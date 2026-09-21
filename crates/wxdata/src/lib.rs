@@ -51,6 +51,7 @@ pub mod placefile;
 pub mod probsevere;
 pub mod raob;
 pub mod recon;
+pub mod refs;
 pub mod river;
 pub mod rotation;
 pub mod severe;

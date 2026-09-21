@@ -22,6 +22,9 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
   during pre-implementation parallel: <https://registry.opendata.aws/noaa-rrfs-ops/>.
 - Adapter: CONUS 3 km `2dfld` GRIB2 plus `.idx` range reads. Hourly cycles extend to F18;
   00/06/12/18 UTC cycles extend to F84.
+- REFS: combined `ensprod` probability files are range-read from their `.idx` sidecars. The first
+  implemented product is neighborhood probability of composite reflectivity above 40 dBZ; its
+  index-provided available-member count is preserved in field provenance.
 - Status: label the source as parallel/experimental until NOAA's announced operational promotion.
   Scheduled CI requires a current or previous-day index object so naming drift fails visibly.
 

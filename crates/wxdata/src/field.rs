@@ -151,6 +151,8 @@ pub struct DataStamp {
     pub received_time: DateTime<Utc>,
     pub class: DataClass,
     pub quality: QualitySummary,
+    /// Members contributing to an ensemble product, when the source reports it.
+    pub available_members: Option<u16>,
 }
 
 /// Immutable decoded values plus the metadata needed to identify and sample them.
@@ -302,6 +304,7 @@ mod tests {
                 received_time: valid,
                 class: DataClass::Analysis,
                 quality: QualitySummary::Good,
+                available_members: None,
             },
         );
         let sample = frame.sample(-99.5, 39.5);

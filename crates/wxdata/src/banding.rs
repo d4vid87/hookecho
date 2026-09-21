@@ -55,6 +55,7 @@ pub fn snow_bands_frame(echo: &FieldFrame, precip_type: &FieldFrame) -> Option<F
                 .max(precip_type.stamp.received_time),
             class: DataClass::Derived,
             quality: QualitySummary::Unknown,
+            available_members: None,
         },
     ))
 }
@@ -283,6 +284,7 @@ mod tests {
                     received_time: time,
                     class: DataClass::Analysis,
                     quality: QualitySummary::Good,
+                    available_members: None,
                 },
             )
         };

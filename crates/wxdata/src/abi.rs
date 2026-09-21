@@ -567,6 +567,7 @@ impl Image {
                 received_time,
                 class: DataClass::Observed,
                 quality: QualitySummary::Unknown,
+                available_members: None,
             },
         ))
     }

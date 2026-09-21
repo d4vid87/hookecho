@@ -8526,6 +8526,7 @@ impl HookEchoApp {
                                 received_time: image.received_time.unwrap_or_else(Utc::now),
                                 class: wxdata::field::DataClass::Observed,
                                 quality: wxdata::field::QualitySummary::Unknown,
+                                available_members: None,
                             },
                         ));
                     }
@@ -19372,6 +19373,7 @@ mod request_book_tests {
                     received_time: field.time,
                     class: wxdata::field::DataClass::Analysis,
                     quality: wxdata::field::QualitySummary::Good,
+                    available_members: None,
                 },
             )
         };

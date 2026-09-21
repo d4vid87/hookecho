@@ -82,6 +82,7 @@ pub async fn fetch_frame(http: &reqwest::Client, hours: u16) -> anyhow::Result<F
             received_time,
             class: DataClass::Analysis,
             quality: QualitySummary::Unknown,
+            available_members: None,
         },
     ))
 }

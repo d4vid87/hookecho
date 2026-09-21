@@ -379,6 +379,7 @@ impl HrrrForecast {
                     DataClass::Forecast
                 },
                 quality: QualitySummary::Unknown,
+                available_members: None,
             },
         )
     }
@@ -766,7 +767,11 @@ pub(crate) fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64
 
 /// Decode a single-message HRRR GRIB2 (Lambert grid) and scatter-regrid onto a regular lat/lon
 /// grid, keeping the max dBZ per target cell (reflectivity composites well under max).
-fn decode_regrid(raw: &[u8], model: Model, min_valid: f64) -> anyhow::Result<MrmsField> {
+pub(crate) fn decode_regrid(
+    raw: &[u8],
+    model: Model,
+    min_valid: f64,
+) -> anyhow::Result<MrmsField> {
     use gribberish::data_message::DataMessage;
     use gribberish::message::read_message;
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;

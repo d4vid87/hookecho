@@ -269,6 +269,7 @@ pub fn diff_frames(
             received_time: a.stamp.received_time.max(b.stamp.received_time),
             class: DataClass::Derived,
             quality: QualitySummary::Unknown,
+            available_members: None,
         },
     ))
 }
@@ -459,6 +460,7 @@ mod tests {
                     received_time: valid,
                     class: DataClass::Forecast,
                     quality: QualitySummary::Unknown,
+                    available_members: None,
                 },
             )
         };

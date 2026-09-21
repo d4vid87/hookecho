@@ -227,6 +227,11 @@ pub(crate) fn show(
                     ui.weak("Quality");
                     ui.label(stamp.quality.label());
                     ui.end_row();
+                    if let Some(members) = stamp.available_members {
+                        ui.weak("Members");
+                        ui.label(members.to_string());
+                        ui.end_row();
+                    }
                     ui.weak("Units");
                     ui.label(descriptor.units);
                     ui.end_row();

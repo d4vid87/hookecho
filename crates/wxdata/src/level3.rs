@@ -929,6 +929,7 @@ fn field_frame(
             received_time,
             class: DataClass::Observed,
             quality: QualitySummary::Unknown,
+            available_members: None,
         },
     ))
 }

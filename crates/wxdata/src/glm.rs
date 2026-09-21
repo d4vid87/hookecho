@@ -375,6 +375,7 @@ pub fn flash_density_frame(
             received_time: now,
             class: DataClass::Derived,
             quality: QualitySummary::Unknown,
+            available_members: None,
         },
     ))
 }

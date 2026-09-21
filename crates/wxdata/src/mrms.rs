@@ -517,6 +517,7 @@ pub async fn fetch_latest_frame(
             received_time,
             class: DataClass::Analysis,
             quality: QualitySummary::Unknown,
+            available_members: None,
         },
     ))
 }

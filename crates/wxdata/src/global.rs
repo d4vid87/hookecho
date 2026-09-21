@@ -290,6 +290,7 @@ impl GlobalForecast {
                 received_time: self.received_at,
                 class: DataClass::Forecast,
                 quality: QualitySummary::Unknown,
+                available_members: None,
             },
         )
     }
