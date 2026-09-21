@@ -1639,8 +1639,9 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
     let model = match model {
         "ecmwf" => GlobalModel::Ecmwf,
         "gefs" | "gefs-mean" => GlobalModel::GefsMean,
+        "gefs-spread" => GlobalModel::GefsSpread,
         "gfs" => GlobalModel::Gfs,
-        other => anyhow::bail!("unknown global model '{other}' (gfs|gefs|ecmwf)"),
+        other => anyhow::bail!("unknown global model '{other}' (gfs|gefs|gefs-spread|ecmwf)"),
     };
     let gfield = GlobalField::from_slug(slug)
         .ok_or_else(|| anyhow::anyhow!("unknown global field '{slug}'"))?;

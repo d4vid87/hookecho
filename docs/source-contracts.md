@@ -15,7 +15,8 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
   <https://registry.opendata.aws/dynamical-noaa-hrrr/>
 - GFS: <https://www.nco.ncep.noaa.gov/pmb/products/gfs/>
 - GEFS: <https://registry.opendata.aws/noaa-gefs/>. HookEcho reads the published ensemble-mean
-  `geavg` fields, using the 0.25-degree surface product and 0.5-degree pressure-level product.
+  `geavg` mean and `gespr` standard-deviation fields, using the 0.25-degree surface product and
+  0.5-degree pressure-level product.
 - ECMWF IFS: <https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS>
 
 ## NOAA RRFS v1 parallel

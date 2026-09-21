@@ -262,6 +262,7 @@ pub(crate) fn show(
             for m in [
                 wxdata::global::GlobalModel::Gfs,
                 wxdata::global::GlobalModel::GefsMean,
+                wxdata::global::GlobalModel::GefsSpread,
                 wxdata::global::GlobalModel::Ecmwf,
             ] {
                 changed |= ui.selectable_value(global_model, m, m.label()).changed();
