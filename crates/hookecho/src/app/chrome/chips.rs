@@ -3,6 +3,83 @@
 use super::*;
 
 impl HookEchoApp {
+    pub(crate) fn show_broadcast_overlay(&self, ctx: &egui::Context) {
+        if !self.obs_mode {
+            return;
+        }
+        let margin = self.settings.broadcast_safe_margin as f32;
+        if self.settings.broadcast_clock_source
+            || !self.settings.broadcast_branding.trim().is_empty()
+        {
+            let view = &self.views[self.active];
+            let site = view.site.as_deref().unwrap_or("No radar");
+            let product = view
+                .custom_product
+                .as_deref()
+                .unwrap_or_else(|| view.moment.short_name());
+            let valid = view
+                .volume
+                .as_ref()
+                .map(|volume| volume.time.format("%H:%MZ").to_string())
+                .unwrap_or_else(|| "waiting".into());
+            egui::Area::new("broadcast_source".into())
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(margin, margin))
+                .interactable(false)
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_black_alpha(180))
+                        .inner_margin(egui::Margin::symmetric(10, 6))
+                        .show(ui, |ui| {
+                            if self.settings.broadcast_clock_source {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{site} · {product} · valid {valid} · {}",
+                                        chrono::Utc::now().format("%H:%M:%SZ")
+                                    ))
+                                    .color(egui::Color32::WHITE),
+                                );
+                            }
+                            if !self.settings.broadcast_branding.trim().is_empty() {
+                                ui.weak(self.settings.broadcast_branding.trim());
+                            }
+                        });
+                });
+            if self.settings.broadcast_clock_source {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
+        }
+        if self.settings.broadcast_warning_crawl {
+            let crawl: String = self
+                .active_alert_features()
+                .iter()
+                .filter(|feature| feature.kind == wxdata::overlay::FeatureKind::Warning)
+                .map(|feature| feature.title.as_str())
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("  •  ")
+                .chars()
+                .take(240)
+                .collect();
+            if !crawl.is_empty() {
+                egui::Area::new("broadcast_warning_crawl".into())
+                    .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -margin))
+                    .interactable(false)
+                    .show(ctx, |ui| {
+                        egui::Frame::new()
+                            .fill(egui::Color32::from_rgb(145, 20, 20))
+                            .inner_margin(egui::Margin::symmetric(14, 7))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(crawl)
+                                        .strong()
+                                        .color(egui::Color32::WHITE),
+                                );
+                            });
+                    });
+            }
+        }
+    }
+
     /// Persistent, session-only notice while the automatic performance guard is active.
     pub(crate) fn quality_chip(&self, ctx: &egui::Context) {
         if !crate::ui::motion::degraded() {

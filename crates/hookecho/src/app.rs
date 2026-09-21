@@ -15372,6 +15372,49 @@ impl HookEchoApp {
                         self.obs_mode = true;
                     }
                 }
+                ui.separator();
+                ui.strong("Broadcast output");
+                ui.horizontal_wrapped(|ui| {
+                    for (label, size) in [
+                        ("1080p", [1920.0, 1080.0]),
+                        ("1440p", [2560.0, 1440.0]),
+                        ("4K", [3840.0, 2160.0]),
+                        ("Portrait", [1080.0, 1920.0]),
+                    ] {
+                        if ui.button(label).clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                                egui::vec2(size[0], size[1]),
+                            ));
+                            self.obs_mode = true;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Safe margin");
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.broadcast_safe_margin)
+                            .range(0..=240)
+                            .suffix(" px"),
+                    );
+                });
+                toggle(
+                    ui,
+                    &mut self.settings.broadcast_clock_source,
+                    "Clock and source stamp",
+                );
+                toggle(
+                    ui,
+                    &mut self.settings.broadcast_warning_crawl,
+                    "Warning crawl",
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Branding");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings.broadcast_branding)
+                            .hint_text("Optional station or organization")
+                            .desired_width(220.0),
+                    );
+                });
 
                 if ui
                     .add_enabled(
@@ -19034,6 +19077,7 @@ impl eframe::App for HookEchoApp {
             self.show_cappi = open;
         }
         self.show_warning_banners(ctx);
+        self.show_broadcast_overlay(ctx);
         self.show_toasts(ctx);
 
         // Turn this frame's UI mutations into uploads/fetches before painting the map.

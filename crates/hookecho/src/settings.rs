@@ -535,6 +535,14 @@ pub struct Settings {
     /// receives it.
     #[serde(default = "default_true")]
     pub share_card: bool,
+    #[serde(default = "default_broadcast_margin")]
+    pub broadcast_safe_margin: u16,
+    #[serde(default = "default_true")]
+    pub broadcast_clock_source: bool,
+    #[serde(default)]
+    pub broadcast_warning_crawl: bool,
+    #[serde(default)]
+    pub broadcast_branding: String,
     /// Registry labels in the order the user dragged them, across every category. Labels not in
     /// here keep their registry order behind the ones that are — so a reorder never hides a row,
     /// and a renamed action just falls back to its default place.
@@ -757,6 +765,10 @@ fn default_plugin_capabilities() -> Vec<String> {
 }
 fn default_plugin_outputs() -> Vec<String> {
     vec!["vector-features".into()]
+}
+
+fn default_broadcast_margin() -> u16 {
+    32
 }
 
 fn default_plugin_refresh() -> u32 {
@@ -1160,6 +1172,10 @@ impl Default for Settings {
             tile_disk_cache_mb: 0,
             map_quality: MapQuality::Auto,
             share_card: true,
+            broadcast_safe_margin: default_broadcast_margin(),
+            broadcast_clock_source: true,
+            broadcast_warning_crawl: false,
+            broadcast_branding: String::new(),
             layer_order: Vec::new(),
             favorite_fields: Vec::new(),
             recent_fields: Vec::new(),
@@ -1681,6 +1697,9 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{"coach_done": true, "setup_done": true}"#).unwrap();
         assert!(s.setup_done);
+        assert_eq!(s.broadcast_safe_margin, 32);
+        assert!(s.broadcast_clock_source);
+        assert!(!s.broadcast_warning_crawl);
     }
 
     #[test]
@@ -1722,6 +1741,10 @@ mod tests {
             seeded_workspaces: false,
             smooth_radar: false,
             share_card: true,
+            broadcast_safe_margin: default_broadcast_margin(),
+            broadcast_clock_source: true,
+            broadcast_warning_crawl: false,
+            broadcast_branding: String::new(),
             layer_order: Vec::new(),
             favorite_fields: vec!["mrms.mesh".into()],
             recent_fields: vec!["mrms.composite-reflectivity".into()],
