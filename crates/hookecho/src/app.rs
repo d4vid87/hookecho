@@ -1883,6 +1883,13 @@ struct RegionAnalysis {
     units: &'static str,
     valid: DateTime<Utc>,
     stats: wxdata::field::RegionStats,
+    correlation: Option<RegionCorrelation>,
+}
+
+struct RegionCorrelation {
+    product: &'static str,
+    units: &'static str,
+    stats: wxdata::field::CorrelationStats,
 }
 
 /// How long a field layer stays uploaded after the last pane turns it off. Long enough that
@@ -12081,11 +12088,11 @@ impl HookEchoApp {
                         }
                         self.region_points.push([lon, lat]);
                         if self.region_points.len() == 2 {
-                            self.region_analysis = crate::render::FieldLayer::DRAW_ORDER
+                            let frames = crate::render::FieldLayer::DRAW_ORDER
                                 .iter()
                                 .rev()
-                                .find(|layer| self.views[idx].fields_on.contains(layer))
-                                .and_then(|layer| self.fields.get(layer)?.frame.as_ref())
+                                .filter(|layer| self.views[idx].fields_on.contains(layer))
+                                .filter_map(|layer| self.fields.get(layer)?.frame.as_ref())
                                 .filter(|frame| {
                                     !matches!(
                                         frame.descriptor.value_kind,
@@ -12094,19 +12101,34 @@ impl HookEchoApp {
                                             | wxdata::field::ValueKind::Vector
                                     )
                                 })
-                                .and_then(|frame| {
-                                    frame
-                                        .statistics_in_box(
-                                            self.region_points[0],
-                                            self.region_points[1],
-                                        )
-                                        .map(|stats| RegionAnalysis {
-                                            product: frame.descriptor.short_name,
-                                            units: frame.descriptor.units,
-                                            valid: frame.stamp.valid_time,
-                                            stats,
-                                        })
-                                });
+                                .take(2)
+                                .collect::<Vec<_>>();
+                            self.region_analysis = frames.first().and_then(|frame| {
+                                frame
+                                    .statistics_in_box(
+                                        self.region_points[0],
+                                        self.region_points[1],
+                                    )
+                                    .map(|stats| RegionAnalysis {
+                                        product: frame.descriptor.short_name,
+                                        units: frame.descriptor.units,
+                                        valid: frame.stamp.valid_time,
+                                        stats,
+                                        correlation: frames.get(1).and_then(|other| {
+                                            frame
+                                                .correlation_in_box(
+                                                    other,
+                                                    self.region_points[0],
+                                                    self.region_points[1],
+                                                )
+                                                .map(|stats| RegionCorrelation {
+                                                    product: other.descriptor.short_name,
+                                                    units: other.descriptor.units,
+                                                    stats,
+                                                })
+                                        }),
+                                    })
+                            });
                         }
                     }
                     MapTool::Marker => {
@@ -15033,7 +15055,7 @@ impl HookEchoApp {
                     || "No registered field values in box".to_string(),
                     |analysis| {
                         let stats = &analysis.stats;
-                        format!(
+                        let mut text = format!(
                             "{} · {} cells · mean {:.2} {} · min {:.2} · max {:.2} · σ {:.2}\n{}",
                             analysis.product,
                             stats.count,
@@ -15043,7 +15065,22 @@ impl HookEchoApp {
                             stats.max,
                             stats.std_dev,
                             histogram_text(&stats.histogram),
-                        )
+                        );
+                        if let Some(pair) = &analysis.correlation {
+                            use std::fmt::Write;
+                            let _ = write!(
+                                text,
+                                "\n{} vs {} · n {} · r {:.3} · y={:.3}x{:+.3} {}",
+                                analysis.product,
+                                pair.product,
+                                pair.stats.count,
+                                pair.stats.pearson_r,
+                                pair.stats.slope,
+                                pair.stats.intercept,
+                                pair.units,
+                            );
+                        }
+                        text
                     },
                 );
                 painter.text(
@@ -16209,6 +16246,19 @@ impl HookEchoApp {
         for (bin, count) in stats.histogram.iter().enumerate() {
             use std::fmt::Write;
             let _ = writeln!(csv, "{bin},{count}");
+        }
+        if let Some(pair) = &analysis.correlation {
+            use std::fmt::Write;
+            let _ = write!(
+                csv,
+                "\npaired_product,paired_units,count,pearson_r,slope,intercept\n{},{},{},{},{},{}\n",
+                pair.product,
+                pair.units,
+                pair.stats.count,
+                pair.stats.pearson_r,
+                pair.stats.slope,
+                pair.stats.intercept,
+            );
         }
         match crate::dialog::save_bytes("hookecho-region-statistics.csv", "csv", csv.as_bytes()) {
             crate::dialog::Saved::Where(where_) => {

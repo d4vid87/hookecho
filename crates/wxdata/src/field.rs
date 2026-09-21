@@ -263,7 +263,7 @@ impl FieldFrame {
         let mut m2 = 0.0f64;
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
-        self.for_each_in_box(bounds, |value| {
+        self.for_each_in_box(bounds, |_, _, value| {
             count += 1;
             min = min.min(value);
             max = max.max(value);
@@ -276,7 +276,7 @@ impl FieldFrame {
         }
         let mut histogram = [0u32; 16];
         let span = (max - min).max(f32::EPSILON);
-        self.for_each_in_box(bounds, |value| {
+        self.for_each_in_box(bounds, |_, _, value| {
             let bin = (((value - min) / span * 16.0) as usize).min(15);
             histogram[bin] = histogram[bin].saturating_add(1);
         });
@@ -290,7 +290,52 @@ impl FieldFrame {
         })
     }
 
-    fn for_each_in_box(&self, bounds: (f64, f64, f64, f64), mut visit: impl FnMut(f32)) {
+    /// Pair this field's native cells with another field's declared point sampler.
+    /// Exact valid-time matching prevents correlations across different weather states.
+    pub fn correlation_in_box(
+        &self,
+        other: &Self,
+        a: [f64; 2],
+        b: [f64; 2],
+    ) -> Option<CorrelationStats> {
+        if self.stamp.valid_time != other.stamp.valid_time {
+            return None;
+        }
+        let bounds = (
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+        );
+        let mut count = 0usize;
+        let (mut mean_x, mut mean_y, mut m2_x, mut m2_y, mut covariance) =
+            (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        self.for_each_in_box(bounds, |lon, lat, x| {
+            let Some(y) = other.sample(lon, lat).value else {
+                return;
+            };
+            count += 1;
+            let dx = f64::from(x) - mean_x;
+            mean_x += dx / count as f64;
+            let dy = f64::from(y) - mean_y;
+            mean_y += dy / count as f64;
+            m2_x += dx * (f64::from(x) - mean_x);
+            m2_y += dy * (f64::from(y) - mean_y);
+            covariance += dx * (f64::from(y) - mean_y);
+        });
+        if count < 2 || m2_x <= 0.0 || m2_y <= 0.0 {
+            return None;
+        }
+        let slope = covariance / m2_x;
+        Some(CorrelationStats {
+            count,
+            pearson_r: (covariance / (m2_x * m2_y).sqrt()) as f32,
+            slope: slope as f32,
+            intercept: (mean_y - slope * mean_x) as f32,
+        })
+    }
+
+    fn for_each_in_box(&self, bounds: (f64, f64, f64, f64), mut visit: impl FnMut(f64, f64, f32)) {
         let (west, south, east, north) = bounds;
         if let Some(image) = &self.native_abi {
             for (row, &y) in image.y.iter().enumerate() {
@@ -302,7 +347,7 @@ impl FieldFrame {
                     }
                     if let Some((lon, lat)) = image.projection.lon_lat(x, y) {
                         if (west..=east).contains(&lon) && (south..=north).contains(&lat) {
-                            visit(value);
+                            visit(lon, lat, value);
                         }
                     }
                 }
@@ -321,7 +366,7 @@ impl FieldFrame {
                 let lon = field.lon_west + (col as f64 + 0.5) * dlon;
                 let value = field.values[row * field.nx + col];
                 if (west..=east).contains(&lon) && value.is_finite() {
-                    visit(value);
+                    visit(lon, lat, value);
                 }
             }
         }
@@ -398,6 +443,14 @@ pub struct RegionStats {
     pub histogram: [u32; 16],
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrelationStats {
+    pub count: usize,
+    pub pearson_r: f32,
+    pub slope: f32,
+    pub intercept: f32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,5 +516,16 @@ mod tests {
         assert_eq!((stats.min, stats.max, stats.mean), (1.0, 3.0, 2.0));
         assert!((stats.std_dev - 1.0).abs() < 1e-6);
         assert_eq!(stats.histogram.iter().sum::<u32>(), 2);
+
+        let mut doubled = frame.field().clone();
+        doubled.values.iter_mut().for_each(|value| *value *= 2.0);
+        let paired = FieldFrame::new(&TEST, doubled, frame.stamp.clone());
+        let correlation = frame
+            .correlation_in_box(&paired, [-100.0, 38.0], [-98.0, 40.0])
+            .unwrap();
+        assert_eq!(correlation.count, 4);
+        assert!((correlation.pearson_r - 1.0).abs() < 1e-6);
+        assert!((correlation.slope - 2.0).abs() < 1e-6);
+        assert!(correlation.intercept.abs() < 1e-6);
     }
 }
