@@ -162,28 +162,113 @@ pub enum Model {
     Nbm,
 }
 
+/// Acquisition facts shared by run discovery, range reads, UI, and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelDefinition {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub provider: &'static str,
+    pub base_url: &'static str,
+    pub cycle_hours: u32,
+    pub max_forecast_hour: u16,
+    pub grid: &'static str,
+    pub regrid_resolution_deg: f64,
+    pub index_suffix: &'static str,
+    pub expected_latency_minutes: Option<u16>,
+    pub domain: &'static str,
+    pub ensemble: bool,
+}
+
 impl Model {
+    pub fn definition(self) -> ModelDefinition {
+        match self {
+            Self::Hrrr => ModelDefinition {
+                id: "hrrr",
+                label: "HRRR",
+                provider: "NOAA",
+                base_url: BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 48,
+                grid: "3 km Lambert conformal CONUS",
+                regrid_resolution_deg: 0.04,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
+                ensemble: false,
+            },
+            Self::HrrrPressure => ModelDefinition {
+                id: "hrrr-pressure",
+                label: "HRRR pressure",
+                grid: "3 km Lambert conformal CONUS pressure levels",
+                ..Self::Hrrr.definition()
+            },
+            Self::Rap => ModelDefinition {
+                id: "rap",
+                label: "RAP",
+                provider: "NOAA",
+                base_url: RAP_BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 51,
+                grid: "13 km Lambert conformal North America",
+                regrid_resolution_deg: 0.15,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "North America",
+                ensemble: false,
+            },
+            Self::NamNest => ModelDefinition {
+                id: "nam-conus-nest",
+                label: "NAM 3 km nest",
+                provider: "NOAA",
+                base_url: NAM_BUCKET,
+                cycle_hours: 6,
+                max_forecast_hour: 60,
+                grid: "3 km Lambert conformal CONUS nest",
+                regrid_resolution_deg: 0.04,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
+                ensemble: false,
+            },
+            Self::Nbm => ModelDefinition {
+                id: "nbm",
+                label: "NBM",
+                provider: "NOAA",
+                base_url: NBM_BUCKET,
+                cycle_hours: 1,
+                max_forecast_hour: 264,
+                grid: "2.5 km CONUS blend",
+                regrid_resolution_deg: 0.035,
+                index_suffix: ".idx",
+                expected_latency_minutes: None,
+                domain: "CONUS",
+                ensemble: false,
+            },
+        }
+    }
+
     /// The GRIB2 file for a cycle + forecast hour.
     fn url(self, date: &str, cycle_hour: u32, fh: u8) -> String {
+        let base = self.definition().base_url;
         match self {
             Model::Hrrr => {
-                format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfsfcf{fh:02}.grib2")
+                format!("{base}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfsfcf{fh:02}.grib2")
             }
             // The pressure-level file: full mandatory levels with dewpoint and with U and V as
             // separate messages, which the surface file and RAP's awp130 both lack.
             Model::HrrrPressure => {
-                format!("{BUCKET}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfprsf{fh:02}.grib2")
+                format!("{base}/hrrr.{date}/conus/hrrr.t{cycle_hour:02}z.wrfprsf{fh:02}.grib2")
             }
             // awp130 is the 13 km CONUS pressure/surface product — the one with CAPE and helicity.
             Model::Rap => {
-                format!("{RAP_BUCKET}/rap.{date}/rap.t{cycle_hour:02}z.awp130pgrbf{fh:02}.grib2")
+                format!("{base}/rap.{date}/rap.t{cycle_hour:02}z.awp130pgrbf{fh:02}.grib2")
             }
             Model::NamNest => format!(
-                "{NAM_BUCKET}/nam.{date}/nam.t{cycle_hour:02}z.conusnest.hiresf{fh:02}.tm00.grib2"
+                "{base}/nam.{date}/nam.t{cycle_hour:02}z.conusnest.hiresf{fh:02}.tm00.grib2"
             ),
             // `co` is the CONUS domain; the forecast hour is three digits here, not two.
             Model::Nbm => format!(
-                "{NBM_BUCKET}/blend.{date}/{cycle_hour:02}/core/blend.t{cycle_hour:02}z.core.f{fh:03}.co.grib2"
+                "{base}/blend.{date}/{cycle_hour:02}/core/blend.t{cycle_hour:02}z.core.f{fh:03}.co.grib2"
             ),
         }
     }
@@ -191,33 +276,18 @@ impl Model {
     /// Hours between cycles. Walking back an hour at a time past a model that runs every six only
     /// ever finds 404s.
     fn cycle_hours(self) -> u32 {
-        match self {
-            Model::NamNest => 6,
-            _ => 1,
-        }
+        self.definition().cycle_hours
     }
 
     /// Regular-grid cell size (degrees) for the regrid: a shade coarser than the model's native
     /// spacing, so the scatter fills every target cell instead of leaving a grid of holes.
     /// HRRR is ~3 km, RAP ~13 km.
     fn res_deg(self) -> f64 {
-        match self {
-            Model::Hrrr | Model::HrrrPressure => 0.04,
-            Model::Rap => 0.15,
-            // The NAM nest is 3 km like the HRRR; the NBM CONUS grid is 2.5 km.
-            Model::NamNest => 0.04,
-            Model::Nbm => 0.035,
-        }
+        self.definition().regrid_resolution_deg
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Model::Hrrr => "HRRR",
-            Model::HrrrPressure => "HRRR pressure",
-            Model::Rap => "RAP",
-            Model::NamNest => "NAM 3 km nest",
-            Model::Nbm => "NBM",
-        }
+        self.definition().label
     }
 }
 
@@ -830,6 +900,22 @@ mod tests {
             Model::Rap.res_deg() > Model::Hrrr.res_deg(),
             "13 km vs 3 km"
         );
+    }
+
+    #[test]
+    fn operational_models_have_complete_unique_definitions() {
+        let models = [Model::Hrrr, Model::Rap, Model::NamNest, Model::Nbm];
+        let mut ids = std::collections::HashSet::new();
+        for model in models {
+            let definition = model.definition();
+            assert!(ids.insert(definition.id));
+            assert!(definition.base_url.starts_with("https://"));
+            assert!(definition.cycle_hours > 0);
+            assert!(definition.max_forecast_hour > 0);
+            assert_eq!(definition.index_suffix, ".idx");
+            assert!(!definition.grid.is_empty());
+            assert!(!definition.domain.is_empty());
+        }
     }
 
     #[tokio::test]
