@@ -11067,6 +11067,73 @@ impl HookEchoApp {
         ))
     }
 
+    fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        if let Some(probe) = self.custom_radar_probe(idx, lon, lat) {
+            return Some(probe);
+        }
+        let (sample, site, vcp, moment, tilt) = {
+            let view = &self.views[idx];
+            let volume = view.volume.as_ref()?;
+            (
+                wxdata::level2::sample_native(
+                    &volume.scan,
+                    view.moment,
+                    view.tilt,
+                    lon,
+                    lat,
+                )?,
+                view.site.clone().unwrap_or_else(|| "Radar".into()),
+                volume.vcp.clone(),
+                view.moment,
+                view.tilt,
+            )
+        };
+        let value = sample.value.map_or_else(
+            || {
+                if sample.folded {
+                    "Range folded".to_string()
+                } else if sample.below_threshold {
+                    "Below threshold".to_string()
+                } else {
+                    "Missing".to_string()
+                }
+            },
+            |value| format!("Raw: {value:.2} {}", moment.units()),
+        );
+        let dealiased = if moment == Moment::Velocity
+            && self.settings.dealias_velocity
+            && !wxdata::tdwr::is_tdwr(&site)
+        {
+            self.views[idx]
+                .volume
+                .as_mut()
+                .and_then(|volume| volume.binned(moment, tilt, true).ok())
+                .and_then(|sweep| sweep.sample_at(lon, lat))
+                .and_then(|gate| gate.value)
+                .map(|value| format!("\nDealiased: {value:.2} {}", moment.units()))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let nyquist = if moment == Moment::Velocity {
+            "\nNyquist: unavailable in decoded metadata"
+        } else {
+            ""
+        };
+        Some(format!(
+            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
+            moment.short_name(),
+            sample.elevation_deg,
+            sample.azimuth_deg,
+            sample.ground_range_km,
+            sample.slant_range_km,
+            sample.beam_height_ft,
+            sample.gate,
+            sample.gate_spacing_km,
+            sample.collected_at.format("%Y-%m-%d %H:%M:%S UTC")
+        ))
+    }
+
     /// The always-on-top mini loop: a small undecorated window showing the active pane, so the
     /// radar stays visible over whatever else is on screen.
     ///
@@ -12101,71 +12168,13 @@ impl HookEchoApp {
         let radar_probe = response.hover_pos().and_then(|pos| {
             let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
             let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
-            if let Some(probe) = self.custom_radar_probe(idx, lon, lat) {
-                return Some(probe);
-            }
-            let (sample, site, vcp, moment, tilt) = {
-                let view = &self.views[idx];
-                let volume = view.volume.as_ref()?;
-                (
-                    wxdata::level2::sample_native(
-                        &volume.scan,
-                        view.moment,
-                        view.tilt,
-                        lon,
-                        lat,
-                    )?,
-                    view.site.clone().unwrap_or_else(|| "Radar".into()),
-                    volume.vcp.clone(),
-                    view.moment,
-                    view.tilt,
-                )
-            };
-            let value = sample.value.map_or_else(
-                || {
-                    if sample.folded {
-                        "Range folded".to_string()
-                    } else if sample.below_threshold {
-                        "Below threshold".to_string()
-                    } else {
-                        "Missing".to_string()
-                    }
-                },
-                |value| format!("Raw: {value:.2} {}", moment.units()),
-            );
-            let dealiased = if moment == Moment::Velocity
-                && self.settings.dealias_velocity
-                && !wxdata::tdwr::is_tdwr(&site)
-            {
-                self.views[idx]
-                    .volume
-                    .as_mut()
-                    .and_then(|volume| volume.binned(moment, tilt, true).ok())
-                    .and_then(|sweep| sweep.sample_at(lon, lat))
-                    .and_then(|gate| gate.value)
-                    .map(|value| format!("\nDealiased: {value:.2} {}", moment.units()))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            let nyquist = if moment == Moment::Velocity {
-                "\nNyquist: unavailable in decoded metadata"
-            } else {
-                ""
-            };
-            Some(format!(
-                "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
-                moment.short_name(),
-                sample.elevation_deg,
-                sample.azimuth_deg,
-                sample.ground_range_km,
-                sample.slant_range_km,
-                sample.beam_height_ft,
-                sample.gate,
-                sample.gate_spacing_km,
-                sample.collected_at.format("%Y-%m-%d %H:%M:%S UTC")
-            ))
+            self.radar_probe_at(idx, lon, lat)
         });
+        let linked_probe_value = self
+            .linked_probe
+            .filter(|_| self.views.len() > 1)
+            .and_then(|ll| self.radar_probe_at(idx, ll[0], ll[1]))
+            .map(|probe| probe.lines().take(2).collect::<Vec<_>>().join("\n"));
 
         // --- Painter overlays (clipped to this pane) ---
         let painter = ui.painter_at(prect);
@@ -14375,6 +14384,23 @@ impl HookEchoApp {
                     [p - egui::vec2(0.0, 7.0), p + egui::vec2(0.0, 7.0)],
                     egui::Stroke::new(1.5, col),
                 );
+                if let Some(label) = &linked_probe_value {
+                    let at = p + egui::vec2(9.0, 9.0);
+                    painter.text(
+                        at + egui::vec2(1.0, 1.0),
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::BLACK,
+                    );
+                    painter.text(
+                        at,
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::WHITE,
+                    );
+                }
             }
         }
 
