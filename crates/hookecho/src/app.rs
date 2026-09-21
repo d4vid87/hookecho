@@ -518,6 +518,8 @@ pub(crate) struct SourceHealth {
     pub last_failure: Option<std::time::Duration>,
     pub error: Option<String>,
     pub cadence: std::time::Duration,
+    pub successes: u64,
+    pub failures: u64,
 }
 
 impl SourceHealth {
@@ -3141,6 +3143,7 @@ pub struct HookEchoApp {
     /// mark the frames-per-minute number is derived from, and the last idle interval requested.
     #[cfg(not(target_arch = "wasm32"))]
     perf: PerfReadout,
+    renderer_info: String,
     /// Last pane state posted to the parent frame, so only real changes cross the boundary.
     #[cfg(target_arch = "wasm32")]
     last_posted: Option<crate::workspace::PaneSnap>,
@@ -3272,7 +3275,7 @@ impl HookEchoApp {
         // Which GPU actually got picked. One line, at startup, because every performance report
         // is unreadable without it — "the map is choppy" means one thing on a discrete adapter
         // and another on llvmpipe, and nothing in the app said which one was running.
-        {
+        let renderer_info = {
             let info = render_state.adapter.get_info();
             log::info!(
                 "gpu: {} ({:?}, {:?}) driver {}",
@@ -3281,7 +3284,8 @@ impl HookEchoApp {
                 info.backend,
                 info.driver
             );
-        }
+            format!("{} ({:?}, {:?}) driver {}", info.name, info.device_type, info.backend, info.driver)
+        };
         // Device loss on wasm is unrecoverable from inside the app: WebGPU (Safari 26+) loses
         // devices silently — black canvas, `webglcontextlost` can never fire — and on the WebGL
         // fallback (WebKitGTK) wgpu marks the device lost for gles errors that never surface as
@@ -3910,6 +3914,7 @@ impl HookEchoApp {
             gesture_live: false,
             #[cfg(not(target_arch = "wasm32"))]
             perf: PerfReadout::new(),
+            renderer_info,
             #[cfg(target_arch = "wasm32")]
             last_posted: None,
             obs_tour: false,
@@ -16443,6 +16448,9 @@ impl HookEchoApp {
                 if ui.button("Take the tour…").clicked() {
                     self.tour.start();
                 }
+                if ui.button("Save diagnostics…").clicked() {
+                    self.export_diagnostics();
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("Exit HookEcho").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -16753,6 +16761,56 @@ impl HookEchoApp {
                 crate::dialog::Saved::Cancelled => {}
             },
             Err(error) => self.toast(ToastKind::Error, format!("Cannot verify: {error}")),
+        }
+    }
+
+    fn export_diagnostics(&mut self) {
+        let sources = self
+            .overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .diagnostics();
+        let (cache, degraded, storage_error) = wxdata::object_cache::known_stats();
+        let cache: Vec<_> = cache
+            .into_iter()
+            .map(|row| serde_json::json!({
+                "family": row.family,
+                "objects": row.objects,
+                "bytes": row.bytes,
+                "cap": row.cap,
+            }))
+            .collect();
+        let counters: serde_json::Map<String, serde_json::Value> = wxdata::stats::snapshot()
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value.into()))
+            .collect();
+        let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": "hookecho.diagnostics/v1",
+            "version": env!("CARGO_PKG_VERSION"),
+            "platform": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+            },
+            "renderer": &self.renderer_info,
+            "sources": sources,
+            "cache": {
+                "families": cache,
+                "degraded": degraded,
+                "storage_error": storage_error.map(|_| "storage unavailable"),
+            },
+            "performance_counters": counters,
+        }))
+        .expect("diagnostics values are serializable");
+        match crate::dialog::save_bytes("hookecho-diagnostics.json", "json", &bytes) {
+            crate::dialog::Saved::Where(where_) => self.toast(
+                ToastKind::Success,
+                format!("Diagnostics saved to {where_}"),
+            ),
+            crate::dialog::Saved::Failed(error) => self.toast(
+                ToastKind::Error,
+                format!("Diagnostics export failed: {error}"),
+            ),
+            crate::dialog::Saved::Cancelled => {}
         }
     }
 
@@ -21389,6 +21447,19 @@ mod request_book_tests {
     }
 
     #[test]
+    fn diagnostics_report_counts_without_request_selectors_or_errors() {
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Feed("test feed");
+        let generation = book.start(lane.clone(), 0xdead_beef).unwrap();
+        assert!(book.finish(&lane, generation, Some("secret-token"), None));
+        let text = serde_json::to_string(&book.diagnostics()).unwrap();
+        assert!(text.contains("test feed"));
+        assert!(text.contains("failures\":1"));
+        assert!(!text.contains("secret-token"));
+        assert!(!text.contains("dead"));
+    }
+
+    #[test]
     fn abi_discovery_keeps_up_with_mesoscale_frames() {
         assert_eq!(field_refresh_secs(FieldLayer::GoesC13), 60);
         assert_eq!(field_refresh_secs(FieldLayer::GoesCatalog(0)), 60);
@@ -21485,6 +21556,8 @@ mod request_book_tests {
             last_failure: failure.map(std::time::Duration::from_secs),
             error,
             cadence,
+            successes: u64::from(success.is_some()),
+            failures: u64::from(failure.is_some()),
         };
         assert_eq!(health(true, None, None, None).state(), HealthState::Fetching);
         assert_eq!(health(false, Some(5), None, None).state(), HealthState::Fresh);

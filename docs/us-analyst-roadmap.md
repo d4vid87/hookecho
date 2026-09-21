@@ -2179,7 +2179,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] broadcast/headless deterministic rendering
 - [ ] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable
 - [x] browser persistent cache
-- [ ] Android tablet analyst layout
+- [x] Android tablet analyst layout
 - [x] performance regression suite
 - [x] scheduled public-feed contract tests
 - [x] all major layers expose provenance, exact time, units, age and sampling

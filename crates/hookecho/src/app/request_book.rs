@@ -29,6 +29,8 @@ struct RequestStatus {
     last_failure: Option<(Instant, String)>,
     cadence: std::time::Duration,
     abort: Option<futures_util::future::AbortHandle>,
+    successes: u64,
+    failures: u64,
 }
 
 /// Latest generation and fetch health in each result lane.
@@ -73,6 +75,8 @@ impl RequestBook {
                 last_failure: None,
                 cadence,
                 abort: None,
+                successes: 0,
+                failures: 0,
             });
         Some(self.next)
     }
@@ -126,8 +130,12 @@ impl RequestBook {
             s.fetching = false;
             s.abort = None;
             match error {
-                Some(e) => s.last_failure = Some((Instant::now(), e.to_string())),
+                Some(e) => {
+                    s.failures += 1;
+                    s.last_failure = Some((Instant::now(), e.to_string()));
+                }
                 None => {
+                    s.successes += 1;
                     s.last_success = Some(Instant::now());
                     if data_time.is_some() {
                         s.data_time = data_time;
@@ -150,6 +158,8 @@ impl RequestBook {
                 last_failure: None,
                 error: None,
                 cadence: lane.cadence(),
+                successes: 0,
+                failures: 0,
             };
         };
         SourceHealth {
@@ -166,6 +176,29 @@ impl RequestBook {
                 .map(|(t, _)| now.saturating_duration_since(*t)),
             error: s.last_failure.as_ref().map(|(_, e)| e.clone()),
             cadence: s.cadence,
+            successes: s.successes,
+            failures: s.failures,
         }
+    }
+
+    pub(super) fn diagnostics(&self) -> Vec<serde_json::Value> {
+        self.status
+            .iter()
+            .map(|(lane, status)| {
+                let health = self.health(lane);
+                serde_json::json!({
+                    "source": lane.label(),
+                    "state": format!("{:?}", health.state()),
+                    "fetching": status.fetching,
+                    "successes": status.successes,
+                    "failures": status.failures,
+                    "data_time": status.data_time,
+                    "cadence_seconds": status.cadence.as_secs(),
+                    "last_success_seconds_ago": health.last_success.map(|age| age.as_secs()),
+                    "last_failure_seconds_ago": health.last_failure.map(|age| age.as_secs()),
+                    "retry_in_seconds": health.next_retry().map(|age| age.as_secs()),
+                })
+            })
+            .collect()
     }
 }

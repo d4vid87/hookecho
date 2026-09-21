@@ -482,7 +482,7 @@ pub use browser::{get, known_stats, latest_key, put, set_pinned, spawn_clear};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use super::{CachedObject, checksum};
+    use super::{CacheStats, CachedObject, checksum};
     use chrono::{DateTime, Utc};
     use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
@@ -497,6 +497,33 @@ mod native {
 
     pub fn root() -> Option<&'static Path> {
         ROOT.get().map(PathBuf::as_path)
+    }
+
+    pub fn known_stats() -> (Vec<CacheStats>, bool, Option<String>) {
+        let Some(root) = root() else {
+            return (Vec::new(), false, None);
+        };
+        let mut rows = Vec::new();
+        let Ok(families) = std::fs::read_dir(root) else {
+            return (rows, false, None);
+        };
+        for family in families.flatten().filter(|entry| entry.path().is_dir()) {
+            let mut objects = 0;
+            let mut bytes = 0;
+            if let Ok(entries) = std::fs::read_dir(family.path()) {
+                for entry in entries.flatten().filter(|entry| entry.path().is_file()) {
+                    objects += 1;
+                    bytes += entry.metadata().map(|meta| meta.len() as usize).unwrap_or(0);
+                }
+            }
+            rows.push(CacheStats {
+                family: family.file_name().to_string_lossy().into_owned(),
+                objects,
+                bytes,
+                cap: 0,
+            });
+        }
+        (rows, false, None)
     }
 
     fn key_hash(key: &str) -> u64 {
@@ -637,7 +664,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{get, latest_key, put, set_pinned};
+pub use native::{get, known_stats, latest_key, put, set_pinned};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn set_native_root(root: std::path::PathBuf) {

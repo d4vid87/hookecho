@@ -37,6 +37,8 @@ impl HookEchoApp {
             last_failure: v.error.as_ref().map(|_| std::time::Duration::ZERO),
             error: v.error.clone(),
             cadence: std::time::Duration::from_secs(120),
+            successes: u64::from(v.volume.is_some()),
+            failures: u64::from(v.error.is_some()),
         }
     }
 
