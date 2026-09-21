@@ -19,6 +19,52 @@ pub enum LoopFormat {
     Mp4,
 }
 
+pub struct Manifest<'a> {
+    pub site: Option<&'a str>,
+    pub product: &'a str,
+    pub units: &'a str,
+    pub tilt: usize,
+    pub fps: f32,
+    pub center: [f64; 2],
+    pub zoom: f64,
+}
+
+pub fn write_manifest(path: &Path, info: &Manifest<'_>, sources: &[String]) -> anyhow::Result<()> {
+    let frames: Vec<_> = sources
+        .iter()
+        .map(|source| {
+            let object = wxdata::level2::Identifier::new(source.clone());
+            serde_json::json!({
+                "source_object": source,
+                "valid_time": object.date_time().map(|time| time.to_rfc3339()),
+            })
+        })
+        .collect();
+    let name = format!(
+        "{}.json",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("hookecho-loop")
+    );
+    let sidecar = path.with_file_name(name);
+    std::fs::write(
+        sidecar,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": "hookecho.loop/v1",
+            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "output": path.file_name().and_then(|name| name.to_str()),
+            "site": info.site,
+            "product": info.product,
+            "units": info.units,
+            "tilt_index": info.tilt,
+            "playback_fps": info.fps,
+            "view": { "center_lon_lat": info.center, "zoom": info.zoom },
+            "frames": frames,
+        }))?,
+    )?;
+    Ok(())
+}
+
 /// Encode `frames` into an MP4 (H.264) at `path` via the `ffmpeg` CLI. Frames are written as
 /// PNGs to a temp dir and muxed at `fps`. Errors if ffmpeg is missing or fails.
 pub fn encode_mp4(frames: &[RgbaImage], fps: u32, path: &Path) -> anyhow::Result<()> {
@@ -148,6 +194,34 @@ mod tests {
     fn rejects_mismatched_frame_timing() {
         let path = std::env::temp_dir().join("hookecho_gif_bad_timing.gif");
         assert!(encode_gif_timed(&[RgbaImage::new(1, 1)], &[], &path).is_err());
+    }
+
+    #[test]
+    fn writes_a_provenance_sidecar() {
+        let dir = std::env::temp_dir().join("hookecho_loop_manifest_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("loop.gif");
+        write_manifest(
+            &path,
+            &Manifest {
+                site: Some("KTLX"),
+                product: "REF",
+                units: "dBZ",
+                tilt: 0,
+                fps: 4.0,
+                center: [-97.2, 35.3],
+                zoom: 8.0,
+            },
+            &["KTLX20240526_011000_V06".into()],
+        )
+        .unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("loop.gif.json")).unwrap()).unwrap();
+        assert_eq!(value["schema"], "hookecho.loop/v1");
+        assert_eq!(
+            value["frames"][0]["valid_time"],
+            "2024-05-26T01:10:00+00:00"
+        );
     }
 
     #[test]

@@ -1911,6 +1911,13 @@ struct LoopExport {
     /// Playback speed the scrubber was set to when the export started — the exported clip plays
     /// at the speed the user was watching, instead of a hardcoded 5 fps.
     fps: f32,
+    site: Option<String>,
+    product: String,
+    units: &'static str,
+    tilt: usize,
+    center: [f64; 2],
+    zoom: f64,
+    sources: Vec<String>,
 }
 
 /// A placefile the app has fetched and is tracking (mirrors a `PlacefileConfig` by URL).
@@ -15954,6 +15961,8 @@ impl HookEchoApp {
             return;
         }
         let speed = v.timeline.speed;
+        let (lon, lat) =
+            crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
         v.timeline.go_begin();
         self.loop_export = Some(LoopExport {
             dest: path,
@@ -15963,6 +15972,16 @@ impl HookEchoApp {
             settle: LOOP_SETTLE_FRAMES,
             capturing: false,
             fps: speed,
+            site: v.site.clone(),
+            product: v
+                .custom_product
+                .clone()
+                .unwrap_or_else(|| v.moment.short_name().to_string()),
+            units: v.moment.units(),
+            tilt: v.tilt,
+            center: [lon, lat],
+            zoom: v.camera.zoom,
+            sources: Vec::with_capacity(slots),
         });
     }
 
@@ -15986,6 +16005,10 @@ impl HookEchoApp {
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
     fn record_loop_frame(&mut self, image: &egui::ColorImage) {
+        let source = self.views[self.active]
+            .timeline
+            .current()
+            .map(|frame| frame.name().to_string());
         let Some(le) = &mut self.loop_export else {
             return;
         };
@@ -15996,6 +16019,9 @@ impl HookEchoApp {
         }
         if let Some(img) = image::RgbaImage::from_raw(w, h, buf) {
             le.frames.push(img);
+            if let Some(source) = source {
+                le.sources.push(source);
+            }
         }
         le.capturing = false;
         le.remaining -= 1;
@@ -16024,7 +16050,22 @@ impl HookEchoApp {
                     le.fps.round().clamp(1.0, 15.0) as u32,
                     &le.dest,
                 ),
-            };
+            }
+            .and_then(|()| {
+                crate::loopexport::write_manifest(
+                    &le.dest,
+                    &crate::loopexport::Manifest {
+                        site: le.site.as_deref(),
+                        product: &le.product,
+                        units: le.units,
+                        tilt: le.tilt,
+                        fps: le.fps,
+                        center: le.center,
+                        zoom: le.zoom,
+                    },
+                    &le.sources,
+                )
+            });
             match res {
                 Ok(()) => {
                     log::info!(
