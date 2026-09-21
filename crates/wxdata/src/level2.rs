@@ -186,6 +186,39 @@ pub struct MomentPairs {
     pub intercept: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativeTimeSample {
+    pub time: chrono::DateTime<chrono::Utc>,
+    pub value: f32,
+}
+
+/// Native values at one fixed location across decoded timeline volumes.
+pub fn native_time_series<'a>(
+    scans: impl IntoIterator<Item = &'a Scan>,
+    moment: Moment,
+    tilt: usize,
+    lon: f64,
+    lat: f64,
+) -> Vec<NativeTimeSample> {
+    const MAX_SAMPLES: usize = 512;
+    let mut samples = scans
+        .into_iter()
+        .filter_map(|scan| sample_native(scan, moment, tilt, lon, lat))
+        .filter_map(|sample| {
+            sample.value.map(|value| NativeTimeSample {
+                time: sample.collected_at,
+                value,
+            })
+        })
+        .collect::<Vec<_>>();
+    samples.sort_unstable_by_key(|sample| sample.time);
+    samples.dedup_by_key(|sample| sample.time);
+    if samples.len() > MAX_SAMPLES {
+        samples.drain(..samples.len() - MAX_SAMPLES);
+    }
+    samples
+}
+
 /// Pair two transmitted moments over a geographic box without using display-resampled values.
 pub fn moment_pairs_in_box(
     scan: &Scan,
@@ -1114,6 +1147,42 @@ mod tests {
             .all(|point| point.iter().all(|v| v.is_finite())));
         assert!((-1.0..=1.0).contains(&pairs.pearson_r));
         assert!(pairs.slope.is_finite() && pairs.intercept.is_finite());
+    }
+
+    #[test]
+    fn native_time_series_is_chronological_and_deduplicated() {
+        let scan = nexrad_data::volume::File::new(
+            include_bytes!("../tests/data/kdmx-one-sweep.bin").to_vec(),
+        )
+        .scan()
+        .expect("fixture decodes");
+        let radial = &scan.sweeps()[0].radials()[100];
+        let data = radial.reflectivity().expect("fixture has reflectivity");
+        let gate = data
+            .iter()
+            .position(|value| matches!(value, MomentValue::Value(_)))
+            .expect("fixture has a measured gate");
+        let slant = data.first_gate_range_km() + (gate as f64 + 0.5) * data.gate_interval_km();
+        let ground = crate::xsection::ground_from_slant_km(
+            slant,
+            scan.sweeps()[0].elevation_angle_degrees().unwrap() as f64,
+        );
+        let site = scan.site().unwrap();
+        let (lon, lat) = destination(
+            site.longitude() as f64,
+            site.latitude() as f64,
+            radial.azimuth_angle_degrees() as f64,
+            ground,
+        );
+        let samples = native_time_series(
+            [&scan, &scan],
+            Moment::Reflectivity,
+            0,
+            lon,
+            lat,
+        );
+        assert_eq!(samples.len(), 1);
+        assert!(samples[0].value.is_finite());
     }
 
     /// The two sentinel codes are not values, and must not be reported as one.

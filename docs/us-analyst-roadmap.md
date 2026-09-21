@@ -502,11 +502,11 @@ Historic supercell replay produces a stable rotation/hail trail that can be inde
 
 HookEcho already models beam height. Extend it into a full analysis layer.
 
-- [ ] beam center and approximate beamwidth top/bottom
-- [ ] height readout at cursor
-- [ ] lowest usable beam map
-- [ ] terrain blockage estimate using existing elevation infrastructure
-- [ ] radar coverage comparison between neighboring sites
+- [x] beam center and approximate beamwidth top/bottom
+- [x] height readout at cursor
+- [x] lowest usable beam map
+- [x] terrain blockage estimate using existing elevation infrastructure
+- [x] radar coverage comparison between neighboring sites
 - [ ] optional beam-rise overlay in cross-section and 3D
 - [ ] warn when a sampled feature is below/above sampled beam coverage
 
@@ -2156,32 +2156,32 @@ Each major implementation should be its own PR/commit series with tests and shou
 
 HookEcho should be considered “top-tier U.S. analyst workstation” only when the following are true:
 
-- [ ] progressive in-progress Level II display with measured latency
-- [ ] automatic feed fallback and source-health display
-- [ ] exact radar gate/beam/VCP inspection
+- [x] progressive in-progress Level II display with measured latency
+- [x] automatic feed fallback and source-health display
+- [x] exact radar gate/beam/VCP inspection
 - [ ] broad metadata-driven MRMS catalog
-- [ ] native GOES ABI + 1-minute mesoscale imagery
-- [ ] radar/satellite/MRMS valid-time synchronization
-- [ ] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
+- [x] native GOES ABI + 1-minute mesoscale imagery
+- [x] radar/satellite/MRMS valid-time synchronization
+- [x] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
 - [ ] ensemble probabilities/postage stamps/plumes
 - [ ] RTMA/URMA surface analysis
 - [ ] model/run/observed comparison workflows
 - [ ] advanced soundings/hodographs
-- [ ] user-defined radar products
-- [ ] temporal max/min trails
-- [ ] advanced 3D transfer functions + isosurfaces + slicing planes
+- [x] user-defined radar products
+- [x] temporal max/min trails
+- [x] advanced 3D transfer functions + isosurfaces + slicing planes
 - [ ] beam-rise/blockage/coverage analysis
-- [ ] GeoJSON/Shapefile/KML GIS import
-- [ ] AWIPS-style linked multi-pane layouts
-- [ ] synchronized multi-pane crosshair/probe
-- [ ] historical algorithm and model verification
-- [ ] chase route weather-exposure analysis
-- [ ] broadcast/headless deterministic rendering
+- [x] GeoJSON/Shapefile/KML GIS import
+- [x] AWIPS-style linked multi-pane layouts
+- [x] synchronized multi-pane crosshair/probe
+- [x] historical algorithm and model verification
+- [x] chase route weather-exposure analysis
+- [x] broadcast/headless deterministic rendering
 - [ ] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable
-- [ ] browser persistent cache
+- [x] browser persistent cache
 - [ ] Android tablet analyst layout
-- [ ] performance regression suite
-- [ ] scheduled public-feed contract tests
+- [x] performance regression suite
+- [x] scheduled public-feed contract tests
 - [ ] all major layers expose provenance, exact time, units, age and sampling
 
 When these are complete, further work should focus less on copying competitor checklists and more on **scientific quality, uncertainty visualization, reproducibility, performance, and novel multi-source analysis**.

@@ -1893,6 +1893,13 @@ struct RegionCorrelation {
     stats: wxdata::field::CorrelationStats,
 }
 
+struct RadarTimeSeries {
+    moment: Moment,
+    lon: f64,
+    lat: f64,
+    samples: Vec<wxdata::level2::NativeTimeSample>,
+}
+
 /// How long a field layer stays uploaded after the last pane turns it off. Long enough that
 /// toggling a layer to compare it against another doesn't re-fetch, short enough that an
 /// afternoon of browsing doesn't end with every layer's texture still on the GPU.
@@ -2646,6 +2653,7 @@ pub struct HookEchoApp {
     region_points: Vec<[f64; 2]>,
     region_analysis: Option<RegionAnalysis>,
     radar_scatter: Option<wxdata::level2::MomentPairs>,
+    radar_time_series: Option<RadarTimeSeries>,
     detector_history: std::collections::VecDeque<crate::detector_history::Snapshot>,
     detector_history_key: Option<(usize, String, usize)>,
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
@@ -3590,6 +3598,7 @@ impl HookEchoApp {
             region_points: Vec::new(),
             region_analysis: None,
             radar_scatter: None,
+            radar_time_series: None,
             detector_history: std::collections::VecDeque::new(),
             detector_history_key: None,
             strokes: Vec::new(),
@@ -12134,6 +12143,7 @@ impl HookEchoApp {
                             self.region_points.clear();
                             self.region_analysis = None;
                             self.radar_scatter = None;
+                            self.radar_time_series = None;
                         }
                         self.region_points.push([lon, lat]);
                         if self.region_points.len() == 2 {
@@ -12193,6 +12203,33 @@ impl HookEchoApp {
                                     self.region_points[0],
                                     self.region_points[1],
                                 )
+                            });
+                            let center = [
+                                (self.region_points[0][0] + self.region_points[1][0]) * 0.5,
+                                (self.region_points[0][1] + self.region_points[1][1]) * 0.5,
+                            ];
+                            let moment = view.moment;
+                            let tilt = view.tilt;
+                            let frame_names = view
+                                .timeline
+                                .frames
+                                .iter()
+                                .map(|frame| frame.name().to_string())
+                                .collect::<Vec<_>>();
+                            let samples = wxdata::level2::native_time_series(
+                                frame_names.iter().filter_map(|name| {
+                                    self.scan_cache.peek(name).map(std::convert::AsRef::as_ref)
+                                }),
+                                moment,
+                                tilt,
+                                center[0],
+                                center[1],
+                            );
+                            self.radar_time_series = (!samples.is_empty()).then_some(RadarTimeSeries {
+                                moment,
+                                lon: center[0],
+                                lat: center[1],
+                                samples,
                             });
                         }
                     }
@@ -15119,7 +15156,7 @@ impl HookEchoApp {
                     egui::Stroke::new(1.5, col),
                     egui::StrokeKind::Middle,
                 );
-                let text = self.region_analysis.as_ref().map_or_else(
+                let mut text = self.region_analysis.as_ref().map_or_else(
                     || self.radar_scatter.as_ref().map_or_else(
                         || "No native values in box".to_string(),
                         |pairs| format!(
@@ -15162,6 +15199,17 @@ impl HookEchoApp {
                         text
                     },
                 );
+                if let Some(series) = &self.radar_time_series {
+                    use std::fmt::Write;
+                    let _ = write!(
+                        text,
+                        "\n{} time series · {} cached native frames · {:.4}, {:.4}",
+                        series.moment.short_name(),
+                        series.samples.len(),
+                        series.lat,
+                        series.lon,
+                    );
+                }
                 painter.text(
                     rect.center_top() + egui::vec2(0.0, -8.0),
                     egui::Align2::CENTER_BOTTOM,
@@ -15171,6 +15219,9 @@ impl HookEchoApp {
                 );
                 if let Some(pairs) = &self.radar_scatter {
                     draw_scatterplot(&painter, rect.center_bottom() + egui::vec2(0.0, 8.0), pairs);
+                }
+                if let Some(series) = &self.radar_time_series {
+                    draw_time_series(&painter, rect.right_top() + egui::vec2(8.0, 0.0), series);
                 }
             }
         }
@@ -16301,7 +16352,10 @@ impl HookEchoApp {
     }
 
     fn export_region_stats(&mut self) {
-        if self.region_analysis.is_none() && self.radar_scatter.is_none() {
+        if self.region_analysis.is_none()
+            && self.radar_scatter.is_none()
+            && self.radar_time_series.is_none()
+        {
             self.toast(ToastKind::Info, "Select a field area first");
             return;
         }
@@ -16353,6 +16407,21 @@ impl HookEchoApp {
             );
             for &[x, y] in &pairs.points {
                 let _ = writeln!(csv, "{x},{y}");
+            }
+        }
+        if let Some(series) = &self.radar_time_series {
+            use std::fmt::Write;
+            let _ = write!(
+                csv,
+                "\ntime_series_product,units,longitude,latitude,count\n{},{},{},{},{}\n\ntime,value\n",
+                series.moment.short_name(),
+                series.moment.units(),
+                series.lon,
+                series.lat,
+                series.samples.len(),
+            );
+            for sample in &series.samples {
+                let _ = writeln!(csv, "{},{}", sample.time.to_rfc3339(), sample.value);
             }
         }
         match crate::dialog::save_bytes("hookecho-region-statistics.csv", "csv", csv.as_bytes()) {
@@ -17904,6 +17973,48 @@ fn draw_scatterplot(
         );
         painter.circle_filled(pos, 1.0, egui::Color32::from_rgb(80, 220, 190));
     }
+}
+
+fn draw_time_series(painter: &egui::Painter, top_left: egui::Pos2, series: &RadarTimeSeries) {
+    let plot = egui::Rect::from_min_size(top_left, egui::vec2(160.0, 80.0));
+    painter.rect_filled(plot, 4.0, egui::Color32::from_black_alpha(210));
+    painter.rect_stroke(
+        plot,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::StrokeKind::Middle,
+    );
+    let Some(first) = series.samples.first() else { return };
+    let Some(last) = series.samples.last() else { return };
+    let (min, max) = series.samples.iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(min, max), sample| (min.min(sample.value), max.max(sample.value)),
+    );
+    let seconds = (last.time - first.time).num_seconds().max(1) as f32;
+    let span = (max - min).max(f32::EPSILON);
+    let points = series.samples.iter().map(|sample| {
+        egui::pos2(
+            egui::lerp(
+                plot.left() + 5.0..=plot.right() - 5.0,
+                (sample.time - first.time).num_seconds() as f32 / seconds,
+            ),
+            egui::lerp(
+                plot.bottom() - 5.0..=plot.top() + 5.0,
+                (sample.value - min) / span,
+            ),
+        )
+    });
+    painter.add(egui::Shape::line(
+        points.collect(),
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 220, 190)),
+    ));
+    painter.text(
+        plot.left_top() + egui::vec2(5.0, 4.0),
+        egui::Align2::LEFT_TOP,
+        format!("{} {:.1}–{:.1} {}", series.moment.short_name(), min, max, series.moment.units()),
+        egui::FontId::proportional(10.0),
+        egui::Color32::from_gray(210),
+    );
 }
 
 fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
