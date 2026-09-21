@@ -1925,6 +1925,19 @@ struct LoadedPlacefile {
     error: Option<String>,
 }
 
+fn stored_gis(name: &str, content: &str) -> anyhow::Result<wxdata::placefile::Placefile> {
+    if name.to_ascii_lowercase().ends_with(".kmz") || name.to_ascii_lowercase().ends_with(".zip") {
+        use base64::Engine as _;
+        let encoded = content
+            .strip_prefix("base64:")
+            .ok_or_else(|| anyhow::anyhow!("saved GIS archive is corrupt"))?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+        wxdata::gis::archive(name, &bytes)
+    } else {
+        wxdata::gis::parse(name, content)
+    }
+}
+
 /// A background fetch result routed back to a specific view.
 /// Loop frames a phone keeps decoded at once. Each volume is tens of MB; a longer loop than this
 /// pushes the process into the range Android kills.
@@ -4431,7 +4444,7 @@ impl HookEchoApp {
                         .url
                         .strip_prefix("gis:")
                         .and_then(|_| self.settings.web_files.get(&cfg.url))
-                        .map(|text| wxdata::gis::parse(&cfg.url[4..], text));
+                        .map(|text| stored_gis(&cfg.url[4..], text));
                     self.placefiles.push(LoadedPlacefile {
                         url: cfg.url.clone(),
                         enabled: cfg.enabled,
@@ -15415,26 +15428,47 @@ impl HookEchoApp {
                 }
                 Err(e) => self.toast(ToastKind::Error, format!("GPX import failed: {e}")),
             },
-            K::Gis => match import.text() {
-                Ok(text) => match wxdata::gis::parse(&import.name(), &text) {
-                    Ok(file) => {
-                        let key = format!("gis:{}", import.name());
-                        let items = file.items.len();
-                        self.settings.web_files.insert(key.clone(), text);
-                        if !self.settings.placefiles.iter().any(|cfg| cfg.url == key) {
-                            self.settings.placefiles.push(crate::settings::PlacefileConfig {
-                                url: key.clone(),
-                                enabled: true,
-                                opacity: 1.0,
-                            });
+            K::Gis => {
+                let name = import.name();
+                let archive = name.to_ascii_lowercase().ends_with(".kmz")
+                    || name.to_ascii_lowercase().ends_with(".zip");
+                let content = if archive {
+                    use base64::Engine as _;
+                    import.content().map(|bytes| {
+                        format!(
+                            "base64:{}",
+                            base64::engine::general_purpose::STANDARD.encode(bytes)
+                        )
+                    })
+                } else {
+                    import.text()
+                };
+                match content {
+                    Ok(content) => match stored_gis(&name, &content) {
+                        Ok(file) => {
+                            let key = format!("gis:{name}");
+                            let items = file.items.len();
+                            self.settings.web_files.insert(key.clone(), content);
+                            if !self.settings.placefiles.iter().any(|cfg| cfg.url == key) {
+                                self.settings.placefiles.push(crate::settings::PlacefileConfig {
+                                    url: key.clone(),
+                                    enabled: true,
+                                    opacity: 1.0,
+                                });
+                            }
+                            self.placefiles.retain(|loaded| loaded.url != key);
+                            self.toast(
+                                ToastKind::Success,
+                                format!("Imported {items} GIS features"),
+                            );
                         }
-                        self.placefiles.retain(|loaded| loaded.url != key);
-                        self.toast(ToastKind::Success, format!("Imported {items} GIS features"));
+                        Err(error) => self.toast(ToastKind::Error, error.to_string()),
+                    },
+                    Err(error) => {
+                        self.toast(ToastKind::Error, format!("GIS import failed: {error}"))
                     }
-                    Err(error) => self.toast(ToastKind::Error, error.to_string()),
-                },
-                Err(error) => self.toast(ToastKind::Error, format!("GIS import failed: {error}")),
-            },
+                }
+            }
             K::MarkerIcon => {
                 let idx = import.tag.parse::<usize>().ok();
                 match (

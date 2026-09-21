@@ -105,7 +105,7 @@ impl ImportKind {
             ImportKind::MarkerIcon => &["png"],
             ImportKind::AlertSound => &["wav", "mp3", "ogg", "flac"],
             ImportKind::ChaseGpx => &["gpx"],
-            ImportKind::Gis => &["geojson", "json", "kml"],
+            ImportKind::Gis => &["geojson", "json", "kml", "kmz", "zip"],
         }
     }
 
@@ -146,6 +146,14 @@ pub struct Import {
 }
 
 impl Import {
+    /// The file's raw content, including binary GIS archives.
+    pub fn content(&self) -> Result<Vec<u8>, String> {
+        match &self.bytes {
+            Some(bytes) => Ok(bytes.clone()),
+            None => std::fs::read(&self.path).map_err(|error| error.to_string()),
+        }
+    }
+
     /// The file's content as text. The one read that works everywhere: native and Android reopen
     /// the path, the browser already has the bytes.
     pub fn text(&self) -> Result<String, String> {

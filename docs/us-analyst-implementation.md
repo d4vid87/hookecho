@@ -18,7 +18,7 @@ roadmap checkbox only after its gate passes and link the test or capture here.
 | F model workstation | Partial | shared HRRR/RAP/RRFS/NAM/NBM/GFS/GEFS/ECMWF source and schedule definitions, range-index decoders, registered fields, global fields, and comparisons; GEFS ensemble mean and spread are selectable for global fields; RRFS v1 parallel is selectable for environment fields; REFS >40 dBZ probability is selectable by forecast hour and preserves available-member provenance | Live RRFS CAPE and 14-member REFS probability range reads each cover 1,088,905 finite cells; pending vertical mappings, probabilities, postage stamps, plumes, and ensemble gate |
 | G analysis/verification | Partial | observations, soundings, warning verification | Pending objective analysis/forecast verification |
 | H workspaces | Existing | compatible workspaces, analyst presets, 1/2/4 pane layouts, camera/time link groups, and a geographic cursor with native radar or field values projected across linked panes; layouts cap at four panes and national textures respect platform GPU limits | Workspace compatibility, pane-ceiling, Mercator round-trip, field sampling, and native radar sampling tests pass |
-| I GIS | Partial | GeoJSON/placefiles plus contract-tested user GeoJSON normalization into the existing renderer with explicit rejection of unsupported CRS | cross-platform file-picker import, persistent settings storage, shared overlay rendering, and KML point/line/polygon ingestion are integrated; Shapefile and KMZ remain pending |
+| I GIS | Existing | cross-platform GeoJSON, KML/KMZ, and zipped Shapefile import normalizes points, lines, polygons, and holes into the shared overlay renderer and persists with settings; archive size/count/feature limits bound input, and Shapefiles require a matching WGS84 `.prj` | GeoJSON geometry/CRS, KML geometry, KMZ archive, zipped Shapefile, unsupported/missing CRS, native Clippy, and WASM checks pass |
 | J 3D | Partial | volume view and cross sections | Pending multi-moment/slice/isosurface gate |
 | K case/chase | Partial | GPS, packs, sharing, archive replay | Pending portable case manifests/routing exposure |
 | L output/API | Partial | snapshots, GIF/MP4, streamer mode | Pending deterministic exports and local API |
@@ -39,9 +39,9 @@ Baseline commit: `9a0847c6521e9d9354c42cde09d291f4f2b67327`.
 | Lite web WASM | 149,346 bytes raw / 72,109 gzip | `scripts/web/build.sh`, generated artifact |
 | Linux release executable | 39,041,288 bytes | `cargo build --release -p hookecho` |
 
-The web gate is currently 4,111,000 gzip bytes. The in-app radar-product editor measured 4,109,552
-bytes; the ceiling keeps a narrow regression margin while retaining formula validation and input
-controls on web as well as native builds.
+The web gate is currently 4,130,000 gzip bytes. The cross-platform GIS import measured 4,126,418
+bytes after replacing general Shapefile, ZIP, and XML libraries with bounded readers for the
+required geometry and archive formats; the ceiling keeps a narrow regression margin.
 
 Startup, resident memory, and interactive frame timing are hardware-dependent. Capture them with
 `scripts/perf/capture.sh` and the in-app performance panel on the release-test hardware before the
