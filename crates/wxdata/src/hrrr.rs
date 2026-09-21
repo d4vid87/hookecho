@@ -247,6 +247,16 @@ impl Model {
         }
     }
 
+    pub fn validate_forecast_hour(self, hour: u16) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            hour <= self.definition().max_forecast_hour,
+            "{} forecast hour {hour} exceeds F{}",
+            self.label(),
+            self.definition().max_forecast_hour
+        );
+        Ok(())
+    }
+
     /// The GRIB2 file for a cycle + forecast hour.
     fn url(self, date: &str, cycle_hour: u32, fh: u8) -> String {
         let base = self.definition().base_url;
@@ -359,7 +369,7 @@ impl HrrrForecast {
     }
 }
 
-/// Fetch the REFC forecast for `fcst_hour` (0..=18) from the most recent available HRRR run.
+/// Fetch the REFC forecast for `fcst_hour` from the most recent available HRRR run.
 /// Tries recent cycles (allowing for the ~1–2 h data latency), newest first.
 pub async fn fetch_forecast(http: &reqwest::Client, fcst_hour: u8) -> anyhow::Result<HrrrForecast> {
     fetch_field(
@@ -384,7 +394,8 @@ pub async fn fetch_field(
     fcst_hour: u8,
     min_valid: f64,
 ) -> anyhow::Result<HrrrForecast> {
-    let fh = fcst_hour.min(18);
+    model.validate_forecast_hour(fcst_hour.into())?;
+    let fh = fcst_hour;
     let now = Utc::now();
     let mut last_err = None;
     for run in recent_cycles(model, now) {
@@ -453,7 +464,8 @@ pub async fn fetch_fields_one_run_capped(
     specs: &[(&str, &str, f64)],
     max_dim: Option<usize>,
 ) -> anyhow::Result<(DateTime<Utc>, Vec<MrmsField>)> {
-    let fh = fcst_hour.min(18);
+    model.validate_forecast_hour(fcst_hour.into())?;
+    let fh = fcst_hour;
     // Owned up front: the concurrent stream below must not borrow `specs` across an await, or
     // the whole future stops being `Send` and the app can't spawn it.
     let owned_specs: Vec<(String, String, f64)> = specs
@@ -916,6 +928,9 @@ mod tests {
             assert!(!definition.grid.is_empty());
             assert!(!definition.domain.is_empty());
         }
+        assert!(Model::Hrrr.validate_forecast_hour(48).is_ok());
+        assert!(Model::Hrrr.validate_forecast_hour(49).is_err());
+        assert!(Model::Nbm.validate_forecast_hour(255).is_ok());
     }
 
     #[tokio::test]
