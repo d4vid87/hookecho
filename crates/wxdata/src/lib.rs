@@ -26,6 +26,7 @@ pub mod fronts;
 pub mod geocode;
 pub mod glm;
 pub mod global;
+pub mod gis;
 pub mod hrrr;
 pub mod kdp;
 pub mod level2;
