@@ -36,6 +36,7 @@ pub struct UiActions {
     pub export_trail: bool,
     pub export_local_tracks_csv: bool,
     pub export_local_tracks_json: bool,
+    pub load_gefs_distribution: bool,
 }
 
 /// Read-only chase-pack state the app feeds the UI each frame: the current-view estimate and,
@@ -104,6 +105,7 @@ pub(crate) fn show(
     // why there isn't one. Radars scan on their own schedules, so a composite is always a little
     // ragged in time and the honest thing is to show by how much.
     mosaic: Option<&str>,
+    gefs_distribution: Option<&wxdata::global::GefsPointDistribution>,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -320,6 +322,28 @@ pub(crate) fn show(
                 .on_hover_text("Three-hourly out to five days, from the newest complete cycle")
                 .changed();
         });
+        if ui.button("Load GEFS distribution at map center").clicked() {
+            actions.load_gefs_distribution = true;
+        }
+        if let Some(result) = gefs_distribution {
+            let s = &result.statistics;
+            ui.weak(format!(
+                "{} ({}) · valid {} · {}/{} members · {:.2}, {:.2}",
+                result.field.label(), result.field.descriptor().units,
+                result.valid.format("%d %H:%MZ"), s.available, s.expected,
+                result.longitude, result.latitude
+            ));
+            egui::Grid::new("gefs_distribution").num_columns(6).show(ui, |ui| {
+                for label in ["Min", "P10", "Median", "Mean", "P90", "Max"] {
+                    ui.weak(label);
+                }
+                ui.end_row();
+                for value in [s.minimum, s.percentile_10, s.median, s.mean, s.percentile_90, s.maximum] {
+                    ui.label(format!("{value:.1}"));
+                }
+                ui.end_row();
+            });
+        }
     }
 
     if section == "Model comparison" && on.contains(&FL::ModelDiff) {

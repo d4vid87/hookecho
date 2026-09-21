@@ -243,6 +243,7 @@ enum OverlayMsg {
     Rgb(crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
+    GefsDistribution(wxdata::global::GefsPointDistribution),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
     FreezingLevels(f64, f64),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
@@ -368,6 +369,7 @@ enum OverlaySource {
         wxdata::global::GlobalField,
         u16,
     ),
+    GefsDistribution(wxdata::global::GlobalField, u16, f64, f64),
     Rtma(crate::render::FieldLayer, wxdata::rtma::SurfaceField),
     /// One model's field minus another's, at a forecast hour. Which two models is implied by the
     /// field (see `fielddiff::DiffField::pair`).
@@ -598,6 +600,7 @@ impl OverlaySource {
             | Self::Global(layer, ..)
             | Self::Rtma(layer, ..)
             | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
+            Self::GefsDistribution(..) => RequestLane::Feed("GEFS plume"),
             Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
             Self::RefsProbability(..) => RequestLane::Field(FL::RefsReflectivityProb),
             Self::Mosaic(..) => RequestLane::Field(FL::Mosaic),
@@ -751,6 +754,12 @@ impl OverlaySource {
             OverlaySource::Global(layer, model, field, fh) => {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
                 OverlayMsg::RegisteredField(layer, fc.into_frame(field.descriptor()), None)
+            }
+            OverlaySource::GefsDistribution(field, fh, lon, lat) => {
+                OverlayMsg::GefsDistribution(
+                    wxdata::global::fetch_gefs_point_distribution(http, field, fh, lon, lat)
+                        .await?,
+                )
             }
             OverlaySource::Rtma(layer, field) => OverlayMsg::RegisteredField(
                 layer,
@@ -2575,6 +2584,7 @@ pub struct HookEchoApp {
     /// The (model, hour) each global layer was last fetched for, so a change refetches at once.
     global_layer_key:
         std::collections::HashMap<crate::render::FieldLayer, (wxdata::global::GlobalModel, u16)>,
+    gefs_distribution: Option<wxdata::global::GefsPointDistribution>,
     /// What the difference layer differences, and the two valid times its last fetch compared —
     /// the pair rarely shares a cycle, and a difference between two instants has to say so.
     diff_field: crate::fielddiff::DiffField,
@@ -3581,6 +3591,7 @@ impl HookEchoApp {
             global_model: wxdata::global::GlobalModel::default(),
             global_fcst_hour: 0,
             global_layer_key: std::collections::HashMap::new(),
+            gefs_distribution: None,
             diff_field: crate::fielddiff::DiffField::default(),
             diff_valid: None,
             diff_grid: None,
@@ -7664,6 +7675,28 @@ impl HookEchoApp {
         if actions.reload {
             self.trigger_reload(ctx);
         }
+        if actions.load_gefs_distribution {
+            use crate::render::FieldLayer as FL;
+            let field = [
+                (FL::GlobalMslp, wxdata::global::GlobalField::Mslp),
+                (FL::GlobalHeight500, wxdata::global::GlobalField::Height500),
+                (FL::GlobalTemp2m, wxdata::global::GlobalField::Temp2m),
+                (FL::GlobalDewpoint2m, wxdata::global::GlobalField::Dewpoint2m),
+                (FL::GlobalWind10m, wxdata::global::GlobalField::Wind10m),
+                (FL::GlobalPrecip, wxdata::global::GlobalField::Precip),
+            ]
+            .into_iter()
+            .find_map(|(layer, field)| self.field_wanted(layer).then_some(field));
+            if let Some(field) = field {
+                let center = self.views[self.active].camera.center;
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(center.0, center.1);
+                self.gefs_distribution = None;
+                self.spawn_overlay(
+                    ctx,
+                    OverlaySource::GefsDistribution(field, self.global_fcst_hour, lon, lat),
+                );
+            }
+        }
         if actions.trail_changed {
             self.reflectivity_trail = wxdata::trail::ExtremaTrail::new(
                 self.reflectivity_trail_minutes,
@@ -8978,6 +9011,9 @@ impl HookEchoApp {
                     }
                     self.diff_valid = Some(valid);
                     self.diff_grid = Some(frame.field().clone());
+                }
+                OverlayMsg::GefsDistribution(result) => {
+                    self.gefs_distribution = Some(result);
                 }
                 OverlayMsg::StormReports(bucket, reports) => match bucket {
                     None => self.storm_reports = reports,

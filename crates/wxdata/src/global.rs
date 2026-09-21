@@ -54,6 +54,7 @@ pub struct EnsembleDistribution {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GefsPointDistribution {
+    pub field: GlobalField,
     pub run: DateTime<Utc>,
     pub valid: DateTime<Utc>,
     pub longitude: f64,
@@ -142,6 +143,7 @@ pub async fn fetch_gefs_point_distribution(
         }
         if let Some(statistics) = ensemble_distribution(samples, 31) {
             return Ok(GefsPointDistribution {
+                field,
                 run,
                 valid: run + chrono::Duration::hours(fh as i64),
                 longitude,
