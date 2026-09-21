@@ -295,11 +295,12 @@ fn image_reply(ctype: &'static str, body: Vec<u8>) -> Reply {
 fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
     count(match path {
         "/" => "index",
-        "/status.json" | "/alerts.json" | "/obs.json" | "/health.json" => "json",
-        "/cells.json" => "cells",
-        "/snapshot.png" => "snapshot",
+        "/status.json" | "/alerts.json" | "/obs.json" | "/health.json"
+        | "/v1/status" | "/v1/health" | "/v1/products" | "/v1/frame" | "/v1/probe" => "json",
+        "/cells.json" | "/v1/cells" => "cells",
+        "/snapshot.png" | "/v1/snapshot.png" => "snapshot",
         "/national.png" | "/national.mp4" => "national",
-        "/loop.gif" | "/loop.mp4" => "loop",
+        "/loop.gif" | "/loop.mp4" | "/v1/loop.gif" | "/v1/loop.mp4" => "loop",
         "/metrics" => "metrics",
         _ if path.starts_with("/proxy/") => "proxy",
         _ => "other",
@@ -324,6 +325,31 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             Ok(body) => ("200 OK", "application/json", body).into(),
             Err(e) => error_json(e).into(),
         },
+        "/v1/status" => match cached_json(server, "/status.json") {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/health" => match health_json(server) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/products" => ("200 OK", "application/json", products_json()).into(),
+        "/v1/cells" => match cells_json(server, query) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/frame" => match frame_json(server, query) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/probe" => match probe_json(server, query) {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/snapshot.png" => match snapshot(server, query) {
+            Ok(png) => image_reply("image/png", png),
+            Err(e) => error_json(e).into(),
+        },
         "/snapshot.png" => match snapshot(server, query) {
             Ok(png) => image_reply("image/png", png),
             Err(e) => error_json(e).into(),
@@ -341,6 +367,14 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             Err(e) => error_json(e).into(),
         },
         "/loop.mp4" => match loop_clip(server, query, crate::loopexport::LoopFormat::Mp4) {
+            Ok(body) => image_reply("video/mp4", body),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/loop.gif" => match loop_clip(server, query, crate::loopexport::LoopFormat::Gif) {
+            Ok(body) => image_reply("image/gif", body),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/loop.mp4" => match loop_clip(server, query, crate::loopexport::LoopFormat::Mp4) {
             Ok(body) => image_reply("video/mp4", body),
             Err(e) => error_json(e).into(),
         },
@@ -552,6 +586,7 @@ fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
     // rather than on never having tried.
     let feeds_ok = cached_json(server, "/status.json").is_ok();
     let body = serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_secs": STARTED.get().map(|t| t.elapsed().as_secs()),
         "spots": server.spots.len(),
@@ -566,6 +601,127 @@ fn health_json(server: &Server) -> anyhow::Result<Vec<u8>> {
             .count(),
     }))?;
     Ok(body)
+}
+
+fn products_json() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
+        "radar_sites": wxdata::sites::sites().iter().map(|site| serde_json::json!({
+            "id": site.id,
+            "city": site.city,
+            "state": site.state,
+            "lat": site.latitude,
+            "lon": site.longitude,
+            "elevation_m": site.elevation_meters,
+        })).collect::<Vec<_>>(),
+        "radar_products": crate::products::PRODUCTS.iter().map(|product| serde_json::json!({
+            "id": product.short,
+            "name": product.name,
+            "units": product.moment.units(),
+        })).collect::<Vec<_>>(),
+        "mrms_products": wxdata::mrms::DESCRIPTORS.iter().map(|field| serde_json::json!({
+            "id": field.id.0,
+            "name": field.display_name,
+            "units": field.units,
+        })).collect::<Vec<_>>(),
+    }))
+    .expect("static product catalog serializes")
+}
+
+fn selected_radar_object(
+    server: &Server,
+    query: &str,
+) -> anyhow::Result<(Frame, wxdata::level2::Identifier)> {
+    let frame = Frame::parse(query)?;
+    let requested = crate::cloud::param(query, "time")
+        .map(|value| {
+            chrono::DateTime::parse_from_rfc3339(&value)
+                .map(|time| time.with_timezone(&chrono::Utc))
+                .map_err(|_| anyhow::anyhow!("time must be RFC3339"))
+        })
+        .transpose()?;
+    let date = match crate::cloud::param(query, "date") {
+        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+            .map_err(|_| anyhow::anyhow!("date must be YYYY-MM-DD"))?,
+        None => requested
+            .map(|time| time.date_naive())
+            .unwrap_or_else(|| chrono::Utc::now().date_naive()),
+    };
+    let objects = server
+        .rt
+        .block_on(wxdata::level2::list_volumes(&frame.site, date))?;
+    let object = match requested {
+        Some(time) => objects
+            .into_iter()
+            .filter_map(|object| object.date_time().map(|at| (object, (at - time).abs())))
+            .min_by_key(|(_, distance)| *distance)
+            .map(|(object, _)| object),
+        None => objects.into_iter().next_back(),
+    }
+    .ok_or_else(|| anyhow::anyhow!("no radar volumes for {} on {date}", frame.site))?;
+    Ok((frame, object))
+}
+
+fn frame_json(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
+    let (frame, object) = selected_radar_object(server, query)?;
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
+        "site": frame.site,
+        "product": frame.moment.short_name(),
+        "units": frame.moment.units(),
+        "tilt_index": frame.tilt,
+        "source_object": object.name(),
+        "valid_time": object.date_time(),
+        "classification": "observed",
+    }))?)
+}
+
+fn probe_json(server: &Server, query: &str) -> anyhow::Result<Vec<u8>> {
+    let lon: f64 = crate::cloud::param(query, "lon")
+        .ok_or_else(|| anyhow::anyhow!("lon is required"))?
+        .parse()?;
+    let lat: f64 = crate::cloud::param(query, "lat")
+        .ok_or_else(|| anyhow::anyhow!("lat is required"))?
+        .parse()?;
+    anyhow::ensure!(
+        lon.is_finite()
+            && lat.is_finite()
+            && (-180.0..=180.0).contains(&lon)
+            && (-90.0..=90.0).contains(&lat),
+        "invalid probe coordinate"
+    );
+    let (frame, object) = selected_radar_object(server, query)?;
+    let source_object = object.name().to_string();
+    let scan = server
+        .rt
+        .block_on(wxdata::level2::download_scan(object, crate::paths::cache_dir()))?;
+    let sample = wxdata::level2::sample_native(
+        &scan,
+        frame.moment,
+        frame.tilt,
+        lon,
+        lat,
+    )
+    .ok_or_else(|| anyhow::anyhow!("point is outside the selected radar sweep"))?;
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "api_version": 1,
+        "site": frame.site,
+        "product": frame.moment.short_name(),
+        "units": frame.moment.units(),
+        "tilt_index": frame.tilt,
+        "source_object": source_object,
+        "valid_time": sample.collected_at,
+        "lon": lon,
+        "lat": lat,
+        "value": sample.value,
+        "below_threshold": sample.below_threshold,
+        "range_folded": sample.folded,
+        "azimuth_deg": sample.azimuth_deg,
+        "ground_range_km": sample.ground_range_km,
+        "beam_height_ft": sample.beam_height_ft,
+        "gate_spacing_km": sample.gate_spacing_km,
+        "sampling": "nearest native radial and gate",
+    }))?)
 }
 
 /// When this process started serving, for `/health.json`.
@@ -1618,6 +1774,27 @@ mod tests {
         // A dashboard's `?token=` form.
         assert_eq!(query_token("site=KTLX&token=abc"), Some("abc".to_string()));
         assert_eq!(query_token("site=KTLX"), None);
+    }
+
+    #[test]
+    fn versioned_product_catalog_has_stable_ids_and_units() {
+        let catalog: serde_json::Value = serde_json::from_slice(&products_json()).unwrap();
+        assert_eq!(catalog["api_version"], 1);
+        assert!(catalog["radar_sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|site| site["id"] == "KTLX"));
+        assert!(catalog["radar_products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|product| product["id"] == "REF" && product["units"] == "dBZ"));
+        assert!(catalog["mrms_products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|product| product["id"] == "mrms.composite-reflectivity"));
     }
 
     #[test]
