@@ -375,6 +375,41 @@ fn metrics(errors: impl IntoIterator<Item = f32>) -> anyhow::Result<Verification
     })
 }
 
+/// Bolton-style equivalent potential temperature from surface temperature, dewpoint, and pressure.
+pub fn theta_e_k(temp_k: f32, dewpoint_k: f32, pressure_pa: f32) -> Option<f32> {
+    if !(temp_k > 150.0 && dewpoint_k > 150.0 && pressure_pa > 10_000.0) {
+        return None;
+    }
+    let pressure_hpa = pressure_pa / 100.0;
+    let dewpoint_c = dewpoint_k - 273.15;
+    let vapor_hpa = 6.112 * (17.67 * dewpoint_c / (dewpoint_c + 243.5)).exp();
+    if vapor_hpa >= pressure_hpa {
+        return None;
+    }
+    let mixing_ratio = 0.622 * vapor_hpa / (pressure_hpa - vapor_hpa);
+    let lcl_k = 1.0 / (1.0 / (dewpoint_k - 56.0) + (temp_k / dewpoint_k).ln() / 800.0) + 56.0;
+    let theta_e = temp_k
+        * (1000.0 / pressure_hpa).powf(0.2854 * (1.0 - 0.28 * mixing_ratio))
+        * ((3376.0 / lcl_k - 2.54) * mixing_ratio * (1.0 + 0.81 * mixing_ratio)).exp();
+    theta_e.is_finite().then_some(theta_e)
+}
+
+/// Horizontal gradient magnitude at a point, expressed as native field units per 100 km.
+pub fn gradient_per_100km(field: &MrmsField, lon: f64, lat: f64) -> Option<f32> {
+    if field.nx < 3 || field.ny < 3 {
+        return None;
+    }
+    let dlon = (field.lon_east - field.lon_west) / field.nx as f64;
+    let dlat = (field.lat_north - field.lat_south) / field.ny as f64;
+    let west = field.sample_bilinear(lon - dlon, lat)?;
+    let east = field.sample_bilinear(lon + dlon, lat)?;
+    let south = field.sample_bilinear(lon, lat - dlat)?;
+    let north = field.sample_bilinear(lon, lat + dlat)?;
+    let dx_km = 2.0 * dlon.abs() * 111.32 * lat.to_radians().cos().abs().max(0.01);
+    let dy_km = 2.0 * dlat.abs() * 111.32;
+    Some((((east - west) / dx_km as f32).hypot((north - south) / dy_km as f32)) * 100.0)
+}
+
 /// `a - b`, on the coarser of the two lattices, over the part of the world both cover.
 ///
 /// The time is `a`'s: a difference is only meaningful for one instant, and the caller is
@@ -727,5 +762,21 @@ mod tests {
         )
         .unwrap();
         assert!((score.bias).abs() < 0.001);
+    }
+
+    #[test]
+    fn surface_diagnostics_are_bounded_and_physical() {
+        let theta_e = theta_e_k(303.15, 293.15, 100_000.0).unwrap();
+        assert!((340.0..=350.0).contains(&theta_e), "{theta_e}");
+        assert!(theta_e_k(f32::NAN, 293.15, 100_000.0).is_none());
+
+        let mut values = Vec::new();
+        for _row in 0..5 {
+            values.extend([0.0, 1.0, 2.0, 3.0, 4.0]);
+        }
+        let field = grid(5, 5, -2.5, 2.5, -2.5, 2.5, 0.0);
+        let field = MrmsField { values, ..field };
+        let gradient = gradient_per_100km(&field, 0.0, 0.0).unwrap();
+        assert!((0.89..=0.91).contains(&gradient), "{gradient}");
     }
 }

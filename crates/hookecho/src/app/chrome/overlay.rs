@@ -90,6 +90,10 @@ impl HookEchoApp {
         let l3_site = self.l3grid_site.clone();
         let tz = self.active_tz();
         let mosaic = self.mosaic_status();
+        let analysis_point = crate::render::mercator::world_to_lonlat(
+            self.views[self.active].camera.center.0,
+            self.views[self.active].camera.center.1,
+        );
         let mut etop_dbz = self.settings.etop_dbz;
         let mut hide = false;
         // Height budget: the search pill above, the scrubber pill below (which is centred and
@@ -185,6 +189,7 @@ impl HookEchoApp {
                             &mut self.global_model,
                             &mut self.global_fcst_hour,
                             &mut self.analysis_source,
+                            analysis_point,
                             &mut self.diff_field,
                             self.diff_valid.as_ref(),
                             &mut self.settings.lightning_minutes,
@@ -319,6 +324,7 @@ impl HookEchoApp {
                                     &mut self.global_model,
                                     &mut self.global_fcst_hour,
                                     &mut self.analysis_source,
+                                    analysis_point,
                                     &mut self.diff_field,
                                     self.diff_valid.as_ref(),
                                     &mut self.settings.lightning_minutes,

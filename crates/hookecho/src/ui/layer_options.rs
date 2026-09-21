@@ -89,6 +89,7 @@ pub(crate) fn show(
     global_model: &mut wxdata::global::GlobalModel,
     global_fcst_hour: &mut u16,
     analysis_source: &mut wxdata::rtma::Source,
+    analysis_point: (f64, f64),
     // Model difference: which field, and the two valid times the last fetch actually compared.
     diff_field: &mut crate::fielddiff::DiffField,
     diff_valid: Option<&(String, String)>,
@@ -417,6 +418,41 @@ pub(crate) fn show(
                 }
             }
             changed = true;
+        }
+        let frame = |layer| fields.get(&layer).and_then(|state| state.frame.as_ref());
+        if let (Some(temp), Some(dewpoint), Some(pressure)) = (
+            frame(FL::RtmaTemp2m),
+            frame(FL::RtmaDewpoint2m),
+            frame(FL::RtmaPressure),
+        ) {
+            let matched = temp.stamp.valid_time == dewpoint.stamp.valid_time
+                && temp.stamp.valid_time == pressure.stamp.valid_time
+                && temp.stamp.source_identity == dewpoint.stamp.source_identity
+                && temp.stamp.source_identity == pressure.stamp.source_identity;
+            if matched {
+                let (lon, lat) = analysis_point;
+                let theta_e = temp
+                    .sample(lon, lat)
+                    .value
+                    .zip(dewpoint.sample(lon, lat).value)
+                    .zip(pressure.sample(lon, lat).value)
+                    .and_then(|((t, td), p)| crate::fielddiff::theta_e_k(t, td, p));
+                let gradient = crate::fielddiff::gradient_per_100km(dewpoint.field(), lon, lat);
+                if theta_e.is_some() || gradient.is_some() {
+                    ui.separator();
+                    ui.weak(format!("Map center · {:.2}, {:.2}", lon, lat));
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(value) = theta_e {
+                            ui.label(format!("θe {value:.1} K"));
+                        }
+                        if let Some(value) = gradient {
+                            ui.label(format!("Dewpoint gradient {value:.1} K/100 km"));
+                        }
+                    });
+                }
+            } else {
+                ui.weak("Diagnostics wait for matching analysis times.");
+            }
         }
     }
 
