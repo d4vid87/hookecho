@@ -19,6 +19,8 @@ pub struct CrossSection {
     pub max_height_km: f32,
     pub length_km: f64,
     pub dbz: Vec<Option<f32>>,
+    /// One 4/3-earth beam-center path per transmitted tilt, indexed by cross-section column.
+    pub beam_paths_km: Vec<Vec<Option<f32>>>,
 }
 
 impl CrossSection {
@@ -153,6 +155,7 @@ pub fn build(
     let rows = rows.max(2);
     let length_km = dist_bearing(a.0, a.1, b.0, b.1).0;
     let mut dbz = vec![None; cols * rows];
+    let mut beam_paths_km = vec![Vec::with_capacity(cols); sweeps.len()];
     let mut samples: Vec<(f64, f32)> = Vec::with_capacity(sweeps.len());
 
     for i in 0..cols {
@@ -160,6 +163,15 @@ pub fn build(
         let plon = a.0 + (b.0 - a.0) * t;
         let plat = a.1 + (b.1 - a.1) * t;
         let (ground_km, az) = dist_bearing(rlon, rlat, plon, plat);
+
+        for (path, sweep) in beam_paths_km.iter_mut().zip(sweeps) {
+            let slant = slant_from_ground_km(ground_km, sweep.elevation_deg as f64);
+            let first = sweep.first_gate_km as f64;
+            let last = first + sweep.gate_interval_km as f64 * sweep.gate_count as f64;
+            path.push((first..=last).contains(&slant).then(|| {
+                beam_height_km(slant, sweep.elevation_deg as f64) as f32
+            }));
+        }
 
         // One sample per tilt whose beam reaches this ground range and has data at (az, range).
         column_samples(sweeps, ground_km, az, &mut samples);
@@ -176,6 +188,7 @@ pub fn build(
         max_height_km,
         length_km,
         dbz,
+        beam_paths_km,
     })
 }
 
@@ -220,6 +233,7 @@ mod tests {
             max_height_km: 12.0,
             length_km: 40.0,
             dbz: vec![None, Some(5.0), None, None, Some(50.0), None],
+            beam_paths_km: Vec::new(),
         };
         let csv = xs.to_csv();
         let lines: Vec<&str> = csv.lines().collect();
@@ -236,6 +250,35 @@ mod tests {
         assert!(beam_height_km(100.0, 4.0) > beam_height_km(100.0, 0.5));
         // Near the radar at low tilt the beam is near the surface.
         assert!(beam_height_km(10.0, 0.5) < 0.5);
+    }
+
+    #[test]
+    fn cross_section_retains_each_tilts_beam_path() {
+        let sweep = |elevation_deg| BinnedSweep {
+            moment: crate::level2::Moment::Reflectivity,
+            az_bins: 360,
+            gate_count: 800,
+            data: vec![100; 360 * 800],
+            first_gate_km: 0.0,
+            gate_interval_km: 0.25,
+            radar_lat: 35.0,
+            radar_lon: -97.0,
+            elevation_deg,
+            value_min: -32.0,
+            value_max: 95.0,
+        };
+        let xs = build(
+            &[sweep(0.5), sweep(1.5)],
+            (-97.0, 35.1),
+            (-97.0, 36.0),
+            20,
+            10,
+            18.0,
+        )
+        .unwrap();
+        assert_eq!(xs.beam_paths_km.len(), 2);
+        assert!(xs.beam_paths_km.iter().all(|path| path.len() == xs.cols));
+        assert!(xs.beam_paths_km[1][10].unwrap() > xs.beam_paths_km[0][10].unwrap());
     }
 
     #[test]

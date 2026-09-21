@@ -3148,6 +3148,7 @@ pub struct HookEchoApp {
     xsection_pts: Vec<[f64; 2]>,
     xsection: Option<wxdata::xsection::CrossSection>,
     xsection_tex: Option<egui::TextureHandle>,
+    xsection_beams: bool,
     /// Lazily-loaded textures for uploaded marker icons, keyed by filename. `None` = load failed
     /// (negative-cached so a missing/corrupt file isn't retried every frame).
     marker_icon_tex: ui::marker_window::IconTextures,
@@ -3881,6 +3882,7 @@ impl HookEchoApp {
             xsection_pts: Vec::new(),
             xsection: None,
             xsection_tex: None,
+            xsection_beams: true,
             marker_icon_tex: Default::default(),
             show_3d: false,
             vol3d: Default::default(),
@@ -11573,8 +11575,24 @@ impl HookEchoApp {
             .as_ref()?;
         let sample = frame.sample(lon, lat);
         sample.value.map(|value| {
+            let coverage_warning = self
+                .beam_coverage(idx, [lon, lat])
+                .and_then(|coverage| {
+                    let site_msl_km = view
+                        .site
+                        .as_deref()
+                        .and_then(wxdata::sites::site_by_id)
+                        .map(|site| {
+                            (site.elevation_meters as f64 + wxdata::towers::tower_m(site.id))
+                                / 1000.0
+                        })
+                        .unwrap_or(0.0);
+                    sampled_height_warning(sample.units, value, coverage, site_msl_km)
+                })
+                .map(|warning| format!("\n⚠ {warning}"))
+                .unwrap_or_default();
             format!(
-                "{}\n{value:.1} {} · valid {}",
+                "{}\n{value:.1} {} · valid {}{coverage_warning}",
                 frame.descriptor.short_name,
                 sample.units,
                 sample.valid_time.format("%Y-%m-%d %H:%M UTC")
@@ -12788,7 +12806,8 @@ impl HookEchoApp {
         let radar_probe = response.hover_pos().and_then(|pos| {
             let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
             let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
-            self.radar_probe_at(idx, lon, lat)
+            self.field_probe_at(idx, lon, lat)
+                .or_else(|| self.radar_probe_at(idx, lon, lat))
         });
         let linked_probe_value = self
             .linked_probe
@@ -18017,6 +18036,26 @@ fn draw_time_series(painter: &egui::Painter, top_left: egui::Pos2, series: &Rada
     );
 }
 
+fn sampled_height_warning(
+    units: &str,
+    value: f32,
+    coverage: crate::elevation::BeamCoverage,
+    site_msl_km: f64,
+) -> Option<&'static str> {
+    let height_km = match units {
+        "km AGL" => value as f64,
+        "m MSL" => value as f64 / 1000.0 - site_msl_km,
+        _ => return None,
+    };
+    if height_km < coverage.bottom_km_agl {
+        Some("sampled feature is below this radar beam")
+    } else if height_km > coverage.top_km_agl {
+        Some("sampled feature extends above this radar beam")
+    } else {
+        None
+    }
+}
+
 fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
     f.distance_km(lon, lat) <= 30.0 * crate::geo::KM_PER_MILE
 }
@@ -19806,7 +19845,14 @@ impl eframe::App for HookEchoApp {
         }
         if let (Some(xs), Some(tex)) = (&self.xsection, &self.xsection_tex) {
             let mut moment = self.xsection_moment;
-            let open = ui::xsection_window::show(ctx, xs, tex, &mut moment, &mut self.drawer);
+            let open = ui::xsection_window::show(
+                ctx,
+                xs,
+                tex,
+                &mut moment,
+                &mut self.xsection_beams,
+                &mut self.drawer,
+            );
             if !open {
                 self.xsection = None;
                 self.xsection_tex = None;
@@ -20372,7 +20418,10 @@ mod follow_tests {
 
 #[cfg(test)]
 mod warning_scope_tests {
-    use super::{feature_in_box, nearest_alternate_nexrad, warning_is_near_home, GeoFeature};
+    use super::{
+        feature_in_box, nearest_alternate_nexrad, sampled_height_warning, warning_is_near_home,
+        GeoFeature,
+    };
     use wxdata::overlay::FeatureKind;
 
     fn poly(x0: f64, y0: f64, x1: f64, y1: f64) -> GeoFeature {
@@ -20415,6 +20464,25 @@ mod warning_scope_tests {
         let alternate = nearest_alternate_nexrad("KTLX").expect("nearby NEXRAD");
         assert_ne!(alternate, "KTLX");
         assert!(wxdata::sites::is_nexrad(&alternate));
+    }
+
+    #[test]
+    fn height_fields_warn_outside_the_sampled_beam() {
+        let coverage = crate::elevation::BeamCoverage {
+            ground_km: 80.0,
+            center_km_agl: 2.0,
+            bottom_km_agl: 1.5,
+            top_km_agl: 2.5,
+            blockage: 0.0,
+            tilt_deg: 0.5,
+        };
+        assert!(sampled_height_warning("km AGL", 5.0, coverage, 0.3)
+            .unwrap()
+            .contains("above"));
+        assert!(sampled_height_warning("m MSL", 1_000.0, coverage, 0.3)
+            .unwrap()
+            .contains("below"));
+        assert_eq!(sampled_height_warning("dBZ", 50.0, coverage, 0.3), None);
     }
 }
 

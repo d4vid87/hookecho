@@ -508,7 +508,7 @@ HookEcho already models beam height. Extend it into a full analysis layer.
 - [x] terrain blockage estimate using existing elevation infrastructure
 - [x] radar coverage comparison between neighboring sites
 - [ ] optional beam-rise overlay in cross-section and 3D
-- [ ] warn when a sampled feature is below/above sampled beam coverage
+- [x] warn when a sampled feature is below/above sampled beam coverage
 
 Do not imply perfect propagation; clearly label 4/3-earth assumptions.
 
