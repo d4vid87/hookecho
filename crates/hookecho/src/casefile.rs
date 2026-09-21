@@ -65,6 +65,51 @@ impl CaseManifest {
         Ok(serde_json::to_string_pretty(self)?)
     }
 
+    pub fn to_markdown(&self) -> anyhow::Result<String> {
+        use std::fmt::Write;
+        self.validate()?;
+        let mut report = format!(
+            "# {}\n\nCreated: {}  \nWorkspace: {}  \nPanes: {}\n\n",
+            self.name.replace(['\n', '\r'], " "),
+            self.created_at.to_rfc3339(),
+            self.workspace.name.replace(['\n', '\r'], " "),
+            self.panes.len(),
+        );
+        for (index, pane) in self.panes.iter().enumerate() {
+            writeln!(report, "## Pane {} — {}\n", index + 1, pane.site)?;
+            writeln!(
+                report,
+                "Selected time: {}  ",
+                pane.selected_time
+                    .map(|time| time.to_rfc3339())
+                    .unwrap_or_else(|| "live".into())
+            )?;
+            writeln!(report, "Radar objects: {}\n", pane.radar_objects.len())?;
+            for object in &pane.radar_objects {
+                writeln!(report, "- `{object}`")?;
+            }
+            report.push('\n');
+        }
+        writeln!(report, "## Analyst material\n")?;
+        writeln!(report, "Annotations: {}  ", self.annotations.len())?;
+        writeln!(report, "Bookmarks: {}\n", self.bookmarks.len())?;
+        for bookmark in &self.bookmarks {
+            writeln!(
+                report,
+                "- {} — {} ({:.4}, {:.4}, zoom {:.1})",
+                bookmark.name.replace(['\n', '\r'], " "),
+                bookmark.site,
+                bookmark.x,
+                bookmark.y,
+                bookmark.zoom
+            )?;
+        }
+        writeln!(report, "\n## Reproducible manifest\n\n```json")?;
+        report.push_str(&self.to_json()?);
+        report.push_str("\n```\n");
+        Ok(report)
+    }
+
     fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.schema_version == SCHEMA_VERSION,
@@ -94,7 +139,10 @@ impl CaseManifest {
                     .all(|stroke| stroke.points.len() <= 100_000),
             "case contains too many annotation points"
         );
-        anyhow::ensure!(self.bookmarks.len() <= 2048, "case contains too many bookmarks");
+        anyhow::ensure!(
+            self.bookmarks.len() <= 2048,
+            "case contains too many bookmarks"
+        );
         for pane in &self.panes {
             for name in &pane.radar_objects {
                 let object = wxdata::level2::Identifier::new(name.clone());
@@ -141,6 +189,10 @@ mod tests {
             CaseManifest::from_json(&manifest.to_json().unwrap()).unwrap(),
             manifest
         );
+        let report = manifest.to_markdown().unwrap();
+        assert!(report.contains("# May 25 outbreak"));
+        assert!(report.contains("`KTLX20240526_013000_V06`"));
+        assert!(report.contains("\"schema_version\": 1"));
 
         let mut bad = manifest;
         bad.panes.pop();

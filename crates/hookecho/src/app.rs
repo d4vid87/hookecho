@@ -1653,6 +1653,7 @@ pub(crate) enum PaletteAction {
     /// Snapshot the current pane layout as a new workspace.
     SaveWorkspace,
     ExportCase,
+    ExportCaseReport,
     ImportCase,
     /// Restore the saved workspace at this index (an index, not the workspace itself, so the enum
     /// stays `Copy` and the palette rows stay cheap).
@@ -8387,6 +8388,7 @@ impl HookEchoApp {
                 );
             }
             PaletteAction::ExportCase => self.export_case(),
+            PaletteAction::ExportCaseReport => self.export_case_report(),
             PaletteAction::ImportCase => {
                 crate::dialog::request_open(crate::dialog::ImportKind::CaseManifest, "")
             }
@@ -15102,7 +15104,7 @@ impl HookEchoApp {
         }
     }
 
-    fn export_case(&mut self) {
+    fn current_case(&mut self) -> anyhow::Result<crate::casefile::CaseManifest> {
         let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
         let name = format!("HookEcho case {stamp}");
         let mut workspace = self.capture_workspace();
@@ -15147,14 +15149,18 @@ impl HookEchoApp {
                 rgba: stroke.color.to_array(),
             })
             .collect();
-        let result = crate::casefile::CaseManifest::new(
+        crate::casefile::CaseManifest::new(
             name,
             workspace,
             panes,
             annotations,
             self.settings.bookmarks.clone(),
         )
-        .and_then(|manifest| manifest.to_json());
+    }
+
+    fn export_case(&mut self) {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        let result = self.current_case().and_then(|manifest| manifest.to_json());
         match result {
             Ok(json) => match crate::dialog::save_bytes(
                 &format!("hookecho-case-{stamp}.json"),
@@ -15170,6 +15176,27 @@ impl HookEchoApp {
                 crate::dialog::Saved::Cancelled => {}
             },
             Err(error) => self.toast(ToastKind::Error, format!("Case export failed: {error}")),
+        }
+    }
+
+    fn export_case_report(&mut self) {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        let result = self.current_case().and_then(|manifest| manifest.to_markdown());
+        match result {
+            Ok(report) => match crate::dialog::save_bytes(
+                &format!("hookecho-case-report-{stamp}.md"),
+                "md",
+                report.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Case report saved to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => {
+                    self.toast(ToastKind::Error, format!("Case report failed: {error}"))
+                }
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, format!("Case report failed: {error}")),
         }
     }
 

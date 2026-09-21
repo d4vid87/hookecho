@@ -1038,6 +1038,14 @@ impl HookEchoApp {
             None,
         );
         push(
+            "Export case report",
+            "Reference",
+            "Save a readable report with exact source objects and an embedded manifest",
+            true,
+            PaletteAction::ExportCaseReport,
+            None,
+        );
+        push(
             "Open case manifest",
             "Reference",
             "Restore a portable HookEcho case manifest",
