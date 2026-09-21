@@ -3,8 +3,8 @@
 Status is conservative: **existing** has repository evidence, **partial** has useful foundations
 but misses roadmap acceptance criteria, and **missing** has no accepted implementation. Update a
 roadmap checkbox only after its gate passes and link the test or capture here. The web gzip budget
-is 4,222,000 bytes after the GEFS distribution UI measured 4,218,268 bytes in the hosted optimized
-build (a 3,732-byte, 0.09% allowance over the measured bundle).
+is 4,240,000 bytes after the completed analyst feature set measured 4,231,144 bytes in the hosted
+optimized build (an 8,856-byte, 0.21% allowance over the measured bundle).
 
 | Area | Status | Current evidence | Gate evidence |
 |---|---|---|---|
