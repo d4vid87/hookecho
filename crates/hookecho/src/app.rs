@@ -1644,6 +1644,8 @@ pub(crate) enum PaletteAction {
     Explain(usize),
     /// Snapshot the current pane layout as a new workspace.
     SaveWorkspace,
+    ExportCase,
+    ImportCase,
     /// Restore the saved workspace at this index (an index, not the workspace itself, so the enum
     /// stays `Copy` and the palette rows stay cheap).
     ApplyWorkspace(usize),
@@ -8304,6 +8306,10 @@ impl HookEchoApp {
                     format!("Saved \u{2014} rename \"{name}\" in Settings"),
                 );
             }
+            PaletteAction::ExportCase => self.export_case(),
+            PaletteAction::ImportCase => {
+                crate::dialog::request_open(crate::dialog::ImportKind::CaseManifest, "")
+            }
             PaletteAction::ApplyWorkspace(i) => {
                 if let Some(ws) = self.settings.workspaces.get(i).cloned() {
                     self.apply_workspace(&ws, ctx);
@@ -14824,6 +14830,63 @@ impl HookEchoApp {
         }
     }
 
+    fn export_case(&mut self) {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        let name = format!("HookEcho case {stamp}");
+        let mut workspace = self.capture_workspace();
+        workspace.name = name.clone();
+        let panes = self
+            .views
+            .iter()
+            .map(|view| {
+                let selected_time = view
+                    .timeline
+                    .current()
+                    .and_then(|frame| frame.date_time())
+                    .or_else(|| view.volume.as_ref().map(|volume| volume.time));
+                let radar_objects = match view.timeline.replay {
+                    Some((from, to)) => view
+                        .timeline
+                        .frames
+                        .get(from..=to)
+                        .unwrap_or(&[])
+                        .iter()
+                        .take(2048)
+                        .map(|frame| frame.name().to_string())
+                        .collect(),
+                    None => view
+                        .timeline
+                        .current()
+                        .map(|frame| vec![frame.name().to_string()])
+                        .unwrap_or_default(),
+                };
+                crate::casefile::CasePane {
+                    site: view.site.clone().unwrap_or_default(),
+                    selected_time,
+                    radar_objects,
+                }
+            })
+            .collect();
+        let result = crate::casefile::CaseManifest::new(name, workspace, panes)
+            .and_then(|manifest| manifest.to_json());
+        match result {
+            Ok(json) => match crate::dialog::save_bytes(
+                &format!("hookecho-case-{stamp}.json"),
+                "json",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Case saved to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => {
+                    self.toast(ToastKind::Error, format!("Case export failed: {error}"))
+                }
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, format!("Case export failed: {error}")),
+        }
+    }
+
     /// Restore a saved arrangement. Panes come back empty of data and fill through the normal
     /// poll, exactly as a freshly split pane does.
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
@@ -15385,7 +15448,7 @@ impl HookEchoApp {
     }
 
     /// Route a picked file to whatever asked for it.
-    fn apply_import(&mut self, import: crate::dialog::Import) {
+    fn apply_import(&mut self, import: crate::dialog::Import, ctx: &egui::Context) {
         use crate::dialog::ImportKind as K;
         match import.kind {
             K::SettingsBundle => self.apply_settings_bundle(&import),
@@ -15470,6 +15533,48 @@ impl HookEchoApp {
                     }
                 }
             }
+            K::CaseManifest => match import
+                .text()
+                .map_err(anyhow::Error::msg)
+                .and_then(|json| crate::casefile::CaseManifest::from_json(&json))
+            {
+                Ok(case) => {
+                    self.apply_workspace(&case.workspace, ctx);
+                    for (view, pane) in self.views.iter_mut().zip(case.panes) {
+                        if !pane.radar_objects.is_empty() {
+                            view.timeline.frames = pane
+                                .radar_objects
+                                .into_iter()
+                                .map(Identifier::new)
+                                .collect();
+                            view.timeline.frames_key = Some((
+                                pane.site,
+                                pane.selected_time
+                                    .map(|time| time.date_naive())
+                                    .unwrap_or_else(|| view.timeline.date),
+                            ));
+                        }
+                        if let Some(time) = pane.selected_time {
+                            view.timeline.date = time.date_naive();
+                            view.timeline.playhead = view
+                                .timeline
+                                .frames
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, frame)| {
+                                    frame.date_time().map(|at| (index, (at - time).abs()))
+                                })
+                                .min_by_key(|(_, distance)| *distance)
+                                .map(|(index, _)| index)
+                                .unwrap_or(0);
+                            view.timeline.seek_target = None;
+                            view.timeline.following = false;
+                        }
+                    }
+                    self.toast(ToastKind::Success, format!("Opened case: {}", case.name));
+                }
+                Err(error) => self.toast(ToastKind::Error, format!("Case import failed: {error}")),
+            },
             K::MarkerIcon => {
                 let idx = import.tag.parse::<usize>().ok();
                 match (
@@ -16783,7 +16888,7 @@ impl eframe::App for HookEchoApp {
         // button, because on Android the picker is an activity result that lands long after the
         // click — through the same file handover a notification tap uses.
         if let Some(import) = crate::dialog::take_result() {
-            self.apply_import(import);
+            self.apply_import(import, ctx);
         }
 
         // Android paste: re-focus the text field that lost focus to the Paste-button tap, before

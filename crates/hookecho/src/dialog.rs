@@ -84,6 +84,8 @@ pub enum ImportKind {
     ChaseGpx,
     /// A user GIS overlay normalized into the map renderer.
     Gis,
+    /// A portable HookEcho case manifest.
+    CaseManifest,
 }
 
 impl ImportKind {
@@ -95,6 +97,7 @@ impl ImportKind {
             ImportKind::AlertSound => "Alert sound",
             ImportKind::ChaseGpx => "GPX track",
             ImportKind::Gis => "GIS overlay",
+            ImportKind::CaseManifest => "HookEcho case manifest",
         }
     }
 
@@ -106,6 +109,7 @@ impl ImportKind {
             ImportKind::AlertSound => &["wav", "mp3", "ogg", "flac"],
             ImportKind::ChaseGpx => &["gpx"],
             ImportKind::Gis => &["geojson", "json", "kml", "kmz", "zip"],
+            ImportKind::CaseManifest => &["hookecho-case.json", "json"],
         }
     }
 
@@ -122,6 +126,7 @@ impl ImportKind {
             // way back, same as a palette.
             ImportKind::ChaseGpx => "*/*",
             ImportKind::Gis => "*/*",
+            ImportKind::CaseManifest => "application/json",
         }
     }
 }
@@ -237,6 +242,7 @@ mod android_open {
             ImportKind::AlertSound => "sound",
             ImportKind::ChaseGpx => "gpx",
             ImportKind::Gis => "gis",
+            ImportKind::CaseManifest => "case",
         }
     }
 
@@ -248,6 +254,7 @@ mod android_open {
             "sound" => ImportKind::AlertSound,
             "gpx" => ImportKind::ChaseGpx,
             "gis" => ImportKind::Gis,
+            "case" => ImportKind::CaseManifest,
             _ => return None,
         })
     }

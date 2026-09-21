@@ -1029,6 +1029,22 @@ impl HookEchoApp {
             PaletteAction::SaveWorkspace,
             None,
         );
+        push(
+            "Export case manifest",
+            "Reference",
+            "Save this workspace, selected times, and exact radar source objects",
+            true,
+            PaletteAction::ExportCase,
+            None,
+        );
+        push(
+            "Open case manifest",
+            "Reference",
+            "Restore a portable HookEcho case manifest",
+            true,
+            PaletteAction::ImportCase,
+            None,
+        );
         for (i, ws) in self.settings.workspaces.iter().enumerate() {
             push(
                 &format!("Workspace: {}", ws.name),
