@@ -250,6 +250,83 @@ impl FieldFrame {
         }
     }
 
+    /// Exact native-value statistics inside a lon/lat box. Display textures are never sampled.
+    pub fn statistics_in_box(&self, a: [f64; 2], b: [f64; 2]) -> Option<RegionStats> {
+        let bounds = (
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+        );
+        let mut count = 0usize;
+        let mut mean = 0.0f64;
+        let mut m2 = 0.0f64;
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        self.for_each_in_box(bounds, |value| {
+            count += 1;
+            min = min.min(value);
+            max = max.max(value);
+            let delta = f64::from(value) - mean;
+            mean += delta / count as f64;
+            m2 += delta * (f64::from(value) - mean);
+        });
+        if count == 0 {
+            return None;
+        }
+        let mut histogram = [0u32; 16];
+        let span = (max - min).max(f32::EPSILON);
+        self.for_each_in_box(bounds, |value| {
+            let bin = (((value - min) / span * 16.0) as usize).min(15);
+            histogram[bin] = histogram[bin].saturating_add(1);
+        });
+        Some(RegionStats {
+            count,
+            min,
+            max,
+            mean: mean as f32,
+            std_dev: (m2 / count as f64).sqrt() as f32,
+            histogram,
+        })
+    }
+
+    fn for_each_in_box(&self, bounds: (f64, f64, f64, f64), mut visit: impl FnMut(f32)) {
+        let (west, south, east, north) = bounds;
+        if let Some(image) = &self.native_abi {
+            for (row, &y) in image.y.iter().enumerate() {
+                for (col, &x) in image.x.iter().enumerate() {
+                    let index = row * image.width + col;
+                    let value = image.values[index];
+                    if image.quality.get(index).copied().unwrap_or(3) >= 2 || !value.is_finite() {
+                        continue;
+                    }
+                    if let Some((lon, lat)) = image.projection.lon_lat(x, y) {
+                        if (west..=east).contains(&lon) && (south..=north).contains(&lat) {
+                            visit(value);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        let field = &self.field;
+        let dlon = (field.lon_east - field.lon_west) / field.nx.max(1) as f64;
+        let dlat = (field.lat_north - field.lat_south) / field.ny.max(1) as f64;
+        for row in 0..field.ny {
+            let lat = field.lat_north - (row as f64 + 0.5) * dlat;
+            if !(south..=north).contains(&lat) {
+                continue;
+            }
+            for col in 0..field.nx {
+                let lon = field.lon_west + (col as f64 + 0.5) * dlon;
+                let value = field.values[row * field.nx + col];
+                if (west..=east).contains(&lon) && value.is_finite() {
+                    visit(value);
+                }
+            }
+        }
+    }
+
     /// Stream native scalar values with enough metadata to reproduce their meaning.
     pub fn write_csv(&self, mut output: impl std::io::Write) -> std::io::Result<usize> {
         let metadata = serde_json::json!({
@@ -311,6 +388,16 @@ pub struct SampleResult {
     pub method: SamplingPolicy,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegionStats {
+    pub count: usize,
+    pub min: f32,
+    pub max: f32,
+    pub mean: f32,
+    pub std_dev: f32,
+    pub histogram: [u32; 16],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,5 +455,13 @@ mod tests {
         assert!(csv.contains("\"product_id\":\"test.scalar\""));
         assert!(csv.contains("\"source_identity\":\"fixture\""));
         assert!(csv.contains("-99.500000,39.500000,1"));
+
+        let stats = frame
+            .statistics_in_box([-100.0, 38.0], [-99.0, 40.0])
+            .unwrap();
+        assert_eq!(stats.count, 2);
+        assert_eq!((stats.min, stats.max, stats.mean), (1.0, 3.0, 2.0));
+        assert!((stats.std_dev - 1.0).abs() < 1e-6);
+        assert_eq!(stats.histogram.iter().sum::<u32>(), 2);
     }
 }

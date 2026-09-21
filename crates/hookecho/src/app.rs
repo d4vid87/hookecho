@@ -1251,6 +1251,8 @@ pub(crate) enum MapTool {
     Interrogate,
     /// Measure great-circle distance/bearing between two clicks.
     Measure,
+    /// Select opposite corners and calculate exact native-value area statistics.
+    RegionStats,
     /// Drop a location marker at the clicked point.
     Marker,
     /// Draw a two-click line, then reconstruct a vertical cross-section along it.
@@ -1640,6 +1642,7 @@ pub(crate) enum PaletteAction {
     SetOutlookKind(u8),
     SetContours(ContourKind),
     Tool(MapTool),
+    ExportRegionStats,
     OpenWindow(AppWindow),
     SetPanes(usize),
     CycleBasemap,
@@ -1873,6 +1876,13 @@ pub(crate) struct FieldState {
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
     pub off_since: Option<Instant>,
+}
+
+struct RegionAnalysis {
+    product: &'static str,
+    units: &'static str,
+    valid: DateTime<Utc>,
+    stats: wxdata::field::RegionStats,
 }
 
 /// How long a field layer stays uploaded after the last pane turns it off. Long enough that
@@ -2624,6 +2634,9 @@ pub struct HookEchoApp {
     tool: MapTool,
     /// Measure-tool clicked endpoints in `[lon, lat]` (max 2).
     measure: Vec<[f64; 2]>,
+    /// Opposite corners and cached native-value statistics for the selected registered field.
+    region_points: Vec<[f64; 2]>,
+    region_analysis: Option<RegionAnalysis>,
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
@@ -3563,6 +3576,8 @@ impl HookEchoApp {
             last_viewport: (1000.0, 800.0),
             tool: MapTool::default(),
             measure: Vec::new(),
+            region_points: Vec::new(),
+            region_analysis: None,
             strokes: Vec::new(),
             route_waypoints: Vec::new(),
             routes: Vec::new(),
@@ -8446,6 +8461,7 @@ impl HookEchoApp {
                     t
                 }
             }
+            PaletteAction::ExportRegionStats => self.export_region_stats(),
             PaletteAction::SetPanes(n) => {
                 self.set_pane_count(n);
                 if n > 1 {
@@ -12058,6 +12074,41 @@ impl HookEchoApp {
                         }
                         self.measure.push([lon, lat]);
                     }
+                    MapTool::RegionStats => {
+                        if self.region_points.len() >= 2 {
+                            self.region_points.clear();
+                            self.region_analysis = None;
+                        }
+                        self.region_points.push([lon, lat]);
+                        if self.region_points.len() == 2 {
+                            self.region_analysis = crate::render::FieldLayer::DRAW_ORDER
+                                .iter()
+                                .rev()
+                                .find(|layer| self.views[idx].fields_on.contains(layer))
+                                .and_then(|layer| self.fields.get(layer)?.frame.as_ref())
+                                .filter(|frame| {
+                                    !matches!(
+                                        frame.descriptor.value_kind,
+                                        wxdata::field::ValueKind::Categorical
+                                            | wxdata::field::ValueKind::Mask
+                                            | wxdata::field::ValueKind::Vector
+                                    )
+                                })
+                                .and_then(|frame| {
+                                    frame
+                                        .statistics_in_box(
+                                            self.region_points[0],
+                                            self.region_points[1],
+                                        )
+                                        .map(|stats| RegionAnalysis {
+                                            product: frame.descriptor.short_name,
+                                            units: frame.descriptor.units,
+                                            valid: frame.stamp.valid_time,
+                                            stats,
+                                        })
+                                });
+                        }
+                    }
                     MapTool::Marker => {
                         let n = self.settings.markers.len() + 1;
                         self.settings.markers.push(crate::settings::Marker {
@@ -14956,6 +15007,55 @@ impl HookEchoApp {
             }
         }
 
+        if !self.region_points.is_empty() {
+            let col = egui::Color32::from_rgb(80, 220, 190);
+            let screen = |ll: [f64; 2]| {
+                let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                let (x, y) = cam.world_to_screen(world, vp);
+                egui::pos2(prect.left() + x, prect.top() + y)
+            };
+            for &point in &self.region_points {
+                painter.circle_filled(screen(point), 3.5, col);
+            }
+            if self.region_points.len() == 2 {
+                let rect = egui::Rect::from_two_pos(
+                    screen(self.region_points[0]),
+                    screen(self.region_points[1]),
+                );
+                painter.rect_filled(rect, 0.0, col.gamma_multiply(0.08));
+                painter.rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(1.5, col),
+                    egui::StrokeKind::Middle,
+                );
+                let text = self.region_analysis.as_ref().map_or_else(
+                    || "No registered field values in box".to_string(),
+                    |analysis| {
+                        let stats = &analysis.stats;
+                        format!(
+                            "{} · {} cells · mean {:.2} {} · min {:.2} · max {:.2} · σ {:.2}\n{}",
+                            analysis.product,
+                            stats.count,
+                            stats.mean,
+                            analysis.units,
+                            stats.min,
+                            stats.max,
+                            stats.std_dev,
+                            histogram_text(&stats.histogram),
+                        )
+                    },
+                );
+                painter.text(
+                    rect.center_top() + egui::vec2(0.0, -8.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    text,
+                    egui::FontId::proportional(11.0),
+                    col,
+                );
+            }
+        }
+
         // Cross-section endpoints + line (cyan, distinct from the yellow measure tool).
         if !self.xsection_pts.is_empty() {
             let col = egui::Color32::from_rgb(90, 220, 255);
@@ -16078,6 +16178,46 @@ impl HookEchoApp {
                 let _ = std::fs::remove_file(&path);
                 self.toast(ToastKind::Error, format!("Field export failed: {error}"));
             }
+        }
+    }
+
+    fn export_region_stats(&mut self) {
+        let Some(analysis) = &self.region_analysis else {
+            self.toast(ToastKind::Info, "Select a field area first");
+            return;
+        };
+        let stats = &analysis.stats;
+        let [a, b] = self.region_points.as_slice() else {
+            self.toast(ToastKind::Info, "Select a field area first");
+            return;
+        };
+        let mut csv = format!(
+            "product,valid_time,units,west,south,east,north,count,min,max,mean,std_dev\n{},{},{},{},{},{},{},{},{},{},{},{}\n\nbin,count\n",
+            analysis.product,
+            analysis.valid.to_rfc3339(),
+            analysis.units,
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+            stats.count,
+            stats.min,
+            stats.max,
+            stats.mean,
+            stats.std_dev,
+        );
+        for (bin, count) in stats.histogram.iter().enumerate() {
+            use std::fmt::Write;
+            let _ = writeln!(csv, "{bin},{count}");
+        }
+        match crate::dialog::save_bytes("hookecho-region-statistics.csv", "csv", csv.as_bytes()) {
+            crate::dialog::Saved::Where(where_) => {
+                self.toast(ToastKind::Success, format!("Statistics saved to {where_}"))
+            }
+            crate::dialog::Saved::Failed(error) => {
+                self.toast(ToastKind::Error, format!("Statistics export failed: {error}"))
+            }
+            crate::dialog::Saved::Cancelled => {}
         }
     }
 
@@ -17544,6 +17684,20 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
     };
     let (bx0, by0, bx1, by1) = bx;
     x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
+}
+
+fn histogram_text(bins: &[u32; 16]) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let high = bins.iter().copied().max().unwrap_or(0);
+    bins.iter()
+        .map(|&count| {
+            if high == 0 {
+                BARS[0]
+            } else {
+                BARS[((count as usize * (BARS.len() - 1)) / high as usize).min(BARS.len() - 1)]
+            }
+        })
+        .collect()
 }
 
 fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
@@ -20076,6 +20230,13 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn area_histogram_is_non_color_and_preserves_all_bins() {
+        let text = super::histogram_text(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(text.chars().count(), 16);
+        assert!(text.contains('█'));
+    }
 
     #[test]
     fn snowfall_alignment_covers_its_six_hour_issue_cadence() {

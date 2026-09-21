@@ -1147,6 +1147,12 @@ impl HookEchoApp {
                 true,
             ),
             (
+                MapTool::RegionStats,
+                "Tool: Area statistics",
+                "Select two corners for native-value statistics and a histogram",
+                false,
+            ),
+            (
                 MapTool::Marker,
                 "Tool: Drop marker",
                 "Save a place — home, work, where you're headed",
@@ -1210,6 +1216,14 @@ impl HookEchoApp {
                 Some(tool == t),
             );
         }
+        push(
+            "Export area statistics",
+            "Tools",
+            "Save the selected field area's native-value summary and histogram as CSV",
+            false,
+            PaletteAction::ExportRegionStats,
+            None,
+        );
         for (w, label, desc, common) in [
             (
                 W::Site,

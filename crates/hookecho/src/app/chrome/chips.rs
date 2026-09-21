@@ -261,6 +261,7 @@ impl HookEchoApp {
         // sentence of instructions as the only sign anything changed.
         let (glyph, name, hint) = match self.tool {
             MapTool::Measure => (ph::RULER, "Measure", "click two points"),
+            MapTool::RegionStats => (ph::SELECTION, "Area statistics", "click two corners"),
             MapTool::Marker => (ph::MAP_PIN, "Drop marker", "click the map"),
             MapTool::CrossSection => (ph::CHART_LINE, "Cross-section", "click two points"),
             MapTool::Sounding => (ph::THERMOMETER_SIMPLE, "Sounding", "click a point"),
