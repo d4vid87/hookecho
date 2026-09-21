@@ -1065,7 +1065,6 @@ fn national_clip(server: &Server) -> anyhow::Result<Vec<u8>> {
 /// How far apart the frames of a loop are asked for. A volume is about five minutes wide; a site
 /// in clear-air mode is slower, and two targets then land on the same volume — a repeated frame,
 /// not an error.
-const LOOP_STEP_MIN: i64 = 5;
 /// Rendered loop frames older than this are never wanted again — the window only slides forward.
 const LOOP_FRAME_TTL: Duration = Duration::from_secs(2 * 3600);
 
@@ -1076,10 +1075,6 @@ const LOOP_FRAME_TTL: Duration = Duration::from_secs(2 * 3600);
 /// same window a snapshot is, and frames already on disk are reused — a poll a minute later
 /// renders one new frame, not six.
 ///
-// ponytail: frames are picked by wall-clock steps rather than by listing the site's volumes,
-// which reuses the archive path the timeline already uses. Listing volumes would give exact
-// frames; it also gives a second network round trip per request, for a dashboard that cannot
-// tell the difference.
 fn loop_clip(
     server: &Server,
     query: &str,
@@ -1101,8 +1096,28 @@ fn loop_clip(
         crate::loopexport::LoopFormat::Mp4 => "mp4",
     };
 
-    let now = chrono::Utc::now();
-    let key = format!("/loop.{ext}?{}-{count}-{fps}", f.tag());
+    let end = crate::cloud::param(query, "time")
+        .map(|value| {
+            chrono::DateTime::parse_from_rfc3339(&value)
+                .map(|time| time.with_timezone(&chrono::Utc))
+                .map_err(|_| anyhow::anyhow!("time must be RFC3339"))
+        })
+        .transpose()?
+        .unwrap_or_else(chrono::Utc::now);
+    let date = crate::cloud::param(query, "date")
+        .map(|value| {
+            chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                .map_err(|_| anyhow::anyhow!("date must be YYYY-MM-DD"))
+        })
+        .transpose()?
+        .unwrap_or_else(|| end.date_naive());
+    let objects = server
+        .rt
+        .block_on(wxdata::level2::list_volumes(&f.site, date))?;
+    let times = select_loop_times(&objects, end, count);
+    anyhow::ensure!(times.len() >= 2, "not enough radar frames for a loop");
+    let newest = times.last().expect("at least two frames").timestamp();
+    let key = format!("/loop.{ext}?{}-{count}-{fps}-{newest}", f.tag());
     if let Some(hit) = server
         .cache
         .lock()
@@ -1116,8 +1131,7 @@ fn loop_clip(
     let dir = snapshot_dir()?;
     let mut frames = Vec::with_capacity(count);
     let mut last: Option<Vec<u8>> = None;
-    for k in (0..count as i64).rev() {
-        let at = now - chrono::Duration::minutes(k * LOOP_STEP_MIN);
+    for at in times {
         let out = dir.join(format!("loop-{}-{}.png", f.tag(), at.format("%Y%m%d-%H%M")));
         // An archived frame never changes, so one already on disk is the answer. Only the newest
         // step is rendered on a repeat poll.
@@ -1151,6 +1165,22 @@ fn loop_clip(
         .unwrap()
         .put(key, (Instant::now(), body.clone()));
     Ok(body)
+}
+
+fn select_loop_times(
+    objects: &[wxdata::level2::Identifier],
+    end: chrono::DateTime<chrono::Utc>,
+    count: usize,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    let mut times: Vec<_> = objects
+        .iter()
+        .filter_map(|object| object.date_time())
+        .filter(|time| *time <= end)
+        .rev()
+        .take(count)
+        .collect();
+    times.reverse();
+    times
 }
 
 /// How long a rendered snapshot stays on disk. Longer than a loop frame's TTL because a snapshot
@@ -1795,6 +1825,27 @@ mod tests {
             .unwrap()
             .iter()
             .any(|product| product["id"] == "mrms.composite-reflectivity"));
+    }
+
+    #[test]
+    fn loop_selection_uses_exact_archive_times_before_requested_end() {
+        let objects = [0, 5, 10, 15]
+            .into_iter()
+            .map(|minute| {
+                wxdata::level2::Identifier::new(format!(
+                    "KTLX20240526_01{minute:02}00_V06"
+                ))
+            })
+            .collect::<Vec<_>>();
+        let end = "2024-05-26T01:12:00Z".parse().unwrap();
+        let times = select_loop_times(&objects, end, 2);
+        assert_eq!(
+            times
+                .iter()
+                .map(|time| time.format("%H:%M").to_string())
+                .collect::<Vec<_>>(),
+            ["01:05", "01:10"]
+        );
     }
 
     #[test]
