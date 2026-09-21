@@ -146,6 +146,11 @@ pub enum FieldLayer {
     GlobalWind10m,
     /// Global model precipitable water / total precipitation.
     GlobalPrecip,
+    /// NOAA real-time surface analyses.
+    RtmaTemp2m,
+    RtmaDewpoint2m,
+    RtmaPressure,
+    RtmaWindU10m,
     /// Banded precipitation from the MRMS mosaic, narrowed to snow — the snow-squall layer.
     SnowBands,
     /// NBM calibrated probability of thunder over the hour ending at the scrubbed forecast hour.
@@ -188,12 +193,16 @@ impl FieldLayer {
                 | FieldLayer::GlobalDewpoint2m
                 | FieldLayer::GlobalWind10m
                 | FieldLayer::GlobalPrecip
+                | FieldLayer::RtmaTemp2m
+                | FieldLayer::RtmaDewpoint2m
+                | FieldLayer::RtmaPressure
+                | FieldLayer::RtmaWindU10m
                 | FieldLayer::ModelDiff
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const DRAW_ORDER: [FieldLayer; 82] = [
+    pub const DRAW_ORDER: [FieldLayer; 86] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -219,6 +228,10 @@ impl FieldLayer {
         FieldLayer::GlobalDewpoint2m,
         FieldLayer::GlobalWind10m,
         FieldLayer::GlobalPrecip,
+        FieldLayer::RtmaTemp2m,
+        FieldLayer::RtmaDewpoint2m,
+        FieldLayer::RtmaPressure,
+        FieldLayer::RtmaWindU10m,
         FieldLayer::ModelDiff,
         FieldLayer::Mrms,
         FieldLayer::MrmsLowLevel,
@@ -342,6 +355,10 @@ impl FieldLayer {
             FieldLayer::GlobalDewpoint2m => "global-dewpoint2m",
             FieldLayer::GlobalWind10m => "global-wind10m",
             FieldLayer::GlobalPrecip => "global-precip",
+            FieldLayer::RtmaTemp2m => "rtma-temp2m",
+            FieldLayer::RtmaDewpoint2m => "rtma-dewpoint2m",
+            FieldLayer::RtmaPressure => "rtma-pressure",
+            FieldLayer::RtmaWindU10m => "rtma-wind-u10m",
             FieldLayer::ModelDiff => "model-diff",
             FieldLayer::GlmFed => "glm-fed",
         }
@@ -397,6 +414,10 @@ impl FieldLayer {
             FL::GlobalDewpoint2m => &wxdata::global::DEWPOINT_2M_DESCRIPTOR,
             FL::GlobalWind10m => &wxdata::global::WIND_10M_DESCRIPTOR,
             FL::GlobalPrecip => &wxdata::global::PRECIP_DESCRIPTOR,
+            FL::RtmaTemp2m => &wxdata::rtma::TEMP_DESCRIPTOR,
+            FL::RtmaDewpoint2m => &wxdata::rtma::DEWPOINT_DESCRIPTOR,
+            FL::RtmaPressure => &wxdata::rtma::PRESSURE_DESCRIPTOR,
+            FL::RtmaWindU10m => &wxdata::rtma::WIND_U_DESCRIPTOR,
             FL::SnowAnalysis => &wxdata::nohrsc::SNOWFALL_DESCRIPTOR,
             FL::SnowBands => &wxdata::banding::SNOW_BANDS_DESCRIPTOR,
             FL::ModelDiff => &crate::fielddiff::MODEL_DIFF_DESCRIPTOR,

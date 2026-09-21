@@ -96,6 +96,10 @@ impl HookEchoApp {
                         | FL::GlobalDewpoint2m
                         | FL::GlobalWind10m
                         | FL::GlobalPrecip
+                        | FL::RtmaTemp2m
+                        | FL::RtmaDewpoint2m
+                        | FL::RtmaPressure
+                        | FL::RtmaWindU10m
                         | FL::ThunderProb
                         | FL::RefsReflectivityProb
                         | FL::GlmFed
@@ -585,6 +589,34 @@ impl HookEchoApp {
                 "Models",
                 "Moisture in the air column",
                 "Precipitable water (GFS) or total precipitation (ECMWF)",
+                false,
+            ),
+            (
+                FL::RtmaTemp2m,
+                "Analysis",
+                "RTMA surface temperature",
+                "NOAA real-time 2 m temperature analysis",
+                false,
+            ),
+            (
+                FL::RtmaDewpoint2m,
+                "Analysis",
+                "RTMA surface dewpoint",
+                "NOAA real-time 2 m dewpoint analysis",
+                false,
+            ),
+            (
+                FL::RtmaPressure,
+                "Analysis",
+                "RTMA surface pressure",
+                "NOAA real-time surface pressure analysis",
+                false,
+            ),
+            (
+                FL::RtmaWindU10m,
+                "Analysis",
+                "RTMA west/east wind",
+                "NOAA real-time 10 m U-wind analysis",
                 false,
             ),
             (

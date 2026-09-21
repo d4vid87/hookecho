@@ -368,6 +368,7 @@ enum OverlaySource {
         wxdata::global::GlobalField,
         u16,
     ),
+    Rtma(crate::render::FieldLayer, wxdata::rtma::SurfaceField),
     /// One model's field minus another's, at a forecast hour. Which two models is implied by the
     /// field (see `fielddiff::DiffField::pair`).
     ModelDiff(crate::fielddiff::DiffField, u16),
@@ -595,6 +596,7 @@ impl OverlaySource {
             | Self::Env(layer, ..)
             | Self::HrrrLayer(layer, ..)
             | Self::Global(layer, ..)
+            | Self::Rtma(layer, ..)
             | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
             Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
             Self::RefsProbability(..) => RequestLane::Field(FL::RefsReflectivityProb),
@@ -750,6 +752,11 @@ impl OverlaySource {
                 let fc = wxdata::global::fetch(http, model, field, fh).await?;
                 OverlayMsg::RegisteredField(layer, fc.into_frame(field.descriptor()), None)
             }
+            OverlaySource::Rtma(layer, field) => OverlayMsg::RegisteredField(
+                layer,
+                wxdata::rtma::fetch_latest_rtma(http, field).await?,
+                None,
+            ),
             OverlaySource::ModelDiff(field, fh) => {
                 use crate::fielddiff::DiffField;
                 use wxdata::global::{GlobalField, GlobalModel};
@@ -1797,6 +1804,8 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::GlobalPrecip
         // Two global cycles behind it, so the same half hour.
         | FL::ModelDiff => 1800,
+        // RTMA is hourly; poll often enough to notice a newly published analysis.
+        FL::RtmaTemp2m | FL::RtmaDewpoint2m | FL::RtmaPressure | FL::RtmaWindU10m => 300,
         FL::Smoke => 900,
         // NBM posts hourly; the blend moves no faster than that.
         FL::ThunderProb | FL::RefsReflectivityProb => 900,
@@ -17905,6 +17914,25 @@ impl eframe::App for HookEchoApp {
                 }
                 self.global_layer_key.insert(layer, (model, fh));
                 self.spawn_overlay(ctx, OverlaySource::Global(layer, model, gfield, fh));
+            }
+        }
+        for (layer, field) in [
+            (FL::RtmaTemp2m, wxdata::rtma::SurfaceField::Temperature2m),
+            (FL::RtmaDewpoint2m, wxdata::rtma::SurfaceField::Dewpoint2m),
+            (FL::RtmaPressure, wxdata::rtma::SurfaceField::Pressure),
+            (FL::RtmaWindU10m, wxdata::rtma::SurfaceField::WindU10m),
+        ] {
+            let stale = self.field_wanted(layer)
+                && self.fields.get(&layer).is_some_and(|state| {
+                    state
+                        .last_fetch
+                        .is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer))
+                });
+            if stale {
+                if let Some(state) = self.fields.get_mut(&layer) {
+                    state.last_fetch = Some(Instant::now());
+                }
+                self.spawn_overlay(ctx, OverlaySource::Rtma(layer, field));
             }
         }
         // Model difference: same cadence as a global layer, and the same refetch-on-change rule.

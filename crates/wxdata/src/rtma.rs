@@ -151,6 +151,27 @@ pub async fn fetch_rtma(
     ))
 }
 
+/// Fetch the newest available hourly RTMA analysis, allowing for normal publication latency.
+pub async fn fetch_latest_rtma(
+    http: &reqwest::Client,
+    field: SurfaceField,
+) -> anyhow::Result<FieldFrame> {
+    let now = Utc::now();
+    let hour = now
+        .with_minute(0)
+        .and_then(|time| time.with_second(0))
+        .and_then(|time| time.with_nanosecond(0))
+        .unwrap_or(now);
+    let mut last_error = None;
+    for age in 1..=4 {
+        match fetch_rtma(http, field, hour - chrono::Duration::hours(age)).await {
+            Ok(frame) => return Ok(frame),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no recent RTMA analysis")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
