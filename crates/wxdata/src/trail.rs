@@ -3,6 +3,24 @@
 use crate::mrms::MrmsField;
 use chrono::{DateTime, Duration, Utc};
 
+pub static REFLECTIVITY_TRAIL_DESCRIPTOR: crate::field::FieldDescriptor =
+    crate::field::FieldDescriptor {
+        id: crate::field::FieldId("derived.trail.mrms-reflectivity"),
+        source: "HookEcho derived from NOAA MRMS",
+        family: crate::field::FieldFamily::ObservationDerived,
+        display_name: "MRMS reflectivity trail",
+        short_name: "Reflectivity Trail",
+        search_aliases: &["storm trail", "reflectivity history", "maximum"],
+        units: "dBZ",
+        value_kind: crate::field::ValueKind::Scalar,
+        palette_key: "reflectivity",
+        sampling: crate::field::SamplingPolicy::Nearest,
+        missing: crate::field::MissingData::Nan,
+        time_policy: None,
+        supports_contours: false,
+        supports_difference: false,
+    };
+
 const MAX_FRAMES: usize = 256;
 const MAX_CELLS: usize = 4_000_000;
 

@@ -32,6 +32,8 @@ pub struct UiActions {
     pub cancel_chasepack: bool,
     /// A row in the embedded layers registry was clicked; the app applies it.
     pub(crate) palette: Option<crate::app::PaletteAction>,
+    pub trail_changed: bool,
+    pub export_trail: bool,
 }
 
 /// Read-only chase-pack state the app feeds the UI each frame: the current-view estimate and,
@@ -61,6 +63,8 @@ pub(crate) fn show(
     // fetch state, which is what `fields` is still needed for (clearing a refetch clock).
     on: &std::collections::HashSet<crate::render::FieldLayer>,
     rotation_minutes: &mut u16,
+    trail_minutes: &mut u16,
+    trail_threshold: &mut f32,
     hail_minutes: &mut u16,
     hrrr_fcst_hour: &mut u8,
     refs_fcst_hour: &mut u8,
@@ -128,6 +132,7 @@ pub(crate) fn show(
         ("Satellite", satellite_on),
         ("Spotters", show_spotters),
         ("Rotation tracks", on.contains(&FL::Rotation)),
+        ("Reflectivity trail", on.contains(&FL::MrmsReflectivityTrail)),
         ("Hail swaths", on.contains(&FL::HailSwath)),
         ("Radar mosaic", on.contains(&FL::Mosaic)),
         (
@@ -562,6 +567,26 @@ pub(crate) fn show(
             ui.label(egui::RichText::new(text).small().strong());
         }
     };
+
+    if section == "Reflectivity trail" && on.contains(&FL::MrmsReflectivityTrail) {
+        header(ui, "MRMS maximum reflectivity trail");
+        ui.horizontal(|ui| {
+            ui.label("Window:");
+            for minutes in [15u16, 30, 60, 120] {
+                actions.trail_changed |= ui
+                    .selectable_value(trail_minutes, minutes, format!("{minutes}m"))
+                    .changed();
+            }
+        });
+        actions.trail_changed |= ui
+            .add(egui::Slider::new(trail_threshold, 5.0..=70.0).text("Threshold").suffix(" dBZ"))
+            .changed();
+        if ui.button("Reset trail now").clicked() {
+            actions.trail_changed = true;
+        }
+        actions.export_trail |= ui.button("Export trail values…").clicked();
+        ui.weak("Keeps each cell's strongest reflectivity and its contributing frame age.");
+    }
 
     if section == "Rotation tracks" && on.contains(&FL::Rotation) {
         header(ui, "Rotation tracks");

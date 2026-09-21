@@ -781,6 +781,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         // reflectivity `.pal` rather than a fixed ramp of its own.
         FL::Mrms
         | FL::MrmsLowLevel
+        | FL::MrmsReflectivityTrail
         | FL::Mosaic
         | FL::CompositeLocal
         | FL::Hrrr

@@ -100,6 +100,7 @@ impl HookEchoApp {
                         | FL::RtmaDewpoint2m
                         | FL::RtmaPressure
                         | FL::RtmaWindU10m
+                        | FL::MrmsReflectivityTrail
                         | FL::ThunderProb
                         | FL::RefsReflectivityProb
                         | FL::GlmFed
@@ -617,6 +618,13 @@ impl HookEchoApp {
                 "Analysis",
                 "RTMA west/east wind",
                 "NOAA real-time 10 m U-wind analysis",
+                false,
+            ),
+            (
+                FL::MrmsReflectivityTrail,
+                "Radar",
+                "Reflectivity trail (MRMS)",
+                "Moving-window maximum reflectivity with configurable threshold and age",
                 false,
             ),
             (

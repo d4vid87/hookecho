@@ -1772,6 +1772,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         | FL::GoesCatalog(_) => 60,
         FL::Lightning | FL::AzShear => 60,
         FL::Mrms
+        | FL::MrmsReflectivityTrail
         | FL::MrmsLowLevel
         | FL::Mesh
         | FL::Posh
@@ -2750,6 +2751,10 @@ pub struct HookEchoApp {
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
+    reflectivity_trail: wxdata::trail::ExtremaTrail,
+    reflectivity_trail_result: Option<wxdata::trail::TrailResult>,
+    reflectivity_trail_minutes: u16,
+    reflectivity_trail_threshold: f32,
     /// Selected hail-swath accumulation window (minutes); see [`wxdata::mrms::hail_swath`].
     hail_minutes: u16,
     /// Environment suite (HRRR CAPE/SRH): CAPE uses the mixed-layer (90-0 mb) parcel when true,
@@ -3633,6 +3638,15 @@ impl HookEchoApp {
                 .map(|&l| (l, FieldState::default()))
                 .collect(),
             rotation_minutes: 30,
+            reflectivity_trail: wxdata::trail::ExtremaTrail::new(
+                30,
+                35.0,
+                wxdata::trail::Mode::Maximum,
+            )
+            .expect("valid reflectivity trail defaults"),
+            reflectivity_trail_result: None,
+            reflectivity_trail_minutes: 30,
+            reflectivity_trail_threshold: 35.0,
             hail_minutes: 1440,
             env_cape_ml: false,
             env_srh_km: 3,
@@ -7522,6 +7536,37 @@ impl HookEchoApp {
         if actions.reload {
             self.trigger_reload(ctx);
         }
+        if actions.trail_changed {
+            self.reflectivity_trail = wxdata::trail::ExtremaTrail::new(
+                self.reflectivity_trail_minutes,
+                self.reflectivity_trail_threshold,
+                wxdata::trail::Mode::Maximum,
+            )
+            .expect("trail controls are bounded");
+            self.reflectivity_trail_result = None;
+            if let Some(state) = self.fields.get_mut(&crate::render::FieldLayer::Mrms) {
+                state.last_fetch = None;
+            }
+        }
+        if actions.export_trail {
+            match self.reflectivity_trail_result.as_ref() {
+                Some(result) => match crate::dialog::save_bytes(
+                    "hookecho-reflectivity-trail.csv",
+                    "csv",
+                    result.to_csv().as_bytes(),
+                ) {
+                    crate::dialog::Saved::Where(where_) => self.toast(
+                        ToastKind::Success,
+                        format!("Trail values saved to {where_}"),
+                    ),
+                    crate::dialog::Saved::Failed(error) => {
+                        self.toast(ToastKind::Error, format!("Trail export failed: {error}"))
+                    }
+                    crate::dialog::Saved::Cancelled => {}
+                },
+                None => self.toast(ToastKind::Info, "Trail has no frames yet"),
+            }
+        }
         if actions.instant_replay {
             self.instant_replay();
         }
@@ -8672,6 +8717,47 @@ impl HookEchoApp {
                     if layer == crate::render::FieldLayer::Hrrr {
                         self.hrrr_run = frame.stamp.run_time;
                         self.hrrr_valid = Some(frame.stamp.valid_time);
+                    }
+                    if layer == crate::render::FieldLayer::Mrms
+                        && self.field_wanted(crate::render::FieldLayer::MrmsReflectivityTrail)
+                    {
+                        match self
+                            .reflectivity_trail
+                            .push(frame.field().clone().decimated(2_000))
+                        {
+                            Ok(result) => {
+                                let trail_layer = crate::render::FieldLayer::MrmsReflectivityTrail;
+                                let trail_frame = wxdata::field::FieldFrame::new(
+                                    &wxdata::trail::REFLECTIVITY_TRAIL_DESCRIPTOR,
+                                    result.field.clone(),
+                                    wxdata::field::DataStamp {
+                                        source_identity: format!(
+                                            "derived:mrms-reflectivity-trail:{}m:{:.1}dBZ",
+                                            self.reflectivity_trail_minutes,
+                                            self.reflectivity_trail_threshold,
+                                        ),
+                                        issue_time: frame.stamp.issue_time,
+                                        run_time: None,
+                                        valid_time: result.field.time,
+                                        received_time: frame.stamp.received_time,
+                                        class: wxdata::field::DataClass::Derived,
+                                        quality: frame.stamp.quality,
+                                        available_members: None,
+                                    },
+                                );
+                                let upload = self.field_upload(trail_layer, trail_frame.field());
+                                if let Some(state) = self.fields.get_mut(&trail_layer) {
+                                    state.pending = Some(upload);
+                                    state.metadata = Some((
+                                        trail_frame.grid.clone(),
+                                        trail_frame.stamp.clone(),
+                                    ));
+                                    state.frame = Some(trail_frame);
+                                }
+                                self.reflectivity_trail_result = Some(result);
+                            }
+                            Err(error) => log::warn!("reflectivity trail: {error}"),
+                        }
                     }
                     let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
                     if let Some(s) = self.fields.get_mut(&layer) {
@@ -17761,8 +17847,9 @@ impl eframe::App for HookEchoApp {
             };
             // The reflectivity tint reads the precipitation-type grid whether or not that
             // layer is being drawn, so wanting the tint counts as wanting the layer's data.
-            let wanted =
-                self.field_wanted(layer) || (layer == FL::PrecipType && self.settings.precip_tint);
+            let wanted = self.field_wanted(layer)
+                || (layer == FL::Mrms && self.field_wanted(FL::MrmsReflectivityTrail))
+                || (layer == FL::PrecipType && self.settings.precip_tint);
             let stale = wanted
                 && self.fields.get(&layer).is_none_or(|s| {
                     s.last_fetch
