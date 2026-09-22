@@ -20083,11 +20083,13 @@ impl eframe::App for HookEchoApp {
             }
         }
         let tz = self.active_tz();
-        if let Some((site_id, site)) = self.views[self.active].site.as_deref()
-            .and_then(|id| wxdata::sites::site_by_id(id).map(|site| (id, site))) {
+        if let Some((station_id, (lon, lat))) = self.views[self.active].site.as_deref()
+            .filter(|site| self.sensor_site.as_deref() == Some(*site))
+            .and_then(|_| self.sensor_data.as_ref()?.as_ref().ok())
+            .and_then(|station| station.location.map(|point| (station.station_id.as_str(), point))) {
             let frame = |layer| self.fields.get(&layer).and_then(|state| state.frame.as_ref());
             self.sensor_history.record(
-                site_id, site.longitude as f64, site.latitude as f64,
+                station_id, lon, lat,
                 frame(crate::render::FieldLayer::RtmaTemp2m),
                 frame(crate::render::FieldLayer::GlobalTemp2m),
             );

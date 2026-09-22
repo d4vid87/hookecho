@@ -7,7 +7,7 @@ use wxdata::obs::{Observation, StationObs};
 
 const KMH_TO_MPH: f32 = 0.621_371;
 
-/// Native-value samples accumulated as distinct frames are viewed at one radar site.
+/// Native-value samples accumulated as distinct frames are viewed at one observation station.
 #[derive(Default)]
 pub struct PointHistory {
     pub site: String,
@@ -184,9 +184,9 @@ fn dashboard(
             series(|o| o.wind_kmh.map(|k| k * KMH_TO_MPH)),
             egui::Color32::from_rgb(200, 200, 200),
         );
-        if let Some(history) = history {
+        if let Some(history) = history.filter(|history| history.site == station.station_id) {
             ui.separator();
-            ui.strong("Loaded temperature history at radar site");
+            ui.strong(format!("Loaded temperature history at {}", station.station_id));
             ui.weak("Only frames viewed this session are included; observation history above covers 24 hours.");
             if history.analysis.is_empty() && history.forecast.is_empty() {
                 ui.weak("Enable a surface temperature analysis or global temperature forecast layer to compare.");
@@ -195,13 +195,31 @@ fn dashboard(
                 if !series.is_empty() {
                     ui.label(format!("{label} · {} valid times", series.len()));
                     for reading in series.iter().rev().take(8) {
-                        ui.weak(format!("{} UTC · {:.1} °F",
+                        let bias = nearest_temperature(&station.obs, reading.valid)
+                            .map(|(observed, time)| format!(" · vs observed {:+.1} °F ({} min apart)",
+                                c_to_f(reading.temp_k - 273.15) - c_to_f(observed),
+                                (time - reading.valid).num_minutes().abs()))
+                            .unwrap_or_default();
+                        ui.weak(format!("{} UTC · {:.1} °F{bias}",
                             reading.valid.format("%Y-%m-%d %H:%M"), c_to_f(reading.temp_k - 273.15)));
                     }
                 }
             }
+        } else {
+            ui.weak(if station.location.is_some() {
+                "No temperature field frames sampled at this station yet."
+            } else {
+                "Station coordinates unavailable; gridded comparison cannot be sampled here."
+            });
         }
     });
+}
+
+fn nearest_temperature(obs: &[Observation], valid: DateTime<Utc>) -> Option<(f32, DateTime<Utc>)> {
+    obs.iter()
+        .filter_map(|ob| Some((ob.temp_c.filter(|v| v.is_finite())?, ob.time?)))
+        .filter(|(_, time)| (*time - valid).num_seconds().abs() <= 90 * 60)
+        .min_by_key(|(_, time)| (*time - valid).num_seconds().abs())
 }
 
 /// A labelled sparkline row: the series drawn as a min-max normalized polyline.
@@ -262,5 +280,18 @@ mod tests {
         history.record("KBBB", -99.5, 39.5, Some(&frame(1)), None);
         assert_eq!(history.analysis.len(), 1);
         assert_eq!(history.site, "KBBB");
+    }
+
+    #[test]
+    fn station_comparison_uses_nearest_valid_observation_only() {
+        let valid = Utc::now();
+        let ob = |minutes, temp| Observation {
+            time: Some(valid + chrono::Duration::minutes(minutes)), temp_c: temp,
+            dewpoint_c: None, rh: None, wind_kmh: None, gust_kmh: None,
+            wind_dir_deg: None, pressure_pa: None, slp_pa: None,
+        };
+        let observations = [ob(-20, Some(20.0)), ob(10, Some(21.0)), ob(2, None)];
+        assert_eq!(nearest_temperature(&observations, valid), Some((21.0, valid + chrono::Duration::minutes(10))));
+        assert_eq!(nearest_temperature(&observations, valid + chrono::Duration::hours(3)), None);
     }
 }
