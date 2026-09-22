@@ -14,6 +14,11 @@ Android builds.
 
 ### Shared data and live radar
 
+- An optional Analyst Workstation adds docked product and inspector panels,
+  linked four-pane task layouts, and direct settings access while retaining the
+  map-first default. The menu control stays reachable above the panel, and
+  saved workspaces restore new docks without breaking older files.
+
 - Radar, MRMS, satellite and model fields now share stable product IDs,
   provenance, native-value sampling, source health, time alignment and a
   persistent object cache. Linked panes show the actual valid time for each

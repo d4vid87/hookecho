@@ -42,7 +42,7 @@ impl HookEchoApp {
         }
     }
 
-    fn palette_health(&self, action: PaletteAction) -> Option<SourceHealth> {
+    pub(crate) fn palette_health(&self, action: PaletteAction) -> Option<SourceHealth> {
         use crate::render::FieldLayer as FL;
         use OverlayToggle as T;
         let lane = match action {
@@ -1393,6 +1393,14 @@ impl HookEchoApp {
             PaletteAction::AllTilts,
             None,
         );
+        for (index, label, desc) in [
+            (0, "Tornado analysis", "Reflectivity, storm-relative velocity, CC and ZDR in linked panes"),
+            (1, "Hail analysis", "Reflectivity, ZDR, CC, KDP and MRMS hail size"),
+            (2, "Mesoscale analysis", "Surface moisture, CAPE, SRH and satellite"),
+            (3, "Forecast comparison", "HRRR, MRMS, global precipitation and satellite"),
+        ] {
+            push(label, "Tools", desc, false, PaletteAction::ApplyAnalystPreset(index), None);
+        }
         let panes = self.views.len();
         for n in [1usize, 2, 4] {
             push(

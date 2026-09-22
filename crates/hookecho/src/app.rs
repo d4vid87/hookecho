@@ -1964,6 +1964,8 @@ pub(crate) enum PaletteAction {
     /// Restore the saved workspace at this index (an index, not the workspace itself, so the enum
     /// stays `Copy` and the palette rows stay cheap).
     ApplyWorkspace(usize),
+    /// A task-oriented, unsaved arrangement built from the existing pane and field systems.
+    ApplyAnalystPreset(u8),
 }
 
 /// A placefile label/marker the egui painter draws over the map.
@@ -3236,6 +3238,9 @@ pub struct HookEchoApp {
     /// Is the floating left panel showing? Runtime state, not a setting: the map is the app,
     /// and a panel you left open yesterday shouldn't cover it today.
     panel_open: bool,
+    /// Optional analyst layout; the plain map remains the startup default.
+    analyst_open: bool,
+    analyst_inspector_open: bool,
     /// Is the background picker slid out beside the control column?
     basemap_open: bool,
     sidebar_focus_search: bool,
@@ -3501,6 +3506,23 @@ pub struct HookEchoApp {
     /// Whether this device can hold the 3D texture the raymarch window needs. See its assignment
     /// in `new` — it is a property of the adapter that turned up, not of the platform.
     volume3d_supported: bool,
+}
+
+/// Existing products arranged by analyst task. The preset changes panes only when selected.
+fn analyst_preset(preset: u8) -> Option<([Moment; 4], [Option<crate::render::FieldLayer>; 4])> {
+    use crate::render::FieldLayer as F;
+    Some(match preset {
+        0 => ([Moment::Reflectivity, Moment::Velocity, Moment::CorrelationCoefficient,
+            Moment::DifferentialReflectivity], [None; 4]),
+        1 => ([Moment::Reflectivity, Moment::DifferentialReflectivity,
+            Moment::CorrelationCoefficient, Moment::SpecificDifferentialPhase],
+            [Some(F::Mesh), None, None, None]),
+        2 => ([Moment::Reflectivity; 4], [Some(F::RtmaDewpoint2m),
+            Some(F::Cape), Some(F::Srh), Some(F::GoesC13)]),
+        3 => ([Moment::Reflectivity; 4], [Some(F::Hrrr),
+            Some(F::Mrms), Some(F::GlobalPrecip), Some(F::GoesC13)]),
+        _ => return None,
+    })
 }
 
 /// Split `r` into `n` pane rects: 1 full, 2 side-by-side, 3–4 in a 2×2 grid.
@@ -4124,6 +4146,8 @@ impl HookEchoApp {
             chrome_rect: egui::Rect::EVERYTHING,
             layers_query: String::new(),
             panel_open: false,
+            analyst_open: false,
+            analyst_inspector_open: true,
             basemap_open: false,
             sidebar_focus_search: false,
             show_cheatsheet: false,
@@ -9086,6 +9110,7 @@ impl HookEchoApp {
                     );
                 }
             }
+            PaletteAction::ApplyAnalystPreset(preset) => self.apply_analyst_preset(preset),
             PaletteAction::AllTilts => self.apply_all_tilts(),
             PaletteAction::CycleBasemap => {
                 let (mb, mt) = (
@@ -16136,6 +16161,27 @@ impl HookEchoApp {
     /// Four panes of the SAME product at four different tilts — the layout you build by hand
     /// every time you want to see how a couplet leans with height.
     ///
+    fn apply_analyst_preset(&mut self, preset: u8) {
+        let Some((moments, fields)) = analyst_preset(preset) else { return };
+        self.set_pane_count(4);
+        for (i, view) in self.views.iter_mut().enumerate() {
+            view.moment = moments[i];
+            view.srv = preset == 0 && i == 1;
+            view.fields_on.clear();
+            if let Some(field) = fields[i] {
+                view.fields_on.insert(field);
+            }
+            view.show_radar = fields[i].is_none();
+        }
+        self.link_cameras = true;
+        self.link_times = true;
+        self.analyst_open = true;
+        self.analyst_inspector_open = true;
+        self.panel_open = true;
+        self.active = 0;
+        self.pane_shown.clear();
+    }
+
     /// SAILS/MRLE re-scan the lowest cut mid-volume, so the elevation list repeats angles; taking
     /// four *distinct* ones is what makes the quad show four heights instead of three plus a
     /// duplicate.
@@ -19971,9 +20017,13 @@ impl eframe::App for HookEchoApp {
             if chrome {
                 self.sync_permalink();
                 self.search_pill(ctx);
+                self.panel(ctx, root);
+                self.workbench_inspector(ctx, root);
+                // The analyst docks reserve map width. Center the transport and map chips in
+                // the remaining viewport rather than underneath either dock.
+                self.chrome_rect = root.available_rect_before_wrap();
                 self.scrubber(ctx);
                 self.pane_strip(ctx);
-                self.panel(ctx);
                 self.basemap_panel(ctx);
                 self.info_chip(ctx);
                 self.error_chip(ctx);
@@ -21566,6 +21616,19 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn analyst_presets_use_existing_products_and_reject_unknown_ids() {
+        use crate::render::FieldLayer as F;
+        let (tornado, fields) = super::analyst_preset(0).unwrap();
+        assert_eq!(tornado[1], wxdata::level2::Moment::Velocity);
+        assert_eq!(tornado[2], wxdata::level2::Moment::CorrelationCoefficient);
+        assert!(fields.iter().all(Option::is_none));
+        assert_eq!(super::analyst_preset(1).unwrap().1[0], Some(F::Mesh));
+        assert_eq!(super::analyst_preset(2).unwrap().1[0], Some(F::RtmaDewpoint2m));
+        assert_eq!(super::analyst_preset(3).unwrap().1[0], Some(F::Hrrr));
+        assert!(super::analyst_preset(4).is_none());
+    }
+
     #[test]
     fn selected_radar_pill_clears_bottom_playback_bar() {
         let map = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 870.0));

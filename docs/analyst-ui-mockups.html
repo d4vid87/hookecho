@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HookEcho Analyst Workstation — layout mockups</title>
+<style>
+  :root { color-scheme: dark; font: 14px system-ui, sans-serif; background: #0a1017; color: #e8edf4 }
+  * { box-sizing: border-box }
+  body { margin: 0; padding: 30px; background: radial-gradient(circle at 50% 0, #172539, #0a1017 60%) }
+  h1 { font-size: 26px; margin: 0 0 8px } p { color: #9daebe; margin: 0 0 28px }
+  h2 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; color: #9daebe; margin: 32px 0 12px }
+  .frame { overflow: hidden; border: 1px solid #3b4c60; border-radius: 16px; box-shadow: 0 20px 50px #0008; background: #101923 }
+  .desktop { width: min(100%, 1380px); height: 680px; display: grid; grid-template-columns: 318px 1fr 264px; grid-template-rows: 52px 1fr 68px }
+  .tablet { width: 780px; height: 570px; display: grid; grid-template-columns: 282px 1fr; grid-template-rows: 52px 1fr 62px }
+  .phone { width: 390px; height: 710px; display: grid; grid-template-rows: 54px 1fr 300px 60px }
+  .top { grid-column: 1/-1; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid #344354; background: #141d28 }
+  .mark { color: #77d7e7; font-weight: 800; letter-spacing: .05em }
+  .site { color: #b7c8d7 }
+  .spacer { flex: 1 }
+  .tag { border: 1px solid #3e5871; border-radius: 8px; padding: 7px 10px; background: #1b2b3d; white-space: nowrap }
+  .tag.on { border-color: #5689bb; color: #e6f5ff; background: #2d5278 }
+  .tag.live { color: #69dda2; border-color: #2d7559; background: #16322b }
+  .dock { background: #151e28; padding: 16px; overflow: hidden }
+  .left { border-right: 1px solid #344354 }
+  .right { border-left: 1px solid #344354 }
+  .dock h3 { font-size: 18px; margin: 0 0 12px }
+  .sub { color: #94a7b8; font-size: 12px; margin: 12px 0 7px }
+  .search { border: 1px solid #425468; background: #101923; color: #9daebe; border-radius: 9px; padding: 10px; margin-bottom: 10px }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 10px 4px; border-bottom: 1px solid #2c3a49 }
+  .row b { font-weight: 500 }
+  .row small { color: #82d6e5 }
+  .choice { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 }
+  .choice span { border: 1px solid #40536a; border-radius: 7px; padding: 7px 9px; color: #c5d4e0 }
+  .choice .selected { background: #2d5278; border-color: #5689bb; color: white }
+  .card { border: 1px solid #3c4d5f; border-radius: 10px; background: #1b2733; padding: 10px; margin: 8px 0 }
+  .card strong { color: #eaf4ff }
+  .card p { margin: 6px 0 0; font-size: 12px }
+  .map { position: relative; overflow: hidden; background: #162533 }
+  .map::before { content: ""; position: absolute; inset: -30%; transform: rotate(-16deg); opacity: .6; background: repeating-linear-gradient(0deg, transparent 0 37px, #5f6b6833 38px 39px), repeating-linear-gradient(90deg, transparent 0 68px, #4f616133 69px 70px) }
+  .map::after { content: ""; position: absolute; width: 60%; height: 60%; top: 22%; left: 22%; border-radius: 50%; background: radial-gradient(circle, #e3a7428c 0 3%, #8cce4d88 5% 9%, #61b6a268 13% 20%, #4a8e9360 25%, transparent 48%); filter: blur(6px) }
+  .city { position: absolute; z-index: 1; color: #c6d5e0; font-size: 11px; text-shadow: 0 1px 3px black }
+  .c1 { top: 28%; left: 32% } .c2 { top: 58%; left: 66% } .c3 { top: 70%; left: 28% }
+  .cross { position: absolute; z-index: 2; top: 48%; left: 48%; color: #8de4ef; font-size: 24px }
+  .pane-label { position: absolute; z-index: 2; top: 10px; left: 10px; border: 1px solid #3c6480; border-radius: 7px; background: #162432df; padding: 6px 9px }
+  .transport { grid-column: 1/-1; background: #101923; border-top: 1px solid #344354; display: flex; align-items: center; justify-content: center; gap: 17px }
+  .track { height: 4px; width: 28%; border-radius: 9px; background: linear-gradient(90deg, #58a4e7 75%, #435566 75%) }
+  .phone .dock { border-top: 1px solid #405268; border-radius: 18px 18px 0 0; padding: 14px }
+  .phone .map { min-height: 0 }
+  .phone .transport { grid-row: 4 }
+  .phone .dock .row { padding: 7px 2px }
+  .tablet .right { display: none }
+  @media (max-width: 850px) { body { padding: 16px } .tablet { max-width: 100% } }
+</style>
+<h1>Analyst Workstation</h1>
+<p>Map-first default. The optional workbench keeps products, linked panes, source times, and probes in predictable places.</p>
+<h2>Desktop · two optional docks</h2>
+<section class="frame desktop" aria-label="Desktop mockup">
+  <div class="top"><span class="mark">HOOKECHO</span><span class="site">KFWS · Reflectivity</span><span class="tag on">☷ Workbench</span><span class="spacer"></span><span class="tag live">● Live</span><span class="tag">Search ⌘K</span></div>
+  <aside class="dock left"><h3>Products &amp; layouts</h3><div class="search">⌕ &nbsp; Find a product, tool, or place</div><div class="sub">QUICK ANALYSIS</div><div class="choice"><span class="selected">Tornado</span><span>Hail</span><span>Mesoscale</span><span>Forecast</span></div><div class="sub">LINKED PANES</div><div class="choice"><span>1</span><span>2</span><span class="selected">4</span><span class="selected">Map</span><span class="selected">Time</span></div><div class="sub">PRODUCTS</div><div class="row"><b>Radar products</b><small>REF · VEL · CC</small></div><div class="row"><b>MRMS</b><small>82 fields</small></div><div class="row"><b>Models &amp; ensembles</b><small>HRRR · RRFS</small></div><div class="row"><b>Satellite</b><small>ABI · GLM</small></div><div class="row"><b>Warnings &amp; outlooks</b><small>8 in view</small></div><div class="row"><b>Saved workspaces</b><small>3</small></div></aside>
+  <main class="map"><span class="pane-label">Pane 1 · REF · 0.5°</span><span class="city c1">Wichita Falls</span><span class="city c2">Fort Worth</span><span class="city c3">Abilene</span><span class="cross">＋</span></main>
+  <aside class="dock right"><h3>Inspector</h3><div class="sub">LINKED PROBE</div><div class="card"><strong>33.88°N, 97.28°W</strong><p>Native gate values · exact frame times</p></div><div class="card"><strong>1 · KFWS REF</strong><p>52 dBZ · valid 19:42 UTC</p></div><div class="card"><strong>2 · KFWS SRV</strong><p>−26 m/s · valid 19:42 UTC</p></div><div class="card"><strong>3 · KFWS CC</strong><p>0.91 · valid 19:42 UTC</p></div><div class="sub">SOURCE</div><div class="row"><b>Level II · KFWS</b><small>Fresh</small></div></aside>
+  <footer class="transport"><span>◀</span><span>Ⅱ</span><span>▶</span><span class="track"></span><span>19:42 UTC</span><span class="tag live">Live</span></footer>
+</section>
+<h2>Tablet · browser dock, inspector within</h2>
+<section class="frame tablet" aria-label="Tablet mockup">
+  <div class="top"><span class="mark">HOOKECHO</span><span class="tag on">Workbench</span><span class="spacer"></span><span class="tag live">● Live</span><span class="tag">⌕</span></div>
+  <aside class="dock left"><h3>Products &amp; layouts</h3><div class="search">⌕ &nbsp; Search</div><div class="choice"><span class="selected">Tornado</span><span>Hail</span><span>Forecast</span></div><div class="row"><b>Radar products</b><small>›</small></div><div class="row"><b>MRMS &amp; models</b><small>›</small></div><div class="row"><b>Warnings</b><small>›</small></div><div class="sub">INSPECTOR</div><div class="card"><strong>Pane 1 · REF</strong><p>52 dBZ · valid 19:42 UTC</p></div></aside>
+  <main class="map"><span class="pane-label">Pane 1 of 4 · REF</span><span class="city c1">Wichita Falls</span><span class="city c2">Fort Worth</span><span class="cross">＋</span></main>
+  <footer class="transport"><span>◀</span><span>Ⅱ</span><span>▶</span><span class="track"></span><span>19:42 UTC</span></footer>
+</section>
+<h2>Phone · bottom sheet, map remains visible</h2>
+<section class="frame phone" aria-label="Phone mockup">
+  <div class="top"><span class="tag">☰</span><span class="site">KFWS · REF</span><span class="spacer"></span><span class="tag live">●</span><span class="tag">⌕</span></div>
+  <main class="map"><span class="pane-label">Pane 1 / 4</span><span class="city c1">Wichita Falls</span><span class="city c2">Fort Worth</span><span class="cross">＋</span></main>
+  <aside class="dock"><h3>Analyst Workstation</h3><div class="choice"><span class="selected">Products</span><span>Layouts</span><span>Inspector</span></div><div class="search">⌕ &nbsp; Find a product or tool</div><div class="row"><b>Radar products</b><small>›</small></div><div class="row"><b>Warnings &amp; outlooks</b><small>›</small></div><div class="row"><b>Models &amp; ensembles</b><small>›</small></div></aside>
+  <footer class="transport"><span>◀</span><span>Ⅱ</span><span class="track"></span><span>19:42</span></footer>
+</section>
+</html>

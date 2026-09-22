@@ -497,22 +497,24 @@ pub(crate) fn primary_controls(
     entries: &[PaletteEntry],
     outlook_day: u8,
     outlook_kind: wxdata::spc::OutlookKind,
+    compact: bool,
 ) -> Option<PaletteAction> {
     use crate::app::{AppWindow, OverlayToggle};
     let mut chosen = None;
-    let open_id = ui.make_persistent_id("primary_spc_open");
-    let mut spc_open = ui.ctx().data_mut(|d| d.get_temp::<bool>(open_id).unwrap_or(true));
-    ui.columns(4, |columns| {
-        for (column, (label, action)) in columns.iter_mut().zip([
-            ("Storm\ntracks", PaletteAction::ToggleOverlay(OverlayToggle::Tracks)),
+    let open_id = ui.make_persistent_id(("primary_spc_open", compact));
+    let mut spc_open = ui.ctx().data_mut(|d| d.get_temp::<bool>(open_id).unwrap_or(!compact));
+    let controls = [
+            ("Storm tracks", PaletteAction::ToggleOverlay(OverlayToggle::Tracks)),
             ("MRMS", PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)),
-            ("Storm\nattributes", PaletteAction::OpenWindow(AppWindow::StormTable)),
-            ("SPC\nOutlook", PaletteAction::OpenOutlooks),
-        ]) {
+            ("Storm attributes", PaletteAction::OpenWindow(AppWindow::StormTable)),
+            ("SPC Outlook", PaletteAction::OpenOutlooks),
+        ];
+    ui.horizontal_wrapped(|ui| {
+        for (label, action) in controls {
             let on = if action == PaletteAction::OpenOutlooks { spc_open } else {
                 entries.iter().any(|e| e.action == action && e.on == Some(true))
             };
-            if column.add_sized([column.available_width(), 64.0], egui::Button::new(RichText::new(label).size(12.0)).selected(on)).clicked() {
+            if ui.add(egui::Button::new(RichText::new(label).size(12.0)).selected(on)).clicked() {
                 if action == PaletteAction::OpenOutlooks { spc_open = !spc_open; }
                 else { chosen = Some(action); }
             }
@@ -1146,7 +1148,7 @@ mod tests {
         }];
         let out = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_width(400.0);
-            primary_controls(ui, &entries, 1, wxdata::spc::OutlookKind::Categorical);
+            primary_controls(ui, &entries, 1, wxdata::spc::OutlookKind::Categorical, false);
         });
         let text: Vec<_> = out
             .shapes
@@ -1162,6 +1164,21 @@ mod tests {
     }
 
     #[test]
+    fn analyst_toolbar_starts_with_spc_details_collapsed() {
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(340.0);
+            primary_controls(ui, &[], 1, wxdata::spc::OutlookKind::Categorical, true);
+        });
+        let labels: Vec<_> = out.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        }).collect();
+        assert!(labels.contains(&"SPC Outlook"));
+        assert!(!labels.contains(&"Forecast day"));
+    }
+
+    #[test]
     fn outlook_days_toggle_off_and_switch_directly() {
         let ctx = egui::Context::default();
         let mut active = 0;
@@ -1169,7 +1186,7 @@ mod tests {
             ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 ui.set_width(340.0);
                 if let Some(PaletteAction::SetOutlookDay(day)) =
-                    primary_controls(ui, &[], active, wxdata::spc::OutlookKind::Categorical) {
+                    primary_controls(ui, &[], active, wxdata::spc::OutlookKind::Categorical, false) {
                     active = day;
                 }
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("test_outlook_day"), active));
@@ -1209,7 +1226,7 @@ mod tests {
         let mut frame = |events| {
             ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 ui.set_width(340.0);
-                action = primary_controls(ui, &entries, 1, wxdata::spc::OutlookKind::Categorical);
+                action = primary_controls(ui, &entries, 1, wxdata::spc::OutlookKind::Categorical, false);
                 if let Some(workspace) = workspace_shortcuts(ui, &entries) { action = Some(workspace); }
                 ui.ctx().data_mut(|d| {
                     d.remove::<PaletteAction>(egui::Id::new("test_action"));
@@ -1219,8 +1236,8 @@ mod tests {
         };
         for (label, expected) in [
             ("MRMS", PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)),
-            ("Storm\ntracks", PaletteAction::ToggleOverlay(crate::app::OverlayToggle::Tracks)),
-            ("Storm\nattributes", PaletteAction::OpenWindow(crate::app::AppWindow::StormTable)),
+            ("Storm tracks", PaletteAction::ToggleOverlay(crate::app::OverlayToggle::Tracks)),
+            ("Storm attributes", PaletteAction::OpenWindow(crate::app::AppWindow::StormTable)),
             ("Day 8", PaletteAction::SetOutlookDay(8)),
             ("Hail", PaletteAction::SetOutlookKind(3)),
             ("Workspace: Chase", PaletteAction::ApplyWorkspace(0)),

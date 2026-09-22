@@ -9,7 +9,9 @@ pub(crate) use overlay::compact;
 mod registry;
 mod scrubber;
 mod state;
+pub(crate) use state::PrimarySurface;
 mod window_frame;
 mod windows;
+mod workbench;
 
 use super::*;
