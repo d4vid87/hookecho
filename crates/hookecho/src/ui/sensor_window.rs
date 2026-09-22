@@ -200,8 +200,9 @@ fn dashboard(
                                 c_to_f(reading.temp_k - 273.15) - c_to_f(observed),
                                 (time - reading.valid).num_minutes().abs()))
                             .unwrap_or_default();
-                        ui.weak(format!("{} UTC · {:.1} °F{bias}",
-                            reading.valid.format("%Y-%m-%d %H:%M"), c_to_f(reading.temp_k - 273.15)));
+                        ui.weak(format!("{} · {} UTC · {:.1} °F{bias}",
+                            source_label(&reading.source), reading.valid.format("%Y-%m-%d %H:%M"),
+                            c_to_f(reading.temp_k - 273.15)));
                     }
                 }
             }
@@ -220,6 +221,16 @@ fn nearest_temperature(obs: &[Observation], valid: DateTime<Utc>) -> Option<(f32
         .filter_map(|ob| Some((ob.temp_c.filter(|v| v.is_finite())?, ob.time?)))
         .filter(|(_, time)| (*time - valid).num_seconds().abs() <= 90 * 60)
         .min_by_key(|(_, time)| (*time - valid).num_seconds().abs())
+}
+
+/// Source identities are full object URLs; display only a stable public provider label.
+fn source_label(identity: &str) -> &'static str {
+    if identity.contains("/urma/") { "URMA" }
+    else if identity.contains("/rtma/") { "RTMA" }
+    else if identity.contains("noaa-gefs") { "GEFS" }
+    else if identity.contains("noaa-gfs") { "GFS" }
+    else if identity.contains("ecmwf") { "ECMWF" }
+    else { "Other source" }
 }
 
 /// A labelled sparkline row: the series drawn as a min-max normalized polyline.
@@ -293,5 +304,11 @@ mod tests {
         let observations = [ob(-20, Some(20.0)), ob(10, Some(21.0)), ob(2, None)];
         assert_eq!(nearest_temperature(&observations, valid), Some((21.0, valid + chrono::Duration::minutes(10))));
         assert_eq!(nearest_temperature(&observations, valid + chrono::Duration::hours(3)), None);
+    }
+
+    #[test]
+    fn source_labels_do_not_expose_object_urls() {
+        assert_eq!(source_label("https://noaa-gfs-bdp-pds.s3.amazonaws.com/key?secret=1"), "GFS");
+        assert_eq!(source_label("https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod/file"), "URMA");
     }
 }
