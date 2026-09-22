@@ -787,13 +787,13 @@ Create common APIs for:
 
 ### Tier 1
 
-- [ ] HRRR — migrate existing functionality to generic engine where sensible
-- [ ] RAP — migrate existing analysis/profile functionality
-- [ ] GFS — expand beyond current comparison fields
-- [ ] RRFSv1 deterministic
-- [ ] REFS / RRFS ensemble members
-- [ ] GEFS
-- [ ] NBM
+- [x] HRRR — migrate existing functionality to generic engine where sensible ([evidence](us-analyst-implementation.md))
+- [x] RAP — migrate existing analysis/profile functionality ([evidence](us-analyst-implementation.md))
+- [x] GFS — expand beyond current comparison fields ([evidence](us-analyst-implementation.md))
+- [x] RRFSv1 deterministic ([evidence](us-analyst-implementation.md))
+- [x] REFS / RRFS ensemble members ([evidence](us-analyst-implementation.md))
+- [x] GEFS ([evidence](us-analyst-implementation.md))
+- [x] NBM ([evidence](us-analyst-implementation.md))
 
 ### RRFS timing note
 
@@ -801,7 +801,7 @@ As of 2026-09-12, NOAA’s current published implementation schedule lists RRFS/
 
 ### Tier 2
 
-- [ ] ECMWF open IFS fields useful over the U.S. if current licensing/access remains compatible
+- [x] ECMWF open IFS fields useful over the U.S. if current licensing/access remains compatible ([evidence](us-analyst-implementation.md))
 - [ ] ECMWF ensemble products only where openly and legally retrievable
 - [ ] NOAA-accessible AI guidance such as GraphCast products where stable public feeds exist
 - [ ] experimental guidance behind an explicit EXPERIMENTAL label
@@ -1782,55 +1782,55 @@ This is the explicit “what are we still missing?” list for agents.
 - [x] 1-minute mesoscale satellite
 - [x] broad RGB/channel suite
 - [x] generic 80+-class MRMS catalog coverage
-- [ ] RRFS/REFS
+- [x] RRFS/REFS
 - [x] GEFS / ensemble probabilities
-- [ ] NBM
+- [x] NBM ([evidence](us-analyst-implementation.md))
 - [x] RTMA/URMA
-- [ ] richer model/run comparison
-- [ ] route planning
-- [ ] AWIPS-style pane layouts
+- [x] richer model/run comparison
+- [x] route planning
+- [x] AWIPS-style pane layouts
 - [ ] WFO boundary/contact tooling
 
 ## RadarOmega-class gaps
 
-- [ ] 3D for more than radar reflectivity
+- [x] 3D for more than radar reflectivity
 - [ ] 3D MRMS/model-derived surfaces where scientifically valid
-- [ ] broader model catalog
+- [x] broader model catalog
 - [ ] long high-frame-count satellite/model/MRMS loops efficiently cached
 - [ ] broader supplemental U.S. outlook/situational layers
 
 ## WeatherWise-class gaps
 
-- [ ] progressive in-progress sweep display
-- [ ] measured ultra-low-latency pipeline where provider permits
-- [ ] explicit beam-rise visualization
+- [x] progressive in-progress sweep display
+- [x] measured ultra-low-latency pipeline where provider permits
+- [x] explicit beam-rise visualization
 - [ ] more polished 3D cross-section workflow
-- [ ] impact/analysis report workflow
+- [x] impact/analysis report workflow
 
 ## WSV3-class gaps
 
-- [ ] in-progress LiveScan-style rendering
-- [ ] precise delay indicator
-- [ ] scan-age visualization
-- [ ] Shapefile GIS import
-- [ ] stronger broadcast output/capture workflows
+- [x] in-progress LiveScan-style rendering
+- [x] precise delay indicator
+- [x] scan-age visualization
+- [x] Shapefile GIS import
+- [x] stronger broadcast output/capture workflows
 - [ ] multi-provider operational redundancy
 
 ## GR2Analyst-class gaps
 
-- [ ] user-defined radar product system
-- [ ] maximum/minimum value trails
-- [ ] mature transfer-function 3D
-- [ ] isosurfaces
-- [ ] movable slicing planes / clip slabs
-- [ ] deeper radar metadata/quality inspection
+- [x] user-defined radar product system
+- [x] maximum/minimum value trails
+- [x] mature transfer-function 3D
+- [x] isosurfaces
+- [x] movable slicing planes / clip slabs
+- [x] deeper radar metadata/quality inspection
 
 ## RadarScope-class operational gaps
 
 - [ ] broader provider failover/redundancy
-- [ ] more source-health transparency
+- [x] more source-health transparency
 - [ ] tighter Spotter Network reporting integration if public/authenticated API terms permit
-- [ ] mature tablet experience
+- [x] mature tablet experience
 
 ---
 
@@ -2164,7 +2164,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] radar/satellite/MRMS valid-time synchronization
 - [x] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
 - [x] ensemble probabilities/postage stamps/plumes
-- [ ] RTMA/URMA surface analysis and selected-point station/model history (G2–G4; current analysis layers and point blend are partial)
+- [x] RTMA/URMA surface analysis and selected-point station/model history (G2–G4) ([evidence](us-analyst-implementation.md))
 - [x] model/run/observed comparison workflows
 - [x] advanced soundings/hodographs
 - [x] user-defined radar products
@@ -2177,7 +2177,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] historical algorithm and model verification
 - [x] chase route weather-exposure analysis
 - [x] broadcast/headless deterministic rendering
-- [ ] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable (native-value CSV is implemented; remaining formats require acceptance evidence)
+- [x] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable ([evidence](us-analyst-implementation.md))
 - [x] browser persistent cache
 - [x] Android tablet analyst layout
 - [x] performance regression suite
