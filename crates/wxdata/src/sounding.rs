@@ -497,30 +497,35 @@ async fn sample_message(
 }
 
 fn sample_nearest(raw: &[u8], lon: f64, lat: f64) -> anyhow::Result<f64> {
+    Ok(sample_grib_points(raw, &[(lon, lat)])?.1[0].1)
+}
+
+/// Decode once and return native nearest values for all requested coordinates.
+/// The caller decides whether its source requires an exact GRIB valid-time match.
+pub(crate) type GribPointSamples = (Option<DateTime<Utc>>, Vec<(f64, f64)>);
+pub(crate) fn sample_grib_points(
+    raw: &[u8], points: &[(f64, f64)],
+) -> anyhow::Result<GribPointSamples> {
     use gribberish::data_message::DataMessage;
     use gribberish::message::read_message;
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;
+    let valid = msg.forecast_date().ok();
     let dm = DataMessage::try_from(&msg).map_err(|e| anyhow::anyhow!("decode: {e:?}"))?;
     let (lats, lons) = dm.metadata.latlng();
     let data = dm.data;
-    anyhow::ensure!(
-        lats.len() == data.len() && lons.len() == data.len(),
-        "latlng/data mismatch"
-    );
-    let mut best = None;
-    let mut best_d = f64::MAX;
+    anyhow::ensure!(lats.len() == data.len() && lons.len() == data.len(), "latlng/data mismatch");
+    let mut best = vec![(f64::INFINITY, f64::NAN); points.len()];
     for k in 0..data.len() {
-        if !data[k].is_finite() || !lats[k].is_finite() || !lons[k].is_finite() {
-            continue;
-        }
-        let dlon = (lons[k] - lon) * (lat.to_radians().cos());
-        let d = dlon * dlon + (lats[k] - lat).powi(2);
-        if d < best_d {
-            best_d = d;
-            best = Some(data[k]);
+        if !data[k].is_finite() || !lats[k].is_finite() || !lons[k].is_finite() { continue; }
+        let lon = if lons[k] > 180.0 { lons[k] - 360.0 } else { lons[k] };
+        for (i, &(target_lon, target_lat)) in points.iter().enumerate() {
+            let dx = (lon - target_lon) * target_lat.to_radians().cos();
+            let d = dx * dx + (lats[k] - target_lat).powi(2);
+            if d < best[i].0 { best[i] = (d, data[k]); }
         }
     }
-    best.ok_or_else(|| anyhow::anyhow!("no finite grid point"))
+    anyhow::ensure!(best.iter().all(|(_, value)| value.is_finite()), "no finite grid point");
+    Ok((valid, best))
 }
 
 #[cfg(test)]

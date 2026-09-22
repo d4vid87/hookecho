@@ -599,18 +599,6 @@ pub fn objective_surface_point(
     objective_surface_point_with(temperature, dewpoint, observations, stations, lon, lat, false)
 }
 
-/// A sounding needs both thermodynamic observations from the same station.
-pub fn objective_surface_point_for_sounding(
-    temperature: &FieldFrame,
-    dewpoint: &FieldFrame,
-    observations: &[wxdata::metar::SurfaceOb],
-    stations: &[wxdata::stations::StationOb],
-    lon: f64,
-    lat: f64,
-) -> Option<ObjectiveSurfacePoint> {
-    objective_surface_point_with(temperature, dewpoint, observations, stations, lon, lat, true)
-}
-
 fn objective_surface_point_with(
     temperature: &FieldFrame,
     dewpoint: &FieldFrame,
@@ -648,39 +636,6 @@ fn objective_surface_point_with(
         dewpoint_residual_k: chosen.dewpoint_c.zip(dewpoint.sample(chosen.lon, chosen.lat).value)
             .map(|(observed, analysis)| observed + 273.15 - analysis),
     })
-}
-
-/// Replace only the surface boundary of an HRRR analysis profile. The model levels aloft
-/// remain unchanged; this is a HookEcho diagnostic, not an official analysed sounding.
-pub fn objective_sounding(
-    model: &wxdata::sounding::Sounding,
-    [temperature, dewpoint, pressure, wind_u, wind_v]: [&FieldFrame; 5],
-    observations: &[wxdata::metar::SurfaceOb],
-    stations: &[wxdata::stations::StationOb],
-) -> Option<(wxdata::sounding::Sounding, ObjectiveSurfacePoint)> {
-    let frames = [temperature, dewpoint, pressure, wind_u, wind_v];
-    if model.fh != 0
-        || frames.iter().any(|frame| {
-            frame.stamp.class != DataClass::Analysis
-                || frame.stamp.valid_time != model.run
-                || !same_analysis_object(temperature, frame)
-        })
-    {
-        return None;
-    }
-    let point = objective_surface_point_for_sounding(
-        temperature,
-        dewpoint,
-        observations,
-        stations,
-        model.lon,
-        model.lat,
-    )?;
-    objective_sounding_surface(
-        model, point, pressure.sample(model.lon, model.lat).value?,
-        wind_u.sample(model.lon, model.lat).value?,
-        wind_v.sample(model.lon, model.lat).value?,
-    )
 }
 
 /// Same boundary replacement for fields acquired at the clicked point without map layers.
@@ -1254,9 +1209,6 @@ mod tests {
         };
         let t = frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0);
         let td = frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0);
-        let p = frame(&wxdata::rtma::PRESSURE_DESCRIPTOR, 95_000.0);
-        let u = frame(&wxdata::rtma::WIND_U_DESCRIPTOR, 8.0);
-        let v = frame(&wxdata::rtma::WIND_V_DESCRIPTOR, -2.0);
         let model_level = |pressure_hpa| wxdata::sounding::SoundingLevel {
             pressure_hpa,
             temp_c: 20.0,
@@ -1294,17 +1246,15 @@ mod tests {
             dpd_s: None,
             raw: String::new(),
         };
-        let (adjusted, _) = objective_sounding(&model, [&t, &td, &p, &u, &v], std::slice::from_ref(&ob), &[]).unwrap();
+        let point = objective_surface_point(&t, &td, std::slice::from_ref(&ob), &[], model.lon, model.lat).unwrap();
+        let (adjusted, _) = objective_sounding_surface(&model, point.clone(), 95_000.0, 8.0, -2.0).unwrap();
         assert_eq!(adjusted.levels.len(), 4);
         assert_eq!(adjusted.levels[0].pressure_hpa, 950.0);
         assert!((adjusted.levels[0].temp_c - 30.0).abs() < 0.001);
         assert_eq!(adjusted.levels[0].u_ms, 8.0);
         assert_eq!(adjusted.levels[1].pressure_hpa, 925.0);
         assert_eq!(model.levels[0].pressure_hpa, 1000.0);
-        let point = objective_surface_point(&t, &td, &[], &wxdata::stations::from_metars(&[ob]), model.lon, model.lat).unwrap();
-        let (point_only, point) = objective_sounding_surface(&model, point, 95_000.0, 8.0, -2.0).unwrap();
-        assert_eq!(point_only.levels[0].pressure_hpa, adjusted.levels[0].pressure_hpa);
-        assert_eq!(point.station, "METAR:KTEST");
+        assert_eq!(point.station, "KTEST");
         let mut partial = wxdata::stations::from_metars(&[wxdata::metar::SurfaceOb {
             icao: "PARTIAL".into(), name: "Partial".into(), lat: 39.5, lon: -99.5,
             temp_c: Some(31.0), dewp_c: None, wdir_deg: None, wspd_kt: 0.0,
@@ -1332,6 +1282,6 @@ mod tests {
         assert_eq!(native_profile.levels[0].pressure_hpa, 950.0);
         assert_eq!(native_profile.levels[1].pressure_hpa, 925.0);
         let forecast = wxdata::sounding::Sounding { fh: 1, ..model };
-        assert!(objective_sounding(&forecast, [&t, &td, &p, &u, &v], &[], &[]).is_none());
+        assert!(objective_sounding_surface(&forecast, point, 95_000.0, 8.0, -2.0).is_none());
     }
 }

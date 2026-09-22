@@ -131,7 +131,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Vector-tile worker serialization adds ~2.4 KB gzip while moving tessellation off the UI thread.
 # The station-analysis timeline measured 4,244,093 bytes gzip with binaryen; retain a 0.21%
 # regression allowance rather than silently failing the new preview on a 4,240,000-byte gate.
-budget="${HOOKECHO_WASM_BUDGET:-4253000}"
+# Native point/station RTMA sampling for the objective sounding measured 4,257,369 bytes after
+# sharing the existing GRIB decoder and removing the old map-grid sounding path. The remaining
+# 2,631-byte allowance is 0.06% of the measured bundle.
+budget="${HOOKECHO_WASM_BUDGET:-4260000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

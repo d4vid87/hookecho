@@ -20005,27 +20005,10 @@ impl eframe::App for HookEchoApp {
             }
         }
         let tz = self.active_tz();
-        let sounding_frame = |layer| {
-            self.fields
-                .get(&layer)
-                .and_then(|state| state.frame.as_ref())
-        };
-        let loaded_objective = self.sounding_window.sounding.as_ref().and_then(|model| {
-            use crate::render::FieldLayer as FL;
-            crate::fielddiff::objective_sounding(
-                model,
-                [sounding_frame(FL::RtmaTemp2m)?, sounding_frame(FL::RtmaDewpoint2m)?,
-                    sounding_frame(FL::RtmaPressure)?, sounding_frame(FL::RtmaWindU10m)?,
-                    sounding_frame(FL::RtmaWindV10m)?],
-                &self.metars,
-                &self.stations.obs,
-            )
-        });
-        let objective = self.objective_sounding.as_ref().or(loaded_objective.as_ref());
         self.sounding_window.show(
             ctx,
             tz,
-            objective.map(|(s, p)| (s, p)),
+            self.objective_sounding.as_ref().map(|(s, p)| (s, p)),
             self.objective_sounding_rx.is_some(),
             &mut self.drawer,
         );

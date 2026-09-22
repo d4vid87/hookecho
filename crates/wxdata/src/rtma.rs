@@ -265,34 +265,16 @@ pub async fn fetch_native_pair(
     let (cached, source_identity) = fetch_message(http, source, field, valid).await?;
     let received_time = cached.received_at;
     let (actual, values) = crate::task::blocking(move || {
-        crate::task::guarded(|| {
-            use gribberish::data_message::DataMessage;
-            use gribberish::message::read_message;
-            let message = read_message(&cached.bytes, 0).ok_or_else(|| anyhow::anyhow!("no analysis GRIB message"))?;
-            let actual = message.forecast_date()?;
-            let decoded = DataMessage::try_from(&message).map_err(|e| anyhow::anyhow!("analysis decode: {e:?}"))?;
-            let (lats, lons) = decoded.metadata.latlng();
-            let data = decoded.data;
-            anyhow::ensure!(lats.len() == data.len() && lons.len() == data.len(), "analysis coordinate mismatch");
-            let targets = [point, station];
-            let mut best = [(f64::INFINITY, f32::NAN); 2];
-            for k in 0..data.len() {
-                if !data[k].is_finite() || !lats[k].is_finite() || !lons[k].is_finite() { continue; }
-                let lon = if lons[k] > 180.0 { lons[k] - 360.0 } else { lons[k] };
-                for (i, &(target_lon, target_lat)) in targets.iter().enumerate() {
-                    let dx = (lon - target_lon) * target_lat.to_radians().cos();
-                    let distance = dx * dx + (lats[k] - target_lat).powi(2);
-                    if distance < best[i].0 { best[i] = (distance, data[k] as f32); }
-                }
-            }
-            anyhow::ensure!(best.iter().all(|(distance, value)| *distance <= 0.2_f64.powi(2) && value.is_finite()), "analysis point outside native grid");
-            Ok((actual, [best[0].1, best[1].1]))
-        }).unwrap_or_else(|_| anyhow::bail!("analysis native decode panicked"))
+        crate::task::guarded(|| crate::sounding::sample_grib_points(&cached.bytes, &[point, station]))
+            .unwrap_or_else(|_| anyhow::bail!("analysis native decode panicked"))
     }).await??;
+    let actual = actual.ok_or_else(|| anyhow::anyhow!("analysis valid time unavailable"))?;
+    anyhow::ensure!(values.iter().all(|(distance, _)| *distance <= 0.2_f64.powi(2)),
+        "analysis point outside native grid");
     anyhow::ensure!(actual == valid, "analysis valid time differs from requested hour");
     Ok(NativeSamplePair {
         source_identity, valid_time: actual, received_time,
-        point: values[0], station: values[1],
+        point: values[0].1 as f32, station: values[1].1 as f32,
     })
 }
 
