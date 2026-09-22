@@ -558,6 +558,70 @@ pub fn objective_surface_point(
     })
 }
 
+/// Replace only the surface boundary of an HRRR analysis profile. The model levels aloft
+/// remain unchanged; this is a HookEcho diagnostic, not an official analysed sounding.
+pub fn objective_sounding(
+    model: &wxdata::sounding::Sounding,
+    [temperature, dewpoint, pressure, wind_u, wind_v]: [&FieldFrame; 5],
+    observations: &[wxdata::metar::SurfaceOb],
+    stations: &[wxdata::stations::StationOb],
+) -> Option<(wxdata::sounding::Sounding, ObjectiveSurfacePoint)> {
+    let frames = [temperature, dewpoint, pressure, wind_u, wind_v];
+    if model.fh != 0
+        || frames.iter().any(|frame| {
+            frame.stamp.class != DataClass::Analysis
+                || frame.stamp.valid_time != model.run
+                || !same_analysis_object(temperature, frame)
+        })
+    {
+        return None;
+    }
+    let point = objective_surface_point(
+        temperature,
+        dewpoint,
+        observations,
+        stations,
+        model.lon,
+        model.lat,
+    )?;
+    let temp_k = point.temperature_k?;
+    let dewpoint_k = point.dewpoint_k?;
+    let pressure_hpa = (pressure.sample(model.lon, model.lat).value? / 100.0) as f64;
+    let u = wind_u.sample(model.lon, model.lat).value? as f64;
+    let v = wind_v.sample(model.lon, model.lat).value? as f64;
+    if !(650.0..=1050.0).contains(&pressure_hpa)
+        || ![temp_k, dewpoint_k].into_iter().all(f32::is_finite)
+        || !u.is_finite()
+        || !v.is_finite()
+    {
+        return None;
+    }
+    let mut levels = vec![wxdata::sounding::SoundingLevel {
+        pressure_hpa,
+        temp_c: (temp_k - 273.15) as f64,
+        dewpt_c: (dewpoint_k.min(temp_k) - 273.15) as f64,
+        u_ms: u,
+        v_ms: v,
+    }];
+    levels.extend(
+        model
+            .levels
+            .iter()
+            .copied()
+            .filter(|level| level.pressure_hpa < pressure_hpa - 1.0),
+    );
+    (levels.len() >= 3).then_some((
+        wxdata::sounding::Sounding {
+            lon: model.lon,
+            lat: model.lat,
+            run: model.run,
+            fh: model.fh,
+            levels,
+        },
+        point,
+    ))
+}
+
 /// `a - b`, on the coarser of the two lattices, over the part of the world both cover.
 ///
 /// The time is `a`'s: a difference is only meaningful for one instant, and the caller is
@@ -1060,5 +1124,76 @@ mod tests {
         ).unwrap();
         assert_eq!(blend.station, "Tempest:home");
         assert!((blend.temperature_k.unwrap() - 304.15).abs() < 0.001);
+    }
+    #[test]
+    fn objective_sounding_replaces_only_matching_surface_boundary() {
+        let valid = chrono::Utc::now();
+        let frame = |descriptor, value| {
+            FieldFrame::new(
+                descriptor,
+                grid(2, 2, -100.0, -99.0, 39.0, 40.0, value),
+                DataStamp {
+                    source_identity: "rtma#bytes=0-10".into(),
+                    issue_time: None,
+                    run_time: None,
+                    valid_time: valid,
+                    received_time: valid,
+                    class: DataClass::Analysis,
+                    quality: QualitySummary::Good,
+                    available_members: None,
+                },
+            )
+        };
+        let t = frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0);
+        let td = frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0);
+        let p = frame(&wxdata::rtma::PRESSURE_DESCRIPTOR, 95_000.0);
+        let u = frame(&wxdata::rtma::WIND_U_DESCRIPTOR, 8.0);
+        let v = frame(&wxdata::rtma::WIND_V_DESCRIPTOR, -2.0);
+        let model_level = |pressure_hpa| wxdata::sounding::SoundingLevel {
+            pressure_hpa,
+            temp_c: 20.0,
+            dewpt_c: 10.0,
+            u_ms: 1.0,
+            v_ms: 1.0,
+        };
+        let model = wxdata::sounding::Sounding {
+            lon: -99.5,
+            lat: 39.5,
+            run: valid,
+            fh: 0,
+            levels: vec![
+                model_level(1000.0),
+                model_level(925.0),
+                model_level(850.0),
+                model_level(700.0),
+            ],
+        };
+        let ob = wxdata::metar::SurfaceOb {
+            icao: "KTEST".into(),
+            name: "Test".into(),
+            lat: 39.5,
+            lon: -99.5,
+            temp_c: Some(30.0),
+            dewp_c: Some(20.0),
+            wdir_deg: None,
+            wspd_kt: 0.0,
+            wgst_kt: None,
+            altim_mb: None,
+            elev_m: None,
+            obs_time: Some(valid.timestamp()),
+            flt_cat: String::new(),
+            wvht_ft: None,
+            dpd_s: None,
+            raw: String::new(),
+        };
+        let (adjusted, _) = objective_sounding(&model, [&t, &td, &p, &u, &v], &[ob], &[]).unwrap();
+        assert_eq!(adjusted.levels.len(), 4);
+        assert_eq!(adjusted.levels[0].pressure_hpa, 950.0);
+        assert!((adjusted.levels[0].temp_c - 30.0).abs() < 0.001);
+        assert_eq!(adjusted.levels[0].u_ms, 8.0);
+        assert_eq!(adjusted.levels[1].pressure_hpa, 925.0);
+        assert_eq!(model.levels[0].pressure_hpa, 1000.0);
+        let forecast = wxdata::sounding::Sounding { fh: 1, ..model };
+        assert!(objective_sounding(&forecast, [&t, &td, &p, &u, &v], &[], &[]).is_none());
     }
 }

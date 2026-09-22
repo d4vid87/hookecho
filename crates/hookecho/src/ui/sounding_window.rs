@@ -21,6 +21,7 @@ pub struct SoundingWindow {
     /// Why there's no observed profile — no station in range, or the balloon didn't fly.
     pub observed_error: Option<String>,
     pub show_observed: bool,
+    pub show_objective: bool,
     /// Forecast hour the user has dialled up; a change asks the app for a new profile.
     pub fh: u8,
     /// Set for one frame when `fh` changed, so the app refetches.
@@ -40,6 +41,7 @@ impl Default for SoundingWindow {
             // On by default: an observed profile is the more trustworthy of the two, and hiding it
             // behind a toggle nobody finds would waste the fetch.
             show_observed: true,
+            show_objective: false,
             fh: 0,
             refetch: false,
         }
@@ -51,6 +53,7 @@ impl SoundingWindow {
         &mut self,
         ctx: &egui::Context,
         tz: Option<wxdata::tz::Tz>,
+        objective: Option<(&Sounding, &crate::fielddiff::ObjectiveSurfacePoint)>,
         drawer: &mut crate::ui::drawer::Drawer,
     ) {
         if !self.open {
@@ -80,10 +83,18 @@ impl SoundingWindow {
                     ui.colored_label(egui::Color32::from_rgb(230, 120, 120), format!("Sounding unavailable: {e}"));
                     return;
                 }
-                let Some(s) = &self.sounding else {
+                let Some(model) = &self.sounding else {
                     ui.weak("Press Ctrl+K, pick \"Tool: Sounding\", then click a point on the map.");
                     return;
                 };
+                if let Some((_, point)) = objective {
+                    ui.checkbox(&mut self.show_objective, "HookEcho objective-adjusted surface");
+                    ui.weak(format!("{} · {:.0} km · {:.0}% observation weight; RTMA/URMA surface, HRRR aloft. Not an official sounding.",
+                        point.station, point.distance_km, point.weight * 100.0));
+                } else if model.fh == 0 {
+                    ui.weak("Objective-adjusted surface requires matching RTMA/URMA temperature, dewpoint, pressure and winds plus a recent nearby observation.");
+                }
+                let s = if self.show_objective { objective.map_or(model, |(s, _)| s) } else { model };
                 ui.horizontal_wrapped(|ui| {
                     ui.strong(format!("{:.2}, {:.2}", s.lat, s.lon));
                     ui.separator();
@@ -122,7 +133,18 @@ impl SoundingWindow {
                             ui,
                             "sounding.csv",
                             "The indices, then the profile they came from",
-                            || s.to_csv(),
+                            || {
+                                let csv = s.to_csv();
+                                if self.show_objective {
+                                    if let Some((_, point)) = objective {
+                                        return csv.replacen("index,value\n", &format!(
+                                            "index,value\nprofile,HookEcho objective-adjusted surface\nstation,{}\nobservation_weight,{:.3}\nsurface_source,RTMA/URMA analysis\naloft_source,HRRR f00\nvalid_time,{}\n",
+                                            point.station, point.weight, s.run.to_rfc3339(),
+                                        ), 1);
+                                    }
+                                }
+                                csv
+                            },
                         );
                     });
                 });
