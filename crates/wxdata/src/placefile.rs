@@ -48,6 +48,9 @@ pub struct PlaceItem {
     /// from this point (x right, y up) rather than a position — that's how placefiles draw
     /// fixed-size symbols, which stay the same size on screen as you zoom.
     pub anchor: Option<[f64; 2]>,
+    /// Original GIS feature properties, retained for round-trip export. Ordinary placefiles
+    /// leave this empty.
+    pub properties: Option<std::sync::Arc<serde_json::Map<String, serde_json::Value>>>,
     pub kind: PlaceKind,
 }
 
@@ -252,6 +255,7 @@ pub fn parse(text: &str) -> Placefile {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
                         anchor: None,
+                        properties: None,
                         kind: PlaceKind::Line { color, width, pts },
                     });
                 } else {
@@ -283,6 +287,7 @@ pub fn parse(text: &str) -> Placefile {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
                         anchor: None,
+                        properties: None,
                         kind: PlaceKind::Polygon { color, rings },
                     });
                 } else {
@@ -303,6 +308,7 @@ pub fn parse(text: &str) -> Placefile {
                             threshold_nmi: threshold,
                             time: pending_time.take(),
                             anchor: None,
+                            properties: None,
                             kind: PlaceKind::Text {
                                 color,
                                 pos,
@@ -353,6 +359,7 @@ pub fn parse(text: &str) -> Placefile {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
                         anchor: None,
+                        properties: None,
                         kind: PlaceKind::Icon {
                             color,
                             pos,
@@ -430,6 +437,7 @@ pub fn parse(text: &str) -> Placefile {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
                         anchor: None,
+                        properties: None,
                         kind: PlaceKind::Triangles { verts },
                     });
                 } else {
@@ -505,6 +513,7 @@ pub fn parse(text: &str) -> Placefile {
                         threshold_nmi: threshold,
                         time: pending_time.take(),
                         anchor: None,
+                        properties: None,
                         kind: PlaceKind::Image { url, verts },
                     });
                 } else {

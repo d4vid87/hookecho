@@ -55,14 +55,25 @@ pub fn export_geojson(file: &Placefile) -> anyhow::Result<String> {
             ),
             _ => continue,
         };
+        let mut properties = item.properties.as_deref().cloned().unwrap_or_default();
+        properties
+            .entry("source")
+            .or_insert_with(|| file.title.clone().into());
+        if let Some(label) = label {
+            properties
+                .entry("label")
+                .or_insert_with(|| label.clone().into());
+        }
+        if let Some((start, end)) = item.time {
+            properties
+                .entry("valid_from")
+                .or_insert_with(|| start.to_rfc3339().into());
+            properties
+                .entry("valid_until")
+                .or_insert_with(|| end.to_rfc3339().into());
+        }
         features.push(serde_json::json!({
-            "type": "Feature", "geometry": geometry,
-            "properties": {
-                "source": file.title,
-                "label": label,
-                "valid_from": item.time.map(|(start, _)| start),
-                "valid_until": item.time.map(|(_, end)| end),
-            }
+            "type": "Feature", "geometry": geometry, "properties": properties
         }));
     }
     anyhow::ensure!(
@@ -100,16 +111,18 @@ pub fn geojson(name: &str, text: &str) -> anyhow::Result<Placefile> {
     match document {
         GeoJson::Geometry(geometry) => append(&mut file.items, geometry.value, name),
         GeoJson::Feature(feature) => {
-            let label = feature_label(feature.properties.as_ref()).unwrap_or(name);
+            let properties = feature.properties.unwrap_or_default();
+            let label = feature_label(Some(&properties)).unwrap_or(name).to_string();
             if let Some(geometry) = feature.geometry {
-                append(&mut file.items, geometry.value, label);
+                append_properties(&mut file.items, geometry.value, &label, properties);
             }
         }
         GeoJson::FeatureCollection(collection) => {
             for feature in collection.features {
-                let label = feature_label(feature.properties.as_ref()).unwrap_or(name);
+                let properties = feature.properties.unwrap_or_default();
+                let label = feature_label(Some(&properties)).unwrap_or(name).to_string();
                 if let Some(geometry) = feature.geometry {
-                    append(&mut file.items, geometry.value, label);
+                    append_properties(&mut file.items, geometry.value, &label, properties);
                 }
             }
         }
@@ -244,6 +257,7 @@ fn item(kind: PlaceKind) -> PlaceItem {
         threshold_nmi: 0.0,
         time: None,
         anchor: None,
+        properties: None,
         kind,
     }
 }
@@ -314,6 +328,20 @@ fn append(items: &mut Vec<PlaceItem>, geometry: GeometryValue, label: &str) {
                 append(items, geometry.value, label);
             }
         }
+    }
+}
+
+fn append_properties(
+    items: &mut Vec<PlaceItem>,
+    geometry: GeometryValue,
+    label: &str,
+    properties: serde_json::Map<String, serde_json::Value>,
+) {
+    let first = items.len();
+    append(items, geometry, label);
+    let properties = std::sync::Arc::new(properties);
+    for item in &mut items[first..] {
+        item.properties = Some(properties.clone());
     }
 }
 
@@ -470,6 +498,36 @@ impl<'a> DbfTable<'a> {
             .iter()
             .position(|field| field.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| anyhow::anyhow!("DBF has no attribute named {name}"))
+    }
+
+    fn properties(&self, row: usize) -> serde_json::Map<String, serde_json::Value> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| {
+                let value = self.value(row, index);
+                if value.is_empty() {
+                    return None;
+                }
+                let value = match field.kind {
+                    b'N' | b'F' => value
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(serde_json::Number::from_f64)
+                        .map_or_else(
+                            || serde_json::Value::String(value.into_owned()),
+                            serde_json::Value::Number,
+                        ),
+                    b'L' => match value.as_bytes().first().map(u8::to_ascii_uppercase) {
+                        Some(b'T' | b'Y') => serde_json::Value::Bool(true),
+                        Some(b'F' | b'N') => serde_json::Value::Bool(false),
+                        _ => serde_json::Value::String(value.into_owned()),
+                    },
+                    _ => serde_json::Value::String(value.into_owned()),
+                };
+                Some((field.name.clone(), value))
+            })
+            .collect()
     }
 }
 
@@ -793,6 +851,10 @@ fn shapefile(
                 &mut file.items,
             )?;
             if let Some((table, style)) = dbf.zip(style) {
+                let properties = std::sync::Arc::new(table.properties(features));
+                for item in &mut file.items[first..] {
+                    item.properties = Some(properties.clone());
+                }
                 if let Some(time) = style.time(table, features)? {
                     for item in &mut file.items[first..] {
                         item.time = Some(time);
@@ -950,7 +1012,7 @@ mod tests {
     #[test]
     fn exports_imported_vectors_with_holes_labels_and_wgs84_coordinates() {
         let source = r#"{"type":"FeatureCollection","features":[
-          {"type":"Feature","properties":{"name":"Storm area"},"geometry":{"type":"Polygon","coordinates":[[[-98,34],[-96,34],[-96,36],[-98,34]],[[-97.5,34.5],[-97,34.5],[-97,35],[-97.5,34.5]]]}},
+          {"type":"Feature","properties":{"name":"Storm area","priority":3},"geometry":{"type":"Polygon","coordinates":[[[-98,34],[-96,34],[-96,36],[-98,34]],[[-97.5,34.5],[-97,34.5],[-97,35],[-97.5,34.5]]]}},
           {"type":"Feature","properties":{"name":"Track"},"geometry":{"type":"LineString","coordinates":[[-98,34],[-97,35]]}},
           {"type":"Feature","properties":{"name":"Site"},"geometry":{"type":"Point","coordinates":[-97,35]}}
         ]}"#;
@@ -966,6 +1028,9 @@ mod tests {
             2
         );
         assert_eq!(json["features"][2]["properties"]["label"], "Site");
+        assert_eq!(json["features"][0]["properties"]["name"], "Storm area");
+        assert_eq!(json["features"][0]["properties"]["priority"], 3);
+        assert_eq!(json["features"][1]["properties"]["name"], "Track");
         assert_eq!(
             geojson("roundtrip.geojson", &exported).unwrap().items.len(),
             3
@@ -1154,6 +1219,8 @@ mod tests {
         let exported: serde_json::Value =
             serde_json::from_str(&export_geojson(&file).unwrap()).unwrap();
         let pos = &exported["features"][0]["geometry"]["coordinates"];
+        assert_eq!(exported["features"][0]["properties"]["NAME"], "County test");
+        assert_eq!(exported["features"][0]["properties"]["COLOR"], "#ff8000");
         let lon = pos[0].as_f64().unwrap();
         let lat = pos[1].as_f64().unwrap();
         assert!((-98.0..-96.0).contains(&lon), "longitude: {lon}");
@@ -1171,6 +1238,8 @@ mod tests {
         .contains("no attribute"));
         dbf[75] = b'N';
         dbf[110..117].copy_from_slice(b"     42");
+        let table = DbfTable::new(&dbf).unwrap();
+        assert_eq!(table.properties(0)["COLOR"], 42.0);
         let numeric = test_zip(
             &[
                 ("layer.shp", &shp),
