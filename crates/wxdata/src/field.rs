@@ -537,10 +537,10 @@ impl FieldFrame {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn write_netcdf(&self, path: &std::path::Path) -> anyhow::Result<()> {
         use netcdf3::{DataSet, FileWriter, Version, NC_FILL_F32};
-        fn nc<T, E: std::fmt::Debug>(result: Result<T, E>) -> anyhow::Result<T> {
-            result.map_err(|error| anyhow::anyhow!("{error:?}"))
+        if let Some(image) = &self.native_abi {
+            return self.write_abi_netcdf(path, image);
         }
-        anyhow::ensure!(self.native_abi.is_none() && self.grid.projection == "EPSG:4326",
+        anyhow::ensure!(self.grid.projection == "EPSG:4326",
             "NetCDF requires a native geographic scalar grid");
         let grid = &self.grid;
         anyhow::ensure!(grid.nx > 0 && grid.ny > 0 && grid.nx.checked_mul(grid.ny) == Some(self.field.values.len()),
@@ -582,6 +582,87 @@ impl FieldFrame {
         nc(writer.close())?;
         Ok(())
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_abi_netcdf(&self, path: &std::path::Path, image: &crate::abi::Image) -> anyhow::Result<()> {
+        use netcdf3::{DataSet, FileWriter, Version, NC_FILL_F32, NC_FILL_F64};
+        anyhow::ensure!(image.width > 0 && image.height > 0
+            && image.width.checked_mul(image.height) == Some(image.values.len())
+            && image.x.len() == image.width && image.y.len() == image.height,
+            "invalid native ABI dimensions");
+        let mut data = DataSet::new();
+        nc(data.add_fixed_dim("time", 1))?;
+        nc(data.add_fixed_dim("y", image.height))?;
+        nc(data.add_fixed_dim("x", image.width))?;
+        nc(data.add_var_f64("time", &["time"]))?;
+        nc(data.add_var_f64("x", &["x"]))?;
+        nc(data.add_var_f64("y", &["y"]))?;
+        nc(data.add_var_f64("latitude", &["y", "x"]))?;
+        nc(data.add_var_f64("longitude", &["y", "x"]))?;
+        nc(data.add_var_i32("goes_projection", &[] as &[&str]))?;
+        nc(data.add_var_f32("value", &["time", "y", "x"]))?;
+        nc(data.add_global_attr_string("Conventions", "CF-1.12"))?;
+        nc(data.add_global_attr_string("product_id", self.descriptor.id.0))?;
+        nc(data.add_global_attr_string("source_id", self.descriptor.source_id().0))?;
+        nc(data.add_global_attr_string("source_identity", &self.stamp.source_identity))?;
+        nc(data.add_global_attr_string("received_time", self.stamp.received_time.to_rfc3339()))?;
+        nc(data.add_global_attr_string("quality", self.stamp.quality.label()))?;
+        nc(data.add_global_attr_string("source_projection", "GOES-R fixed grid scan angles") )?;
+        nc(data.add_var_attr_string("time", "units", "seconds since 1970-01-01 00:00:00 UTC"))?;
+        nc(data.add_var_attr_string("time", "calendar", "gregorian"))?;
+        nc(data.add_var_attr_string("x", "units", "rad"))?;
+        nc(data.add_var_attr_string("y", "units", "rad"))?;
+        nc(data.add_var_attr_string("x", "standard_name", "projection_x_angular_coordinate"))?;
+        nc(data.add_var_attr_string("y", "standard_name", "projection_y_angular_coordinate"))?;
+        nc(data.add_var_attr_string("latitude", "units", "degrees_north"))?;
+        nc(data.add_var_attr_string("longitude", "units", "degrees_east"))?;
+        nc(data.add_var_attr_string("goes_projection", "grid_mapping_name", "geostationary"))?;
+        nc(data.add_var_attr_string("goes_projection", "sweep_angle_axis", "x"))?;
+        nc(data.add_var_attr_f64("goes_projection", "latitude_of_projection_origin", vec![0.0]))?;
+        nc(data.add_var_attr_f64("goes_projection", "longitude_of_projection_origin", vec![image.projection.longitude_origin_deg]))?;
+        nc(data.add_var_attr_f64("goes_projection", "perspective_point_height", vec![image.projection.perspective_height_m]))?;
+        nc(data.add_var_attr_f64("goes_projection", "semi_major_axis", vec![image.projection.semi_major_m]))?;
+        nc(data.add_var_attr_f64("goes_projection", "semi_minor_axis", vec![image.projection.semi_minor_m]))?;
+        nc(data.add_var_attr_string("value", "coordinates", "latitude longitude"))?;
+        nc(data.add_var_attr_string("value", "grid_mapping", "goes_projection"))?;
+        nc(data.add_var_attr_string("value", "units", self.descriptor.units))?;
+        nc(data.add_var_attr_string("value", "long_name", self.descriptor.display_name))?;
+        nc(data.add_var_attr_f32("value", "_FillValue", vec![NC_FILL_F32]))?;
+        nc(data.add_var_attr_f64("latitude", "_FillValue", vec![NC_FILL_F64]))?;
+        nc(data.add_var_attr_f64("longitude", "_FillValue", vec![NC_FILL_F64]))?;
+        let mut latitude = Vec::with_capacity(image.values.len());
+        let mut longitude = Vec::with_capacity(image.values.len());
+        let mut values = Vec::with_capacity(image.values.len());
+        for (row, &y) in image.y.iter().enumerate() {
+            for (col, &x) in image.x.iter().enumerate() {
+                let point = image.projection.lon_lat(x, y).filter(|(lon, lat)|
+                    lon.is_finite() && lat.is_finite() && lon.abs() <= 180.0 && lat.abs() <= 90.0);
+                longitude.push(point.map_or(NC_FILL_F64, |(lon, _)| lon));
+                latitude.push(point.map_or(NC_FILL_F64, |(_, lat)| lat));
+                let index = row * image.width + col;
+                let value = image.values[index];
+                values.push(if point.is_some() && image.quality.get(index).copied().unwrap_or(3) < 2 && value.is_finite() {
+                    value
+                } else { NC_FILL_F32 });
+            }
+        }
+        let mut writer = nc(FileWriter::open(path))?;
+        nc(writer.set_def(&data, Version::Offset64Bit, 0))?;
+        nc(writer.write_var_f64("time", &[self.stamp.valid_time.timestamp_millis() as f64 / 1000.0]))?;
+        nc(writer.write_var_f64("x", &image.x))?;
+        nc(writer.write_var_f64("y", &image.y))?;
+        nc(writer.write_var_f64("latitude", &latitude))?;
+        nc(writer.write_var_f64("longitude", &longitude))?;
+        nc(writer.write_var_i32("goes_projection", &[0]))?;
+        nc(writer.write_var_f32("value", &values))?;
+        nc(writer.close())?;
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn nc<T, E: std::fmt::Debug>(result: Result<T, E>) -> anyhow::Result<T> {
+    result.map_err(|error| anyhow::anyhow!("{error:?}"))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -737,5 +818,53 @@ mod tests {
         let pressure = crate::global::MSLP_DESCRIPTOR.display_value(101_325.0, UnitSystem::Us);
         assert!((pressure.value - 29.92).abs() < 0.01);
         assert_eq!(pressure.units, "inHg");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn projected_abi_netcdf_keeps_scan_angles_and_quality_mask() {
+        let time = Utc::now();
+        let projection = crate::abi::Projection {
+            longitude_origin_deg: -75.0,
+            perspective_height_m: 35_786_023.0,
+            semi_major_m: 6_378_137.0,
+            semi_minor_m: 6_356_752.314_14,
+        };
+        let native = crate::abi::Image {
+            width: 2, height: 2, band: 13,
+            values: vec![270.0, 271.0, 272.0, 273.0],
+            quality: vec![0, 2, 0, 0],
+            x: vec![-0.01, 0.0], y: vec![0.01, 0.0], projection,
+            valid_time: time, source_identity: "fixture".into(), received_time: Some(time),
+        };
+        let display = crate::mrms::MrmsField {
+            values: vec![270.0; 4], nx: 2, ny: 2,
+            lon_west: -80.0, lon_east: -70.0,
+            lat_north: 5.0, lat_south: -5.0, time,
+        };
+        let stamp = DataStamp {
+            source_identity: "fixture".into(), issue_time: None, run_time: None,
+            valid_time: time, received_time: time, class: DataClass::Observed,
+            quality: QualitySummary::Good, available_members: None,
+        };
+        let frame = FieldFrame::from_abi(&TEST, native, display, stamp);
+        let path = std::env::temp_dir().join(format!("hookecho-abi-{}-{}.nc", std::process::id(), time.timestamp_nanos_opt().unwrap()));
+        frame.write_netcdf(&path).unwrap();
+        let mut reader = netcdf3::FileReader::open(&path).unwrap();
+        assert_eq!(reader.read_var_f64("x").unwrap(), vec![-0.01, 0.0]);
+        assert_eq!(reader.read_var_f64("y").unwrap(), vec![0.01, 0.0]);
+        let lons = reader.read_var_f64("longitude").unwrap();
+        let lats = reader.read_var_f64("latitude").unwrap();
+        let expected = projection.lon_lat(-0.01, 0.01).unwrap();
+        assert!((lons[0] - expected.0).abs() < 1e-8);
+        assert!((lats[0] - expected.1).abs() < 1e-8);
+        let values = reader.read_var_f32("value").unwrap();
+        assert_eq!(values, vec![270.0, netcdf3::NC_FILL_F32, 272.0, 273.0]);
+        assert_eq!(reader.data_set().get_var_attr_as_string("value", "coordinates").as_deref(), Some("latitude longitude"));
+        assert_eq!(reader.data_set().get_var_attr_as_string("value", "grid_mapping").as_deref(), Some("goes_projection"));
+        assert_eq!(reader.data_set().get_var_attr_as_string("goes_projection", "grid_mapping_name").as_deref(), Some("geostationary"));
+        assert_eq!(reader.data_set().get_var_attr_as_string("goes_projection", "sweep_angle_axis").as_deref(), Some("x"));
+        drop(reader);
+        std::fs::remove_file(path).unwrap();
     }
 }

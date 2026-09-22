@@ -16576,9 +16576,8 @@ impl HookEchoApp {
     fn export_active_field(&mut self, ext: &str) {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
-            .find(|layer| self.views[self.active].fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(&layer))
-            .and_then(|state| state.frame.clone());
+            .filter(|layer| self.views[self.active].fields_on.contains(layer))
+            .find_map(|layer| self.fields.get(&layer).and_then(|state| state.frame.clone()));
         let Some(frame) = frame else {
             self.toast(ToastKind::Info, "No scalar field is active");
             return;
