@@ -24,6 +24,7 @@ pub enum SurfaceField {
     WindV10m,
     Gust10m,
     Visibility,
+    Precip1h,
 }
 
 macro_rules! descriptor {
@@ -95,6 +96,22 @@ descriptor!(URMA_WIND_V_DESCRIPTOR, "NOAA URMA", "analysis.urma.wind-v-10m", "UR
 descriptor!(URMA_GUST_DESCRIPTOR, "NOAA URMA", "analysis.urma.gust-10m", "URMA 10 m wind gust", "URMA gust", "m s-1", "wind gust");
 descriptor!(URMA_VISIBILITY_DESCRIPTOR, "NOAA URMA", "analysis.urma.visibility", "URMA surface visibility", "URMA visibility", "m", "visibility");
 
+macro_rules! precip_descriptor {
+    ($name:ident, $source:literal, $id:literal, $label:literal) => {
+        pub static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id), source: $source, family: FieldFamily::Analysis,
+            display_name: $label, short_name: "1 h precipitation",
+            search_aliases: &["hourly precipitation", "rain analysis", "QPE"],
+            units: "mm", value_kind: ValueKind::Accumulation,
+            palette_key: "qpe-1h", sampling: SamplingPolicy::Nearest,
+            missing: MissingData::Nan, time_policy: None,
+            supports_contours: false, supports_difference: false,
+        };
+    };
+}
+precip_descriptor!(PRECIP_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.precip-1h", "RTMA 1 h precipitation");
+precip_descriptor!(URMA_PRECIP_DESCRIPTOR, "NOAA URMA", "analysis.urma.precip-1h", "URMA 1 h precipitation");
+
 impl SurfaceField {
     fn index(self) -> (&'static str, &'static str) {
         match self {
@@ -105,6 +122,7 @@ impl SurfaceField {
             Self::WindV10m => ("VGRD", "10 m above ground"),
             Self::Gust10m => ("GUST", "10 m above ground"),
             Self::Visibility => ("VIS", "surface"),
+            Self::Precip1h => ("APCP", "0 m above mean sea level"),
         }
     }
 
@@ -117,6 +135,7 @@ impl SurfaceField {
             Self::WindV10m => &WIND_V_DESCRIPTOR,
             Self::Gust10m => &GUST_DESCRIPTOR,
             Self::Visibility => &VISIBILITY_DESCRIPTOR,
+            Self::Precip1h => &PRECIP_DESCRIPTOR,
         }
     }
 
@@ -132,6 +151,7 @@ impl SurfaceField {
             Self::WindV10m => &URMA_WIND_V_DESCRIPTOR,
             Self::Gust10m => &URMA_GUST_DESCRIPTOR,
             Self::Visibility => &URMA_VISIBILITY_DESCRIPTOR,
+            Self::Precip1h => &URMA_PRECIP_DESCRIPTOR,
         }
     }
 }
@@ -147,6 +167,16 @@ pub fn object_url(source: Source, valid: DateTime<Utc>) -> String {
         "{root}/{prefix}.{day}/{prefix}.t{:02}z.2dvaranl_ndfd.grb2_wexp",
         valid.hour()
     )
+}
+
+/// Hourly precipitation is a separate object; its filename hour is the interval end.
+pub fn precip_object_url(source: Source, valid: DateTime<Utc>) -> String {
+    let day = valid.format("%Y%m%d");
+    let hour = valid.format("%Y%m%d%H");
+    match source {
+        Source::Rtma => format!("{RTMA_ROOT}/rtma2p5.{day}/rtma2p5.{hour}.pcp.184.grb2"),
+        Source::Urma => format!("{URMA_ROOT}/urma2p5.{day}/urma2p5.{hour}.pcp_01h.wexp.grb2"),
+    }
 }
 
 fn grib_message(bytes: &[u8]) -> Option<(u64, u8, u8, u8)> {
@@ -196,6 +226,7 @@ async fn urma_range(
         SurfaceField::WindV10m => (2, 3, 103),
         SurfaceField::Gust10m => (2, 22, 103),
         SurfaceField::Visibility => (19, 0, 1),
+        SurfaceField::Precip1h => (1, 8, 1),
     };
     let mut offset = 0u64;
     for _ in 0..32 {
@@ -244,11 +275,15 @@ pub async fn fetch_analysis(
     valid: DateTime<Utc>,
 ) -> anyhow::Result<FieldFrame> {
     let (cached, source_identity) = fetch_message(http, source, field, valid).await?;
-    let grid = crate::task::guarded(|| {
+    let mut grid = crate::task::guarded(|| {
         crate::hrrr::decode_regrid_at_resolution(&cached.bytes, 0.03, f64::NEG_INFINITY)
     })
     .unwrap_or_else(|_| anyhow::bail!("RTMA GRIB decode panicked"))?;
+    if field == SurfaceField::Precip1h {
+        grid.time += chrono::Duration::hours(1);
+    }
     let valid_time = grid.time;
+    anyhow::ensure!(valid_time == valid, "analysis valid time differs from requested hour");
     Ok(FieldFrame::new(
         field.descriptor_for(source),
         grid,
@@ -271,6 +306,11 @@ async fn fetch_message(
     field: SurfaceField,
     valid: DateTime<Utc>,
 ) -> anyhow::Result<(crate::object_cache::CachedObject, String)> {
+    if field == SurfaceField::Precip1h {
+        let url = precip_object_url(source, valid);
+        let cached = crate::object_cache::fetch_range(http, &url, 0, None).await?;
+        return Ok((cached, url));
+    }
     let url = object_url(source, valid);
     let (start, end) = if source == Source::Urma {
         urma_range(http, &url, field).await?
@@ -319,7 +359,10 @@ pub async fn fetch_native_pair(
         crate::task::guarded(|| crate::sounding::sample_grib_points(&cached.bytes, &[point, station]))
             .unwrap_or_else(|_| anyhow::bail!("analysis native decode panicked"))
     }).await??;
-    let actual = actual.ok_or_else(|| anyhow::anyhow!("analysis valid time unavailable"))?;
+    let mut actual = actual.ok_or_else(|| anyhow::anyhow!("analysis valid time unavailable"))?;
+    if field == SurfaceField::Precip1h {
+        actual += chrono::Duration::hours(1);
+    }
     anyhow::ensure!(values.iter().all(|(distance, _)| *distance <= 0.2_f64.powi(2)),
         "analysis point outside native grid");
     anyhow::ensure!(actual == valid, "analysis valid time differs from requested hour");
@@ -461,6 +504,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hourly_precip_fixtures_decode_complex_packing_and_end_time() {
+        // Unmodified NOMADS RTMA/URMA hourly precipitation GRIBs from the filename hours below.
+        // RTMA uses packing template 2; URMA uses template 3.
+        for (raw, end, finite) in [
+            (include_bytes!("../testdata/rtma-pcp-2026092214.grb2").as_slice(),
+             "2026-09-22T14:00:00Z", 2_387_407),
+            (include_bytes!("../testdata/urma-pcp-2026092020.grb2").as_slice(),
+             "2026-09-20T20:00:00Z", 3_744_965),
+        ] {
+            let message = gribberish::message::read_message(raw, 0).unwrap();
+            let start = message.forecast_date().unwrap();
+            assert_eq!(start + chrono::Duration::hours(1), end.parse::<DateTime<Utc>>().unwrap());
+            let values = message.data().unwrap();
+            assert_eq!(values.iter().filter(|value| value.is_finite()).count(), finite);
+            assert!(values.iter().all(|value| !value.is_finite() || *value >= 0.0));
+        }
+    }
+
+    #[test]
     fn native_grid_definition_rejects_truncated_sections() {
         let mut raw = vec![0; 16];
         raw[..4].copy_from_slice(b"GRIB");
@@ -498,14 +560,20 @@ mod tests {
         assert_eq!(point.source_identity, latest.stamp.source_identity);
         assert!((240.0..330.0).contains(&point.point));
         assert!((240.0..330.0).contains(&point.station));
+        let precip = fetch_analysis(&http, Source::Rtma, SurfaceField::Precip1h, at).await.unwrap();
+        assert_eq!(precip.stamp.valid_time, at);
+        assert_eq!(precip.descriptor.value_kind, ValueKind::Accumulation);
+        assert!(precip.sample(-97.3, 32.6).value.is_some());
         for field in [SurfaceField::Dewpoint2m, SurfaceField::Pressure,
             SurfaceField::WindU10m, SurfaceField::WindV10m,
-            SurfaceField::Gust10m, SurfaceField::Visibility] {
+            SurfaceField::Gust10m, SurfaceField::Visibility, SurfaceField::Precip1h] {
             let other = fetch_native_pair(&http, Source::Rtma, field,
                 at, (-97.3, 32.6), (-97.04, 32.9)).await.unwrap();
             assert_eq!(other.valid_time, at);
-            assert_eq!(other.source_identity.split_once("#bytes=").unwrap().0,
-                point.source_identity.split_once("#bytes=").unwrap().0);
+            if field != SurfaceField::Precip1h {
+                assert_eq!(other.source_identity.split_once("#bytes=").unwrap().0,
+                    point.source_identity.split_once("#bytes=").unwrap().0);
+            }
             assert!(other.point.is_finite() && other.station.is_finite());
         }
     }
@@ -608,7 +676,7 @@ mod tests {
         ).await.unwrap();
         assert_eq!(v_wind.descriptor.id.0, "analysis.urma.wind-v-10m");
         assert!(v_wind.field().values.iter().any(|value| value.is_finite()));
-        for field in [SurfaceField::Gust10m, SurfaceField::Visibility] {
+        for field in [SurfaceField::Gust10m, SurfaceField::Visibility, SurfaceField::Precip1h] {
             let decoded = fetch_analysis(&reqwest::Client::new(), Source::Urma, field,
                 "2026-09-20T20:00:00Z".parse().unwrap()).await.unwrap();
             assert_eq!(decoded.descriptor.id, field.descriptor_for(Source::Urma).id);

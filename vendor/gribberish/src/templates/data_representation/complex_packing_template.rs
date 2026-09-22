@@ -2,6 +2,7 @@ use bitvec::prelude::*;
 
 use crate::{error::GribberishError, utils::iter::ScaleGribValueIterator};
 use itertools::izip;
+use std::iter;
 
 use crate::{
     templates::template::{Template, TemplateType},
@@ -131,7 +132,7 @@ impl DataRepresentationTemplate<f64> for ComplexPackingDataRepresentationTemplat
                 0
             } else {
                 let start = ig * nbits;
-                bits[start..start + nbits].load::<u32>()
+                bits[start..start + nbits].load_be::<u32>()
             }
         });
 
@@ -142,7 +143,7 @@ impl DataRepresentationTemplate<f64> for ComplexPackingDataRepresentationTemplat
                 0
             } else {
                 let start = group_widths_start + ig * n_width_bits;
-                bits[start..start + n_width_bits].load::<u32>()
+                bits[start..start + n_width_bits].load_be::<u32>()
                     + self.group_width_reference() as u32
             }
         });
@@ -150,16 +151,16 @@ impl DataRepresentationTemplate<f64> for ComplexPackingDataRepresentationTemplat
         let group_lengths_start =
             group_widths_start + (((n_width_bits * ng) as f32 / 8.0).ceil() as usize * 8);
         let n_length_bits = self.group_length_bits() as usize;
-        let group_lengths = (0..ng).map(|ig| {
+        let group_lengths = (0..ng.saturating_sub(1)).map(|ig| {
             if n_length_bits == 0 {
                 0
             } else {
                 let start = group_lengths_start + ig * n_length_bits;
-                bits[start..start + n_length_bits].load::<u32>()
+                bits[start..start + n_length_bits].load_be::<u32>()
                     * self.group_length_increment() as u32
                     + self.group_length_reference()
             }
-        });
+        }).chain(iter::once(self.group_last_length()));
 
         let mut pos =
             group_lengths_start + (((n_length_bits * ng) as f32 / 8.0).ceil() as usize * 8);

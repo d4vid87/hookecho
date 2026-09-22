@@ -1934,7 +1934,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // Two global cycles behind it, so the same half hour.
         | FL::ModelDiff => 1800,
         // RTMA is hourly; poll often enough to notice a newly published analysis.
-        FL::RtmaTemp2m | FL::RtmaDewpoint2m | FL::RtmaPressure | FL::RtmaWindU10m | FL::RtmaWindV10m | FL::RtmaGust10m | FL::RtmaVisibility => 300,
+        FL::RtmaTemp2m | FL::RtmaDewpoint2m | FL::RtmaPressure | FL::RtmaWindU10m | FL::RtmaWindV10m | FL::RtmaGust10m | FL::RtmaVisibility | FL::RtmaPrecip1h => 300,
         FL::Smoke => 900,
         // NBM posts hourly; the blend moves no faster than that.
         FL::ThunderProb | FL::RefsReflectivityProb => 900,
@@ -19133,6 +19133,7 @@ impl eframe::App for HookEchoApp {
             (FL::RtmaWindV10m, wxdata::rtma::SurfaceField::WindV10m),
             (FL::RtmaGust10m, wxdata::rtma::SurfaceField::Gust10m),
             (FL::RtmaVisibility, wxdata::rtma::SurfaceField::Visibility),
+            (FL::RtmaPrecip1h, wxdata::rtma::SurfaceField::Precip1h),
         ] {
             let stale = self.field_wanted(layer)
                 && self.fields.get(&layer).is_some_and(|state| {

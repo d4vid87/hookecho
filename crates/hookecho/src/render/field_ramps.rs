@@ -868,6 +868,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::RtmaWindU10m | FL::RtmaWindV10m => &RTMA_WIND_COMPONENT,
         FL::RtmaGust10m => &RTMA_GUST,
         FL::RtmaVisibility => &RTMA_VISIBILITY,
+        FL::RtmaPrecip1h => &QPE_1H,
         FL::Hca => &HCA,
         FL::GlmFed => &GLM_FED,
         FL::SnowBands => &SNOW_BANDS,
