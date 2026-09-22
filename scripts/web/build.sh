@@ -137,7 +137,8 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Native θe contours compare GRIB grid definitions before deriving, avoiding two duplicate
 # coordinate arrays (local test-process peak: 353.5 → 293.1 MiB). This measured 4,261,133
 # gzip bytes; the ceiling keeps a 2,867-byte (0.07%) allowance.
-budget="${HOOKECHO_WASM_BUDGET:-4264000}"
+# Geographic vector export measured 4,266,867 gzip bytes; keep a 3,133-byte margin.
+budget="${HOOKECHO_WASM_BUDGET:-4270000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

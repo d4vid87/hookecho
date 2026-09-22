@@ -19820,6 +19820,18 @@ impl eframe::App for HookEchoApp {
         if std::mem::take(&mut self.placefile_window.import_gis) {
             crate::dialog::request_open(crate::dialog::ImportKind::Gis, "");
         }
+        if let Some(url) = self.placefile_window.export_gis.take() {
+            if let Some(file) = self.placefiles.iter().find(|file| file.url == url && file.loaded) {
+                match wxdata::gis::export_geojson(&file.pf) {
+                    Ok(json) => match crate::dialog::save_bytes("hookecho-overlay.geojson", "geojson", json.as_bytes()) {
+                        crate::dialog::Saved::Where(where_) => self.toast(ToastKind::Success, format!("Exported GeoJSON to {where_}")),
+                        crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                        crate::dialog::Saved::Cancelled => {},
+                    },
+                    Err(error) => self.toast(ToastKind::Error, error.to_string()),
+                }
+            }
+        }
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
         let names: std::collections::HashMap<crate::render::FieldLayer, String> =

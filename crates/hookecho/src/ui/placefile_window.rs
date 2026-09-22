@@ -16,6 +16,7 @@ pub struct PlacefileStatus {
 pub struct PlacefileWindow {
     pub open: bool,
     pub import_gis: bool,
+    pub export_gis: Option<String>,
     new_url: String,
     new_plugin: String,
     new_command: String,
@@ -61,6 +62,10 @@ impl PlacefileWindow {
                             ui.checkbox(&mut cfg.enabled, "");
                             if ui.button("✖").on_hover_text("Remove").clicked() {
                                 remove = Some(i);
+                            }
+                            if cfg.url.starts_with("gis:") && st.is_some_and(|s| s.loaded)
+                                && ui.button("Export GeoJSON").clicked() {
+                                self.export_gis = Some(cfg.url.clone());
                             }
                             ui.vertical(|ui| {
                                 let title = st

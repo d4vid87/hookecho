@@ -14,6 +14,55 @@ pub fn parse(name: &str, text: &str) -> anyhow::Result<Placefile> {
     }
 }
 
+/// Export the geographic vector subset of an imported overlay as RFC 7946 GeoJSON.
+/// Screen-anchored objects and raster/image meshes have no geographic vector equivalent.
+pub fn export_geojson(file: &Placefile) -> anyhow::Result<String> {
+    let mut features = Vec::new();
+    for item in &file.items {
+        if item.anchor.is_some() { continue; }
+        let (geometry, label) = match &item.kind {
+            PlaceKind::Line { pts, .. } if pts.len() >= 2 && pts.iter().all(valid_pos) =>
+                (serde_json::json!({"type":"LineString", "coordinates":pts}), None),
+            PlaceKind::Polygon { rings, .. } if !rings.is_empty() => {
+                let mut closed = Vec::with_capacity(rings.len());
+                for ring in rings {
+                    anyhow::ensure!(ring.len() >= 3 && ring.iter().all(valid_pos),
+                        "overlay polygon has invalid coordinates");
+                    let mut ring = ring.clone();
+                    if ring.first() != ring.last() { ring.push(ring[0]); }
+                    closed.push(ring);
+                }
+                (serde_json::json!({"type":"Polygon", "coordinates":closed}), None)
+            }
+            PlaceKind::Icon { pos, hover, .. } if valid_pos(pos) =>
+                (serde_json::json!({"type":"Point", "coordinates":pos}), Some(hover)),
+            PlaceKind::Text { pos, text, .. } if valid_pos(pos) =>
+                (serde_json::json!({"type":"Point", "coordinates":pos}), Some(text)),
+            _ => continue,
+        };
+        features.push(serde_json::json!({
+            "type": "Feature", "geometry": geometry,
+            "properties": {
+                "source": file.title,
+                "label": label,
+                "valid_from": item.time.map(|(start, _)| start),
+                "valid_until": item.time.map(|(_, end)| end),
+            }
+        }));
+    }
+    anyhow::ensure!(!features.is_empty(), "overlay has no geographic vectors to export");
+    let json = serde_json::to_string(&serde_json::json!({
+        "type":"FeatureCollection", "features":features
+    }))?;
+    anyhow::ensure!(json.len() <= 64 * 1024 * 1024, "GeoJSON export exceeds 64 MB");
+    Ok(json)
+}
+
+fn valid_pos(pos: &[f64; 2]) -> bool {
+    pos[0].is_finite() && pos[1].is_finite()
+        && (-180.0..=180.0).contains(&pos[0]) && (-90.0..=90.0).contains(&pos[1])
+}
+
 /// Parse RFC 7946 GeoJSON. Coordinates are WGS84 lon/lat; legacy documents that explicitly
 /// declare another CRS fail rather than being silently plotted in the wrong place.
 pub fn geojson(name: &str, text: &str) -> anyhow::Result<Placefile> {
@@ -504,6 +553,22 @@ fn le_f64(bytes: &[u8], offset: usize) -> anyhow::Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exports_imported_vectors_with_holes_labels_and_wgs84_coordinates() {
+        let source = r#"{"type":"FeatureCollection","features":[
+          {"type":"Feature","properties":{"name":"Storm area"},"geometry":{"type":"Polygon","coordinates":[[[-98,34],[-96,34],[-96,36],[-98,34]],[[-97.5,34.5],[-97,34.5],[-97,35],[-97.5,34.5]]]}},
+          {"type":"Feature","properties":{"name":"Track"},"geometry":{"type":"LineString","coordinates":[[-98,34],[-97,35]]}},
+          {"type":"Feature","properties":{"name":"Site"},"geometry":{"type":"Point","coordinates":[-97,35]}}
+        ]}"#;
+        let file = geojson("analyst.geojson", source).unwrap();
+        let exported = export_geojson(&file).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(json["features"].as_array().unwrap().len(), 3);
+        assert_eq!(json["features"][0]["geometry"]["coordinates"].as_array().unwrap().len(), 2);
+        assert_eq!(json["features"][2]["properties"]["label"], "Site");
+        assert_eq!(geojson("roundtrip.geojson", &exported).unwrap().items.len(), 3);
+    }
 
     #[test]
     fn imports_supported_geometry_and_rejects_an_unknown_crs() {
