@@ -207,6 +207,7 @@ fn dashboard(
             ui.separator();
             ui.strong(format!("Loaded temperature history at {}", station.station_id));
             ui.weak("RTMA: recent 6 hours · HRRR: current run · Global: viewed frames. Observations above cover 24 hours.");
+            temperature_comparison(ui, station, history);
             if history.analysis.is_empty() && history.hrrr.is_empty() && history.forecast.is_empty() {
                 ui.weak("Enable a surface temperature analysis or global temperature forecast layer, or wait for HRRR samples.");
             }
@@ -236,6 +237,66 @@ fn dashboard(
             });
         }
     });
+}
+
+/// Same time and temperature axes for observations and every loaded source. Dots are exact samples;
+/// no line is drawn across missing hours or between forecast steps.
+fn temperature_comparison(ui: &mut egui::Ui, station: &StationObs, history: &PointHistory) {
+    let now = Utc::now();
+    let start = now - chrono::Duration::hours(6);
+    let end = now + chrono::Duration::hours(6);
+    let observed = station.obs.iter().filter_map(|ob| Some((ob.time?, ob.temp_c?)))
+        .map(|(time, c)| (time, c_to_f(c)));
+    let series = [
+        ("Observed", egui::Color32::from_rgb(255, 145, 95), observed.collect::<Vec<_>>()),
+        ("RTMA / URMA", egui::Color32::from_rgb(105, 205, 240), history.analysis.iter()
+            .map(|p| (p.valid, c_to_f(p.temp_k - 273.15))).collect()),
+        ("HRRR", egui::Color32::from_rgb(170, 145, 245), history.hrrr.iter()
+            .map(|p| (p.valid, c_to_f(p.temp_k - 273.15))).collect()),
+        ("Global", egui::Color32::from_rgb(145, 205, 145), history.forecast.iter()
+            .map(|p| (p.valid, c_to_f(p.temp_k - 273.15))).collect()),
+    ];
+    let values: Vec<f32> = series.iter().flat_map(|(_, _, points)| points.iter())
+        .filter(|(time, value)| *time >= start && *time <= end && value.is_finite())
+        .map(|(_, value)| *value).collect();
+    let Some(lo) = values.iter().copied().reduce(f32::min) else { return };
+    let hi = values.iter().copied().reduce(f32::max).unwrap_or(lo);
+    let (lo, hi) = (lo - 2.0, hi + 2.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 140.0), egui::Sense::hover());
+    let plot = rect.shrink2(egui::vec2(12.0, 8.0));
+    let painter = ui.painter();
+    painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
+    let middle = plot.left() + plot.width() * 0.5;
+    painter.line_segment([egui::pos2(middle, plot.top()), egui::pos2(middle, plot.bottom())],
+        egui::Stroke::new(1.0, ui.visuals().weak_text_color()));
+    for (_, color, points) in &series {
+        for &(time, value) in points {
+            if let Some(pos) = temperature_plot_point(plot, start, end, lo, hi, time, value) {
+                painter.circle_filled(pos, 3.0, *color);
+            }
+        }
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (label, color, _) in &series {
+            ui.colored_label(*color, *label);
+        }
+    });
+    ui.columns(3, |cols| {
+        cols[0].weak("−6 h");
+        cols[1].weak("now");
+        cols[2].weak("+6 h");
+    });
+    ui.weak(format!("{lo:.0}–{hi:.0} °F · exact points only"));
+}
+
+fn temperature_plot_point(
+    rect: egui::Rect, start: DateTime<Utc>, end: DateTime<Utc>,
+    lo: f32, hi: f32, time: DateTime<Utc>, value: f32,
+) -> Option<egui::Pos2> {
+    if time < start || time > end || !value.is_finite() || hi <= lo { return None; }
+    let x = (time - start).num_seconds() as f32 / (end - start).num_seconds() as f32;
+    let y = 1.0 - ((value - lo) / (hi - lo)).clamp(0.0, 1.0);
+    Some(egui::pos2(rect.left() + rect.width() * x, rect.top() + rect.height() * y))
 }
 
 fn nearest_temperature(obs: &[Observation], valid: DateTime<Utc>) -> Option<(f32, DateTime<Utc>)> {
@@ -346,5 +407,19 @@ mod tests {
     fn source_labels_do_not_expose_object_urls() {
         assert_eq!(source_label("https://noaa-gfs-bdp-pds.s3.amazonaws.com/key?secret=1"), "GFS");
         assert_eq!(source_label("https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod/file"), "URMA");
+    }
+
+    #[test]
+    fn temperature_plot_uses_actual_time_and_rejects_outside_window() {
+        let start = Utc::now();
+        let end = start + chrono::Duration::hours(12);
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(120.0, 100.0));
+        let middle = temperature_plot_point(rect, start, end, 50.0, 100.0,
+            start + chrono::Duration::hours(6), 75.0).unwrap();
+        assert_eq!(middle, egui::pos2(70.0, 70.0));
+        assert!(temperature_plot_point(rect, start, end, 50.0, 100.0,
+            start - chrono::Duration::seconds(1), 75.0).is_none());
+        assert!(temperature_plot_point(rect, start, end, 50.0, 100.0,
+            start, f32::NAN).is_none());
     }
 }
