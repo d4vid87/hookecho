@@ -74,6 +74,8 @@ the 44 TDWRs are addressable.
 | Tropical cyclones (positions, cones, tracks) | NHC `CurrentStorms.json` + MapServer | per advisory (6 h, plus intermediates) | minutes | no |
 | Storm surge | NHC map service | per advisory | minutes | no |
 
+Selected-point temperature history samples native GFS f00 from the three preceding six-hour cycles and f00–f12 from the newest usable cycle. Missing objects leave gaps; run time and valid time remain distinct in the chart and exports.
+
 ## Analysis and verification
 
 | Feed | Source | Cadence | Latency | Key |
