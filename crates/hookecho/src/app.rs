@@ -1326,6 +1326,36 @@ pub(crate) fn draw_append(
     }
 }
 
+fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
+    let features: Vec<_> = strokes
+        .iter()
+        .filter(|stroke| stroke.points.len() >= 2)
+        .map(|stroke| {
+            anyhow::ensure!(
+                stroke.points.iter().all(|point| point[0].is_finite()
+                    && point[1].is_finite()
+                    && (-180.0..=180.0).contains(&point[0])
+                    && (-90.0..=90.0).contains(&point[1])),
+                "annotation has invalid coordinates"
+            );
+            let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
+            Ok(serde_json::json!({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": stroke.points},
+                "properties": {
+                    "source": "HookEcho annotation",
+                    "stroke": format!("#{r:02x}{g:02x}{b:02x}"),
+                    "stroke-opacity": f64::from(a) / 255.0,
+                }
+            }))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    anyhow::ensure!(!features.is_empty(), "no complete annotations to export");
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection", "features": features
+    }))?)
+}
+
 /// What a left-click on the map does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MapTool {
@@ -16091,7 +16121,7 @@ impl HookEchoApp {
             .iter()
             .map(|stroke| crate::casefile::CaseStroke {
                 points: stroke.points.clone(),
-                rgba: stroke.color.to_array(),
+                rgba: stroke.color.to_srgba_unmultiplied(),
             })
             .collect();
         crate::casefile::CaseManifest::new(
@@ -16121,6 +16151,25 @@ impl HookEchoApp {
                 crate::dialog::Saved::Cancelled => {}
             },
             Err(error) => self.toast(ToastKind::Error, format!("Case export failed: {error}")),
+        }
+    }
+
+    fn export_annotations(&mut self) {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        match annotations_geojson(&self.strokes) {
+            Ok(json) => match crate::dialog::save_bytes(
+                &format!("hookecho-annotations-{stamp}.geojson"),
+                "geojson",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => self.toast(
+                    ToastKind::Success,
+                    format!("Annotations exported to {where_}"),
+                ),
+                crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, error.to_string()),
         }
     }
 
@@ -21703,6 +21752,27 @@ mod tests {
         strokes.pop(); // Undo
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].color, red);
+    }
+
+    #[test]
+    fn drawn_annotations_export_coordinates_and_style_as_geojson() {
+        let strokes = vec![Stroke2d {
+            points: vec![[-97.5, 35.2], [-97.4, 35.3]],
+            color: egui::Color32::from_rgba_unmultiplied(255, 80, 80, 128),
+        }];
+        let json: serde_json::Value =
+            serde_json::from_str(&annotations_geojson(&strokes).unwrap()).unwrap();
+        assert_eq!(json["features"][0]["geometry"]["type"], "LineString");
+        assert_eq!(json["features"][0]["geometry"]["coordinates"][1][0], -97.4);
+        assert_eq!(json["features"][0]["properties"]["stroke"], "#ff5050");
+        assert_eq!(json["features"][0]["properties"]["stroke-opacity"], 128.0 / 255.0);
+        assert!(annotations_geojson(&[Stroke2d {
+            points: vec![[f64::NAN, 35.0], [-97.0, 35.0]],
+            color: egui::Color32::WHITE,
+        }])
+        .unwrap_err()
+        .to_string()
+        .contains("invalid coordinates"));
     }
 }
 
