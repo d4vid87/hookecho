@@ -422,12 +422,13 @@ pub struct ObjectiveSurfacePoint {
     pub dewpoint_residual_k: Option<f32>,
 }
 
-/// Blend the nearest recent METAR innovation into an analysis background at one point.
+/// Blend the nearest recent surface observation into an analysis background at one point.
 /// The weight decays as `exp(-(distance / 75 km)^2)` and is zero beyond 150 km.
 pub fn objective_surface_point(
     temperature: &FieldFrame,
     dewpoint: &FieldFrame,
     observations: &[wxdata::metar::SurfaceOb],
+    stations: &[wxdata::stations::StationOb],
     lon: f64,
     lat: f64,
 ) -> Option<ObjectiveSurfacePoint> {
@@ -439,16 +440,22 @@ pub fn objective_surface_point(
     }
     let background_t = temperature.sample(lon, lat).value;
     let background_td = dewpoint.sample(lon, lat).value;
-    let (station, distance_km) = observations
+    let observations = observations
         .iter()
-        .filter(|ob| ob.obs_time
-            .and_then(|time| chrono::DateTime::from_timestamp(time, 0))
-            .is_some_and(|time| (time - temperature.stamp.valid_time).abs() <= chrono::Duration::minutes(90)))
+        .map(|ob| (ob.icao.as_str(), None, ob.lon, ob.lat, ob.temp_c, ob.dewp_c,
+            ob.obs_time.and_then(|time| chrono::DateTime::from_timestamp(time, 0))))
+        .chain(stations.iter().filter(|ob| ob.network != wxdata::stations::Network::Metar)
+            .map(|ob| (ob.id.as_str(), Some(ob.network), ob.lon, ob.lat, ob.temp_c, ob.dewp_c, ob.time)));
+    let ((id, network, station_lon, station_lat, observed_t, observed_td, _), distance_km) = observations
+        .filter(|(_, _, _, _, temp, dewpoint, time)| {
+            (temp.is_some_and(f32::is_finite) || dewpoint.is_some_and(f32::is_finite))
+                && time.is_some_and(|time| (time - temperature.stamp.valid_time).abs() <= chrono::Duration::minutes(90))
+        })
         .map(|ob| {
-            let dlat = (ob.lat - lat).to_radians();
-            let dlon = (ob.lon - lon).to_radians();
+            let dlat = (ob.3 - lat).to_radians();
+            let dlon = (ob.2 - lon).to_radians();
             let a = (dlat / 2.0).sin().powi(2)
-                + lat.to_radians().cos() * ob.lat.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+                + lat.to_radians().cos() * ob.3.to_radians().cos() * (dlon / 2.0).sin().powi(2);
             (ob, 6371.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt()))
         })
         .filter(|(_, distance)| *distance <= 150.0)
@@ -460,12 +467,12 @@ pub fn objective_surface_point(
         })
     };
     Some(ObjectiveSurfacePoint {
-        station: station.icao.clone(), distance_km, weight,
-        temperature_k: blend(background_t, station.temp_c),
-        dewpoint_k: blend(background_td, station.dewp_c),
-        temperature_residual_k: station.temp_c.zip(temperature.sample(station.lon, station.lat).value)
+        station: network.map_or_else(|| id.to_string(), |network| format!("{}:{id}", network.label())), distance_km, weight,
+        temperature_k: blend(background_t, observed_t),
+        dewpoint_k: blend(background_td, observed_td),
+        temperature_residual_k: observed_t.zip(temperature.sample(station_lon, station_lat).value)
             .map(|(observed, analysis)| observed + 273.15 - analysis),
-        dewpoint_residual_k: station.dewp_c.zip(dewpoint.sample(station.lon, station.lat).value)
+        dewpoint_residual_k: observed_td.zip(dewpoint.sample(station_lon, station_lat).value)
             .map(|(observed, analysis)| observed + 273.15 - analysis),
     })
 }
@@ -861,7 +868,7 @@ mod tests {
         let blend = objective_surface_point(
             &frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0),
             &frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0),
-            &[observation], -99.5, 39.5,
+            &[observation], &[], -99.5, 39.5,
         ).unwrap();
         assert_eq!(blend.station, "KTEST");
         assert_eq!(blend.weight, 1.0);
@@ -869,5 +876,21 @@ mod tests {
         assert!((blend.dewpoint_k.unwrap() - 293.15).abs() < 0.001);
         assert!((blend.temperature_residual_k.unwrap() - 3.15).abs() < 0.001);
         assert!((blend.dewpoint_residual_k.unwrap() - 3.15).abs() < 0.001);
+
+        let personal = wxdata::stations::StationOb {
+            id: "home".into(), name: "Home".into(),
+            network: wxdata::stations::Network::Tempest,
+            lat: 39.5, lon: -99.5, time: Some(valid),
+            temp_c: Some(31.0), dewp_c: Some(21.0), rh_pct: None,
+            wdir_deg: None, wspd_kt: None, gust_kt: None, pressure_mb: None,
+            precip_rate_mmh: None, elev_m: None,
+        };
+        let blend = objective_surface_point(
+            &frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0),
+            &frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0),
+            &[], &[personal], -99.5, 39.5,
+        ).unwrap();
+        assert_eq!(blend.station, "Tempest:home");
+        assert!((blend.temperature_k.unwrap() - 304.15).abs() < 0.001);
     }
 }

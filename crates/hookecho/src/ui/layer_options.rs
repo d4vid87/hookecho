@@ -91,6 +91,7 @@ pub(crate) fn show(
     analysis_source: &mut wxdata::rtma::Source,
     analysis_point: (f64, f64),
     metars: &[wxdata::metar::SurfaceOb],
+    stations: &[wxdata::stations::StationOb],
     // Model difference: which field, and the two valid times the last fetch actually compared.
     diff_field: &mut crate::fielddiff::DiffField,
     diff_valid: Option<&(String, String)>,
@@ -452,7 +453,7 @@ pub(crate) fn show(
                     });
                 }
                 if let Some(blend) = crate::fielddiff::objective_surface_point(
-                    temp, dewpoint, metars, lon, lat,
+                    temp, dewpoint, metars, stations, lon, lat,
                 ) {
                     ui.separator();
                     ui.strong("HookEcho objective analysis");
@@ -474,7 +475,7 @@ pub(crate) fn show(
                             ui.label(format!("Td {residual:+.1} °C"));
                         }
                     });
-                    ui.weak("Nearest METAR innovation, ≤90 min old, 75 km decay; not an official SPC analysis.");
+                    ui.weak("Nearest surface observation, ≤90 min old, 75 km decay; not an official SPC analysis.");
                 }
             } else {
                 ui.weak("Diagnostics wait for matching analysis times.");
