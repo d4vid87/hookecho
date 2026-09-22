@@ -950,7 +950,7 @@ fn main() -> eframe::Result<()> {
         let date = flag_value(&args, "--date")
             .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
         let time = flag_value(&args, "--time");
-        let smooth = args.iter().any(|a| a == "--smooth");
+        let smooth = !args.iter().any(|a| a == "--no-smooth");
         let dealias = args.iter().any(|a| a == "--dealias");
         let palette = flag_value(&args, "--pal");
         let basemap = match flag_value(&args, "--basemap") {

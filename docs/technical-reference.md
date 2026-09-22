@@ -670,6 +670,7 @@ clock never catches a half-written PNG, JPEG, or WebP), and repeats. Point conky
 `--on-change` checks the latest NEXRAD volume identifier and leaves the file untouched
 until a new volume is available; it requires `--every` and a NEXRAD site.
 Archive `--date` and `--time` are UTC; `--on-change` applies only to live snapshots.
+Snapshots keep their smoothed rendering by default; use `--no-smooth` for native-looking gates.
 
 There's a container for it, if that's easier than a systemd unit:
 
