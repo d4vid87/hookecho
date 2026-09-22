@@ -660,16 +660,15 @@ impl HookEchoApp {
                     });
                 });
             });
-        if !phone(ctx) {
+        if !phone(ctx) && !self.analyst_open {
             egui::Area::new(egui::Id::new("analyst_workbench_entry"))
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X + PANEL_W + 8.0, 10.0))
                 .show(ctx, |ui| {
                     crate::ui::style::glass(ui, 238).show(ui, |ui| {
-                        let label = if self.analyst_open { "Map view" } else { "Analyze" };
-                        if ui.button(label).named_toggle("Analyst Workstation", self.analyst_open).clicked() {
-                            self.analyst_open = !self.analyst_open;
-                            self.panel_open = self.analyst_open;
+                        if ui.button("Analyze").named("Open Analyst Workstation").clicked() {
+                            self.analyst_open = true;
+                            self.panel_open = true;
                         }
                     });
                 });
