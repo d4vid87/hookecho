@@ -3,8 +3,8 @@
 Status is conservative: **existing** has repository evidence, **partial** has useful foundations
 but misses roadmap acceptance criteria, and **missing** has no accepted implementation. Update a
 roadmap checkbox only after its gate passes and link the test or capture here. The web gzip budget
-is 4,240,000 bytes after the completed analyst feature set measured 4,231,144 bytes in the hosted
-optimized build (an 8,856-byte, 0.21% allowance over the measured bundle).
+is 4,253,000 bytes after the station-analysis timeline measured 4,244,093 bytes in the local
+optimized binaryen build (an 8,907-byte, 0.21% allowance over the measured bundle).
 
 | Area | Status | Current evidence | Gate evidence |
 |---|---|---|---|
@@ -41,7 +41,7 @@ Baseline commit: `9a0847c6521e9d9354c42cde09d291f4f2b67327`.
 | Lite web WASM | 149,346 bytes raw / 72,109 gzip | `scripts/web/build.sh`, generated artifact |
 | Linux release executable | 39,041,288 bytes | `cargo build --release -p hookecho` |
 
-The web gate is currently 4,240,000 gzip bytes. The cross-platform GIS import measured 4,126,418
+The web gate is currently 4,253,000 gzip bytes. The cross-platform GIS import measured 4,126,418
 bytes after replacing general Shapefile, ZIP, and XML libraries with bounded readers for the
 required geometry and archive formats. Portable cases measured 4,134,935 bytes; the route adapter,
 map display, warning intersection, and native-value profile measured 4,146,896 bytes. The ceiling

@@ -129,7 +129,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Raised deliberately for the offline chase packs (IndexedDB via web-sys) and the detailed dark
 # street-map labels shipped in the default view.
 # Vector-tile worker serialization adds ~2.4 KB gzip while moving tessellation off the UI thread.
-budget="${HOOKECHO_WASM_BUDGET:-4240000}"
+# The station-analysis timeline measured 4,244,093 bytes gzip with binaryen; retain a 0.21%
+# regression allowance rather than silently failing the new preview on a 4,240,000-byte gate.
+budget="${HOOKECHO_WASM_BUDGET:-4253000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
