@@ -148,19 +148,12 @@ impl HookEchoApp {
                     ui.separator();
                 } else if ui.button("Open Analyst Workstation  →").named("Open Analyst Workstation").clicked() {
                     self.analyst_open = true;
-                    self.analyst_inspector_open = true;
+                    self.analyst_inspector_open = !sheets_layout;
                 }
             }
             if !alerts_tab && settings_page.is_none() {
                 self.product_section(ui, &mut opts);
                 ui.add_space(12.0);
-            }
-            if self.analyst_open && (sheets_layout || chrome.width() < 1200.0)
-                && self.analyst_inspector_open && !alerts_tab && settings_page.is_none()
-            {
-                egui::CollapsingHeader::new("Inspector")
-                    .default_open(false)
-                    .show(ui, |ui| self.workbench_inspector_body(ui));
             }
             crate::ui::style::glass(ui, 250).show(ui, |ui| {
                 if let Some(page) = settings_page.filter(|_| !alerts_tab) {
@@ -456,6 +449,12 @@ impl HookEchoApp {
                     }
                 }
             });
+            if self.analyst_open && (sheets_layout || chrome.width() < 1200.0)
+                && self.analyst_inspector_open && !alerts_tab && settings_page.is_none()
+            {
+                ui.add_space(12.0);
+                self.workbench_inspector_body(ui);
+            }
         };
         if sheets(ctx) {
             let title = if alerts_tab_was {
