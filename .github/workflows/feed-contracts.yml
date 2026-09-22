@@ -17,6 +17,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify public NOAA prefixes
         run: scripts/feed-contracts.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Decode same-cycle HRRR station temperatures
+        run: cargo test -p wxdata --lib live_hrrr_station_temperature_uses_one_cycle -- --ignored
       - name: Capture cross-source valid times
         run: |
           python3 scripts/cross-source-capture.py --self-test
