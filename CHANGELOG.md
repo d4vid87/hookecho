@@ -4,11 +4,15 @@ Notable changes per release, newest first. Every tagged release's body on GitHub
 is this file's matching section, extracted by `.github/workflows/release.yml` —
 so **write the section before pushing the tag**, or the release job fails.
 
-The rolling `latest` release tracks `main` and is not listed here.
+The rolling `latest` release tracks `main`. Named entries below record major
+updates shipped in that rolling build; versioned entries match GitHub tags.
 
-## Unreleased
+## Analyst Workstation - 2026-09-22 (rolling release)
 
-### U.S. analyst workstation
+The U.S. analyst workstation is live in the web app and rolling desktop and
+Android builds.
+
+### Shared data and live radar
 
 - Radar, MRMS, satellite and model fields now share stable product IDs,
   provenance, native-value sampling, source health, time alignment and a
