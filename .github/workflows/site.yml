@@ -6,6 +6,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "CHANGELOG.md"
       - "site/**"
       - "docs/shots/**"
       - ".github/workflows/site.yml"
