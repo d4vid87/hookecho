@@ -16423,7 +16423,10 @@ impl HookEchoApp {
                         self.request_capture(ui.ctx(), ShotDest::Clipboard);
                     }
                     if ui.button("Export active field CSV…").clicked() {
-                        self.export_active_field_csv();
+                        self.export_active_field(false);
+                    }
+                    if ui.button("Export active field GeoTIFF…").clicked() {
+                        self.export_active_field(true);
                     }
                     toggle(ui, &mut self.settings.share_card, "Caption shared images")
                         .on_hover_text(
@@ -16566,7 +16569,7 @@ impl HookEchoApp {
         });
     }
 
-    fn export_active_field_csv(&mut self) {
+    fn export_active_field(&mut self, geotiff: bool) {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| self.views[self.active].fields_on.contains(layer))
@@ -16576,15 +16579,22 @@ impl HookEchoApp {
             self.toast(ToastKind::Info, "No scalar field is active");
             return;
         };
-        let name = format!("hookecho-{}.csv", frame.descriptor.id.0);
-        let Some(path) = crate::dialog::save_path(&name, "csv") else {
+        let ext = if geotiff { "tif" } else { "csv" };
+        let name = format!("hookecho-{}.{}", frame.descriptor.id.0, ext);
+        let Some(path) = crate::dialog::save_path(&name, ext) else {
             return;
         };
-        let result = std::fs::File::create(&path).and_then(|file| {
-            frame.write_csv(std::io::BufWriter::new(file))
+        let result = std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|file| {
+            let output = std::io::BufWriter::new(file);
+            if geotiff {
+                frame.write_geotiff(output).map(|()| None)
+            } else {
+                frame.write_csv(output).map(Some).map_err(anyhow::Error::from)
+            }
         });
         match result {
-            Ok(rows) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
+            Ok(Some(rows)) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
+            Ok(None) => self.toast(ToastKind::Success, "Exported native-value GeoTIFF"),
             Err(error) => {
                 let _ = std::fs::remove_file(&path);
                 self.toast(ToastKind::Error, format!("Field export failed: {error}"));

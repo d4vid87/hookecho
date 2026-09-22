@@ -495,6 +495,44 @@ impl FieldFrame {
         }
         Ok(rows)
     }
+
+    /// Write a native-value WGS84 GeoTIFF. Projected ABI pixels need their own export path.
+    pub fn write_geotiff(&self, output: impl std::io::Write + std::io::Seek) -> anyhow::Result<()> {
+        use tiff::{encoder::{colortype::Gray32Float, TiffEncoder}, tags::Tag};
+        anyhow::ensure!(self.native_abi.is_none() && self.grid.projection == "EPSG:4326",
+            "GeoTIFF requires a native geographic scalar grid");
+        let grid = &self.grid;
+        anyhow::ensure!(grid.nx > 0 && grid.ny > 0 && grid.nx.checked_mul(grid.ny) == Some(self.field.values.len()),
+            "invalid field grid dimensions");
+        let width = u32::try_from(grid.nx)?;
+        let height = u32::try_from(grid.ny)?;
+        let dx = (grid.lon_east - grid.lon_west) / grid.nx as f64;
+        let dy = (grid.lat_north - grid.lat_south) / grid.ny as f64;
+        anyhow::ensure!(dx.is_finite() && dy.is_finite() && dx > 0.0 && dy > 0.0,
+            "invalid geographic grid bounds");
+        let metadata = serde_json::json!({
+            "schema": "hookecho.field/v1", "product_id": self.descriptor.id.0,
+            "source_id": self.descriptor.source_id().0,
+            "source_identity": self.stamp.source_identity,
+            "units": self.descriptor.units,
+            "valid_time": self.stamp.valid_time.to_rfc3339(),
+            "received_time": self.stamp.received_time.to_rfc3339(),
+            "quality": self.stamp.quality.label(),
+        }).to_string();
+        let mut tiff = TiffEncoder::new(output)?;
+        let mut image = tiff.new_image::<Gray32Float>(width, height)?;
+        let tags = image.encoder();
+        tags.write_tag(Tag::ModelPixelScaleTag, &[dx, dy, 0.0][..])?;
+        tags.write_tag(Tag::ModelTiepointTag,
+            &[0.0, 0.0, 0.0, grid.lon_west, grid.lat_north, 0.0][..])?;
+        // ModelTypeGeographic, PixelIsArea, and WGS84 (EPSG:4326).
+        tags.write_tag(Tag::GeoKeyDirectoryTag,
+            &[1u16, 1, 0, 3, 1024, 0, 1, 2, 1025, 0, 1, 1, 2048, 0, 1, 4326][..])?;
+        tags.write_tag(Tag::GdalNodata, "nan")?;
+        tags.write_tag(Tag::ImageDescription, metadata.as_str())?;
+        image.write_data(&self.field.values)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -582,6 +620,28 @@ mod tests {
         assert!(csv.contains("\"source_id\":\"test\""));
         assert!(csv.contains("\"source_identity\":\"fixture\""));
         assert!(csv.contains("-99.500000,39.500000,1"));
+
+        let mut geotiff = std::io::Cursor::new(Vec::new());
+        frame.write_geotiff(&mut geotiff).unwrap();
+        geotiff.set_position(0);
+        let mut decoded = tiff::decoder::Decoder::new(geotiff).unwrap();
+        assert_eq!(decoded.dimensions().unwrap(), (2, 2));
+        assert_eq!(decoded.get_tag_f64_vec(tiff::tags::Tag::ModelPixelScaleTag).unwrap(), vec![1.0, 1.0, 0.0]);
+        assert_eq!(decoded.get_tag_f64_vec(tiff::tags::Tag::ModelTiepointTag).unwrap(), vec![0.0, 0.0, 0.0, -100.0, 40.0, 0.0]);
+        assert_eq!(decoded.get_tag_u16_vec(tiff::tags::Tag::GeoKeyDirectoryTag).unwrap()[12..], [2048, 0, 1, 4326]);
+        assert!(decoded.get_tag_ascii_string(tiff::tags::Tag::ImageDescription).unwrap().contains("\"units\":\"unit\""));
+        let tiff::decoder::DecodingResult::F32(values) = decoded.read_image().unwrap() else { panic!("expected native float grid") };
+        assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0]);
+        let mut missing_grid = frame.field().clone();
+        missing_grid.values[1] = f32::NAN;
+        let missing_frame = FieldFrame::new(&TEST, missing_grid, frame.stamp.clone());
+        let mut geotiff = std::io::Cursor::new(Vec::new());
+        missing_frame.write_geotiff(&mut geotiff).unwrap();
+        geotiff.set_position(0);
+        let mut decoded = tiff::decoder::Decoder::new(geotiff).unwrap();
+        assert_eq!(decoded.get_tag_ascii_string(tiff::tags::Tag::GdalNodata).unwrap(), "nan");
+        let tiff::decoder::DecodingResult::F32(values) = decoded.read_image().unwrap() else { panic!("expected native float grid") };
+        assert!(values[1].is_nan());
 
         let stats = frame
             .statistics_in_box([-100.0, 38.0], [-99.0, 40.0])
