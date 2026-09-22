@@ -41,6 +41,10 @@ impl PointHistory {
         }
         for (series, frame) in [(&mut self.analysis, analysis), (&mut self.forecast, forecast)] {
             let Some(frame) = frame else { continue };
+            // GEFS spread is a temperature *difference* in K, not an absolute temperature.
+            if frame.stamp.source_identity.contains("/gespr.") {
+                continue;
+            }
             let Some(temp_k) = frame.sample(lon, lat).value.filter(|v| v.is_finite()) else { continue };
             record_native(series, &frame.stamp, temp_k);
         }
@@ -388,6 +392,28 @@ mod tests {
         assert_eq!(history.analysis.len(), 1);
         history.record_rtma("KBBB", &[analysis.clone(), analysis]);
         assert_eq!(history.analysis.len(), 2);
+    }
+
+    #[test]
+    fn gefs_spread_is_not_recorded_as_absolute_temperature() {
+        let time = Utc::now();
+        let frame = FieldFrame::new(
+            &wxdata::global::TEMP_2M_DESCRIPTOR,
+            wxdata::mrms::MrmsField {
+                values: vec![4.0; 4], nx: 2, ny: 2,
+                lon_west: -100.0, lon_east: -99.0,
+                lat_north: 40.0, lat_south: 39.0, time,
+            },
+            DataStamp {
+                source_identity: "https://example.test/pgrb2sp25/gespr.t00z.pgrb2s.0p25.f003".into(),
+                issue_time: None, run_time: Some(time), valid_time: time,
+                received_time: time, class: DataClass::Forecast,
+                quality: QualitySummary::Good, available_members: None,
+            },
+        );
+        let mut history = PointHistory::default();
+        history.record("KAAA", -99.5, 39.5, None, Some(&frame));
+        assert!(history.forecast.is_empty());
     }
 
     #[test]
