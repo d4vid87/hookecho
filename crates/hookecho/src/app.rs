@@ -3033,6 +3033,7 @@ pub struct HookEchoApp {
     /// Sensor dashboard: open flag, latest fetch (Ok/Err), the site it's for, and a refresh clock.
     show_sensors: bool,
     sensor_data: Option<Result<wxdata::obs::StationObs, String>>,
+    sensor_history: ui::sensor_window::PointHistory,
     sensor_site: Option<String>,
     sensor_last_fetch: Option<Instant>,
     /// VAD hodograph: open flag, latest profile, its site, and a refresh clock.
@@ -3864,6 +3865,7 @@ impl HookEchoApp {
             spotters_last_fetch: None,
             show_sensors: false,
             sensor_data: None,
+            sensor_history: Default::default(),
             sensor_site: None,
             sensor_last_fetch: None,
             show_hodo: false,
@@ -20081,19 +20083,22 @@ impl eframe::App for HookEchoApp {
             }
         }
         let tz = self.active_tz();
-        if self.show_sensors {
-            let point = self.views[self.active].site.as_deref()
-                .and_then(wxdata::sites::site_by_id)
-                .map(|site| (site.longitude as f64, site.latitude as f64));
+        if let Some((site_id, site)) = self.views[self.active].site.as_deref()
+            .and_then(|id| wxdata::sites::site_by_id(id).map(|site| (id, site))) {
             let frame = |layer| self.fields.get(&layer).and_then(|state| state.frame.as_ref());
-            if !ui::sensor_window::show(
-                ctx, self.sensor_data.as_ref(),
+            self.sensor_history.record(
+                site_id, site.longitude as f64, site.latitude as f64,
                 frame(crate::render::FieldLayer::RtmaTemp2m),
                 frame(crate::render::FieldLayer::GlobalTemp2m),
-                point, tz, &mut self.drawer,
-            ) {
-                self.show_sensors = false;
-            }
+            );
+        }
+        if self.show_sensors
+            && !ui::sensor_window::show(
+                ctx, self.sensor_data.as_ref(),
+                Some(&self.sensor_history), tz, &mut self.drawer,
+            )
+        {
+            self.show_sensors = false;
         }
         if self.show_hodo
             && !ui::hodograph_window::show(

@@ -2,18 +2,67 @@
 //! station. Sparklines are hand-rolled on the painter (no egui_plot dependency).
 
 use crate::theme::stat_card;
+use chrono::{DateTime, Utc};
 use wxdata::obs::{Observation, StationObs};
 
 const KMH_TO_MPH: f32 = 0.621_371;
+
+/// Native-value samples accumulated as distinct frames are viewed at one radar site.
+#[derive(Default)]
+pub struct PointHistory {
+    pub site: String,
+    analysis: Vec<Reading>,
+    forecast: Vec<Reading>,
+}
+
+#[derive(Clone)]
+struct Reading {
+    valid: DateTime<Utc>,
+    run: Option<DateTime<Utc>>,
+    source: String,
+    temp_k: f32,
+}
+
+impl PointHistory {
+    pub fn record(
+        &mut self,
+        site: &str,
+        lon: f64,
+        lat: f64,
+        analysis: Option<&wxdata::field::FieldFrame>,
+        forecast: Option<&wxdata::field::FieldFrame>,
+    ) {
+        if self.site != site {
+            self.site = site.to_string();
+            self.analysis.clear();
+            self.forecast.clear();
+        }
+        for (series, frame) in [(&mut self.analysis, analysis), (&mut self.forecast, forecast)] {
+            let Some(frame) = frame else { continue };
+            let Some(temp_k) = frame.sample(lon, lat).value.filter(|v| v.is_finite()) else { continue };
+            if let Some(old) = series.iter_mut().find(|old| old.valid == frame.stamp.valid_time
+                && old.run == frame.stamp.run_time && old.source == frame.stamp.source_identity) {
+                old.temp_k = temp_k;
+            } else {
+                series.push(Reading {
+                    valid: frame.stamp.valid_time,
+                    run: frame.stamp.run_time,
+                    source: frame.stamp.source_identity.clone(),
+                    temp_k,
+                });
+                series.sort_by_key(|reading| reading.valid);
+                if series.len() > 72 { series.remove(0); }
+            }
+        }
+    }
+}
 
 /// Show the sensor window. `data` is `Ok(station)`, `Err(message)`, or `None` (loading).
 /// Returns `false` when it should close.
 pub fn show(
     ctx: &egui::Context,
     data: Option<&Result<StationObs, String>>,
-    analysis: Option<&wxdata::field::FieldFrame>,
-    forecast: Option<&wxdata::field::FieldFrame>,
-    point: Option<(f64, f64)>,
+    history: Option<&PointHistory>,
     tz: Option<wxdata::tz::Tz>,
     drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
@@ -35,7 +84,7 @@ pub fn show(
             ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "No nearby station");
             ui.weak(e);
         }
-        Some(Ok(station)) => dashboard(ui, station, analysis, forecast, point, tz),
+        Some(Ok(station)) => dashboard(ui, station, history, tz),
     });
     open
 }
@@ -43,9 +92,7 @@ pub fn show(
 fn dashboard(
     ui: &mut egui::Ui,
     station: &StationObs,
-    analysis: Option<&wxdata::field::FieldFrame>,
-    forecast: Option<&wxdata::field::FieldFrame>,
-    point: Option<(f64, f64)>,
+    history: Option<&PointHistory>,
     tz: Option<wxdata::tz::Tz>,
 ) {
     ui.horizontal(|ui| {
@@ -137,17 +184,19 @@ fn dashboard(
             series(|o| o.wind_kmh.map(|k| k * KMH_TO_MPH)),
             egui::Color32::from_rgb(200, 200, 200),
         );
-        if let Some((lon, lat)) = point {
+        if let Some(history) = history {
             ui.separator();
-            ui.strong("Loaded temperature fields at radar site");
-            ui.weak("Observations above cover 24 hours; each field below is one loaded valid time.");
-            for (label, frame) in [("Surface analysis", analysis), ("Forecast", forecast)] {
-                if let Some(frame) = frame {
-                    let sample = frame.sample(lon, lat);
-                    if let Some(kelvin) = sample.value {
-                        ui.label(format!("{} · {:.1} °F · valid {} UTC",
-                            label, c_to_f(kelvin - 273.15),
-                            sample.valid_time.format("%Y-%m-%d %H:%M")));
+            ui.strong("Loaded temperature history at radar site");
+            ui.weak("Only frames viewed this session are included; observation history above covers 24 hours.");
+            if history.analysis.is_empty() && history.forecast.is_empty() {
+                ui.weak("Enable a surface temperature analysis or global temperature forecast layer to compare.");
+            }
+            for (label, series) in [("Surface analysis", &history.analysis), ("Forecast", &history.forecast)] {
+                if !series.is_empty() {
+                    ui.label(format!("{label} · {} valid times", series.len()));
+                    for reading in series.iter().rev().take(8) {
+                        ui.weak(format!("{} UTC · {:.1} °F",
+                            reading.valid.format("%Y-%m-%d %H:%M"), c_to_f(reading.temp_k - 273.15)));
                     }
                 }
             }
@@ -178,4 +227,40 @@ pub(crate) fn compass(deg: f32) -> &'static str {
         "NW", "NNW",
     ];
     D[((deg / 22.5).round() as usize) % 16]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wxdata::field::{DataClass, DataStamp, FieldFrame, QualitySummary};
+
+    #[test]
+    fn loaded_history_deduplicates_frames_and_resets_on_site_change() {
+        let valid = Utc::now();
+        let frame = |hour: i64| {
+            let time = valid + chrono::Duration::hours(hour);
+            FieldFrame::new(
+                &wxdata::rtma::TEMP_DESCRIPTOR,
+                wxdata::mrms::MrmsField {
+                    values: vec![300.0; 4], nx: 2, ny: 2,
+                    lon_west: -100.0, lon_east: -99.0,
+                    lat_north: 40.0, lat_south: 39.0, time,
+                },
+                DataStamp {
+                    source_identity: "rtma".into(), issue_time: None, run_time: None,
+                    valid_time: time, received_time: valid, class: DataClass::Analysis,
+                    quality: QualitySummary::Good, available_members: None,
+                },
+            )
+        };
+        let mut history = PointHistory::default();
+        history.record("KAAA", -99.5, 39.5, Some(&frame(0)), None);
+        history.record("KAAA", -99.5, 39.5, Some(&frame(0)), None);
+        history.record("KAAA", -99.5, 39.5, Some(&frame(1)), None);
+        assert_eq!(history.analysis.len(), 2);
+        assert_eq!(history.analysis[0].valid, valid);
+        history.record("KBBB", -99.5, 39.5, Some(&frame(1)), None);
+        assert_eq!(history.analysis.len(), 1);
+        assert_eq!(history.site, "KBBB");
+    }
 }
