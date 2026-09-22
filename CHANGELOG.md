@@ -19,6 +19,7 @@ Android builds.
   map-first default. The menu control stays reachable above the panel, and
   saved workspaces restore new docks without breaking older files.
 - SPC forecast-day controls show Days 1–3 in both the main panel and layer options.
+- Ctrl+S opens search from any page, including Settings, without invoking the browser's Save Page dialog.
 
 - Radar, MRMS, satellite and model fields now share stable product IDs,
   provenance, native-value sampling, source health, time alignment and a

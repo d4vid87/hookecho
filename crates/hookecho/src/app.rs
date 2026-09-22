@@ -9017,6 +9017,7 @@ impl HookEchoApp {
     /// Run one registry action. Every surface (drawer, pills, mobile sheets) routes through it.
     pub(crate) fn apply_palette(&mut self, action: PaletteAction, ctx: &egui::Context) {
         use AppWindow as W;
+        if matches!(action, PaletteAction::OpenWindow(_)) { self.drawer.resume(); }
         match action {
             PaletteAction::SetMoment(m, srv) => {
                 let v = &mut self.views[self.active];
@@ -11459,6 +11460,9 @@ impl HookEchoApp {
             }
             A::CommandSearch => {
                 self.layers_query.clear();
+                self.obs_mode = false;
+                self.mobile_chrome_hidden = false;
+                self.drawer.show_search();
                 self.panel_open = true;
                 self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
@@ -19943,6 +19947,9 @@ impl eframe::App for HookEchoApp {
         // Bindings are polled once, globally: a hotkey works the same in OBS mode, on mobile, and
         // with the drawer open. `capture_key` suppresses the table while the Hotkeys tab is
         // listening for the next keypress.
+        if hotkeys::search_requested(ctx) {
+            self.apply_action(BindableAction::CommandSearch, ctx);
+        }
         if !self.capture_key {
             let bindings = hotkeys::active(&self.settings).into_owned();
             for action in hotkeys::poll(ctx, &bindings) {
@@ -20002,6 +20009,7 @@ impl eframe::App for HookEchoApp {
         // handling. The occlusion rects are rebuilt from scratch every frame; a stale rect would
         // keep swallowing gestures over a sheet that closed.
         self.mobile_occlusion.clear();
+        if !self.panel_open { self.drawer.resume(); }
         self.drawer.begin_frame(ctx);
         if !bare {
             // The phone draws its own top strips and back wiring first, and can ask for the rest

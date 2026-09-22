@@ -54,6 +54,10 @@
          after load so the worker's install never competes with the wasm for bandwidth, and
          skipped on file:// and any insecure origin, where it would only throw. -->
     <script>
+      // Ctrl+S belongs to HookEcho search, not the browser's Save Page dialog.
+      addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") e.preventDefault();
+      }, { capture: true });
       if ("serviceWorker" in navigator) {
         addEventListener("load", () => {
           navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("sw:", e));

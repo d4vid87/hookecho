@@ -18,7 +18,7 @@ const CHANGELOG: &str = include_str!("../../../../CHANGELOG.md");
 /// Small things people miss, shown one at a time and rotated so a second look is a second tip.
 const TIPS: &[&str] = &[
     "Drag the scrubber to travel in time; the LIVE badge takes you back to now.",
-    "Ctrl+K searches every command in the app, including ones with no button.",
+    "Ctrl+S opens search everywhere; Ctrl+K also works.",
     "Long-press or right-click the map to interrogate a pixel: every moment at that point.",
     "Panes can each run their own site, product and tilt — set panes to 4 and compare tilts.",
     "Alert rules decide what is worth interrupting you for. Nothing else makes a sound.",
