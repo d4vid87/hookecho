@@ -1153,9 +1153,11 @@ pub fn run_archwarn(ts: &str) -> anyhow::Result<()> {
 }
 
 /// Parse `HH:MM` into minutes-since-midnight.
-fn parse_hhmm(s: &str) -> Option<i64> {
+pub fn parse_hhmm(s: &str) -> Option<i64> {
     let (h, m) = s.split_once(':')?;
-    Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?)
+    let hour = h.parse::<i64>().ok()?;
+    let minute = m.parse::<i64>().ok()?;
+    (hour < 24 && minute < 60 && hour >= 0 && minute >= 0).then_some(hour * 60 + minute)
 }
 
 /// Wait for the first live chunk-stream update for `site` and render it to a PNG.
@@ -3199,6 +3201,9 @@ mod golden_tests {
     fn output_dimensions_preserve_aspect_and_bound_resources() {
         assert_eq!(clamp_dimensions(1920, 1080), (1920, 1080));
         assert_eq!(clamp_dimensions(10, 9000), (256, 4096));
+        assert_eq!(parse_hhmm("23:59"), Some(1439));
+        assert_eq!(parse_hhmm("24:00"), None);
+        assert_eq!(parse_hhmm("10:60"), None);
     }
 
     #[test]

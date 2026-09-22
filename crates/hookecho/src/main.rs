@@ -946,6 +946,13 @@ fn main() -> eframe::Result<()> {
         let moment = flag_value(&args, "--moment")
             .and_then(Moment::from_code)
             .unwrap_or(Moment::Reflectivity);
+        let tilt = flag_value(&args, "--tilt").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+        let date = flag_value(&args, "--date")
+            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+        let time = flag_value(&args, "--time");
+        let smooth = args.iter().any(|a| a == "--smooth");
+        let dealias = args.iter().any(|a| a == "--dealias");
+        let palette = flag_value(&args, "--pal");
         let basemap = match flag_value(&args, "--basemap") {
             Some("sat") => tiles::BasemapStyle::Satellite,
             Some(s) => tiles::BasemapStyle::from_slug(s),
@@ -960,8 +967,16 @@ fn main() -> eframe::Result<()> {
         );
         let every = flag_value(&args, "--every").and_then(|v| v.parse::<u64>().ok());
         let on_change = args.iter().any(|arg| arg == "--on-change");
-        if on_change && (every.is_none() || !wxdata::sites::is_nexrad(site)) {
-            eprintln!("--on-change requires --every and a NEXRAD site");
+        if on_change && (every.is_none() || !wxdata::sites::is_nexrad(site) || date.is_some() || time.is_some()) {
+            eprintln!("--on-change requires --every, a NEXRAD site, and live time");
+            std::process::exit(2);
+        }
+        if (flag_value(&args, "--date").is_some() && date.is_none()) || (time.is_some() && date.is_none()) {
+            eprintln!("--time requires a valid --date YYYY-MM-DD");
+            std::process::exit(2);
+        }
+        if time.is_some_and(|value| headless::parse_hhmm(value).is_none()) {
+            eprintln!("--time must be HH:MM in UTC");
             std::process::exit(2);
         }
         let poll = on_change.then(|| tokio::runtime::Builder::new_current_thread().enable_all().build()).transpose().map_err(|e| eframe::Error::AppCreation(Box::new(e)))?;
@@ -991,7 +1006,7 @@ fn main() -> eframe::Result<()> {
             // Keep the target extension: the encoder picks its format from that extension.
             let tmp = format!("{out}.tmp.{extension}");
             match headless::run(
-                &tmp, site, moment, 0, true, None, None, None, None, basemap, false,
+                &tmp, site, moment, tilt, smooth, palette, None, date, time, basemap, dealias,
             )
             .and_then(|_| std::fs::rename(&tmp, out).map_err(Into::into))
             {
