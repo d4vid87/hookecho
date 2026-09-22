@@ -204,7 +204,7 @@ impl Drawer {
             });
         self.gear = gear_on;
         self.expanded = expanded;
-        if close {
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             *open = false;
             return None;
         }
