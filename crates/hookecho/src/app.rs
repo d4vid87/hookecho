@@ -20081,10 +20081,19 @@ impl eframe::App for HookEchoApp {
             }
         }
         let tz = self.active_tz();
-        if self.show_sensors
-            && !ui::sensor_window::show(ctx, self.sensor_data.as_ref(), tz, &mut self.drawer)
-        {
-            self.show_sensors = false;
+        if self.show_sensors {
+            let point = self.views[self.active].site.as_deref()
+                .and_then(wxdata::sites::site_by_id)
+                .map(|site| (site.longitude as f64, site.latitude as f64));
+            let frame = |layer| self.fields.get(&layer).and_then(|state| state.frame.as_ref());
+            if !ui::sensor_window::show(
+                ctx, self.sensor_data.as_ref(),
+                frame(crate::render::FieldLayer::RtmaTemp2m),
+                frame(crate::render::FieldLayer::GlobalTemp2m),
+                point, tz, &mut self.drawer,
+            ) {
+                self.show_sensors = false;
+            }
         }
         if self.show_hodo
             && !ui::hodograph_window::show(

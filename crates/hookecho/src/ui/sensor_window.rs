@@ -11,6 +11,9 @@ const KMH_TO_MPH: f32 = 0.621_371;
 pub fn show(
     ctx: &egui::Context,
     data: Option<&Result<StationObs, String>>,
+    analysis: Option<&wxdata::field::FieldFrame>,
+    forecast: Option<&wxdata::field::FieldFrame>,
+    point: Option<(f64, f64)>,
     tz: Option<wxdata::tz::Tz>,
     drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
@@ -32,12 +35,19 @@ pub fn show(
             ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "No nearby station");
             ui.weak(e);
         }
-        Some(Ok(station)) => dashboard(ui, station, tz),
+        Some(Ok(station)) => dashboard(ui, station, analysis, forecast, point, tz),
     });
     open
 }
 
-fn dashboard(ui: &mut egui::Ui, station: &StationObs, tz: Option<wxdata::tz::Tz>) {
+fn dashboard(
+    ui: &mut egui::Ui,
+    station: &StationObs,
+    analysis: Option<&wxdata::field::FieldFrame>,
+    forecast: Option<&wxdata::field::FieldFrame>,
+    point: Option<(f64, f64)>,
+    tz: Option<wxdata::tz::Tz>,
+) {
     ui.horizontal(|ui| {
         ui.strong(&station.station_id);
         if !station.name.is_empty() {
@@ -127,6 +137,21 @@ fn dashboard(ui: &mut egui::Ui, station: &StationObs, tz: Option<wxdata::tz::Tz>
             series(|o| o.wind_kmh.map(|k| k * KMH_TO_MPH)),
             egui::Color32::from_rgb(200, 200, 200),
         );
+        if let Some((lon, lat)) = point {
+            ui.separator();
+            ui.strong("Loaded temperature fields at radar site");
+            ui.weak("Observations above cover 24 hours; each field below is one loaded valid time.");
+            for (label, frame) in [("Surface analysis", analysis), ("Forecast", forecast)] {
+                if let Some(frame) = frame {
+                    let sample = frame.sample(lon, lat);
+                    if let Some(kelvin) = sample.value {
+                        ui.label(format!("{} · {:.1} °F · valid {} UTC",
+                            label, c_to_f(kelvin - 273.15),
+                            sample.valid_time.format("%Y-%m-%d %H:%M")));
+                    }
+                }
+            }
+        }
     });
 }
 
