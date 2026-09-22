@@ -8,6 +8,69 @@ The rolling `latest` release tracks `main` and is not listed here.
 
 ## Unreleased
 
+### U.S. analyst workstation
+
+- Radar, MRMS, satellite and model fields now share stable product IDs,
+  provenance, native-value sampling, source health, time alignment and a
+  persistent object cache. Linked panes show the actual valid time for each
+  source and refuse incompatible comparisons instead of silently combining
+  mismatched data.
+- Live Level II radar updates progressively during a scan, retains explicitly
+  aged prior azimuths where a block has not arrived, reports VCP/cut/latency
+  details and falls back to complete archive volumes after a bounded failure.
+- The MRMS catalog expands to 82 metadata-driven products. GOES adds all 16
+  native ABI channels, CONUS/mesoscale/full-disk sectors, declarative true
+  color and GLM density on the common timeline.
+- HRRR, RAP, RRFS, REFS, NAM, NBM, GFS, GEFS and ECMWF use shared model
+  definitions and comparison rules. Ensemble work includes available-member
+  probabilities, statistics, point plumes and postage stamps.
+
+### Analysis and field work
+
+- RTMA and URMA add temperature, dewpoint, pressure, wind, gust, visibility
+  and one-hour precipitation. HookEcho objective analysis can blend nearby
+  METAR, NDBC or personal-station observations into the surface boundary of a
+  model sounding while keeping the original profile available.
+- Surface tools add station residuals, theta-e, dewpoint gradients,
+  temperature advection, near-surface moisture-flux convergence and labeled
+  contours. Selected points and stations compare observed, RTMA, HRRR and GFS
+  values on an exact-time history without filling missing hours.
+- User-defined radar products run through a bounded typed expression engine.
+  Radar analysis adds temporal reflectivity trails, native-value area
+  statistics, moment scatterplots and time series, detector histories,
+  beam-rise/blockage tools and multi-radar reflectivity fusion with contributor
+  confidence.
+- The 3D view supports six moments, transfer and clipping controls, CAPPI and
+  vertical slices, isosurfaces and transmitted-tilt beam paths without
+  rebuilding the source volume for camera-only changes.
+
+### GIS, cases and output
+
+- Import GeoJSON, KML/KMZ and zipped Shapefiles. Supported WGS84/NAD83
+  projections are transformed to map coordinates; DBF fields can drive labels,
+  colors and validity windows, and original properties survive GeoJSON export.
+- Portable case manifests retain exact radar objects, annotations and
+  bookmarks, with a reproducible Markdown report. Routes show alternatives,
+  warning intersections, native-value exposure profiles and storm crossing
+  timing.
+- Scientific export now covers native-value CSV, WGS84 GeoTIFF, CF-labeled
+  NetCDF-3 and GeoJSON for storm tracks, imported vectors, annotations, routes,
+  alerts and displayed contours. Deterministic PNG, JPEG, WebP, GIF and MP4
+  capture includes exact source-time provenance.
+- A token-protected local API exposes alerts, radar/product discovery, frame
+  provenance, point probes, cells, health, stills and loops. Diagnostics omit
+  credentials, signed URLs and private locations.
+
+### Reliability and access
+
+- Browser IndexedDB and native disk caches share integrity checks, family
+  quotas, pin-aware LRU eviction and preserved receipt times. Saved chase packs
+  remain separate from automatic eviction.
+- Existing settings and workspaces migrate by stable IDs while unknown future
+  products are skipped safely. Windows, Linux, web and Android share the new
+  field, timeline and export behavior; tablet layouts, keyboard navigation,
+  touch targets and non-color status cues remain covered by release tests.
+
 ### GPS connects itself
 
 - **Connect GPS at launch** (Chase tab; `gps_autoconnect` in settings.json)
