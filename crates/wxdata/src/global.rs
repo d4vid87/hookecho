@@ -618,6 +618,36 @@ pub async fn fetch(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no {} cycle found", model.label())))
 }
 
+/// Native 2 m temperature at one station from a single GFS run.
+#[derive(Debug, Clone)]
+pub struct PointTemperature {
+    pub stamp: DataStamp,
+    pub kelvin: f32,
+}
+
+/// GFS f00–f12 every three hours, retaining gaps when a forecast file is unpublished.
+pub async fn fetch_point_temperature_trace(
+    http: &reqwest::Client,
+    lon: f64,
+    lat: f64,
+) -> anyhow::Result<Vec<PointTemperature>> {
+    let first = fetch(http, GlobalModel::Gfs, GlobalField::Temp2m, 0).await?;
+    let run = first.run;
+    let sample = |forecast: GlobalForecast| {
+        let frame = forecast.into_frame(&TEMP_2M_DESCRIPTOR);
+        Some(PointTemperature { kelvin: frame.sample(lon, lat).value?, stamp: frame.stamp })
+    };
+    let mut points: Vec<_> = sample(first).into_iter().collect();
+    let later = futures_util::future::join_all([3, 6, 9, 12].map(|hour| {
+        fetch_run(http, GlobalModel::Gfs, GlobalField::Temp2m, run, hour)
+    })).await;
+    for forecast in later.into_iter().flatten() {
+        points.extend(sample(forecast));
+    }
+    anyhow::ensure!(!points.is_empty(), "no GFS temperature data at station");
+    Ok(points)
+}
+
 async fn fetch_run(
     http: &reqwest::Client,
     model: GlobalModel,
@@ -895,6 +925,18 @@ mod tests {
                 .is_err()
         );
         assert_eq!(available_members(GlobalModel::Gfs), None);
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_gfs_station_temperature_uses_one_cycle() {
+        let points = fetch_point_temperature_trace(&reqwest::Client::new(), -97.3, 32.6)
+            .await.expect("GFS station temperature");
+        eprintln!("GFS station temperature: {} points from run {:?}", points.len(), points[0].stamp.run_time);
+        let run = points[0].stamp.run_time;
+        assert!(points.iter().all(|point| point.stamp.run_time == run
+            && (240.0..330.0).contains(&point.kelvin)));
+        assert!(points.windows(2).all(|pair| pair[0].stamp.valid_time < pair[1].stamp.valid_time));
     }
 
     /// Both sources, live, at the newest usable cycle.

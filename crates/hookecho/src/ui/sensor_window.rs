@@ -63,6 +63,13 @@ impl PointHistory {
             record_native(&mut self.analysis, &point.stamp, point.kelvin);
         }
     }
+
+    pub fn record_gfs(&mut self, station: &str, points: &[wxdata::global::PointTemperature]) {
+        if self.site != station { return; }
+        for point in points {
+            record_native(&mut self.forecast, &point.stamp, point.kelvin);
+        }
+    }
 }
 
 fn record_native(series: &mut Vec<Reading>, stamp: &wxdata::field::DataStamp, temp_k: f32) {
@@ -210,10 +217,10 @@ fn dashboard(
         if let Some(history) = history.filter(|history| history.site == station.station_id) {
             ui.separator();
             ui.strong(format!("Loaded temperature history at {}", station.station_id));
-            ui.weak("RTMA: recent 6 hours · HRRR: current run · Global: viewed frames. Observations above cover 24 hours.");
+            ui.weak("RTMA: recent 6 hours · HRRR/GFS: current run · Other global: viewed frames. Observations above cover 24 hours.");
             temperature_comparison(ui, station, history);
             if history.analysis.is_empty() && history.hrrr.is_empty() && history.forecast.is_empty() {
-                ui.weak("Enable a surface temperature analysis or global temperature forecast layer, or wait for HRRR samples.");
+                ui.weak("Waiting for station analysis and forecast samples.");
             }
             for (label, series) in [("RTMA / URMA", &history.analysis), ("HRRR analysis + forecast", &history.hrrr), ("Global forecast", &history.forecast)] {
                 if !series.is_empty() {
@@ -392,6 +399,13 @@ mod tests {
         assert_eq!(history.analysis.len(), 1);
         history.record_rtma("KBBB", &[analysis.clone(), analysis]);
         assert_eq!(history.analysis.len(), 2);
+        let global = wxdata::global::PointTemperature {
+            stamp: frame(0).stamp, kelvin: 298.0,
+        };
+        history.record_gfs("KAAA", std::slice::from_ref(&global));
+        assert!(history.forecast.is_empty());
+        history.record_gfs("KBBB", &[global.clone(), global]);
+        assert_eq!(history.forecast.len(), 1);
     }
 
     #[test]

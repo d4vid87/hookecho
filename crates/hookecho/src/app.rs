@@ -265,6 +265,7 @@ enum OverlayMsg {
     Obs(String, Result<wxdata::obs::StationObs, String>),
     SensorHrrr(String, Vec<wxdata::hrrr::PointTemperature>),
     SensorRtma(String, Vec<wxdata::rtma::PointTemperature>),
+    SensorGfs(String, Vec<wxdata::global::PointTemperature>),
     /// VAD wind profile for a site.
     Vwp(String, Vec<wxdata::level3::VwpLevel>),
     /// Archived storm-based warnings for a 5-min UTC bucket (feature W).
@@ -394,6 +395,7 @@ enum OverlaySource {
     },
     SensorHrrr { station: String, lon: f64, lat: f64 },
     SensorRtma { station: String, lon: f64, lat: f64 },
+    SensorGfs { station: String, lon: f64, lat: f64 },
     /// VAD wind profile for `site`.
     Vwp(String),
     /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
@@ -629,6 +631,7 @@ impl OverlaySource {
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
             Self::SensorRtma { .. } => RequestLane::Feed("RTMA station temperature"),
+            Self::SensorGfs { .. } => RequestLane::Feed("GFS station temperature"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
             Self::ArchiveWarnings(..) => RequestLane::Feed("Archived warnings"),
             Self::Aviation => RequestLane::Feed("Aviation advisories"),
@@ -1045,6 +1048,9 @@ impl OverlaySource {
             }
             OverlaySource::SensorRtma { station, lon, lat } => {
                 OverlayMsg::SensorRtma(station, wxdata::rtma::fetch_point_temperature_history(http, lon, lat).await?)
+            }
+            OverlaySource::SensorGfs { station, lon, lat } => {
+                OverlayMsg::SensorGfs(station, wxdata::global::fetch_point_temperature_trace(http, lon, lat).await?)
             }
             OverlaySource::Vwp(site) => {
                 let levels = wxdata::level3::fetch_vwp(http, &site).await;
@@ -3054,6 +3060,8 @@ pub struct HookEchoApp {
     sensor_hrrr_last_fetch: Option<Instant>,
     sensor_rtma_station: Option<String>,
     sensor_rtma_last_fetch: Option<Instant>,
+    sensor_gfs_station: Option<String>,
+    sensor_gfs_last_fetch: Option<Instant>,
     /// VAD hodograph: open flag, latest profile, its site, and a refresh clock.
     show_hodo: bool,
     hodo_data: Vec<wxdata::level3::VwpLevel>,
@@ -3890,6 +3898,8 @@ impl HookEchoApp {
             sensor_hrrr_last_fetch: None,
             sensor_rtma_station: None,
             sensor_rtma_last_fetch: None,
+            sensor_gfs_station: None,
+            sensor_gfs_last_fetch: None,
             show_hodo: false,
             hodo_data: Vec::new(),
             hodo_history: std::collections::VecDeque::new(),
@@ -9128,6 +9138,12 @@ impl HookEchoApp {
                     if self.sensor_data.as_ref().and_then(|data| data.as_ref().ok())
                         .is_some_and(|current| current.station_id == station) {
                         self.sensor_history.record_rtma(&station, &points);
+                    }
+                }
+                OverlayMsg::SensorGfs(station, points) => {
+                    if self.sensor_data.as_ref().and_then(|data| data.as_ref().ok())
+                        .is_some_and(|current| current.station_id == station) {
+                        self.sensor_history.record_gfs(&station, &points);
                     }
                 }
                 OverlayMsg::Vwp(site, levels) => {
@@ -19322,7 +19338,13 @@ impl eframe::App for HookEchoApp {
                     || self.sensor_rtma_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 3600) {
                     self.sensor_rtma_station = Some(station.clone());
                     self.sensor_rtma_last_fetch = Some(Instant::now());
-                    self.spawn_overlay(ctx, OverlaySource::SensorRtma { station, lon, lat });
+                    self.spawn_overlay(ctx, OverlaySource::SensorRtma { station: station.clone(), lon, lat });
+                }
+                if self.sensor_gfs_station.as_deref() != Some(station.as_str())
+                    || self.sensor_gfs_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 3600) {
+                    self.sensor_gfs_station = Some(station.clone());
+                    self.sensor_gfs_last_fetch = Some(Instant::now());
+                    self.spawn_overlay(ctx, OverlaySource::SensorGfs { station, lon, lat });
                 }
             }
         }
