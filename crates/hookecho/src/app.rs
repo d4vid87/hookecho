@@ -5790,10 +5790,12 @@ impl HookEchoApp {
                 );
                 let (sx, sy) = cam.world_to_screen(w, vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                let is_current = self.views[idx].site.as_deref() == Some(s.id);
                 to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(16.0)
-                    || (cam.zoom >= 5.0
-                        && self.labels.was_shown(crate::labelplace::key(s.id))
-                        && radar_site_pill(p).contains(pos))
+                    || ((is_current
+                        || (cam.zoom >= 5.0
+                            && self.labels.was_shown(crate::labelplace::key(s.id))))
+                        && radar_site_pill(p, prect, is_current).contains(pos))
             })
             .min_by(|a, b| {
                 to_screen_hit(a.longitude as f64, a.latitude as f64)
@@ -14949,13 +14951,14 @@ impl HookEchoApp {
                     painter.circle_filled(p, 8.0, egui::Color32::from_rgb(13, 28, 40));
                     painter.circle_stroke(p, 8.0, egui::Stroke::new(2.0, col));
                     painter.circle_filled(p, 2.5, col);
-                    let pill = radar_site_pill(p);
-                    if show_labels
-                        && self.labels.place(
-                            crate::labelplace::key(s.id),
-                            pill.expand(2.0),
-                            crate::labelplace::Priority::Minor,
-                        )
+                    let pill = radar_site_pill(p, prect, is_current);
+                    if is_current
+                        || (show_labels
+                            && self.labels.place(
+                                crate::labelplace::key(s.id),
+                                pill.expand(2.0),
+                                crate::labelplace::Priority::Minor,
+                            ))
                     {
                         let bg = if is_current {
                             accent
@@ -17628,8 +17631,13 @@ fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
     !next_pending && !gesture_live
 }
 
-fn radar_site_pill(site: egui::Pos2) -> egui::Rect {
-    egui::Rect::from_min_size(site + egui::vec2(12.0, -14.0), egui::vec2(78.0, 28.0))
+fn radar_site_pill(site: egui::Pos2, map: egui::Rect, selected: bool) -> egui::Rect {
+    let dy = if selected && site.y > map.bottom() - 110.0 {
+        -75.0 // Keep the selected site visible above the playback bar.
+    } else {
+        -14.0
+    };
+    egui::Rect::from_min_size(site + egui::vec2(12.0, dy), egui::vec2(78.0, 28.0))
 }
 
 /// Every radar site with its world-space position, projected once.
@@ -20917,6 +20925,14 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_radar_pill_clears_bottom_playback_bar() {
+        let map = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 870.0));
+        let site = egui::pos2(666.0, 771.0);
+        let pill = super::radar_site_pill(site, map, true);
+        assert!(pill.bottom() < map.bottom() - 110.0);
+        assert!(super::radar_site_pill(site, map, false).contains(site + egui::vec2(20.0, 0.0)));
+    }
 
     #[test]
     fn area_histogram_is_non_color_and_preserves_all_bins() {
