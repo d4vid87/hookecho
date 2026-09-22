@@ -659,11 +659,12 @@ straight to a file:
 ```sh
 hookecho --snapshot ~/.cache/radar.png KTLX --size 480 --zoom 7 --every 120
 hookecho --snapshot ~/.cache/radar.jpg KTLX --size 1920x1080 --every 120
+hookecho --snapshot ~/.cache/radar.webp KTLX --size 1920x1080 --every 120
 hookecho --snapshot ~/.cache/radar.png KTLX --every 30 --on-change
 ```
 
 It renders, renames the finished file into place (so a widget polling on its own
-clock never catches a half-written PNG or JPEG), and repeats. Point conky, `feh
+clock never catches a half-written PNG, JPEG, or WebP), and repeats. Point conky, `feh
 --reload`, or a wallpaper script at the file.
 `--on-change` checks the latest NEXRAD volume identifier and leaves the file untouched
 until a new volume is available; it requires `--every` and a NEXRAD site.

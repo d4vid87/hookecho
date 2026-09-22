@@ -3209,6 +3209,15 @@ mod golden_tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn webp_snapshot_accepts_renderer_rgba() {
+        let path = std::env::temp_dir().join(format!("hookecho-{}.webp", std::process::id()));
+        save_render_image(path.to_str().unwrap(), &[255, 0, 0, 255], 1, 1).unwrap();
+        assert_eq!(image::open(&path).unwrap().width(), 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// A deterministic synthetic sweep: a 90° wedge plus three range rings.
     fn synthetic_sweep() -> BinnedSweep {
         let (az_bins, gate_count) = (360usize, 200usize);

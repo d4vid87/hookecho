@@ -929,7 +929,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Desktop-widget mode: `hookecho --snapshot out.png|out.jpg [SITE] [--size N|WIDTHxHEIGHT] [--zoom Z]
+    // Desktop-widget mode: `hookecho --snapshot out.png|out.jpg|out.webp [SITE] [--size N|WIDTHxHEIGHT] [--zoom Z]
     // [--every SECS] [--on-change]`. The same off-screen render `--headless` and the server's `/snapshot.png`
     // use, written where conky, a desktop wallpaper script or `feh --reload` can pick it up.
     if let Some(pos) = args.iter().position(|a| a == "--snapshot") {
@@ -967,8 +967,8 @@ fn main() -> eframe::Result<()> {
         let poll = on_change.then(|| tokio::runtime::Builder::new_current_thread().enable_all().build()).transpose().map_err(|e| eframe::Error::AppCreation(Box::new(e)))?;
         let mut last_volume = None;
         let extension = std::path::Path::new(out).extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !["png", "jpg", "jpeg"].contains(&extension.to_ascii_lowercase().as_str()) {
-            eprintln!("snapshot output must end in .png, .jpg, or .jpeg");
+        if !["png", "jpg", "jpeg", "webp"].contains(&extension.to_ascii_lowercase().as_str()) {
+            eprintln!("snapshot output must end in .png, .jpg, .jpeg, or .webp");
             std::process::exit(2);
         }
         loop {
