@@ -1434,6 +1434,44 @@ fn alerts_geojson(
     Ok(json)
 }
 
+fn contours_geojson(
+    lines: &[wxdata::contour::ContourLine],
+    source: &str,
+    product: &str,
+    units: Option<&str>,
+    valid: chrono::DateTime<Utc>,
+) -> anyhow::Result<String> {
+    let features: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            anyhow::ensure!(
+                line.pts.len() >= 2 && line.pts.iter().all(|&(lon, lat)| lon.is_finite()
+                    && lat.is_finite()
+                    && (-180.0..=180.0).contains(&lon)
+                    && (-90.0..=90.0).contains(&lat)),
+                "contour has invalid coordinates"
+            );
+            Ok(serde_json::json!({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": line.pts},
+                "properties": {
+                    "source": source,
+                    "product": product,
+                    "level": line.level,
+                    "units": units,
+                    "valid_time": valid,
+                }
+            }))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    anyhow::ensure!(!features.is_empty(), "no contour lines to export");
+    let json = serde_json::to_string(&serde_json::json!({
+        "type": "FeatureCollection", "features": features
+    }))?;
+    anyhow::ensure!(json.len() <= 64 * 1024 * 1024, "contour GeoJSON exceeds 64 MB");
+    Ok(json)
+}
+
 /// What a left-click on the map does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MapTool {
@@ -8102,6 +8140,38 @@ impl HookEchoApp {
                     crate::dialog::Saved::Cancelled => {}
                 },
                 None => self.toast(ToastKind::Info, "Trail has no frames yet"),
+            }
+        }
+        if actions.export_contours {
+            let source = if self.contour_kind.is_analysis() {
+                match self.analysis_source {
+                    wxdata::rtma::Source::Rtma => "RTMA",
+                    wxdata::rtma::Source::Urma => "URMA",
+                }
+            } else {
+                self.env_model.label()
+            };
+            let product = self.contour_kind.display_label(self.settings.temp_unit);
+            let unit = self.contour_kind.unit(self.settings.temp_unit);
+            match self.contour_valid {
+                Some(valid) => match contours_geojson(&self.contours, source, &product, unit, valid) {
+                    Ok(json) => match crate::dialog::save_bytes(
+                        &format!("hookecho-contours-{}.geojson", valid.format("%Y%m%d-%H%MZ")),
+                        "geojson",
+                        json.as_bytes(),
+                    ) {
+                        crate::dialog::Saved::Where(where_) => self.toast(
+                            ToastKind::Success,
+                            format!("Contours exported to {where_}"),
+                        ),
+                        crate::dialog::Saved::Failed(error) => {
+                            self.toast(ToastKind::Error, error)
+                        }
+                        crate::dialog::Saved::Cancelled => {}
+                    },
+                    Err(error) => self.toast(ToastKind::Error, error.to_string()),
+                },
+                None => self.toast(ToastKind::Info, "Contours are still loading"),
             }
         }
         if actions.export_local_tracks_csv || actions.export_local_tracks_json || actions.export_local_tracks_geojson {
@@ -21954,6 +22024,38 @@ mod tests {
         assert_eq!(json["features"][0]["properties"]["event"], "Tornado Warning");
         assert_eq!(json["features"][0]["properties"]["id"], "urn:alert:1");
         assert!(alerts_geojson(&[], (-180.0, -90.0, 180.0, 90.0)).is_err());
+    }
+
+    #[test]
+    fn contours_export_level_source_units_and_valid_time() {
+        let valid = chrono::DateTime::parse_from_rfc3339("2026-09-22T18:00:00Z")
+            .unwrap().with_timezone(&chrono::Utc);
+        let mut line = wxdata::contour::ContourLine {
+            level: 1000.0,
+            pts: vec![(-98.0, 35.0), (-97.0, 36.0)],
+            bbox: (-98.0, 35.0, -97.0, 36.0),
+        };
+        let json: serde_json::Value = serde_json::from_str(
+            &contours_geojson(
+                std::slice::from_ref(&line),
+                "HRRR",
+                "MSLP",
+                Some("hPa"),
+                valid,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["features"][0]["geometry"]["type"], "LineString");
+        assert_eq!(json["features"][0]["properties"]["source"], "HRRR");
+        assert_eq!(json["features"][0]["properties"]["level"], 1000.0);
+        assert_eq!(json["features"][0]["properties"]["units"], "hPa");
+        assert_eq!(
+            json["features"][0]["properties"]["valid_time"],
+            "2026-09-22T18:00:00Z"
+        );
+        line.pts[0].0 = f64::NAN;
+        assert!(contours_geojson(&[line], "HRRR", "MSLP", Some("hPa"), valid).is_err());
     }
 }
 

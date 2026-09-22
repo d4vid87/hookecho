@@ -37,6 +37,7 @@ pub struct UiActions {
     pub export_local_tracks_csv: bool,
     pub export_local_tracks_json: bool,
     pub export_local_tracks_geojson: bool,
+    pub export_contours: bool,
     pub load_gefs_distribution: bool,
     pub load_gefs_postage: bool,
 }
@@ -767,6 +768,9 @@ pub(crate) fn show(
             })
             .response
             .on_hover_text("Draw labeled model f00 or RTMA/URMA analysis contours.");
+        if *contour_kind != crate::app::ContourKind::Off {
+            actions.export_contours |= ui.button("Export contour GeoJSON…").clicked();
+        }
         if *contour_kind == crate::app::ContourKind::AnalysisThetaE {
             ui.weak("HookEcho θe: native 2 m temperature/dewpoint + surface pressure, Bolton method; not an official SPC analysis.");
         }
