@@ -1356,6 +1356,38 @@ fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
     }))?)
 }
 
+fn routes_geojson(routes: &[wxdata::route::Route]) -> anyhow::Result<String> {
+    let features: Vec<_> = routes
+        .iter()
+        .enumerate()
+        .map(|(index, route)| {
+            anyhow::ensure!(
+                route.points.len() >= 2
+                    && route.points.iter().all(|point| point[0].is_finite()
+                        && point[1].is_finite()
+                        && (-180.0..=180.0).contains(&point[0])
+                        && (-90.0..=90.0).contains(&point[1])),
+                "route has invalid coordinates"
+            );
+            Ok(serde_json::json!({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": route.points},
+                "properties": {
+                    "source": "HookEcho route",
+                    "route_index": index,
+                    "primary": index == 0,
+                    "distance_m": route.distance_m,
+                    "duration_s": route.duration_s,
+                }
+            }))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    anyhow::ensure!(!features.is_empty(), "no routes to export");
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection", "features": features
+    }))?)
+}
+
 /// What a left-click on the map does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MapTool {
@@ -16173,6 +16205,23 @@ impl HookEchoApp {
         }
     }
 
+    fn export_routes(&mut self) {
+        match routes_geojson(&self.routes) {
+            Ok(json) => match crate::dialog::save_bytes(
+                "hookecho-routes.geojson",
+                "geojson",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Routes exported to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, error.to_string()),
+        }
+    }
+
     fn export_case_report(&mut self) {
         let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
         let result = self.current_case().and_then(|manifest| manifest.to_markdown());
@@ -16529,6 +16578,12 @@ impl HookEchoApp {
                         self.route_waypoints.clear();
                         self.routes.clear();
                         self.route_rx = None;
+                    }
+                    if ui
+                        .add_enabled(!self.routes.is_empty(), egui::Button::new("Export GeoJSON…"))
+                        .clicked()
+                    {
+                        self.export_routes();
                     }
                 });
                 if let Some(route) = self.routes.first() {
@@ -21773,6 +21828,29 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("invalid coordinates"));
+    }
+
+    #[test]
+    fn calculated_routes_export_geometry_eta_and_alternatives() {
+        let routes = vec![
+            wxdata::route::Route {
+                points: vec![[-97.5, 35.2], [-96.8, 32.8]],
+                distance_m: 331_000.0,
+                duration_s: 12_000.0,
+            },
+            wxdata::route::Route {
+                points: vec![[-97.5, 35.2], [-97.0, 33.0]],
+                distance_m: 340_000.0,
+                duration_s: 12_600.0,
+            },
+        ];
+        let json: serde_json::Value =
+            serde_json::from_str(&routes_geojson(&routes).unwrap()).unwrap();
+        assert_eq!(json["features"].as_array().unwrap().len(), 2);
+        assert_eq!(json["features"][0]["properties"]["primary"], true);
+        assert_eq!(json["features"][0]["properties"]["distance_m"], 331_000.0);
+        assert_eq!(json["features"][1]["properties"]["duration_s"], 12_600.0);
+        assert_eq!(json["features"][1]["geometry"]["coordinates"][1][1], 33.0);
     }
 }
 
