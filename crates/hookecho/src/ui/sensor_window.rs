@@ -42,38 +42,37 @@ impl PointHistory {
         for (series, frame) in [(&mut self.analysis, analysis), (&mut self.forecast, forecast)] {
             let Some(frame) = frame else { continue };
             let Some(temp_k) = frame.sample(lon, lat).value.filter(|v| v.is_finite()) else { continue };
-            if let Some(old) = series.iter_mut().find(|old| old.valid == frame.stamp.valid_time
-                && old.run == frame.stamp.run_time && old.source == frame.stamp.source_identity) {
-                old.temp_k = temp_k;
-            } else {
-                series.push(Reading {
-                    valid: frame.stamp.valid_time,
-                    run: frame.stamp.run_time,
-                    source: frame.stamp.source_identity.clone(),
-                    temp_k,
-                });
-                series.sort_by_key(|reading| reading.valid);
-                if series.len() > 72 { series.remove(0); }
-            }
+            record_native(series, &frame.stamp, temp_k);
         }
     }
 
     pub fn record_hrrr(&mut self, station: &str, points: &[wxdata::hrrr::PointTemperature]) {
         if self.site != station { return; }
         for point in points {
-            if !point.kelvin.is_finite() { continue; }
-            if let Some(old) = self.hrrr.iter_mut().find(|old|
-                old.valid == point.stamp.valid_time && old.run == point.stamp.run_time) {
-                old.temp_k = point.kelvin;
-            } else {
-                self.hrrr.push(Reading {
-                    valid: point.stamp.valid_time, run: point.stamp.run_time,
-                    source: point.stamp.source_identity.clone(), temp_k: point.kelvin,
-                });
-                self.hrrr.sort_by_key(|reading| reading.valid);
-                if self.hrrr.len() > 72 { self.hrrr.remove(0); }
-            }
+            record_native(&mut self.hrrr, &point.stamp, point.kelvin);
         }
+    }
+
+    pub fn record_rtma(&mut self, station: &str, points: &[wxdata::rtma::PointTemperature]) {
+        if self.site != station { return; }
+        for point in points {
+            record_native(&mut self.analysis, &point.stamp, point.kelvin);
+        }
+    }
+}
+
+fn record_native(series: &mut Vec<Reading>, stamp: &wxdata::field::DataStamp, temp_k: f32) {
+    if !temp_k.is_finite() { return; }
+    if let Some(old) = series.iter_mut().find(|old| old.valid == stamp.valid_time
+        && old.run == stamp.run_time && old.source == stamp.source_identity) {
+        old.temp_k = temp_k;
+    } else {
+        series.push(Reading {
+            valid: stamp.valid_time, run: stamp.run_time,
+            source: stamp.source_identity.clone(), temp_k,
+        });
+        series.sort_by_key(|reading| reading.valid);
+        if series.len() > 72 { series.remove(0); }
     }
 }
 
@@ -207,11 +206,11 @@ fn dashboard(
         if let Some(history) = history.filter(|history| history.site == station.station_id) {
             ui.separator();
             ui.strong(format!("Loaded temperature history at {}", station.station_id));
-            ui.weak("Only frames viewed this session are included; observation history above covers 24 hours.");
+            ui.weak("RTMA: recent 6 hours · HRRR: current run · Global: viewed frames. Observations above cover 24 hours.");
             if history.analysis.is_empty() && history.hrrr.is_empty() && history.forecast.is_empty() {
                 ui.weak("Enable a surface temperature analysis or global temperature forecast layer, or wait for HRRR samples.");
             }
-            for (label, series) in [("Surface analysis", &history.analysis), ("HRRR analysis + forecast", &history.hrrr), ("Global forecast", &history.forecast)] {
+            for (label, series) in [("RTMA / URMA", &history.analysis), ("HRRR analysis + forecast", &history.hrrr), ("Global forecast", &history.forecast)] {
                 if !series.is_empty() {
                     ui.label(format!("{label} · {} valid times", series.len()));
                     for reading in series.iter().rev().take(8) {
@@ -323,6 +322,11 @@ mod tests {
         assert!(history.hrrr.is_empty(), "late result from old station is ignored");
         history.record_hrrr("KBBB", &[point.clone(), point]);
         assert_eq!(history.hrrr.len(), 1);
+        let analysis = wxdata::rtma::PointTemperature { stamp: frame(0).stamp, kelvin: 299.0 };
+        history.record_rtma("KAAA", std::slice::from_ref(&analysis));
+        assert_eq!(history.analysis.len(), 1);
+        history.record_rtma("KBBB", &[analysis.clone(), analysis]);
+        assert_eq!(history.analysis.len(), 2);
     }
 
     #[test]

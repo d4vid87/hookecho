@@ -278,9 +278,54 @@ pub async fn fetch_latest_urma(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no recent URMA analysis")))
 }
 
+/// One native 2 m temperature sample at a station from an exact RTMA valid hour.
+#[derive(Debug, Clone)]
+pub struct PointTemperature {
+    pub stamp: DataStamp,
+    pub kelvin: f32,
+}
+
+/// Fetch up to six consecutive hourly analyses, ending at the newest published RTMA hour.
+/// Missing hours remain gaps rather than being replaced with a different valid time.
+pub async fn fetch_point_temperature_history(
+    http: &reqwest::Client,
+    lon: f64,
+    lat: f64,
+) -> anyhow::Result<Vec<PointTemperature>> {
+    let latest = fetch_latest_rtma(http, SurfaceField::Temperature2m).await?;
+    let newest = latest.stamp.valid_time;
+    let sample = |frame: FieldFrame| {
+        Some(PointTemperature { kelvin: frame.sample(lon, lat).value?, stamp: frame.stamp })
+    };
+    let mut points: Vec<_> = sample(latest).into_iter().collect();
+    for hour in (1..=5).rev() {
+        let requested = newest - chrono::Duration::hours(hour);
+        if let Ok(frame) = fetch_rtma(http, SurfaceField::Temperature2m, requested).await {
+            if frame.stamp.valid_time == requested {
+                points.extend(sample(frame));
+            }
+        }
+    }
+    points.sort_by_key(|point| point.stamp.valid_time);
+    anyhow::ensure!(!points.is_empty(), "no RTMA temperature data at station");
+    Ok(points)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_station_temperature_history_keeps_exact_hours() {
+        let points = fetch_point_temperature_history(&reqwest::Client::new(), -97.3, 32.6)
+            .await.expect("RTMA station temperature");
+        eprintln!("RTMA station temperature: {} hours", points.len());
+        assert!(points.len() >= 2);
+        assert!(points.iter().all(|point| point.stamp.class == DataClass::Analysis
+            && (240.0..330.0).contains(&point.kelvin)));
+        assert!(points.windows(2).all(|pair| pair[0].stamp.valid_time < pair[1].stamp.valid_time));
+    }
 
     #[test]
     fn official_paths_and_index_names_are_stable() {

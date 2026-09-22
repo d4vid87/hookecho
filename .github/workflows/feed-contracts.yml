@@ -21,6 +21,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Decode same-cycle HRRR station temperatures
         run: cargo test -p wxdata --lib live_hrrr_station_temperature_uses_one_cycle -- --ignored
+      - name: Decode recent RTMA station temperatures
+        run: cargo test -p wxdata --lib live_station_temperature_history_keeps_exact_hours -- --ignored
       - name: Capture cross-source valid times
         run: |
           python3 scripts/cross-source-capture.py --self-test
