@@ -142,7 +142,7 @@ pub(crate) fn show(
         ("Global forecast", global_on),
         (
             "Surface analysis",
-            [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m]
+            [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m]
                 .iter()
                 .any(|layer| on.contains(layer)),
         ),
@@ -415,7 +415,7 @@ pub(crate) fn show(
             wxdata::rtma::Source::Urma => "Delayed retrospective analysis",
         });
         if *analysis_source != before {
-            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m] {
+            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m] {
                 if let Some(state) = fields.get_mut(&layer) {
                     state.last_fetch = None;
                 }
@@ -423,15 +423,31 @@ pub(crate) fn show(
             changed = true;
         }
         let frame = |layer| fields.get(&layer).and_then(|state| state.frame.as_ref());
+        let (lon, lat) = analysis_point;
+        let advection = match (
+            frame(FL::RtmaTemp2m), frame(FL::RtmaWindU10m), frame(FL::RtmaWindV10m),
+        ) {
+            (Some(temp), Some(u), Some(v)) if crate::fielddiff::same_analysis_object(temp, u)
+                && crate::fielddiff::same_analysis_object(temp, v) => {
+                u.sample(lon, lat).value.zip(v.sample(lon, lat).value)
+                    .and_then(|(u, v)| crate::fielddiff::temperature_advection_k_per_h(
+                        temp.field(), lon, lat, u, v,
+                    ))
+            }
+            _ => None,
+        };
+        if let Some(value) = advection {
+            ui.separator();
+            ui.weak(format!("Map center · {:.2}, {:.2}", lon, lat));
+            ui.label(format!("10 m temperature advection {value:+.2} °C/h"));
+        }
         if let (Some(temp), Some(dewpoint), Some(pressure)) = (
             frame(FL::RtmaTemp2m),
             frame(FL::RtmaDewpoint2m),
             frame(FL::RtmaPressure),
         ) {
-            let matched = temp.stamp.valid_time == dewpoint.stamp.valid_time
-                && temp.stamp.valid_time == pressure.stamp.valid_time
-                && temp.stamp.source_identity == dewpoint.stamp.source_identity
-                && temp.stamp.source_identity == pressure.stamp.source_identity;
+            let matched = crate::fielddiff::same_analysis_object(temp, dewpoint)
+                && crate::fielddiff::same_analysis_object(temp, pressure);
             if matched {
                 let (lon, lat) = analysis_point;
                 let theta_e = temp

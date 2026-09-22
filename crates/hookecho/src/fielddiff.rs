@@ -410,6 +410,39 @@ pub fn gradient_per_100km(field: &MrmsField, lon: f64, lat: f64) -> Option<f32> 
     Some((((east - west) / dx_km as f32).hypot((north - south) / dy_km as f32)) * 100.0)
 }
 
+/// Different fields occupy different byte ranges of the same analysis GRIB object.
+/// Compare the immutable object and valid hour, while keeping each exact range in provenance.
+pub fn same_analysis_object(a: &FieldFrame, b: &FieldFrame) -> bool {
+    a.stamp.valid_time == b.stamp.valid_time
+        && a.stamp.source_identity.split_once("#bytes=").map_or(
+            a.stamp.source_identity.as_str(), |(object, _)| object,
+        ) == b.stamp.source_identity.split_once("#bytes=").map_or(
+            b.stamp.source_identity.as_str(), |(object, _)| object,
+        )
+}
+
+/// Horizontal temperature advection by a matched 10 m wind, in K/h (also °C/h).
+/// This is a surface diagnostic, not a parcel trajectory or a forecast tendency.
+pub fn temperature_advection_k_per_h(
+    temperature: &MrmsField, lon: f64, lat: f64, u_ms: f32, v_ms: f32,
+) -> Option<f32> {
+    if temperature.nx < 3 || temperature.ny < 3 || !u_ms.is_finite() || !v_ms.is_finite() {
+        return None;
+    }
+    let dlon = (temperature.lon_east - temperature.lon_west) / temperature.nx as f64;
+    let dlat = (temperature.lat_north - temperature.lat_south) / temperature.ny as f64;
+    let west = temperature.sample_bilinear(lon - dlon, lat)?;
+    let east = temperature.sample_bilinear(lon + dlon, lat)?;
+    let south = temperature.sample_bilinear(lon, lat - dlat)?;
+    let north = temperature.sample_bilinear(lon, lat + dlat)?;
+    let dx_m = 2.0 * dlon.abs() * 111_320.0 * lat.to_radians().cos().abs();
+    let dy_m = 2.0 * dlat.abs() * 111_320.0;
+    if dx_m < 1.0 || dy_m < 1.0 { return None; }
+    let value = -(u_ms * (east - west) / dx_m as f32
+        + v_ms * (north - south) / dy_m as f32) * 3600.0;
+    value.is_finite().then_some(value)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectiveSurfacePoint {
     pub station: String,
@@ -832,6 +865,25 @@ mod tests {
     }
 
     #[test]
+    fn analysis_fields_match_the_object_not_their_distinct_byte_ranges() {
+        let valid = chrono::Utc::now();
+        let frame = |identity: &str, at| FieldFrame::new(
+            &wxdata::rtma::TEMP_DESCRIPTOR,
+            grid(2, 2, -100.0, -99.0, 39.0, 40.0, 300.0),
+            DataStamp {
+                source_identity: identity.into(), issue_time: None, run_time: None,
+                valid_time: at, received_time: at, class: DataClass::Analysis,
+                quality: QualitySummary::Good, available_members: None,
+            },
+        );
+        let a = frame("https://example.test/rtma.grb2#bytes=0-10", valid);
+        let b = frame("https://example.test/rtma.grb2#bytes=11-20", valid);
+        assert!(same_analysis_object(&a, &b));
+        assert!(!same_analysis_object(&a, &frame("https://example.test/urma.grb2#bytes=11-20", valid)));
+        assert!(!same_analysis_object(&a, &frame("https://example.test/rtma.grb2#bytes=11-20", valid + chrono::Duration::hours(1))));
+    }
+
+    #[test]
     fn surface_diagnostics_are_bounded_and_physical() {
         let theta_e = theta_e_k(303.15, 293.15, 100_000.0).unwrap();
         assert!((340.0..=350.0).contains(&theta_e), "{theta_e}");
@@ -845,6 +897,16 @@ mod tests {
         let field = MrmsField { values, ..field };
         let gradient = gradient_per_100km(&field, 0.0, 0.0).unwrap();
         assert!((0.89..=0.91).contains(&gradient), "{gradient}");
+        let adv = temperature_advection_k_per_h(&field, 0.0, 0.0, 10.0, 0.0).unwrap();
+        assert!((-0.33..-0.31).contains(&adv), "{adv}");
+        let mut north_warmer = field.clone();
+        north_warmer.values = (0..5).flat_map(|row| [4.0 - row as f32; 5]).collect();
+        let meridional = temperature_advection_k_per_h(&north_warmer, 0.0, 0.0, 0.0, 10.0).unwrap();
+        assert!((-0.33..-0.31).contains(&meridional), "{meridional}");
+        assert!(temperature_advection_k_per_h(&field, 0.0, 0.0, f32::NAN, 0.0).is_none());
+        let mut missing = field.clone();
+        missing.values.fill(f32::NAN);
+        assert!(temperature_advection_k_per_h(&missing, 0.0, 0.0, 10.0, 0.0).is_none());
     }
 
     #[test]
