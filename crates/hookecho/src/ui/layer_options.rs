@@ -133,6 +133,8 @@ pub(crate) fn show(
             descriptor.family == wxdata::field::FieldFamily::Satellite
         })
     });
+    let surface_analysis_on = [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m]
+        .iter().any(|layer| on.contains(layer));
     let sections = [
         ("Storm cells", filters.show_cells),
         ("Alerts", filters.show_alerts),
@@ -140,12 +142,7 @@ pub(crate) fn show(
         ("Outlooks", true),
         ("Environment", true),
         ("Global forecast", global_on),
-        (
-            "Surface analysis",
-            [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m]
-                .iter()
-                .any(|layer| on.contains(layer)),
-        ),
+        ("Surface analysis", surface_analysis_on),
         ("Model comparison", on.contains(&FL::ModelDiff)),
         ("Lightning", show_glm || on.contains(&FL::Lightning)),
         ("Satellite", satellite_on),
@@ -731,7 +728,7 @@ pub(crate) fn show(
             changed = true;
         }
 
-        // Model contours (isolines) — MSLP / 2 m temp / dewpoint / SB-CAPE / 0-3 km SRH.
+        // Model or surface-analysis isolines, labeled with the selected source and valid time.
         ui.label("Contours");
         egui::ComboBox::from_id_salt("environment_contours")
             .width(ui.available_width() - 8.0)
@@ -745,7 +742,21 @@ pub(crate) fn show(
                 }
             })
             .response
-            .on_hover_text("Draw a surface field as labeled contour lines (f00)");
+            .on_hover_text("Draw labeled model f00 or RTMA/URMA analysis contours.");
+        if contour_kind.analysis_field().is_some() && !surface_analysis_on {
+            let before = *analysis_source;
+            ui.horizontal(|ui| {
+                ui.label("Analysis source:");
+                ui.selectable_value(analysis_source, wxdata::rtma::Source::Rtma, "RTMA");
+                ui.selectable_value(analysis_source, wxdata::rtma::Source::Urma, "URMA");
+            });
+            if *analysis_source != before {
+                for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m] {
+                    if let Some(state) = fields.get_mut(&layer) { state.last_fetch = None; }
+                }
+                changed = true;
+            }
+        }
     }
 
     // Everything below belongs to a layer that has to be on for it to mean anything.

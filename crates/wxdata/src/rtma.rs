@@ -348,6 +348,8 @@ mod tests {
         fn object(identity: &str) -> &str { identity.split_once("#bytes=").unwrap().0 }
         assert_eq!(object(&frame.stamp.source_identity), object(&temperature.stamp.source_identity));
         assert_eq!(object(&frame.stamp.source_identity), object(&u.stamp.source_identity));
+        assert!(!crate::contour::contour_lines(temperature.field(), 2.0).is_empty(),
+            "the decoded native temperature grid should yield analysis isolines");
         eprintln!("RTMA matched wind and temperature: {}", frame.stamp.source_identity);
     }
 

@@ -455,6 +455,7 @@ enum OverlaySource {
     /// Model contours for a field kind (surface f00, contoured off-thread), from HRRR or the RAP
     /// analysis.
     Contours(ContourKind, wxdata::hrrr::Model, crate::settings::TempUnit),
+    AnalysisContours(ContourKind, wxdata::rtma::Source, crate::settings::TempUnit),
     /// County power outages by county, from ODIN (DOE/ORNL).
     Outages,
     /// NHC tropical cyclones (feature V).
@@ -501,7 +502,7 @@ impl RequestLane {
                 "RTMA station temperature" => 3600,
                 "Tropical cyclones" | "Wildfires" | "Air quality"
                 | "Temporary flight restrictions" | "Wind particles" | "Freezing levels"
-                | "Model contours" => 900,
+                | "Contours" => 900,
                 "Surface analysis" | "Archived storm reports" => 1800,
                 "Highway cameras" | "Damage surveys" => 3600,
                 _ => 120,
@@ -655,7 +656,7 @@ impl OverlaySource {
             Self::Mill(..) => RequestLane::Feed("Field mill"),
             Self::Dat(..) => RequestLane::Feed("Damage surveys"),
             Self::Gauges(..) => RequestLane::Feed("River gauges"),
-            Self::Contours(..) => RequestLane::Feed("Model contours"),
+            Self::Contours(..) | Self::AnalysisContours(..) => RequestLane::Feed("Contours"),
             Self::Outages => RequestLane::Feed("Power outages"),
             Self::Tropical(..) => RequestLane::Feed("Tropical cyclones"),
             Self::Wind(..) => RequestLane::Feed("Wind particles"),
@@ -1230,6 +1231,20 @@ impl OverlaySource {
                     valid,
                 )
             }
+            OverlaySource::AnalysisContours(kind, source, temp_unit) => {
+                let field = kind.analysis_field().ok_or_else(|| anyhow::anyhow!("not an analysis contour"))?;
+                let frame = match source {
+                    wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, field).await?,
+                    wxdata::rtma::Source::Urma => wxdata::rtma::fetch_latest_urma(http, field).await?,
+                };
+                let mut grid = frame.field().clone();
+                for value in &mut grid.values {
+                    if value.is_finite() { *value = kind.to_display(*value, temp_unit); }
+                }
+                OverlayMsg::Contours(kind, wxdata::contour::contour_lines(
+                    &grid, kind.interval(temp_unit),
+                ), frame.stamp.valid_time)
+            }
             OverlaySource::Outages => OverlayMsg::Outages(wxdata::outages::fetch(http).await?),
             OverlaySource::Tropical(wind_kt, surge) => OverlayMsg::Tropical(
                 wxdata::tropical::fetch_active_opts(http, wind_kt, surge).await?,
@@ -1338,6 +1353,8 @@ pub(crate) enum ContourKind {
     Mslp,
     T2m,
     Td2m,
+    AnalysisT2m,
+    AnalysisTd2m,
     Cape,
     Srh,
     /// Significant Tornado Parameter (composite of several HRRR fields — see `wxdata::severe`).
@@ -1359,11 +1376,13 @@ pub(crate) enum ContourKind {
 }
 
 impl ContourKind {
-    pub(crate) const ALL: [ContourKind; 14] = [
+    pub(crate) const ALL: [ContourKind; 16] = [
         ContourKind::Off,
         ContourKind::Mslp,
         ContourKind::T2m,
         ContourKind::Td2m,
+        ContourKind::AnalysisT2m,
+        ContourKind::AnalysisTd2m,
         ContourKind::Cape,
         ContourKind::Srh,
         ContourKind::Stp,
@@ -1375,6 +1394,14 @@ impl ContourKind {
         ContourKind::EffSrh,
         ContourKind::StpEff,
     ];
+
+    pub(crate) fn analysis_field(self) -> Option<wxdata::rtma::SurfaceField> {
+        Some(match self {
+            Self::AnalysisT2m => wxdata::rtma::SurfaceField::Temperature2m,
+            Self::AnalysisTd2m => wxdata::rtma::SurfaceField::Dewpoint2m,
+            _ => return None,
+        })
+    }
 
     /// The composite parameters, which combine several GRIB fields instead of drawing one.
     pub(crate) fn severe(self) -> Option<wxdata::severe::SevereKind> {
@@ -1411,6 +1438,8 @@ impl ContourKind {
             ContourKind::Mslp => "MSLP",
             ContourKind::T2m => "2 m temp",
             ContourKind::Td2m => "2 m dewpoint",
+            ContourKind::AnalysisT2m => "Analysis 2 m temp",
+            ContourKind::AnalysisTd2m => "Analysis 2 m dewpoint",
             ContourKind::Cape => "SB-CAPE",
             ContourKind::Srh => "0-3 km SRH",
             ContourKind::Stp => "STP (fixed)",
@@ -1430,6 +1459,8 @@ impl ContourKind {
             "mslp" => ContourKind::Mslp,
             "t2m" => ContourKind::T2m,
             "td2m" => ContourKind::Td2m,
+            "analysis-t2m" => ContourKind::AnalysisT2m,
+            "analysis-td2m" => ContourKind::AnalysisTd2m,
             "cape" => ContourKind::Cape,
             "srh" => ContourKind::Srh,
             "stp" => ContourKind::Stp,
@@ -1447,7 +1478,7 @@ impl ContourKind {
     /// GRIB `(var, level, contour interval)` in display units, or `None` for `Off`.
     pub(crate) fn params(self) -> Option<(&'static str, &'static str, f32)> {
         match self {
-            ContourKind::Off => None,
+            ContourKind::Off | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m => None,
             ContourKind::Mslp => Some(("MSLMA", "mean sea level", 2.0)), // hPa
             ContourKind::T2m => Some(("TMP", "2 m above ground", 5.0)),  // °F
             ContourKind::Td2m => Some(("DPT", "2 m above ground", 5.0)), // °F
@@ -1467,10 +1498,9 @@ impl ContourKind {
 
     pub(crate) fn interval(self, temp_unit: crate::settings::TempUnit) -> f32 {
         match (self, temp_unit) {
-            (ContourKind::T2m | ContourKind::Td2m, crate::settings::TempUnit::Celsius) => 2.0,
-            _ => self
-                .params()
-                .map_or_else(|| self.severe_interval(), |(_, _, interval)| interval),
+            (ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m, crate::settings::TempUnit::Celsius) => 2.0,
+            (ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m, _) => 5.0,
+            _ => self.params().map_or_else(|| self.severe_interval(), |(_, _, interval)| interval),
         }
     }
 
@@ -1478,13 +1508,13 @@ impl ContourKind {
     pub(crate) fn to_display(self, raw: f32, temp_unit: crate::settings::TempUnit) -> f32 {
         match self {
             ContourKind::Mslp => raw / 100.0, // Pa → hPa
-            ContourKind::T2m | ContourKind::Td2m => temp_unit.from_c(raw - 273.15), // K → selected unit
+            ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m => temp_unit.from_c(raw - 273.15), // K → selected unit
             _ => raw, // CAPE / SRH as-is
         }
     }
 
     fn unit(self, temp_unit: crate::settings::TempUnit) -> Option<&'static str> {
-        matches!(self, ContourKind::T2m | ContourKind::Td2m).then(|| temp_unit.label())
+        matches!(self, ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m).then(|| temp_unit.label())
     }
 
     fn display_label(self, temp_unit: crate::settings::TempUnit) -> String {
@@ -1497,8 +1527,8 @@ impl ContourKind {
     fn color(self) -> egui::Color32 {
         match self {
             ContourKind::Mslp => egui::Color32::from_rgb(235, 235, 235),
-            ContourKind::T2m => egui::Color32::from_rgb(240, 120, 60),
-            ContourKind::Td2m => egui::Color32::from_rgb(90, 200, 120),
+            ContourKind::T2m | ContourKind::AnalysisT2m => egui::Color32::from_rgb(240, 120, 60),
+            ContourKind::Td2m | ContourKind::AnalysisTd2m => egui::Color32::from_rgb(90, 200, 120),
             ContourKind::Cape => egui::Color32::from_rgb(240, 160, 40),
             ContourKind::Srh => egui::Color32::from_rgb(190, 110, 230),
             ContourKind::Stp => egui::Color32::from_rgb(230, 60, 90),
@@ -2896,7 +2926,7 @@ pub struct HookEchoApp {
     contours: Vec<wxdata::contour::ContourLine>,
     contour_valid: Option<DateTime<Utc>>,
     contour_last_fetch: Option<Instant>,
-    contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model, crate::settings::TempUnit)>,
+    contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model, wxdata::rtma::Source, crate::settings::TempUnit)>,
     /// NHC tropical suite (feature V): toggle, fetched data, refresh clock. On by default like
     /// the other severe layers — an active hurricane is not something to have to go and enable.
     show_tropical: bool,
@@ -10146,7 +10176,7 @@ impl HookEchoApp {
             self.contour_fetched_kind = None;
             return;
         }
-        let key = (self.contour_kind, self.env_model, self.settings.temp_unit);
+        let key = (self.contour_kind, self.env_model, self.analysis_source, self.settings.temp_unit);
         let changed = self.contour_fetched_kind != Some(key);
         let stale = self
             .contour_last_fetch
@@ -10158,10 +10188,12 @@ impl HookEchoApp {
         if changed || stale {
             self.contour_last_fetch = Some(Instant::now());
             self.contour_fetched_kind = Some(key);
-            self.spawn_overlay(
-                ctx,
-                OverlaySource::Contours(self.contour_kind, self.env_model, self.settings.temp_unit),
-            );
+            let source = if self.contour_kind.analysis_field().is_some() {
+                OverlaySource::AnalysisContours(self.contour_kind, self.analysis_source, self.settings.temp_unit)
+            } else {
+                OverlaySource::Contours(self.contour_kind, self.env_model, self.settings.temp_unit)
+            };
+            self.spawn_overlay(ctx, source);
         }
     }
 
@@ -13547,7 +13579,10 @@ impl HookEchoApp {
                     .map(|t| crate::timefmt::fmt_clock(t, self.active_tz(), false))
                     .unwrap_or_default();
                 let text = format!(
-                    "HRRR {} contours — valid {vt}",
+                    "{} {} contours — valid {vt}",
+                    if self.contour_kind.analysis_field().is_some() {
+                        match self.analysis_source { wxdata::rtma::Source::Rtma => "RTMA", wxdata::rtma::Source::Urma => "URMA" }
+                    } else { self.env_model.label() },
                     self.contour_kind.display_label(self.settings.temp_unit)
                 );
                 let font = egui::FontId::proportional(12.0);
@@ -21244,7 +21279,7 @@ mod tests {
     fn temperature_contours_follow_the_selected_unit() {
         use crate::settings::TempUnit;
 
-        for kind in [ContourKind::T2m, ContourKind::Td2m] {
+        for kind in [ContourKind::T2m, ContourKind::Td2m, ContourKind::AnalysisT2m, ContourKind::AnalysisTd2m] {
             assert_eq!(kind.interval(TempUnit::Fahrenheit), 5.0);
             assert_eq!(kind.interval(TempUnit::Celsius), 2.0);
             assert!((kind.to_display(273.15, TempUnit::Fahrenheit) - 32.0).abs() < 1e-4);
@@ -21260,6 +21295,15 @@ mod tests {
             "the fetch key must change with units"
         );
         assert_eq!(ContourKind::Mslp.interval(TempUnit::Celsius), 2.0);
+        assert_eq!(ContourKind::AnalysisT2m.analysis_field(), Some(wxdata::rtma::SurfaceField::Temperature2m));
+        assert_eq!(ContourKind::AnalysisTd2m.analysis_field(), Some(wxdata::rtma::SurfaceField::Dewpoint2m));
+        assert_eq!(ContourKind::AnalysisT2m.params(), None);
+        assert_ne!(
+            (ContourKind::AnalysisT2m, wxdata::rtma::Source::Rtma),
+            (ContourKind::AnalysisT2m, wxdata::rtma::Source::Urma),
+            "a source switch must re-fetch contours"
+        );
+
     }
 
     #[test]
