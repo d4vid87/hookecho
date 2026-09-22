@@ -417,6 +417,9 @@ pub struct ObjectiveSurfacePoint {
     pub weight: f32,
     pub temperature_k: Option<f32>,
     pub dewpoint_k: Option<f32>,
+    /// Observation minus native analysis at the station, in kelvin (same increment as °C).
+    pub temperature_residual_k: Option<f32>,
+    pub dewpoint_residual_k: Option<f32>,
 }
 
 /// Blend the nearest recent METAR innovation into an analysis background at one point.
@@ -460,6 +463,10 @@ pub fn objective_surface_point(
         station: station.icao.clone(), distance_km, weight,
         temperature_k: blend(background_t, station.temp_c),
         dewpoint_k: blend(background_td, station.dewp_c),
+        temperature_residual_k: station.temp_c.zip(temperature.sample(station.lon, station.lat).value)
+            .map(|(observed, analysis)| observed + 273.15 - analysis),
+        dewpoint_residual_k: station.dewp_c.zip(dewpoint.sample(station.lon, station.lat).value)
+            .map(|(observed, analysis)| observed + 273.15 - analysis),
     })
 }
 
@@ -860,5 +867,7 @@ mod tests {
         assert_eq!(blend.weight, 1.0);
         assert!((blend.temperature_k.unwrap() - 303.15).abs() < 0.001);
         assert!((blend.dewpoint_k.unwrap() - 293.15).abs() < 0.001);
+        assert!((blend.temperature_residual_k.unwrap() - 3.15).abs() < 0.001);
+        assert!((blend.dewpoint_residual_k.unwrap() - 3.15).abs() < 0.001);
     }
 }

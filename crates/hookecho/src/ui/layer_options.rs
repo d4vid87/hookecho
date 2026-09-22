@@ -466,6 +466,14 @@ pub(crate) fn show(
                     });
                     ui.weak(format!("{} · {:.0} km · {:.0}% observation weight",
                         blend.station, blend.distance_km, blend.weight * 100.0));
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(residual) = blend.temperature_residual_k {
+                            ui.label(format!("Station − analysis: T {residual:+.1} °C"));
+                        }
+                        if let Some(residual) = blend.dewpoint_residual_k {
+                            ui.label(format!("Td {residual:+.1} °C"));
+                        }
+                    });
                     ui.weak("Nearest METAR innovation, ≤90 min old, 75 km decay; not an official SPC analysis.");
                 }
             } else {
