@@ -22,6 +22,8 @@ Android builds.
 - Live Level II radar updates progressively during a scan, retains explicitly
   aged prior azimuths where a block has not arrived, reports VCP/cut/latency
   details and falls back to complete archive volumes after a bounded failure.
+- Debris-signature alerts now require a nearby low-level velocity couplet and
+  avoid repeat notifications as partial scans update the same storm.
 - The MRMS catalog expands to 82 metadata-driven products. GOES adds all 16
   native ABI channels, CONUS/mesoscale/full-disk sectors, declarative true
   color and GLM density on the common timeline.

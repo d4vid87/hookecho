@@ -67,6 +67,31 @@ const OVERLAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
 /// happens before we stop listening for it.
 const VOLUME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(100);
 
+/// A live scan may temporarily lose CC or velocity while radials arrive. Remember nearby
+/// alerted signatures for ten minutes so their return is not announced as a new tornado.
+fn new_tds_locations(
+    hits: &[wxdata::tds::TdsHit],
+    alerted: &mut Vec<(f64, f64, Instant)>,
+    now: Instant,
+) -> usize {
+    const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(600);
+    alerted.retain(|(_, _, at)| now.duration_since(*at) < COOLDOWN);
+    let mut new = 0;
+    for hit in hits {
+        if alerted.iter().any(|(lon, lat, _)| {
+            crate::geo::great_circle([*lon, *lat], [hit.lon, hit.lat]).0 <= 10.0
+        }) {
+            continue;
+        }
+        alerted.push((hit.lon, hit.lat, now));
+        new += 1;
+    }
+    if alerted.len() > 64 {
+        alerted.drain(..alerted.len() - 64);
+    }
+    new
+}
+
 /// Loop frames in flight, keyed by volume name, with when each was kicked off.
 type PrefetchBook = std::collections::HashMap<String, Instant>;
 
@@ -3435,8 +3460,8 @@ pub struct HookEchoApp {
     spoken_check: Option<Instant>,
     /// Per-location cooldown clock for the lightning-proximity alarm (re-alert after it goes quiet).
     lightning_alerted: std::collections::HashMap<String, Instant>,
-    /// True while a TDS is currently detected, so the alert fires on the rising edge only.
-    tds_active: bool,
+    /// Recently alerted debris locations, so partial live scans cannot re-alert the same storm.
+    tds_alerted: Vec<(f64, f64, Instant)>,
     /// True while a rotation couplet is currently detected (rising-edge alarm latch).
     rot_active: bool,
     /// Active new-warning banners (event, area, first-seen time); expire after a while.
@@ -4222,7 +4247,7 @@ impl HookEchoApp {
             spoken_alerts: crate::spoken_alerts::SpokenAlerts::default(),
             spoken_check: None,
             lightning_alerted: std::collections::HashMap::new(),
-            tds_active: false,
+            tds_alerted: Vec::new(),
             rot_active: false,
             warning_banners: Vec::new(),
             toasts: Vec::new(),
@@ -5482,7 +5507,9 @@ impl HookEchoApp {
     ) {
         use crate::rules::Detection;
         use crate::settings::RuleTrigger as T;
-        if self.settings.alert_rules.iter().all(|r| !r.enabled) {
+        if !self.views[idx].timeline.following
+            || self.settings.alert_rules.iter().all(|r| !r.enabled)
+        {
             return;
         }
         let key = self.volume_key(idx);
@@ -7370,16 +7397,28 @@ impl HookEchoApp {
         else {
             return Vec::new();
         };
-        let hits = wxdata::tds::detect(&z, &cc, 0.80, 40.0, 150.0, 4);
-        // Rising-edge alert.
-        let now_active = !hits.is_empty();
-        if now_active && !self.tds_active {
+        let Some(vel) = self.views[idx]
+            .volume
+            .as_mut()
+            .and_then(|v| v.binned(Moment::Velocity, 0, true).ok())
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        let hits = wxdata::tds::detect(&z, &cc, &vel, 0.80, 40.0, 150.0, 4);
+        // Partial live updates can momentarily lose a signature and bring it back.
+        let new_hits = if self.views[idx].timeline.following {
+            new_tds_locations(&hits, &mut self.tds_alerted, Instant::now())
+        } else {
+            0
+        };
+        if new_hits > 0 {
             print!("\x07");
             use std::io::Write;
             let _ = std::io::stdout().flush();
             self.banner(
                 "⚠ TDS detected".to_string(),
-                format!("{} debris signature(s) — possible tornado", hits.len()),
+                format!("{new_hits} debris signature(s) — possible tornado"),
             );
             self.notify_alert(
                 "⚠ Tornado Debris Signature",
@@ -7390,7 +7429,6 @@ impl HookEchoApp {
                 self.play_alert_urgent(&self.settings.tds_sound.clone());
             }
         }
-        self.tds_active = now_active;
         hits
     }
 
@@ -22056,6 +22094,23 @@ mod tests {
         );
         line.pts[0].0 = f64::NAN;
         assert!(contours_geojson(&[line], "HRRR", "MSLP", Some("hPa"), valid).is_err());
+    }
+
+    #[test]
+    fn tds_alert_dedupes_partial_scans_but_allows_new_locations() {
+        let now = Instant::now();
+        let hit = wxdata::tds::TdsHit {
+            lon: -97.5, lat: 35.0, gates: 8, min_cc: 0.55,
+        };
+        let mut alerted = Vec::new();
+        assert_eq!(new_tds_locations(&[hit], &mut alerted, now), 1);
+        assert_eq!(new_tds_locations(&[hit], &mut alerted, now), 0);
+        let nearby = wxdata::tds::TdsHit { lon: -97.48, ..hit };
+        assert_eq!(new_tds_locations(&[nearby], &mut alerted, now), 0);
+        let separate = wxdata::tds::TdsHit { lon: -97.2, ..hit };
+        assert_eq!(new_tds_locations(&[separate], &mut alerted, now), 1);
+        assert_eq!(new_tds_locations(&[hit], &mut alerted,
+            now + std::time::Duration::from_secs(601)), 1);
     }
 }
 

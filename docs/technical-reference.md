@@ -274,10 +274,9 @@ layer draws its own scale and units.
 
 - SCIT cell tracks, past tracks and arrival-time cones; hail and mesocyclone
   flags; a sortable attributes table for every tracked cell at once.
-- Automatic **tornado debris signature** detection (low correlation coefficient
-  collocated with high reflectivity) and client-side azimuthal-shear couplet
-  detection on the live volume — a rotation flag that doesn't wait for a Level 3
-  product.
+- Automatic **tornado debris signature** detection requires low correlation
+  coefficient, high reflectivity, and a nearby low-level velocity couplet on the
+  live volume. Repeated partial scans of the same location do not repeat the alert.
 - NOAA **ProbSevere** per-storm severe/tornado/hail/wind probabilities.
 - Cross-sections in any moment, a CAPPI altitude slicer, and a 3D volume view.
 - **Copy CSV or save it to a file** from the cell table, the cross-section, the

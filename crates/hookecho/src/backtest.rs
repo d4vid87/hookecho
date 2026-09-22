@@ -148,7 +148,8 @@ fn first_hit(scan: &level2::Scan, rule: &AlertRule, settings: &Settings) -> Opti
         T::Tds => {
             let z = level2::bin_scan(scan, Moment::Reflectivity, 0).ok()?;
             let cc = level2::bin_scan(scan, Moment::CorrelationCoefficient, 0).ok()?;
-            wxdata::tds::detect(&z, &cc, 0.80, 40.0, 150.0, 4)
+            let vel = level2::bin_scan_opts(scan, Moment::Velocity, 0, true).ok()?;
+            wxdata::tds::detect(&z, &cc, &vel, 0.80, 40.0, 150.0, 4)
                 .iter()
                 .map(|h| Detection::at(h.lon, h.lat))
                 .collect()

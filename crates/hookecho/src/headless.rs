@@ -749,19 +749,20 @@ pub fn run_tds(site: &str) -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let (z, cc) = rt.block_on(async {
+    let (z, cc, vel) = rt.block_on(async {
         let scan = level2::download_latest_scan(site, chrono::Utc::now().date_naive()).await?;
         let z = level2::bin_scan(&scan, Moment::Reflectivity, 0)?;
         let cc = level2::bin_scan(&scan, Moment::CorrelationCoefficient, 0)?;
-        anyhow::Ok((z, cc))
+        let vel = level2::bin_scan_opts(&scan, Moment::Velocity, 0, true)?;
+        anyhow::Ok((z, cc, vel))
     })?;
     println!(
         "{site}: Z {}x{} @ {:.2}°, CC {}x{} @ {:.2}°",
         z.az_bins, z.gate_count, z.elevation_deg, cc.az_bins, cc.gate_count, cc.elevation_deg
     );
-    let hits = wxdata::tds::detect(&z, &cc, 0.80, 40.0, 150.0, 4);
+    let hits = wxdata::tds::detect(&z, &cc, &vel, 0.80, 40.0, 150.0, 4);
     println!(
-        "TDS clusters (CC<0.80, Z>=40 dBZ, >=4 gates): {}",
+        "TDS clusters (CC<0.80, Z>=40 dBZ, >=4 gates, nearby rotation): {}",
         hits.len()
     );
     for h in hits.iter().take(8) {
@@ -897,7 +898,7 @@ pub fn run_rules(site: &str) -> anyhow::Result<()> {
     );
 
     let d = &settings.detectors;
-    let tds = wxdata::tds::detect(&z, &cc, 0.80, 40.0, 150.0, 4);
+    let tds = wxdata::tds::detect(&z, &cc, &vel, 0.80, 40.0, 150.0, 4);
     let tbss = wxdata::dualpol::tbss(&z, &cc, d.tbss_core_dbz, 20.0, 0.8, 4.0, 150.0);
     // No model freezing level out here; 4 km ARL is the usual warm-season figure and the same
     // default `--headless-dualpol` takes.

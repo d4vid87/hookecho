@@ -1,6 +1,6 @@
 //! Bounded, exportable histories for client-side radar detectors.
 
-pub const ALGORITHM_VERSION: &str = "hookecho-radar-detectors-v1";
+pub const ALGORITHM_VERSION: &str = "hookecho-radar-detectors-v2";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Snapshot {
