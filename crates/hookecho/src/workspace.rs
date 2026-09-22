@@ -66,6 +66,11 @@ impl Workspace {
 pub struct Chrome {
     #[serde(default)]
     pub panel_open: bool,
+    /// Optional workbench docks; older workspaces continue to open the plain map.
+    #[serde(default)]
+    pub analyst_open: bool,
+    #[serde(default)]
+    pub analyst_inspector_open: bool,
     /// The panel's Alerts tab rather than Data.
     #[serde(default)]
     pub alerts_tab: bool,
@@ -76,6 +81,9 @@ pub struct Chrome {
     /// the overlay slugs.
     #[serde(default)]
     pub drawer: Option<String>,
+    /// Stable window variant for new builds; `drawer` remains for old workspace readers.
+    #[serde(default)]
+    pub drawer_id: Option<String>,
 }
 
 /// One pane's state. Camera as lon/lat/zoom, basemap as its slug: both survive a file written by
@@ -400,9 +408,12 @@ mod tests {
             fields_on: vec!["mrms".into()],
             chrome: Some(Chrome {
                 panel_open: true,
+                analyst_open: true,
+                analyst_inspector_open: true,
                 alerts_tab: false,
                 basemap_open: false,
                 drawer: Some("Settings".into()),
+                drawer_id: Some("Settings".into()),
             }),
         };
         let json = serde_json::to_string(&ws).unwrap();
@@ -421,6 +432,17 @@ mod tests {
                 && !ws.link_times
                 && ws.chrome.is_none()
         );
+    }
+
+    #[test]
+    fn old_chrome_keeps_plain_map_as_default() {
+        let chrome: Chrome = serde_json::from_str(
+            r#"{"panel_open":true,"alerts_tab":false,"drawer":"Settings"}"#,
+        ).unwrap();
+        assert!(chrome.panel_open);
+        assert!(!chrome.analyst_open);
+        assert!(!chrome.analyst_inspector_open);
+        assert!(chrome.drawer_id.is_none());
     }
 
     #[test]

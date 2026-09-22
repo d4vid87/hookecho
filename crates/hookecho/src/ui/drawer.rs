@@ -41,6 +41,8 @@ pub struct Drawer {
     pub gear: bool,
     /// Large analysis pages can temporarily take the map workspace.
     expanded: bool,
+    /// Temporarily let global search use this lane without losing the open page stack.
+    search_overlay: bool,
 }
 
 impl Drawer {
@@ -49,8 +51,10 @@ impl Drawer {
         let frame = ctx.cumulative_pass_nr();
         if frame != self.frame {
             // A page that stopped drawing has closed itself (its own ✕, a hotkey, an action).
-            self.stack.retain(|t| self.seen.contains(t));
-            self.seen.clear();
+            if !self.search_overlay {
+                self.stack.retain(|t| self.seen.contains(t));
+            }
+            self.seen = if self.search_overlay { self.stack.clone() } else { Vec::new() };
             self.frame = frame;
         }
     }
@@ -58,8 +62,11 @@ impl Drawer {
     /// Is a page showing? The floating panel steps aside when one is: they share the same lane,
     /// and the drawer is where the panel just sent the user.
     pub fn is_open(&self) -> bool {
-        !self.stack.is_empty()
+        !self.search_overlay && !self.stack.is_empty()
     }
+
+    pub fn show_search(&mut self) { self.search_overlay = true; }
+    pub fn resume(&mut self) { self.search_overlay = false; }
 
     /// The page on top, if any. What a workspace saves; the pages underneath it are a back-stack,
     /// which is a history, not an arrangement.
@@ -108,6 +115,7 @@ impl Drawer {
             self.opened_at = ctx.input(|i| i.time);
         }
         if !self.stack.iter().any(|t| t == title) {
+            self.search_overlay = false;
             self.stack.push(title.to_string());
             self.gear = false;
             self.expanded = false;
@@ -115,6 +123,7 @@ impl Drawer {
         if self.stack.last().map(String::as_str) != Some(title) {
             return None;
         }
+        if self.search_overlay { return None; }
 
         let (head, body) = rects(ctx, width, self.expanded);
         let (head, body) = self.slide(ctx, head, body);
@@ -281,5 +290,20 @@ mod tests {
             drawer.begin_frame(ui.ctx());
             assert!(!drawer.is_open());
         });
+    }
+
+    #[test]
+    fn search_temporarily_replaces_a_drawer_page() {
+        let ctx = egui::Context::default();
+        let mut drawer = Drawer::default();
+        drawer.stack.push("Settings".into());
+        drawer.seen.push("Settings".into());
+        drawer.show_search();
+        let _ = ctx.run_ui(Default::default(), |ui| drawer.begin_frame(ui.ctx()));
+        assert!(!drawer.is_open());
+        drawer.resume();
+        let _ = ctx.run_ui(Default::default(), |ui| drawer.begin_frame(ui.ctx()));
+        assert_eq!(drawer.top(), Some("Settings"));
+        assert!(drawer.is_open());
     }
 }

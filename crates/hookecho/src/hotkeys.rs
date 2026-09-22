@@ -144,6 +144,13 @@ pub(crate) fn poll(ctx: &egui::Context, bindings: &[Binding]) -> Vec<BindableAct
     })
 }
 
+/// Reserved recovery shortcut, independent of customized key bindings.
+pub(crate) fn search_requested(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(
+        egui::Modifiers::COMMAND, egui::Key::S,
+    )))
+}
+
 /// Would this shortcut swallow a keystroke meant for a focused text field?
 fn steals_typing(s: egui::KeyboardShortcut) -> bool {
     s.modifiers.is_none() && s.logical_key.name().len() == 1
@@ -222,5 +229,19 @@ mod tests {
             egui::Modifiers::NONE,
             egui::Key::F5
         )));
+    }
+
+    #[test]
+    fn ctrl_s_is_reserved_for_search_even_with_custom_bindings() {
+        let ctx = egui::Context::default();
+        let shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+        let custom = [Binding { shortcut, action: BindableAction::ToggleMute }];
+        let _ = ctx.run_ui(egui::RawInput { events: vec![egui::Event::Key {
+            key: egui::Key::S, physical_key: None, pressed: true, repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }], ..Default::default() }, |ui| {
+            assert!(search_requested(ui.ctx()));
+            assert!(poll(ui.ctx(), &custom).is_empty());
+        });
     }
 }
