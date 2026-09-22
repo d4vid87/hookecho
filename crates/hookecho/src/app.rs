@@ -5920,7 +5920,18 @@ impl HookEchoApp {
             return false;
         }
         let hit = wxdata::sites::all()
-            .filter(|s| to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(12.0))
+            .filter(|s| {
+                let w = crate::render::mercator::lonlat_to_world(
+                    s.longitude as f64,
+                    s.latitude as f64,
+                );
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(16.0)
+                    || (cam.zoom >= 5.0
+                        && self.labels.was_shown(crate::labelplace::key(s.id))
+                        && radar_site_pill(p).contains(pos))
+            })
             .min_by(|a, b| {
                 to_screen_hit(a.longitude as f64, a.latitude as f64)
                     .total_cmp(&to_screen_hit(b.longitude as f64, b.latitude as f64))
@@ -15148,9 +15159,8 @@ impl HookEchoApp {
             }
         }
 
-        // Radar sites: a ring per site — both networks, so a TDWR you can select is a TDWR you can
-        // see. The active site in accent, others muted. IDs only when zoomed in so the CONUS view
-        // isn't cluttered. Click handled in the Interrogate tool.
+        // Larger radar buttons with named pills when zoomed in. The exact site stays marked even
+        // when its pill loses a label collision. Click handled in the Interrogate tool.
         if self.show_radar_sites {
             let accent = crate::theme::accent(self.settings.theme);
             let current = self.views[idx].site.as_deref();
@@ -15173,30 +15183,49 @@ impl HookEchoApp {
                     } else {
                         egui::Color32::from_rgb(120, 190, 255)
                     };
-                    let r = if is_current { 5.0 } else { 3.5 };
-                    painter.circle_stroke(p, r, egui::Stroke::new(1.5, col));
-                    painter.circle_filled(p, 1.5, col);
-                    // The dot always draws — it is the click target, and it is small enough not to
-                    // matter. Only the four-letter id competes for space, and it loses to city names:
-                    // "TDAL" sitting across "Grapevine" is the exact overlap this pass exists for.
-                    let id_rect = egui::Rect::from_min_size(
-                        p + egui::vec2(6.0, -6.0),
-                        egui::vec2(s.id.len() as f32 * 6.5, 12.0),
-                    )
-                    .expand(1.0);
+                    painter.circle_filled(p, 8.0, egui::Color32::from_rgb(13, 28, 40));
+                    painter.circle_stroke(p, 8.0, egui::Stroke::new(2.0, col));
+                    painter.circle_filled(p, 2.5, col);
+                    let pill = radar_site_pill(p);
                     if show_labels
                         && self.labels.place(
                             crate::labelplace::key(s.id),
-                            id_rect,
+                            pill.expand(2.0),
                             crate::labelplace::Priority::Minor,
                         )
                     {
+                        let bg = if is_current {
+                            accent
+                        } else {
+                            egui::Color32::from_rgb(13, 28, 40)
+                        };
+                        let fg = if is_current {
+                            egui::Color32::from_rgb(13, 28, 40)
+                        } else {
+                            egui::Color32::WHITE
+                        };
+                        painter.line_segment(
+                            [p + egui::vec2(8.0, 0.0), pill.left_center()],
+                            egui::Stroke::new(2.0, col),
+                        );
+                        painter.rect_filled(pill, 14.0, bg);
+                        painter.rect_stroke(
+                            pill,
+                            14.0,
+                            egui::Stroke::new(1.5, col),
+                            egui::StrokeKind::Inside,
+                        );
+                        painter.circle_stroke(
+                            pill.left_center() + egui::vec2(14.0, 0.0),
+                            5.0,
+                            egui::Stroke::new(1.5, fg),
+                        );
                         painter.text(
-                            p + egui::vec2(6.0, 0.0),
+                            pill.left_center() + egui::vec2(27.0, 0.0),
                             egui::Align2::LEFT_CENTER,
                             s.id,
-                            egui::FontId::monospace(10.0),
-                            col,
+                            egui::FontId::monospace(13.0),
+                            fg,
                         );
                     }
                 }
@@ -17850,6 +17879,10 @@ fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: boo
 
 fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
     !next_pending && !gesture_live
+}
+
+fn radar_site_pill(site: egui::Pos2) -> egui::Rect {
+    egui::Rect::from_min_size(site + egui::vec2(12.0, -14.0), egui::vec2(78.0, 28.0))
 }
 
 /// Every radar site with its world-space position, projected once.
