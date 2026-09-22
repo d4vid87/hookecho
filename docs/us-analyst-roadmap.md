@@ -2164,7 +2164,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] radar/satellite/MRMS valid-time synchronization
 - [x] RRFS/REFS + GEFS + NBM + expanded HRRR/RAP/GFS
 - [x] ensemble probabilities/postage stamps/plumes
-- [x] RTMA/URMA surface analysis
+- [ ] RTMA/URMA surface analysis and selected-point station/model history (G2–G4; current analysis layers and point blend are partial)
 - [x] model/run/observed comparison workflows
 - [x] advanced soundings/hodographs
 - [x] user-defined radar products
@@ -2177,7 +2177,7 @@ HookEcho should be considered “top-tier U.S. analyst workstation” only when 
 - [x] historical algorithm and model verification
 - [x] chase route weather-exposure analysis
 - [x] broadcast/headless deterministic rendering
-- [x] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable
+- [ ] GeoTIFF/NetCDF/CSV/GeoJSON scientific export where applicable (native-value CSV is implemented; remaining formats require acceptance evidence)
 - [x] browser persistent cache
 - [x] Android tablet analyst layout
 - [x] performance regression suite
