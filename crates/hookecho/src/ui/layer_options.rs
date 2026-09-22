@@ -36,6 +36,7 @@ pub struct UiActions {
     pub export_trail: bool,
     pub export_local_tracks_csv: bool,
     pub export_local_tracks_json: bool,
+    pub export_local_tracks_geojson: bool,
     pub load_gefs_distribution: bool,
     pub load_gefs_postage: bool,
 }
@@ -765,6 +766,7 @@ pub(crate) fn show(
         ui.horizontal(|ui| {
             actions.export_local_tracks_csv |= ui.button("Export CSV…").clicked();
             actions.export_local_tracks_json |= ui.button("Export JSON…").clicked();
+            actions.export_local_tracks_geojson |= ui.button("Export GeoJSON…").clicked();
         });
     }
 

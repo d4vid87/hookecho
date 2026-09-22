@@ -173,6 +173,31 @@ pub fn tracks_json(tracks: &[Track]) -> anyhow::Result<String> {
     Ok(serde_json::to_string_pretty(tracks)?)
 }
 
+/// GeoJSON line features retain each centroid's exact observed time in properties.
+pub fn tracks_geojson(tracks: &[Track]) -> anyhow::Result<String> {
+    let features: Vec<_> = tracks.iter().enumerate().filter_map(|(id, track)| {
+        let points: Vec<_> = track.points.iter()
+            .filter(|(lon, lat, _)| lon.is_finite() && lat.is_finite()
+                && lon.abs() <= 180.0 && lat.abs() <= 90.0)
+            .collect();
+        if points.len() < 2 { return None; }
+        Some(serde_json::json!({
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": points.iter().map(|(lon, lat, _)| vec![*lon, *lat]).collect::<Vec<_>>()},
+            "properties": {
+                "track": id,
+                "times": points.iter().map(|(_, _, time)| time.to_rfc3339()).collect::<Vec<_>>(),
+                "direction_deg": track.dir_deg.is_finite().then_some(track.dir_deg),
+                "speed_kt": track.speed_kt.is_finite().then_some(track.speed_kt),
+                "source": "HookEcho radar-derived storm history"
+            }
+        }))
+    }).collect();
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection", "features": features
+    }))?)
+}
+
 /// One row per observed position; `track` is stable within this export.
 pub fn tracks_csv(tracks: &[Track]) -> String {
     let mut out = String::from("track,time,longitude,latitude,direction_deg,speed_kt\n");
@@ -432,5 +457,11 @@ mod tests {
         assert!(csv.contains("-97.000000,35.000000"));
         let json = tracks_json(&tracks).unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&json).unwrap()[0]["points"].as_array().unwrap().len(), 2);
+        let geojson: serde_json::Value = serde_json::from_str(&tracks_geojson(&tracks).unwrap()).unwrap();
+        let feature = &geojson["features"][0];
+        assert_eq!(feature["geometry"]["type"], "LineString");
+        assert_eq!(feature["geometry"]["coordinates"][0], serde_json::json!([-97.0, 35.0]));
+        assert_eq!(feature["properties"]["times"][1], (t0 + chrono::Duration::minutes(5)).to_rfc3339());
+        assert_eq!(feature["properties"]["source"], "HookEcho radar-derived storm history");
     }
 }

@@ -7790,7 +7790,7 @@ impl HookEchoApp {
                 None => self.toast(ToastKind::Info, "Trail has no frames yet"),
             }
         }
-        if actions.export_local_tracks_csv || actions.export_local_tracks_json {
+        if actions.export_local_tracks_csv || actions.export_local_tracks_json || actions.export_local_tracks_geojson {
             let tracks = self.compute_local_tracks();
             if tracks.is_empty() {
                 self.toast(ToastKind::Info, "Storm history needs at least two decoded radar volumes");
@@ -7800,6 +7800,12 @@ impl HookEchoApp {
                         "hookecho-storm-history.csv",
                         "csv",
                         Ok(wxdata::celltrack::tracks_csv(&tracks)),
+                    )
+                } else if actions.export_local_tracks_geojson {
+                    (
+                        "hookecho-storm-history.geojson",
+                        "geojson",
+                        wxdata::celltrack::tracks_geojson(&tracks),
                     )
                 } else {
                     (
