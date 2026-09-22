@@ -85,6 +85,7 @@ impl HookEchoApp {
         let feats = self.active_alert_features().to_vec();
         let mut muted = self.settings.mute_alerts;
         let mut alert_hit = None;
+        let mut export_alerts = false;
         // Read before the panel closure: the Layer options callback runs inside a `&mut self`
         // borrow and can only touch plain fields, not `&self` methods.
         let l3_site = self.l3grid_site.clone();
@@ -267,7 +268,13 @@ impl HookEchoApp {
                 });
                 ui.add_space(6.0);
                 if alerts_tab {
-                    alert_hit = ui::alert_panel::body(ui, &feats, bounds, &mut muted);
+                    alert_hit = ui::alert_panel::body(
+                        ui,
+                        &feats,
+                        bounds,
+                        &mut muted,
+                        &mut export_alerts,
+                    );
                     return;
                 }
                 // A drag rewrites the order in place, so persist it when it moves.
@@ -450,6 +457,9 @@ impl HookEchoApp {
             cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
             cam.zoom = cam.zoom.max(8.0);
             self.open_alert_popup(&id);
+        }
+        if export_alerts {
+            self.export_alerts_in_view(bounds);
         }
         // `query` is the live text; `self.layers_query` was taken from at the top of the frame.
         let searched = !query.trim().is_empty();

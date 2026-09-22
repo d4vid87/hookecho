@@ -1388,6 +1388,52 @@ fn routes_geojson(routes: &[wxdata::route::Route]) -> anyhow::Result<String> {
     }))?)
 }
 
+fn alerts_geojson(
+    features: &[wxdata::overlay::GeoFeature],
+    bounds: (f64, f64, f64, f64),
+) -> anyhow::Result<String> {
+    let (vx0, vy0, vx1, vy1) = bounds;
+    let mut exported = Vec::new();
+    for feature in features {
+        let Some(alert) = &feature.alert else { continue };
+        let Some((x0, y0, x1, y1)) = feature.bbox() else { continue };
+        if x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1 { continue; }
+        let mut rings = feature.rings.clone();
+        anyhow::ensure!(!rings.is_empty(), "alert polygon has no rings");
+        for ring in &mut rings {
+            anyhow::ensure!(
+                ring.len() >= 3 && ring.iter().all(|point| point[0].is_finite()
+                    && point[1].is_finite()
+                    && (-180.0..=180.0).contains(&point[0])
+                    && (-90.0..=90.0).contains(&point[1])),
+                "alert polygon has invalid coordinates"
+            );
+            if ring.first() != ring.last() { ring.push(ring[0]); }
+        }
+        exported.push(serde_json::json!({
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": rings},
+            "properties": {
+                "source": "NWS alert",
+                "id": alert.id,
+                "event": alert.event,
+                "headline": alert.headline,
+                "area": alert.area,
+                "description": alert.description,
+                "instruction": alert.instruction,
+                "expires": alert.expires,
+                "vtec": alert.vtec,
+            }
+        }));
+    }
+    anyhow::ensure!(!exported.is_empty(), "no alert polygons in view");
+    let json = serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection", "features": exported
+    }))?;
+    anyhow::ensure!(json.len() <= 64 * 1024 * 1024, "alert GeoJSON exceeds 64 MB");
+    Ok(json)
+}
+
 /// What a left-click on the map does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MapTool {
@@ -16222,6 +16268,23 @@ impl HookEchoApp {
         }
     }
 
+    fn export_alerts_in_view(&mut self, bounds: (f64, f64, f64, f64)) {
+        match alerts_geojson(self.active_alert_features(), bounds) {
+            Ok(json) => match crate::dialog::save_bytes(
+                "hookecho-alerts.geojson",
+                "geojson",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Alerts exported to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, error.to_string()),
+        }
+    }
+
     fn export_case_report(&mut self) {
         let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
         let result = self.current_case().and_then(|manifest| manifest.to_markdown());
@@ -21851,6 +21914,46 @@ mod tests {
         assert_eq!(json["features"][0]["properties"]["distance_m"], 331_000.0);
         assert_eq!(json["features"][1]["properties"]["duration_s"], 12_600.0);
         assert_eq!(json["features"][1]["geometry"]["coordinates"][1][1], 33.0);
+    }
+
+    #[test]
+    fn alerts_in_view_export_polygon_holes_and_nws_metadata() {
+        let alert = wxdata::overlay::AlertInfo {
+            id: "urn:alert:1".into(),
+            event: "Tornado Warning".into(),
+            headline: "Tornado Warning issued".into(),
+            area: "Cleveland County".into(),
+            description: "Move to shelter.".into(),
+            instruction: "Take cover now.".into(),
+            expires: chrono::DateTime::parse_from_rfc3339("2026-09-22T18:00:00Z")
+                .ok().map(|time| time.with_timezone(&chrono::Utc)),
+            max_hail_in: None,
+            max_wind: Some("70 MPH".into()),
+            tornado_detection: Some("RADAR INDICATED".into()),
+            damage_threat: None,
+            source: Some("Radar indicated".into()),
+            motion: None,
+            vtec: Some("/O.NEW.KOUN.TO.W.0001.260922T1700Z-260922T1800Z/".into()),
+        };
+        let feature = wxdata::overlay::GeoFeature {
+            rings: vec![
+                vec![[-98.0, 35.0], [-97.0, 35.0], [-97.0, 36.0], [-98.0, 35.0]],
+                vec![[-97.8, 35.2], [-97.6, 35.2], [-97.7, 35.4], [-97.8, 35.2]],
+            ],
+            fill: [255, 0, 0, 50],
+            stroke: [255, 0, 0, 255],
+            kind: wxdata::overlay::FeatureKind::Warning,
+            title: "Tornado Warning".into(),
+            detail: "bulletin".into(),
+            alert: Some(alert),
+        };
+        let json: serde_json::Value = serde_json::from_str(
+            &alerts_geojson(&[feature], (-99.0, 34.0, -96.0, 37.0)).unwrap(),
+        ).unwrap();
+        assert_eq!(json["features"][0]["geometry"]["coordinates"].as_array().unwrap().len(), 2);
+        assert_eq!(json["features"][0]["properties"]["event"], "Tornado Warning");
+        assert_eq!(json["features"][0]["properties"]["id"], "urn:alert:1");
+        assert!(alerts_geojson(&[], (-180.0, -90.0, 180.0, 90.0)).is_err());
     }
 }
 

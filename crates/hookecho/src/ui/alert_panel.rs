@@ -104,6 +104,7 @@ pub fn body(
     feats: &[GeoFeature],
     bounds: (f64, f64, f64, f64),
     muted: &mut bool,
+    export: &mut bool,
 ) -> Option<(String, f64, f64)> {
     let rows = rows_in_view(feats, bounds);
     let mut clicked = None;
@@ -129,6 +130,12 @@ pub fn body(
                         .clicked()
                     {
                         *muted = !*muted;
+                    }
+                    if ui
+                        .add_enabled(!rows.is_empty(), egui::Button::new("Export GeoJSON…"))
+                        .clicked()
+                    {
+                        *export = true;
                     }
                 });
             });
@@ -228,7 +235,7 @@ mod tests {
                 ui.set_width(300.0);
                 let out = egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                     ui.label("Severe weather alerts");
-                    assert!(body(ui, &feats, (-2.0,-2.0,2.0,2.0), &mut false).is_none());
+                    assert!(body(ui, &feats, (-2.0,-2.0,2.0,2.0), &mut false, &mut false).is_none());
                     ui.label("Optional settings and Tools");
                 });
                 offset = out.state.offset.y;
