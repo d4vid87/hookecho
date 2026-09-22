@@ -348,7 +348,7 @@ pub fn sample_native(
         return None; // KDP is derived during binning; there is no transmitted native gate.
     }
     let site = scan.site()?;
-    let sweep = scan.sweeps().get(tilt)?;
+    let sweep = selected_sweep(scan, moment, tilt)?;
     let elevation_deg = sweep.elevation_angle_degrees()?;
     let (ground_range_km, bearing) =
         crate::xsection::dist_bearing(site.longitude() as f64, site.latitude() as f64, lon, lat);
@@ -726,6 +726,30 @@ pub fn elevation_angles(scan: &Scan) -> Vec<f32> {
     angles
 }
 
+/// Use the newest cut at a displayed tilt, while respecting split cuts that carry different
+/// moments. SAILS/MRLE repeats share one tilt button but have distinct collection times.
+fn selected_sweep(scan: &Scan, moment: Moment, tilt: usize) -> Option<&Sweep> {
+    let target = *elevation_angles(scan).get(tilt)?;
+    scan.sweeps()
+        .iter()
+        .filter(|sweep| {
+            sweep
+                .elevation_angle_degrees()
+                .is_some_and(|angle| (angle - target).abs() < 0.15)
+        })
+        .filter_map(|sweep| {
+            sweep
+                .radials()
+                .iter()
+                .filter(|radial| moment.select(radial).is_some())
+                .map(|radial| radial.collection_timestamp())
+                .max()
+                .map(|time| (time, sweep))
+        })
+        .max_by_key(|(time, _)| *time)
+        .map(|(_, sweep)| sweep)
+}
+
 /// Which moments this volume actually carries, indexed by [`Moment::index`].
 ///
 /// Not every radar sends everything: a TDWR has only reflectivity and velocity, and volumes from
@@ -763,24 +787,8 @@ pub fn bin_scan_opts(
     dealias: bool,
 ) -> anyhow::Result<BinnedSweep> {
     crate::stats::bump(crate::stats::Counter::SweepsBinned);
-    let target = *elevation_angles(scan)
-        .get(tilt)
-        .ok_or_else(|| anyhow::anyhow!("tilt {tilt} out of range"))?;
-
-    let sweep = scan
-        .sweeps()
-        .iter()
-        .filter(|s| {
-            s.elevation_angle_degrees()
-                .is_some_and(|e| (e - target).abs() < 0.15)
-        })
-        .find(|s| s.radials().iter().any(|r| moment.select(r).is_some()))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no sweep at tilt {tilt} ({target:.2}deg) carries {}",
-                moment.short_name()
-            )
-        })?;
+    let sweep = selected_sweep(scan, moment, tilt)
+        .ok_or_else(|| anyhow::anyhow!("no sweep carries requested moment at this tilt"))?;
 
     let (lat, lon) = scan
         .site()
@@ -1369,6 +1377,10 @@ mod tests {
 
     // A radial carrying only the given moment (others None).
     fn radial_with(moment: Moment, elevation: f32) -> Radial {
+        radial_with_at(moment, elevation, 0)
+    }
+
+    fn radial_with_at(moment: Moment, elevation: f32, collected_at: i64) -> Radial {
         let raw = vec![106u8];
         let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, raw);
         let (refl, vel) = match moment {
@@ -1377,7 +1389,7 @@ mod tests {
             _ => (Some(data), None),
         };
         Radial::new(
-            0,
+            collected_at,
             0,
             0.0,
             0.5,
@@ -1437,6 +1449,37 @@ mod tests {
             bin_scan(&scan, Moment::Reflectivity, 0).is_ok(),
             "REF found on surveillance cut"
         );
+    }
+
+    #[test]
+    fn repeated_low_cut_uses_newest_matching_sweep_for_display_and_probe() {
+        let old = Sweep::new(1, vec![radial_with_at(Moment::Reflectivity, 0.48, 1_000)]);
+        let velocity = Sweep::new(2, vec![radial_with_at(Moment::Velocity, 0.50, 2_000)]);
+        let new = Sweep::new(3, vec![radial_with_at(Moment::Reflectivity, 0.52, 3_000)]);
+        let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
+        let scan = Scan::with_site(site, minimal_vcp(), vec![old, velocity, new]);
+
+        assert_eq!(elevation_angles(&scan).len(), 1);
+        assert_eq!(
+            selected_sweep(&scan, Moment::Reflectivity, 0)
+                .unwrap()
+                .elevation_number(),
+            3
+        );
+        assert_eq!(
+            selected_sweep(&scan, Moment::Velocity, 0)
+                .unwrap()
+                .elevation_number(),
+            2
+        );
+        assert_eq!(
+            bin_scan(&scan, Moment::Reflectivity, 0)
+                .unwrap()
+                .elevation_deg,
+            0.52
+        );
+        let sample = sample_native(&scan, Moment::Reflectivity, 0, -97.28, 35.35).unwrap();
+        assert_eq!(sample.collected_at.timestamp_millis(), 3_000);
     }
 
     /// The AWS archive reaches back to June 1991 — a decade earlier than the app used to claim.
