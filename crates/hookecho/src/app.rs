@@ -2114,11 +2114,15 @@ fn stored_gis(
             .strip_prefix("base64:")
             .ok_or_else(|| anyhow::anyhow!("saved GIS archive is corrupt"))?;
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
-        wxdata::gis::archive_styled(
+        wxdata::gis::archive_with_options(
             name,
             &bytes,
-            cfg.and_then(|cfg| cfg.gis_label_field.as_deref()),
-            cfg.and_then(|cfg| cfg.gis_color_field.as_deref()),
+            wxdata::gis::GisImportOptions {
+                label_field: cfg.and_then(|cfg| cfg.gis_label_field.as_deref()),
+                color_field: cfg.and_then(|cfg| cfg.gis_color_field.as_deref()),
+                valid_start_field: cfg.and_then(|cfg| cfg.gis_valid_start_field.as_deref()),
+                valid_end_field: cfg.and_then(|cfg| cfg.gis_valid_end_field.as_deref()),
+            },
         )
     } else {
         Ok((wxdata::gis::parse(name, content)?, Vec::new()))
@@ -10538,7 +10542,7 @@ impl HookEchoApp {
         &self,
     ) -> impl Iterator<Item = (&wxdata::placefile::PlaceItem, f32, usize)> {
         let range = self.view_range_nmi();
-        let now = Utc::now();
+        let now = self.placefile_time();
         // Configured placefiles in Layer-Manager order, then plugin output on top of them: a
         // plugin is something the user wrote for this session, so it should not be buried.
         let sources = self
@@ -10570,11 +10574,18 @@ impl HookEchoApp {
         })
     }
 
+    fn placefile_time(&self) -> chrono::DateTime<Utc> {
+        self.views[self.active]
+            .timeline
+            .selected_time()
+            .or_else(|| self.views[self.active].volume.as_ref().map(|volume| volume.time))
+            .unwrap_or_else(Utc::now)
+    }
+
     /// [`Self::placefile_labels`] memoised for the frame's inputs — it deep-clones every item's
     /// strings, and ran once per frame over every enabled placefile.
     fn placefile_labels_cached(&mut self) -> std::sync::Arc<[PlaceLabel]> {
-        // Time is in the inputs because items have on/off windows and thresholds; a minute's
-        // granularity is finer than any placefile's own cadence.
+        // Include the selected frame's exact second so archive scrubbing changes timed labels.
         let fingerprint: usize = self
             .placefiles
             .iter()
@@ -10583,7 +10594,7 @@ impl HookEchoApp {
             + self.pf_icon_tex.len();
         let key = (
             fingerprint,
-            chrono::Utc::now().timestamp() / 60,
+            self.placefile_time().timestamp(),
             self.view_range_nmi() as i32,
         );
         if self
@@ -15878,8 +15889,7 @@ impl HookEchoApp {
             .map(|(_, stamp)| stamp)?;
         let analysis_time = self.views[pane]
             .timeline
-            .current()
-            .and_then(|id| id.date_time())
+            .selected_time()
             .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))?;
         let tolerance = self
             .settings
@@ -17216,6 +17226,8 @@ impl HookEchoApp {
                                     opacity: 1.0,
                                     gis_label_field: None,
                                     gis_color_field: None,
+                                    gis_valid_start_field: None,
+                                    gis_valid_end_field: None,
                                 });
                             }
                             self.placefiles.retain(|loaded| loaded.url != key);
@@ -19837,6 +19849,7 @@ impl eframe::App for HookEchoApp {
             .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
         if let Some(url) = self.placefile_window.restyle_gis.take() {
             self.placefiles.retain(|loaded| loaded.url != url);
+            self.placefile_label_cache = None;
         }
         if std::mem::take(&mut self.placefile_window.import_gis) {
             crate::dialog::request_open(crate::dialog::ImportKind::Gis, "");

@@ -799,6 +799,10 @@ pub struct PlacefileConfig {
     pub gis_label_field: Option<String>,
     #[serde(default)]
     pub gis_color_field: Option<String>,
+    #[serde(default)]
+    pub gis_valid_start_field: Option<String>,
+    #[serde(default)]
+    pub gis_valid_end_field: Option<String>,
 }
 
 fn default_opacity() -> f32 {
@@ -1599,9 +1603,14 @@ mod tests {
         let mut config: PlacefileConfig = serde_json::from_str(old).unwrap();
         assert_eq!(config.gis_label_field, None);
         assert_eq!(config.gis_color_field, None);
+        assert_eq!(config.gis_valid_start_field, None);
+        assert_eq!(config.gis_valid_end_field, None);
         config.gis_label_field = Some("COUNTY".into());
         config.gis_color_field = Some("RISK".into());
-        let restored: PlacefileConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        config.gis_valid_start_field = Some("FROM".into());
+        config.gis_valid_end_field = Some("UNTIL".into());
+        let restored: PlacefileConfig =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
         assert_eq!(restored, config);
     }
 
@@ -1809,6 +1818,8 @@ mod tests {
                 opacity: 1.0,
                 gis_label_field: None,
                 gis_color_field: None,
+                gis_valid_start_field: None,
+                gis_valid_end_field: None,
             }],
             markers: vec![Marker {
                 id: new_marker_id(),

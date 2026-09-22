@@ -71,6 +71,13 @@ impl Timeline {
         self.frames.get(self.playhead)
     }
 
+    /// Time at the playhead, including a pending archive seek before its frame list arrives.
+    pub fn selected_time(&self) -> Option<DateTime<Utc>> {
+        self.current()
+            .and_then(Identifier::date_time)
+            .or(self.seek_target)
+    }
+
     /// Total scrub slots: observed frames plus the forecast tail (only when frames exist).
     pub fn slot_count(&self) -> usize {
         if self.frames.is_empty() {
@@ -226,12 +233,7 @@ impl Timeline {
     }
 
     /// Select the exact same source object when this timeline contains it.
-    pub fn align_to_source(
-        &mut self,
-        target: &Identifier,
-        following: bool,
-        playing: bool,
-    ) -> bool {
+    pub fn align_to_source(&mut self, target: &Identifier, following: bool, playing: bool) -> bool {
         let Some(index) = self.frames.iter().position(|frame| frame == target) else {
             return false;
         };
@@ -367,6 +369,20 @@ mod tests {
                 Identifier::new(format!("{site}20260819_{h:02}{m:02}00_V06"))
             })
             .collect()
+    }
+
+    #[test]
+    fn selected_time_tracks_live_loop_and_pending_archive_seek() {
+        let mut timeline = Timeline::default();
+        let date = timeline.date;
+        timeline.set_frames(day("KTLX", 3), ("KTLX".into(), date));
+        timeline.playhead = 0;
+        assert!(timeline.following);
+        let first = timeline.frames[0].date_time().unwrap();
+        assert_eq!(timeline.selected_time(), Some(first));
+        timeline.frames.clear();
+        timeline.seek_target = Some(first);
+        assert_eq!(timeline.selected_time(), Some(first));
     }
 
     #[test]

@@ -82,69 +82,56 @@ impl PlacefileWindow {
                             });
                         });
                         if let Some(fields) = st
-                            .filter(|status| cfg.url.starts_with("gis:") && !status.attributes.is_empty())
+                            .filter(|status| {
+                                cfg.url.starts_with("gis:") && !status.attributes.is_empty()
+                            })
                             .map(|status| &status.attributes)
                         {
+                            let mut changed = false;
                             ui.horizontal(|ui| {
-                                ui.label("Point label");
-                                egui::ComboBox::from_id_salt(("gis-label", &cfg.url))
-                                    .selected_text(
-                                        cfg.gis_label_field.as_deref().unwrap_or("Default"),
-                                    )
-                                    .show_ui(ui, |ui| {
-                                        if ui
-                                            .selectable_value(
-                                                &mut cfg.gis_label_field,
-                                                None,
-                                                "Default",
-                                            )
-                                            .changed()
-                                        {
-                                            self.restyle_gis = Some(cfg.url.clone());
-                                        }
-                                        for field in fields {
-                                            if ui
-                                                .selectable_value(
-                                                    &mut cfg.gis_label_field,
-                                                    Some(field.clone()),
-                                                    field,
-                                                )
-                                                .changed()
-                                            {
-                                                self.restyle_gis = Some(cfg.url.clone());
-                                            }
-                                        }
-                                    });
-                                ui.label("Color").on_hover_text("Numeric columns use a graduated ramp; text categories get distinct colors. Hex colors are used directly.");
-                                egui::ComboBox::from_id_salt(("gis-color", &cfg.url))
-                                    .selected_text(
-                                        cfg.gis_color_field.as_deref().unwrap_or("Default"),
-                                    )
-                                    .show_ui(ui, |ui| {
-                                        if ui
-                                            .selectable_value(
-                                                &mut cfg.gis_color_field,
-                                                None,
-                                                "Default",
-                                            )
-                                            .changed()
-                                        {
-                                            self.restyle_gis = Some(cfg.url.clone());
-                                        }
-                                        for field in fields {
-                                            if ui
-                                                .selectable_value(
-                                                    &mut cfg.gis_color_field,
-                                                    Some(field.clone()),
-                                                    field,
-                                                )
-                                                .changed()
-                                            {
-                                                self.restyle_gis = Some(cfg.url.clone());
-                                            }
-                                        }
-                                    });
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Point label",
+                                    "gis-label",
+                                    &cfg.url,
+                                    &mut cfg.gis_label_field,
+                                    fields,
+                                );
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Color",
+                                    "gis-color",
+                                    &cfg.url,
+                                    &mut cfg.gis_color_field,
+                                    fields,
+                                );
                             });
+                            ui.horizontal(|ui| {
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Valid from",
+                                    "gis-start",
+                                    &cfg.url,
+                                    &mut cfg.gis_valid_start_field,
+                                    fields,
+                                );
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Valid until",
+                                    "gis-end",
+                                    &cfg.url,
+                                    &mut cfg.gis_valid_end_field,
+                                    fields,
+                                );
+                            });
+                            if cfg.gis_valid_start_field.is_some()
+                                != cfg.gis_valid_end_field.is_some()
+                            {
+                                ui.weak("Choose both date fields to filter by time.");
+                            }
+                            if changed {
+                                self.restyle_gis = Some(cfg.url.clone());
+                            }
                         }
                         ui.separator();
                     }
@@ -173,6 +160,8 @@ impl PlacefileWindow {
                         opacity: 1.0,
                         gis_label_field: None,
                         gis_color_field: None,
+                        gis_valid_start_field: None,
+                        gis_valid_end_field: None,
                     });
                     self.new_url.clear();
                 }
@@ -289,4 +278,30 @@ fn status_line(ui: &mut egui::Ui, st: Option<&PlacefileStatus>) {
         }
         None => {}
     }
+}
+
+fn gis_field_picker(
+    ui: &mut egui::Ui,
+    label: &str,
+    id: &str,
+    url: &str,
+    selected: &mut Option<String>,
+    fields: &[String],
+) -> bool {
+    let response = ui.label(label);
+    if label == "Color" {
+        response.on_hover_text("Numeric columns use a graduated ramp; text categories get distinct colors. Hex colors are used directly.");
+    }
+    let mut changed = false;
+    egui::ComboBox::from_id_salt((id, url))
+        .selected_text(selected.as_deref().unwrap_or("Default"))
+        .show_ui(ui, |ui| {
+            changed |= ui.selectable_value(selected, None, "Default").changed();
+            for field in fields {
+                changed |= ui
+                    .selectable_value(selected, Some(field.clone()), field)
+                    .changed();
+            }
+        });
+    changed
 }

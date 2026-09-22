@@ -447,6 +447,8 @@ mod tests {
                 opacity: 1.0,
                 gis_label_field: None,
                 gis_color_field: None,
+                gis_valid_start_field: None,
+                gis_valid_end_field: None,
             }],
             saved_at: 1_780_000_000,
             bytes: 32.0 * 1024.0 * 1024.0,

@@ -320,16 +320,24 @@ fn append(items: &mut Vec<PlaceItem>, geometry: GeometryValue, label: &str) {
 /// Read a KMZ or zipped Shapefile. Archives are bounded before decompression and Shapefiles must
 /// declare a supported CRS in a matching `.prj`.
 pub fn archive(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
-    archive_styled(name, bytes, None, None).map(|(file, _)| file)
+    archive_with_options(name, bytes, GisImportOptions::default()).map(|(file, _)| file)
 }
 
-/// Import a zipped Shapefile with optional DBF-backed label and color fields. The returned
-/// names are the available DBF columns for the layer's styling controls.
-pub fn archive_styled(
+/// DBF columns selected for a zipped Shapefile. Time filtering applies when both bounds are set.
+#[derive(Default, Clone, Copy)]
+pub struct GisImportOptions<'a> {
+    pub label_field: Option<&'a str>,
+    pub color_field: Option<&'a str>,
+    pub valid_start_field: Option<&'a str>,
+    pub valid_end_field: Option<&'a str>,
+}
+
+/// Import a zipped Shapefile with optional DBF-backed styling and validity. The returned names
+/// are the available DBF columns for the layer controls.
+pub fn archive_with_options(
     name: &str,
     bytes: &[u8],
-    label_field: Option<&str>,
-    color_field: Option<&str>,
+    options: GisImportOptions<'_>,
 ) -> anyhow::Result<(Placefile, Vec<String>)> {
     let files = zip_entries(bytes)?;
     if let Some((entry, content)) = files.iter().find(|(entry, _)| entry.ends_with(".kml")) {
@@ -361,7 +369,7 @@ pub fn archive_styled(
     });
     let style = dbf
         .as_ref()
-        .map(|table| DbfStyle::new(table, label_field, color_field))
+        .map(|table| DbfStyle::new(table, options))
         .transpose()?;
     Ok((
         shapefile(
@@ -469,11 +477,13 @@ struct DbfStyle {
     label: Option<usize>,
     color: Option<usize>,
     numeric: Option<(f64, f64)>,
+    valid_start: Option<usize>,
+    valid_end: Option<usize>,
 }
 
 impl DbfStyle {
-    fn new(table: &DbfTable<'_>, label: Option<&str>, color: Option<&str>) -> anyhow::Result<Self> {
-        let label = match label {
+    fn new(table: &DbfTable<'_>, options: GisImportOptions<'_>) -> anyhow::Result<Self> {
+        let label = match options.label_field {
             Some(name) => Some(table.field(name)?),
             None => table.fields.iter().position(|field| {
                 ["name", "title", "label"]
@@ -481,7 +491,18 @@ impl DbfStyle {
                     .any(|candidate| field.name.eq_ignore_ascii_case(candidate))
             }),
         };
-        let color = color.map(|name| table.field(name)).transpose()?;
+        let color = options
+            .color_field
+            .map(|name| table.field(name))
+            .transpose()?;
+        let valid_start = options
+            .valid_start_field
+            .map(|name| table.field(name))
+            .transpose()?;
+        let valid_end = options
+            .valid_end_field
+            .map(|name| table.field(name))
+            .transpose()?;
         let numeric = color
             .filter(|field| matches!(table.fields[*field].kind, b'N' | b'F'))
             .and_then(|field| {
@@ -504,7 +525,28 @@ impl DbfStyle {
             label,
             color,
             numeric,
+            valid_start,
+            valid_end,
         })
+    }
+
+    fn time(
+        &self,
+        table: &DbfTable<'_>,
+        row: usize,
+    ) -> anyhow::Result<Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>>
+    {
+        let (Some(start), Some(end)) = (self.valid_start, self.valid_end) else {
+            return Ok(None);
+        };
+        let start = dbf_time(&table.value(row, start), false)?;
+        let end = dbf_time(&table.value(row, end), true)?;
+        anyhow::ensure!(
+            start <= end,
+            "DBF validity ends before it starts at record {}",
+            row + 1
+        );
+        Ok(Some((start, end)))
     }
 
     fn color(&self, table: &DbfTable<'_>, row: usize) -> Option<[u8; 3]> {
@@ -549,6 +591,24 @@ impl DbfStyle {
         });
         Some(COLORS[(hash as usize) % COLORS.len()])
     }
+}
+
+fn dbf_time(value: &str, end_of_day: bool) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    use chrono::{NaiveDate, TimeZone, Utc};
+    if let Ok(time) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(time.with_timezone(&Utc));
+    }
+    let date = NaiveDate::parse_from_str(value, "%Y%m%d")
+        .or_else(|_| NaiveDate::parse_from_str(value, "%Y-%m-%d"))
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "invalid DBF UTC date/time '{value}'; use YYYYMMDD, YYYY-MM-DD, or RFC3339"
+            )
+        })?;
+    let seconds = if end_of_day { 86_399 } else { 0 };
+    Ok(Utc.from_utc_datetime(
+        &(date.and_hms_opt(0, 0, 0).unwrap() + chrono::Duration::seconds(seconds)),
+    ))
 }
 
 enum CrsTransform {
@@ -733,6 +793,11 @@ fn shapefile(
                 &mut file.items,
             )?;
             if let Some((table, style)) = dbf.zip(style) {
+                if let Some(time) = style.time(table, features)? {
+                    for item in &mut file.items[first..] {
+                        item.time = Some(time);
+                    }
+                }
                 if let Some(rgb) = style.color(table, features) {
                     for item in &mut file.items[first..] {
                         match &mut item.kind {
@@ -1070,8 +1135,16 @@ mod tests {
             ],
             false,
         );
-        let (file, fields) =
-            archive_styled("layer.zip", &bytes, Some("NAME"), Some("COLOR")).unwrap();
+        let (file, fields) = archive_with_options(
+            "layer.zip",
+            &bytes,
+            GisImportOptions {
+                label_field: Some("NAME"),
+                color_field: Some("COLOR"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(fields, ["NAME", "COLOR"]);
         let PlaceKind::Icon { color, hover, .. } = &file.items[0].kind else {
             panic!("expected icon")
@@ -1085,10 +1158,17 @@ mod tests {
         let lat = pos[1].as_f64().unwrap();
         assert!((-98.0..-96.0).contains(&lon), "longitude: {lon}");
         assert!((34.0..36.0).contains(&lat), "latitude: {lat}");
-        assert!(archive_styled("layer.zip", &bytes, None, Some("MISSING"))
-            .unwrap_err()
-            .to_string()
-            .contains("no attribute"));
+        assert!(archive_with_options(
+            "layer.zip",
+            &bytes,
+            GisImportOptions {
+                color_field: Some("MISSING"),
+                ..Default::default()
+            }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("no attribute"));
         dbf[75] = b'N';
         dbf[110..117].copy_from_slice(b"     42");
         let numeric = test_zip(
@@ -1099,7 +1179,15 @@ mod tests {
             ],
             false,
         );
-        let (file, _) = archive_styled("layer.zip", &numeric, None, Some("COLOR")).unwrap();
+        let (file, _) = archive_with_options(
+            "layer.zip",
+            &numeric,
+            GisImportOptions {
+                color_field: Some("COLOR"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let PlaceKind::Icon { color, .. } = &file.items[0].kind else {
             panic!("expected icon")
         };
@@ -1117,5 +1205,95 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("DBF records are truncated"));
+    }
+
+    #[test]
+    fn dbf_date_columns_set_feature_validity_and_reject_reversed_intervals() {
+        let mut shp = vec![0u8; 128];
+        shp[0..4].copy_from_slice(&9994u32.to_be_bytes());
+        shp[100..104].copy_from_slice(&1u32.to_be_bytes());
+        shp[104..108].copy_from_slice(&10u32.to_be_bytes());
+        shp[108..112].copy_from_slice(&1u32.to_le_bytes());
+        shp[112..120].copy_from_slice(&(-97.0f64).to_le_bytes());
+        shp[120..128].copy_from_slice(&(35.0f64).to_le_bytes());
+
+        let mut dbf = vec![0u8; 114];
+        dbf[4..8].copy_from_slice(&1u32.to_le_bytes());
+        dbf[8..10].copy_from_slice(&97u16.to_le_bytes());
+        dbf[10..12].copy_from_slice(&17u16.to_le_bytes());
+        dbf[32..36].copy_from_slice(b"FROM");
+        dbf[43] = b'D';
+        dbf[48] = 8;
+        dbf[64..69].copy_from_slice(b"UNTIL");
+        dbf[75] = b'D';
+        dbf[80] = 8;
+        dbf[96] = 0x0d;
+        dbf[97] = b' ';
+        dbf[98..106].copy_from_slice(b"20260917");
+        dbf[106..114].copy_from_slice(b"20260919");
+        let table = DbfTable::new(&dbf).unwrap();
+        let style = DbfStyle::new(
+            &table,
+            GisImportOptions {
+                valid_start_field: Some("FROM"),
+                valid_end_field: Some("UNTIL"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let file = shapefile(
+            "case.shp",
+            &shp,
+            &CrsTransform::Wgs84,
+            Some(&table),
+            Some(&style),
+        )
+        .unwrap();
+        let (start, end) = file.items[0].time.unwrap();
+        assert_eq!(start.to_rfc3339(), "2026-09-17T00:00:00+00:00");
+        assert_eq!(end.to_rfc3339(), "2026-09-19T23:59:59+00:00");
+        dbf[98..106].copy_from_slice(b"        ");
+        let table = DbfTable::new(&dbf).unwrap();
+        let style = DbfStyle::new(
+            &table,
+            GisImportOptions {
+                valid_start_field: Some("FROM"),
+                valid_end_field: Some("UNTIL"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(shapefile(
+            "case.shp",
+            &shp,
+            &CrsTransform::Wgs84,
+            Some(&table),
+            Some(&style)
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("invalid DBF UTC date/time"));
+        dbf[98..106].copy_from_slice(b"20260917");
+        dbf[106..114].copy_from_slice(b"20260916");
+        let table = DbfTable::new(&dbf).unwrap();
+        let style = DbfStyle::new(
+            &table,
+            GisImportOptions {
+                valid_start_field: Some("FROM"),
+                valid_end_field: Some("UNTIL"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(shapefile(
+            "case.shp",
+            &shp,
+            &CrsTransform::Wgs84,
+            Some(&table),
+            Some(&style)
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("ends before it starts"));
     }
 }
