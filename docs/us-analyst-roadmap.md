@@ -331,7 +331,7 @@ Instead of waiting for a sweep/volume boundary:
 - [x] decode and publish radial blocks as they arrive
 - [x] update GPU polar texture incrementally
 - [x] preserve previous sweep underneath not-yet-updated azimuths
-- [ ] visually distinguish “new scan”, “old scan” and “not yet received” when analyst scan-progress mode is enabled
+- [x] visually distinguish “new scan”, “old scan” and “not yet received” when analyst scan-progress mode is enabled
 - [x] expose current elevation, VCP, sweep number and scan progress
 - [x] show age since radar timestamp and age since local receipt separately
 - [x] keep animation smooth while updates stream

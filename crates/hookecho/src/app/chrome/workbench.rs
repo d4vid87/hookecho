@@ -24,6 +24,22 @@ impl HookEchoApp {
     pub(crate) fn workbench_inspector_body(&mut self, ui: &mut egui::Ui) {
         ui.heading("Inspector");
         ui.weak("Native values and actual source times");
+        ui.checkbox(&mut self.show_scan_progress, "Scan progress")
+            .on_hover_text("Show which azimuths of the selected radar cut belong to the current live volume");
+        if self.show_scan_progress {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(egui::Color32::from_rgb(80, 220, 255), "New scan");
+                ui.colored_label(egui::Color32::from_rgb(255, 186, 86), "Older scan");
+                ui.colored_label(egui::Color32::from_gray(110), "Not received");
+            });
+            if !self.views[self.active]
+                .volume.as_ref()
+                .and_then(|volume| volume.live_status.as_ref())
+                .is_some_and(|status| status.stream_active && status.volume_start_ms.is_some())
+            {
+                ui.weak("Waiting for live scan updates");
+            }
+        }
         if let Some([lon, lat]) = self.linked_probe {
             ui.label(format!("Probe  {lat:.3}°, {lon:.3}°"));
         } else {
