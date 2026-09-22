@@ -19,25 +19,40 @@ pub fn parse(name: &str, text: &str) -> anyhow::Result<Placefile> {
 pub fn export_geojson(file: &Placefile) -> anyhow::Result<String> {
     let mut features = Vec::new();
     for item in &file.items {
-        if item.anchor.is_some() { continue; }
+        if item.anchor.is_some() {
+            continue;
+        }
         let (geometry, label) = match &item.kind {
-            PlaceKind::Line { pts, .. } if pts.len() >= 2 && pts.iter().all(valid_pos) =>
-                (serde_json::json!({"type":"LineString", "coordinates":pts}), None),
+            PlaceKind::Line { pts, .. } if pts.len() >= 2 && pts.iter().all(valid_pos) => (
+                serde_json::json!({"type":"LineString", "coordinates":pts}),
+                None,
+            ),
             PlaceKind::Polygon { rings, .. } if !rings.is_empty() => {
                 let mut closed = Vec::with_capacity(rings.len());
                 for ring in rings {
-                    anyhow::ensure!(ring.len() >= 3 && ring.iter().all(valid_pos),
-                        "overlay polygon has invalid coordinates");
+                    anyhow::ensure!(
+                        ring.len() >= 3 && ring.iter().all(valid_pos),
+                        "overlay polygon has invalid coordinates"
+                    );
                     let mut ring = ring.clone();
-                    if ring.first() != ring.last() { ring.push(ring[0]); }
+                    if ring.first() != ring.last() {
+                        ring.push(ring[0]);
+                    }
                     closed.push(ring);
                 }
-                (serde_json::json!({"type":"Polygon", "coordinates":closed}), None)
+                (
+                    serde_json::json!({"type":"Polygon", "coordinates":closed}),
+                    None,
+                )
             }
-            PlaceKind::Icon { pos, hover, .. } if valid_pos(pos) =>
-                (serde_json::json!({"type":"Point", "coordinates":pos}), Some(hover)),
-            PlaceKind::Text { pos, text, .. } if valid_pos(pos) =>
-                (serde_json::json!({"type":"Point", "coordinates":pos}), Some(text)),
+            PlaceKind::Icon { pos, hover, .. } if valid_pos(pos) => (
+                serde_json::json!({"type":"Point", "coordinates":pos}),
+                Some(hover),
+            ),
+            PlaceKind::Text { pos, text, .. } if valid_pos(pos) => (
+                serde_json::json!({"type":"Point", "coordinates":pos}),
+                Some(text),
+            ),
             _ => continue,
         };
         features.push(serde_json::json!({
@@ -50,17 +65,25 @@ pub fn export_geojson(file: &Placefile) -> anyhow::Result<String> {
             }
         }));
     }
-    anyhow::ensure!(!features.is_empty(), "overlay has no geographic vectors to export");
+    anyhow::ensure!(
+        !features.is_empty(),
+        "overlay has no geographic vectors to export"
+    );
     let json = serde_json::to_string(&serde_json::json!({
         "type":"FeatureCollection", "features":features
     }))?;
-    anyhow::ensure!(json.len() <= 64 * 1024 * 1024, "GeoJSON export exceeds 64 MB");
+    anyhow::ensure!(
+        json.len() <= 64 * 1024 * 1024,
+        "GeoJSON export exceeds 64 MB"
+    );
     Ok(json)
 }
 
 fn valid_pos(pos: &[f64; 2]) -> bool {
-    pos[0].is_finite() && pos[1].is_finite()
-        && (-180.0..=180.0).contains(&pos[0]) && (-90.0..=90.0).contains(&pos[1])
+    pos[0].is_finite()
+        && pos[1].is_finite()
+        && (-180.0..=180.0).contains(&pos[0])
+        && (-90.0..=90.0).contains(&pos[1])
 }
 
 /// Parse RFC 7946 GeoJSON. Coordinates are WGS84 lon/lat; legacy documents that explicitly
@@ -295,7 +318,7 @@ fn append(items: &mut Vec<PlaceItem>, geometry: GeometryValue, label: &str) {
 }
 
 /// Read a KMZ or zipped Shapefile. Archives are bounded before decompression and Shapefiles must
-/// declare WGS84 in a `.prj`; silently assuming a projected layer is lon/lat is worse than failing.
+/// declare a supported CRS in a matching `.prj`.
 pub fn archive(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
     let files = zip_entries(bytes)?;
     if let Some((entry, content)) = files.iter().find(|(entry, _)| entry.ends_with(".kml")) {
@@ -309,17 +332,75 @@ pub fn archive(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
     let projection = files
         .iter()
         .find(|(entry, _)| entry == &format!("{stem}.prj"))
-        .map(|(_, content)| String::from_utf8_lossy(content).to_ascii_uppercase())
+        .map(|(_, content)| String::from_utf8_lossy(content))
         .ok_or_else(|| {
             anyhow::anyhow!("Shapefile archive is missing its matching .prj CRS file")
         })?;
-    anyhow::ensure!(
-        projection.contains("WGS_1984")
-            || projection.contains("WGS 84")
-            || projection.contains("EPSG\",4326"),
-        "unsupported Shapefile CRS; convert the layer to WGS84 (EPSG:4326)"
-    );
-    shapefile(name, shp)
+    shapefile(name, shp, &CrsTransform::from_wkt(&projection)?)
+}
+
+enum CrsTransform {
+    Wgs84,
+    Projected {
+        from: Box<proj4rs::Proj>,
+        to: Box<proj4rs::Proj>,
+    },
+}
+
+impl CrsTransform {
+    fn from_wkt(wkt: &str) -> anyhow::Result<Self> {
+        let upper = wkt.trim().to_ascii_uppercase();
+        // Root geographic WGS84 is already lon/lat. Do not mistake the nested GEOGCS in a
+        // projected WKT for an unprojected layer.
+        if (upper.starts_with("GEOGCS[") || upper.starts_with("GEOGCRS["))
+            && (upper.contains("WGS_1984") || upper.contains("WGS 84"))
+        {
+            return Ok(Self::Wgs84);
+        }
+        anyhow::ensure!(
+            upper.contains("WGS_1984")
+                || upper.contains("WGS 84")
+                || upper.contains("NAD83")
+                || upper.contains("NORTH_AMERICAN_DATUM_1983"),
+            "unsupported Shapefile datum; WGS84 or NAD83 is required"
+        );
+        let definition = proj4wkt::wkt_to_projstring(wkt)
+            .map_err(|error| anyhow::anyhow!("unsupported Shapefile CRS: {error}"))?;
+        let from = proj4rs::Proj::from_proj_string(&definition)
+            .map_err(|error| anyhow::anyhow!("invalid Shapefile projection: {error}"))?;
+        let to = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs")
+            .map_err(|error| anyhow::anyhow!("WGS84 projection unavailable: {error}"))?;
+        Ok(Self::Projected {
+            from: Box::new(from),
+            to: Box::new(to),
+        })
+    }
+
+    fn point(&self, x: f64, y: f64) -> anyhow::Result<[f64; 2]> {
+        anyhow::ensure!(
+            x.is_finite() && y.is_finite(),
+            "Shapefile coordinate is not finite"
+        );
+        let pos = match self {
+            Self::Wgs84 => [x, y],
+            Self::Projected { from, to } => {
+                let mut point = if from.is_latlong() {
+                    (x.to_radians(), y.to_radians(), 0.0)
+                } else {
+                    (x, y, 0.0)
+                };
+                proj4rs::transform::transform(from, to, &mut point).map_err(|error| {
+                    anyhow::anyhow!("Shapefile coordinate transformation failed: {error}")
+                })?;
+                [point.0.to_degrees(), point.1.to_degrees()]
+            }
+        };
+        anyhow::ensure!(
+            valid_pos(&pos),
+            "Shapefile coordinate is outside WGS84 lon/lat bounds"
+        );
+        Ok(pos)
+    }
 }
 
 fn zip_entries(bytes: &[u8]) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
@@ -394,7 +475,7 @@ fn le_u16(bytes: &[u8], offset: usize) -> anyhow::Result<u16> {
     Ok(u16::from_le_bytes(value.try_into().expect("two bytes")))
 }
 
-fn shapefile(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
+fn shapefile(name: &str, bytes: &[u8], crs: &CrsTransform) -> anyhow::Result<Placefile> {
     anyhow::ensure!(bytes.len() >= 100, "Shapefile header is truncated");
     anyhow::ensure!(be_u32(bytes, 0)? == 9994, "invalid Shapefile header");
     let mut file = Placefile {
@@ -417,7 +498,7 @@ fn shapefile(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
             .checked_add(length)
             .filter(|end| *end <= bytes.len())
             .ok_or_else(|| anyhow::anyhow!("Shapefile record is truncated"))?;
-        parse_shape(&bytes[offset..end], name, &mut file.items)?;
+        parse_shape(&bytes[offset..end], name, crs, &mut file.items)?;
         offset = end;
         features += 1;
         anyhow::ensure!(features <= 100_000, "Shapefile exceeds 100,000 features");
@@ -429,11 +510,16 @@ fn shapefile(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
     Ok(file)
 }
 
-fn parse_shape(bytes: &[u8], label: &str, items: &mut Vec<PlaceItem>) -> anyhow::Result<()> {
+fn parse_shape(
+    bytes: &[u8],
+    label: &str,
+    crs: &CrsTransform,
+    items: &mut Vec<PlaceItem>,
+) -> anyhow::Result<()> {
     let kind = le_u32(bytes, 0)?;
     match kind {
         0 | 31 => {}
-        1 | 11 | 21 => push_shp_point(items, shp_point(bytes, 4)?, label),
+        1 | 11 | 21 => push_shp_point(items, shp_point(bytes, 4, crs)?, label),
         3 | 5 | 13 | 15 | 23 | 25 => {
             anyhow::ensure!(bytes.len() >= 44, "Shapefile path is truncated");
             let parts = le_u32(bytes, 36)? as usize;
@@ -465,8 +551,8 @@ fn parse_shape(bytes: &[u8], label: &str, items: &mut Vec<PlaceItem>) -> anyhow:
                     "invalid Shapefile part index"
                 );
                 let points: Vec<_> = (first..last)
-                    .filter_map(|index| shp_point(bytes, point_start + index * 16).ok())
-                    .collect();
+                    .map(|index| shp_point(bytes, point_start + index * 16, crs))
+                    .collect::<anyhow::Result<_>>()?;
                 if polygon {
                     if points.len() >= 3 {
                         rings.push(points);
@@ -496,9 +582,7 @@ fn parse_shape(bytes: &[u8], label: &str, items: &mut Vec<PlaceItem>) -> anyhow:
                 "Shapefile multipoint is truncated"
             );
             for index in 0..count {
-                if let Ok(point) = shp_point(bytes, 40 + index * 16) {
-                    push_shp_point(items, point, label);
-                }
+                push_shp_point(items, shp_point(bytes, 40 + index * 16, crs)?, label);
             }
         }
         other => anyhow::bail!("unsupported Shapefile shape type {other}"),
@@ -516,17 +600,8 @@ fn push_shp_point(items: &mut Vec<PlaceItem>, pos: [f64; 2], label: &str) {
     }));
 }
 
-fn shp_point(bytes: &[u8], offset: usize) -> anyhow::Result<[f64; 2]> {
-    let lon = le_f64(bytes, offset)?;
-    let lat = le_f64(bytes, offset + 8)?;
-    anyhow::ensure!(
-        lon.is_finite()
-            && lat.is_finite()
-            && (-180.0..=180.0).contains(&lon)
-            && (-90.0..=90.0).contains(&lat),
-        "Shapefile coordinate is outside WGS84 lon/lat bounds"
-    );
-    Ok([lon, lat])
+fn shp_point(bytes: &[u8], offset: usize, crs: &CrsTransform) -> anyhow::Result<[f64; 2]> {
+    crs.point(le_f64(bytes, offset)?, le_f64(bytes, offset + 8)?)
 }
 
 fn le_u32(bytes: &[u8], offset: usize) -> anyhow::Result<u32> {
@@ -565,9 +640,18 @@ mod tests {
         let exported = export_geojson(&file).unwrap();
         let json: serde_json::Value = serde_json::from_str(&exported).unwrap();
         assert_eq!(json["features"].as_array().unwrap().len(), 3);
-        assert_eq!(json["features"][0]["geometry"]["coordinates"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            json["features"][0]["geometry"]["coordinates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(json["features"][2]["properties"]["label"], "Site");
-        assert_eq!(geojson("roundtrip.geojson", &exported).unwrap().items.len(), 3);
+        assert_eq!(
+            geojson("roundtrip.geojson", &exported).unwrap().items.len(),
+            3
+        );
     }
 
     #[test]
@@ -695,5 +779,29 @@ mod tests {
             false,
         );
         assert_eq!(archive("layer.zip", &bytes).unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn transforms_projected_shapefile_coordinates_before_import() {
+        let wkt = r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Mercator_1SP"],PARAMETER["central_meridian",0],PARAMETER["scale_factor",1],PARAMETER["false_easting",0],PARAMETER["false_northing",0],UNIT["metre",1]]"#;
+        let mut shp = vec![0u8; 128];
+        shp[0..4].copy_from_slice(&9994u32.to_be_bytes());
+        shp[24..28].copy_from_slice(&64u32.to_be_bytes());
+        shp[28..32].copy_from_slice(&1000u32.to_le_bytes());
+        shp[32..36].copy_from_slice(&1u32.to_le_bytes());
+        shp[100..104].copy_from_slice(&1u32.to_be_bytes());
+        shp[104..108].copy_from_slice(&10u32.to_be_bytes());
+        shp[108..112].copy_from_slice(&1u32.to_le_bytes());
+        shp[112..120].copy_from_slice(&(-10_798_000.0f64).to_le_bytes());
+        shp[120..128].copy_from_slice(&(4_139_370.0f64).to_le_bytes());
+        let bytes = test_zip(&[("layer.shp", &shp), ("layer.prj", wkt.as_bytes())], false);
+        let file = archive("layer.zip", &bytes).unwrap();
+        let exported: serde_json::Value =
+            serde_json::from_str(&export_geojson(&file).unwrap()).unwrap();
+        let pos = &exported["features"][0]["geometry"]["coordinates"];
+        let lon = pos[0].as_f64().unwrap();
+        let lat = pos[1].as_f64().unwrap();
+        assert!((-98.0..-96.0).contains(&lon), "longitude: {lon}");
+        assert!((34.0..36.0).contains(&lat), "latitude: {lat}");
     }
 }

@@ -4508,6 +4508,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
+name = "proj4rs"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9a8e6a70c71f11595fa32f9128ebe56f1d986ad380db858799640a1039a0e2"
+dependencies = [
+ "console_log",
+ "js-sys",
+ "thiserror 2.0.18",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "proj4wkt"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "098a0cc36b6bfd623f7a34354be6f6bd7ac3621e96ccaf2cf08720f28868203d"
+dependencies = [
+ "console_log",
+ "js-sys",
+ "nom 8.0.0",
+ "thiserror 1.0.69",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7346,6 +7373,8 @@ dependencies = [
  "nexrad-level3",
  "nexrad-model",
  "postcard",
+ "proj4rs",
+ "proj4wkt",
  "rayon",
  "reqwest 0.12.28",
  "serde",
