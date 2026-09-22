@@ -16423,10 +16423,13 @@ impl HookEchoApp {
                         self.request_capture(ui.ctx(), ShotDest::Clipboard);
                     }
                     if ui.button("Export active field CSV…").clicked() {
-                        self.export_active_field(false);
+                        self.export_active_field("csv");
                     }
                     if ui.button("Export active field GeoTIFF…").clicked() {
-                        self.export_active_field(true);
+                        self.export_active_field("tif");
+                    }
+                    if ui.button("Export active field NetCDF…").clicked() {
+                        self.export_active_field("nc");
                     }
                     toggle(ui, &mut self.settings.share_card, "Caption shared images")
                         .on_hover_text(
@@ -16569,7 +16572,8 @@ impl HookEchoApp {
         });
     }
 
-    fn export_active_field(&mut self, geotiff: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_active_field(&mut self, ext: &str) {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| self.views[self.active].fields_on.contains(layer))
@@ -16579,22 +16583,25 @@ impl HookEchoApp {
             self.toast(ToastKind::Info, "No scalar field is active");
             return;
         };
-        let ext = if geotiff { "tif" } else { "csv" };
         let name = format!("hookecho-{}.{}", frame.descriptor.id.0, ext);
         let Some(path) = crate::dialog::save_path(&name, ext) else {
             return;
         };
-        let result = std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|file| {
-            let output = std::io::BufWriter::new(file);
-            if geotiff {
-                frame.write_geotiff(output).map(|()| None)
-            } else {
-                frame.write_csv(output).map(Some).map_err(anyhow::Error::from)
-            }
-        });
+        let result = if ext == "nc" {
+            frame.write_netcdf(&path).map(|()| None)
+        } else {
+            std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|file| {
+                let output = std::io::BufWriter::new(file);
+                if ext == "tif" {
+                    frame.write_geotiff(output).map(|()| None)
+                } else {
+                    frame.write_csv(output).map(Some).map_err(anyhow::Error::from)
+                }
+            })
+        };
         match result {
             Ok(Some(rows)) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
-            Ok(None) => self.toast(ToastKind::Success, "Exported native-value GeoTIFF"),
+            Ok(None) => self.toast(ToastKind::Success, "Exported native-value field"),
             Err(error) => {
                 let _ = std::fs::remove_file(&path);
                 self.toast(ToastKind::Error, format!("Field export failed: {error}"));

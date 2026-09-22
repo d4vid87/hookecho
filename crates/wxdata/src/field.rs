@@ -533,6 +533,55 @@ impl FieldFrame {
         image.write_data(&self.field.values)?;
         Ok(())
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn write_netcdf(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        use netcdf3::{DataSet, FileWriter, Version, NC_FILL_F32};
+        fn nc<T, E: std::fmt::Debug>(result: Result<T, E>) -> anyhow::Result<T> {
+            result.map_err(|error| anyhow::anyhow!("{error:?}"))
+        }
+        anyhow::ensure!(self.native_abi.is_none() && self.grid.projection == "EPSG:4326",
+            "NetCDF requires a native geographic scalar grid");
+        let grid = &self.grid;
+        anyhow::ensure!(grid.nx > 0 && grid.ny > 0 && grid.nx.checked_mul(grid.ny) == Some(self.field.values.len()),
+            "invalid field grid dimensions");
+        let dx = (grid.lon_east - grid.lon_west) / grid.nx as f64;
+        let dy = (grid.lat_north - grid.lat_south) / grid.ny as f64;
+        anyhow::ensure!(dx.is_finite() && dy.is_finite() && dx > 0.0 && dy > 0.0,
+            "invalid geographic grid bounds");
+        let mut data = DataSet::new();
+        nc(data.add_fixed_dim("time", 1))?;
+        nc(data.add_fixed_dim("latitude", grid.ny))?;
+        nc(data.add_fixed_dim("longitude", grid.nx))?;
+        nc(data.add_var_f64("time", &["time"]))?;
+        nc(data.add_var_f64("latitude", &["latitude"]))?;
+        nc(data.add_var_f64("longitude", &["longitude"]))?;
+        nc(data.add_var_f32("value", &["time", "latitude", "longitude"]))?;
+        nc(data.add_global_attr_string("Conventions", "CF-1.8"))?;
+        nc(data.add_global_attr_string("product_id", self.descriptor.id.0))?;
+        nc(data.add_global_attr_string("source_id", self.descriptor.source_id().0))?;
+        nc(data.add_global_attr_string("source_identity", &self.stamp.source_identity))?;
+        nc(data.add_global_attr_string("received_time", self.stamp.received_time.to_rfc3339()))?;
+        nc(data.add_global_attr_string("quality", self.stamp.quality.label()))?;
+        nc(data.add_var_attr_string("time", "units", "seconds since 1970-01-01 00:00:00 UTC"))?;
+        nc(data.add_var_attr_string("time", "calendar", "gregorian"))?;
+        nc(data.add_var_attr_string("latitude", "units", "degrees_north"))?;
+        nc(data.add_var_attr_string("longitude", "units", "degrees_east"))?;
+        nc(data.add_var_attr_string("value", "units", self.descriptor.units))?;
+        nc(data.add_var_attr_string("value", "long_name", self.descriptor.display_name))?;
+        nc(data.add_var_attr_f32("value", "_FillValue", vec![NC_FILL_F32]))?;
+        let lats: Vec<_> = (0..grid.ny).map(|y| grid.lat_north - (y as f64 + 0.5) * dy).collect();
+        let lons: Vec<_> = (0..grid.nx).map(|x| grid.lon_west + (x as f64 + 0.5) * dx).collect();
+        let values: Vec<_> = self.field.values.iter().map(|&v| if v.is_finite() { v } else { NC_FILL_F32 }).collect();
+        let mut writer = nc(FileWriter::open(path))?;
+        nc(writer.set_def(&data, Version::Offset64Bit, 0))?;
+        nc(writer.write_var_f64("time", &[self.stamp.valid_time.timestamp_millis() as f64 / 1000.0]))?;
+        nc(writer.write_var_f64("latitude", &lats))?;
+        nc(writer.write_var_f64("longitude", &lons))?;
+        nc(writer.write_var_f32("value", &values))?;
+        nc(writer.close())?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -642,6 +691,24 @@ mod tests {
         assert_eq!(decoded.get_tag_ascii_string(tiff::tags::Tag::GdalNodata).unwrap(), "nan");
         let tiff::decoder::DecodingResult::F32(values) = decoded.read_image().unwrap() else { panic!("expected native float grid") };
         assert!(values[1].is_nan());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path = std::env::temp_dir().join(format!(
+                "hookecho-field-{}-{}.nc", std::process::id(), valid.timestamp_nanos_opt().unwrap()
+            ));
+            missing_frame.write_netcdf(&path).unwrap();
+            let mut reader = netcdf3::FileReader::open(&path).unwrap();
+            assert_eq!(reader.data_set().get_global_attr_as_string("Conventions").as_deref(), Some("CF-1.8"));
+            assert_eq!(reader.data_set().get_var_attr_as_string("value", "units").as_deref(), Some("unit"));
+            assert_eq!(reader.read_var_f64("latitude").unwrap(), vec![39.5, 38.5]);
+            assert_eq!(reader.read_var_f64("longitude").unwrap(), vec![-99.5, -98.5]);
+            assert_eq!(reader.read_var_f64("time").unwrap()[0], valid.timestamp_millis() as f64 / 1000.0);
+            let values = reader.read_var_f32("value").unwrap();
+            assert_eq!(values[0], 1.0);
+            assert_eq!(values[1], netcdf3::NC_FILL_F32);
+            drop(reader);
+            std::fs::remove_file(path).unwrap();
+        }
 
         let stats = frame
             .statistics_in_box([-100.0, 38.0], [-99.0, 40.0])
