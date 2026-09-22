@@ -104,6 +104,8 @@ pub struct Update {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScanStatus {
     pub provider: &'static str,
+    /// Timestamp encoded in the current live volume's object prefix, independent of upload time.
+    pub volume_start_ms: Option<i64>,
     pub vcp: u16,
     pub cuts_received: usize,
     pub cuts_expected: usize,
@@ -444,6 +446,7 @@ async fn emit<F: FnMut(Update)>(
         changed,
         status: ScanStatus {
             provider: PUBLIC_PROVIDER.label(),
+            volume_start_ms: it.current().map(|id| id.date_time_prefix().and_utc().timestamp_millis()),
             vcp,
             cuts_received: *cuts_received,
             cuts_expected,
@@ -595,6 +598,7 @@ mod tests {
     fn scan_status_summary_reports_progress_and_latency() {
         let mut status = ScanStatus {
             provider: "test",
+            volume_start_ms: Some(0),
             vcp: 212,
             cuts_received: 3,
             cuts_expected: 14,
@@ -731,6 +735,20 @@ mod tests {
             ),
             Some(Duration::from_secs(300)),
         );
+    }
+
+    #[test]
+    fn partial_live_scan_progress_keeps_new_old_and_unreceived_distinct() {
+        use crate::level2::{azimuth_age, AzimuthAge, Moment};
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..4, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge(1, 0..2, 301_000)]);
+        let (merged, _) = merge_scan(&base, partial);
+        let ages = azimuth_age(&merged, Moment::Reflectivity, 0, 300_000).unwrap();
+        assert_eq!(ages[0], AzimuthAge::Current);
+        assert_eq!(ages[1], AzimuthAge::Current);
+        assert_eq!(ages[2], AzimuthAge::Older);
+        assert_eq!(ages[3], AzimuthAge::Older);
+        assert_eq!(ages[4], AzimuthAge::Missing);
     }
 
     #[test]

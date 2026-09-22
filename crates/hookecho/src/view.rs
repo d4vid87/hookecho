@@ -400,6 +400,7 @@ mod tests {
     fn live_status() -> wxdata::live::ScanStatus {
         wxdata::live::ScanStatus {
             provider: "test",
+            volume_start_ms: Some(0),
             vcp: 212,
             cuts_received: 1,
             cuts_expected: 14,

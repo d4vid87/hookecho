@@ -3217,6 +3217,8 @@ pub struct HookEchoApp {
     tropical_text_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
     /// Range rings + azimuth spokes around the active site (feature HH).
     show_range_rings: bool,
+    /// Optional live-scan azimuth age ring in the analyst workbench.
+    show_scan_progress: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
     show_radar_sites: bool,
     /// Beam-vs-terrain blockage shading: the resident raster, what it was built for, and the
@@ -4135,6 +4137,7 @@ impl HookEchoApp {
             tropical_window: ui::tropical_window::TropicalWindow::default(),
             tropical_text_rx: None,
             show_range_rings: false,
+            show_scan_progress: false,
             show_radar_sites: true,
             show_blockage: false,
             blockage_tex: None,
@@ -15432,6 +15435,26 @@ impl HookEchoApp {
             }
         }
 
+        if self.show_scan_progress && view.show_radar {
+            if let Some((volume, start)) = view.volume.as_ref().and_then(|volume| {
+                volume.live_status.as_ref()
+                    .filter(|status| status.stream_active)
+                    .and_then(|status| Some((volume, status.volume_start_ms?)))
+            }) {
+                if let (Some(site), Some(ages)) = (
+                    volume.scan.site(),
+                    level2::azimuth_age(&volume.scan, view.moment, view.tilt, start),
+                ) {
+                    let world = crate::render::mercator::lonlat_to_world(
+                        site.longitude() as f64,
+                        site.latitude() as f64,
+                    );
+                    let (x, y) = cam.world_to_screen(world, vp);
+                    paint_scan_progress(&painter, egui::pos2(prect.left() + x, prect.top() + y), &ages);
+                }
+            }
+        }
+
         // Larger radar buttons with named pills when zoomed in. The exact site stays marked even
         // when its pill loses a label collision. Click handled in the Interrogate tool.
         if self.show_radar_sites {
@@ -18236,6 +18259,44 @@ fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: boo
 
 fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
     !next_pending && !gesture_live
+}
+
+fn paint_scan_progress(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    ages: &[level2::AzimuthAge; 720],
+) {
+    use level2::AzimuthAge;
+    let radius = 17.0;
+    painter.circle_stroke(
+        center,
+        radius,
+        egui::Stroke::new(3.0, egui::Color32::from_gray(110)),
+    );
+    let point = |bin: usize| {
+        let angle = (bin as f32 * 0.5).to_radians();
+        center + egui::vec2(radius * angle.sin(), -radius * angle.cos())
+    };
+    let mut start = 0;
+    while start < ages.len() {
+        let age = ages[start];
+        let mut end = start + 1;
+        while end < ages.len() && ages[end] == age {
+            end += 1;
+        }
+        let color = match age {
+            AzimuthAge::Current => Some(egui::Color32::from_rgb(80, 220, 255)),
+            AzimuthAge::Older => Some(egui::Color32::from_rgb(255, 186, 86)),
+            AzimuthAge::Missing => None,
+        };
+        if let Some(color) = color {
+            painter.add(egui::Shape::line(
+                (start..=end).map(point).collect(),
+                egui::Stroke::new(3.0, color),
+            ));
+        }
+        start = end;
+    }
 }
 
 fn radar_site_pill(site: egui::Pos2, map: egui::Rect, selected: bool) -> egui::Rect {
@@ -21624,6 +21685,19 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scan_progress_ring_paints_missing_old_and_new_segments() {
+        use wxdata::level2::AzimuthAge;
+        let mut ages = [AzimuthAge::Missing; 720];
+        ages[0] = AzimuthAge::Older;
+        ages[1] = AzimuthAge::Current;
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::paint_scan_progress(ui.painter(), egui::pos2(40.0, 40.0), &ages);
+        });
+        assert_eq!(output.shapes.len(), 3);
+    }
+
     #[test]
     fn analyst_presets_use_existing_products_and_reject_unknown_ids() {
         use crate::render::FieldLayer as F;

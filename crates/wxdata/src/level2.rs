@@ -750,6 +750,45 @@ fn selected_sweep(scan: &Scan, moment: Moment, tilt: usize) -> Option<&Sweep> {
         .map(|(_, sweep)| sweep)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AzimuthAge {
+    Missing,
+    Older,
+    Current,
+}
+
+/// Coverage of the displayed sweep in half-degree azimuths. The live object prefix identifies
+/// this scan; retained gates keep their earlier collection timestamps.
+pub fn azimuth_age(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    volume_start_ms: i64,
+) -> Option<[AzimuthAge; 720]> {
+    let sweep = selected_sweep(scan, moment, tilt)?;
+    let mut ages = [AzimuthAge::Missing; 720];
+    for radial in sweep.radials() {
+        if moment.select(radial).is_none() {
+            continue;
+        }
+        let az = radial.azimuth_angle_degrees().rem_euclid(360.0);
+        let bin = (az * 2.0) as usize % 720;
+        let width = (radial.azimuth_spacing_degrees() * 2.0).round().max(1.0) as usize;
+        let age = if radial.collection_timestamp() >= volume_start_ms {
+            AzimuthAge::Current
+        } else {
+            AzimuthAge::Older
+        };
+        for offset in 0..width.min(720) {
+            let cell = &mut ages[(bin + 720 - offset) % 720];
+            if *cell == AzimuthAge::Missing || age == AzimuthAge::Current {
+                *cell = age;
+            }
+        }
+    }
+    Some(ages)
+}
+
 /// Which moments this volume actually carries, indexed by [`Moment::index`].
 ///
 /// Not every radar sends everything: a TDWR has only reflectivity and velocity, and volumes from
@@ -1381,6 +1420,10 @@ mod tests {
     }
 
     fn radial_with_at(moment: Moment, elevation: f32, collected_at: i64) -> Radial {
+        radial_with_at_az(moment, elevation, collected_at, 0)
+    }
+
+    fn radial_with_at_az(moment: Moment, elevation: f32, collected_at: i64, azimuth: u16) -> Radial {
         let raw = vec![106u8];
         let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, raw);
         let (refl, vel) = match moment {
@@ -1390,8 +1433,8 @@ mod tests {
         };
         Radial::new(
             collected_at,
-            0,
-            0.0,
+            azimuth,
+            azimuth as f32 * 0.5,
             0.5,
             nexrad_model::data::RadialStatus::ScanStart,
             1,
@@ -1480,6 +1523,20 @@ mod tests {
         );
         let sample = sample_native(&scan, Moment::Reflectivity, 0, -97.28, 35.35).unwrap();
         assert_eq!(sample.collected_at.timestamp_millis(), 3_000);
+    }
+
+    #[test]
+    fn scan_progress_distinguishes_current_older_and_missing_azimuths() {
+        let sweep = Sweep::new(1, vec![
+            radial_with_at_az(Moment::Reflectivity, 0.5, 1_000, 0),
+            radial_with_at_az(Moment::Reflectivity, 0.5, 3_000, 1),
+        ]);
+        let scan = Scan::new(minimal_vcp(), vec![sweep]);
+        let age = azimuth_age(&scan, Moment::Reflectivity, 0, 2_000).unwrap();
+        assert_eq!(age[0], AzimuthAge::Older);
+        assert_eq!(age[1], AzimuthAge::Current);
+        assert_eq!(age[2], AzimuthAge::Missing);
+        assert!(azimuth_age(&scan, Moment::Velocity, 0, 2_000).is_none());
     }
 
     /// The AWS archive reaches back to June 1991 — a decade earlier than the app used to claim.
