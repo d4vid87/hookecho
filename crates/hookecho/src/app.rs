@@ -263,6 +263,7 @@ enum OverlayMsg {
     Wind(Box<crate::wind_draw::WindField>),
     /// Nearest-station observations for a site (or an error string).
     Obs(String, Result<wxdata::obs::StationObs, String>),
+    SensorHrrr(String, Vec<wxdata::hrrr::PointTemperature>),
     /// VAD wind profile for a site.
     Vwp(String, Vec<wxdata::level3::VwpLevel>),
     /// Archived storm-based warnings for a 5-min UTC bucket (feature W).
@@ -390,6 +391,7 @@ enum OverlaySource {
         lat: f64,
         lon: f64,
     },
+    SensorHrrr { station: String, lon: f64, lat: f64 },
     /// VAD wind profile for `site`.
     Vwp(String),
     /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
@@ -484,7 +486,8 @@ impl RequestLane {
                 "mPING reports" | "Power outages" | "River gauges" | "Electric field"
                 | "VAD profile" | "Archived warnings" => 300,
                 "Webcams" => 480,
-                "Hurricane reconnaissance" | "Aviation advisories" | "Radar observations" => 600,
+                "Hurricane reconnaissance" | "Aviation advisories" | "Radar observations"
+                | "HRRR station temperature" => 600,
                 "Tropical cyclones" | "Wildfires" | "Air quality"
                 | "Temporary flight restrictions" | "Wind particles" | "Freezing levels"
                 | "Model contours" => 900,
@@ -621,6 +624,7 @@ impl OverlaySource {
             Self::GoesRgb(..) => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
+            Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
             Self::ArchiveWarnings(..) => RequestLane::Feed("Archived warnings"),
             Self::Aviation => RequestLane::Feed("Aviation advisories"),
@@ -1031,6 +1035,9 @@ impl OverlaySource {
                     .await
                     .map_err(|e| e.to_string());
                 OverlayMsg::Obs(site, r)
+            }
+            OverlaySource::SensorHrrr { station, lon, lat } => {
+                OverlayMsg::SensorHrrr(station, wxdata::hrrr::fetch_point_temperature_trace(http, lon, lat).await?)
             }
             OverlaySource::Vwp(site) => {
                 let levels = wxdata::level3::fetch_vwp(http, &site).await;
@@ -3036,6 +3043,8 @@ pub struct HookEchoApp {
     sensor_history: ui::sensor_window::PointHistory,
     sensor_site: Option<String>,
     sensor_last_fetch: Option<Instant>,
+    sensor_hrrr_station: Option<String>,
+    sensor_hrrr_last_fetch: Option<Instant>,
     /// VAD hodograph: open flag, latest profile, its site, and a refresh clock.
     show_hodo: bool,
     hodo_data: Vec<wxdata::level3::VwpLevel>,
@@ -3868,6 +3877,8 @@ impl HookEchoApp {
             sensor_history: Default::default(),
             sensor_site: None,
             sensor_last_fetch: None,
+            sensor_hrrr_station: None,
+            sensor_hrrr_last_fetch: None,
             show_hodo: false,
             hodo_data: Vec::new(),
             hodo_history: std::collections::VecDeque::new(),
@@ -9088,6 +9099,12 @@ impl HookEchoApp {
                     if self.views[self.active].site.as_deref() == Some(site.as_str()) {
                         self.sensor_data = Some(res);
                         self.sensor_site = Some(site);
+                    }
+                }
+                OverlayMsg::SensorHrrr(station, points) => {
+                    if self.sensor_data.as_ref().and_then(|data| data.as_ref().ok())
+                        .is_some_and(|current| current.station_id == station) {
+                        self.sensor_history.record_hrrr(&station, &points);
                     }
                 }
                 OverlayMsg::Vwp(site, levels) => {
@@ -19247,6 +19264,20 @@ impl eframe::App for HookEchoApp {
                             },
                         );
                     }
+                }
+            }
+        }
+        if self.show_sensors
+            && self.sensor_site.as_deref() == self.views[self.active].site.as_deref()
+        {
+            if let Some((station, (lon, lat))) = self.sensor_data.as_ref()
+                .and_then(|data| data.as_ref().ok())
+                .and_then(|station| station.location.map(|point| (station.station_id.clone(), point))) {
+                if self.sensor_hrrr_station.as_deref() != Some(station.as_str())
+                    || self.sensor_hrrr_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600) {
+                    self.sensor_hrrr_station = Some(station.clone());
+                    self.sensor_hrrr_last_fetch = Some(Instant::now());
+                    self.spawn_overlay(ctx, OverlaySource::SensorHrrr { station, lon, lat });
                 }
             }
         }

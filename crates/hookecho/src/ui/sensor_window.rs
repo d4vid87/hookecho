@@ -12,6 +12,7 @@ const KMH_TO_MPH: f32 = 0.621_371;
 pub struct PointHistory {
     pub site: String,
     analysis: Vec<Reading>,
+    hrrr: Vec<Reading>,
     forecast: Vec<Reading>,
 }
 
@@ -35,6 +36,7 @@ impl PointHistory {
         if self.site != site {
             self.site = site.to_string();
             self.analysis.clear();
+            self.hrrr.clear();
             self.forecast.clear();
         }
         for (series, frame) in [(&mut self.analysis, analysis), (&mut self.forecast, forecast)] {
@@ -52,6 +54,24 @@ impl PointHistory {
                 });
                 series.sort_by_key(|reading| reading.valid);
                 if series.len() > 72 { series.remove(0); }
+            }
+        }
+    }
+
+    pub fn record_hrrr(&mut self, station: &str, points: &[wxdata::hrrr::PointTemperature]) {
+        if self.site != station { return; }
+        for point in points {
+            if !point.kelvin.is_finite() { continue; }
+            if let Some(old) = self.hrrr.iter_mut().find(|old|
+                old.valid == point.stamp.valid_time && old.run == point.stamp.run_time) {
+                old.temp_k = point.kelvin;
+            } else {
+                self.hrrr.push(Reading {
+                    valid: point.stamp.valid_time, run: point.stamp.run_time,
+                    source: point.stamp.source_identity.clone(), temp_k: point.kelvin,
+                });
+                self.hrrr.sort_by_key(|reading| reading.valid);
+                if self.hrrr.len() > 72 { self.hrrr.remove(0); }
             }
         }
     }
@@ -188,10 +208,10 @@ fn dashboard(
             ui.separator();
             ui.strong(format!("Loaded temperature history at {}", station.station_id));
             ui.weak("Only frames viewed this session are included; observation history above covers 24 hours.");
-            if history.analysis.is_empty() && history.forecast.is_empty() {
-                ui.weak("Enable a surface temperature analysis or global temperature forecast layer to compare.");
+            if history.analysis.is_empty() && history.hrrr.is_empty() && history.forecast.is_empty() {
+                ui.weak("Enable a surface temperature analysis or global temperature forecast layer, or wait for HRRR samples.");
             }
-            for (label, series) in [("Surface analysis", &history.analysis), ("Forecast", &history.forecast)] {
+            for (label, series) in [("Surface analysis", &history.analysis), ("HRRR analysis + forecast", &history.hrrr), ("Global forecast", &history.forecast)] {
                 if !series.is_empty() {
                     ui.label(format!("{label} · {} valid times", series.len()));
                     for reading in series.iter().rev().take(8) {
@@ -200,7 +220,10 @@ fn dashboard(
                                 c_to_f(reading.temp_k - 273.15) - c_to_f(observed),
                                 (time - reading.valid).num_minutes().abs()))
                             .unwrap_or_default();
-                        ui.weak(format!("{} · {} UTC · {:.1} °F{bias}",
+                        let lead = reading.run.map(|run| if run == reading.valid { "analysis".to_string() }
+                            else { format!("f+{} h", (reading.valid - run).num_hours()) })
+                            .unwrap_or_default();
+                        ui.weak(format!("{} {lead} · {} UTC · {:.1} °F{bias}",
                             source_label(&reading.source), reading.valid.format("%Y-%m-%d %H:%M"),
                             c_to_f(reading.temp_k - 273.15)));
                     }
@@ -229,6 +252,7 @@ fn source_label(identity: &str) -> &'static str {
     else if identity.contains("/rtma/") { "RTMA" }
     else if identity.contains("noaa-gefs") { "GEFS" }
     else if identity.contains("noaa-gfs") { "GFS" }
+    else if identity.contains("noaa-hrrr") { "HRRR" }
     else if identity.contains("ecmwf") { "ECMWF" }
     else { "Other source" }
 }
@@ -291,6 +315,14 @@ mod tests {
         history.record("KBBB", -99.5, 39.5, Some(&frame(1)), None);
         assert_eq!(history.analysis.len(), 1);
         assert_eq!(history.site, "KBBB");
+        let point = wxdata::hrrr::PointTemperature {
+            stamp: frame(0).stamp,
+            kelvin: 301.0,
+        };
+        history.record_hrrr("KAAA", std::slice::from_ref(&point));
+        assert!(history.hrrr.is_empty(), "late result from old station is ignored");
+        history.record_hrrr("KBBB", &[point.clone(), point]);
+        assert_eq!(history.hrrr.len(), 1);
     }
 
     #[test]
