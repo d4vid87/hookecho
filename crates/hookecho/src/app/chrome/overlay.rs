@@ -61,6 +61,11 @@ impl HookEchoApp {
         if self.primary_surface() != PrimarySurface::Panel {
             return;
         }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.panel_open = false;
+            self.sidebar_focus_search = false;
+            return;
+        }
         crate::prof_scope!("panel");
         self.hint(
             "info_links",
