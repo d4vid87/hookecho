@@ -930,7 +930,7 @@ fn main() -> eframe::Result<()> {
     }
 
     // Desktop-widget mode: `hookecho --snapshot out.png|out.jpg [SITE] [--size N|WIDTHxHEIGHT] [--zoom Z]
-    // [--every SECS]`. The same off-screen render `--headless` and the server's `/snapshot.png`
+    // [--every SECS] [--on-change]`. The same off-screen render `--headless` and the server's `/snapshot.png`
     // use, written where conky, a desktop wallpaper script or `feh --reload` can pick it up.
     if let Some(pos) = args.iter().position(|a| a == "--snapshot") {
         headless::set_transparent(args.iter().any(|arg| arg == "--transparent"));
@@ -959,12 +959,33 @@ fn main() -> eframe::Result<()> {
             flag_value(&args, "--zoom").and_then(|v| v.parse().ok()),
         );
         let every = flag_value(&args, "--every").and_then(|v| v.parse::<u64>().ok());
+        let on_change = args.iter().any(|arg| arg == "--on-change");
+        if on_change && (every.is_none() || !wxdata::sites::is_nexrad(site)) {
+            eprintln!("--on-change requires --every and a NEXRAD site");
+            std::process::exit(2);
+        }
+        let poll = on_change.then(|| tokio::runtime::Builder::new_current_thread().enable_all().build()).transpose().map_err(|e| eframe::Error::AppCreation(Box::new(e)))?;
+        let mut last_volume = None;
         let extension = std::path::Path::new(out).extension().and_then(|e| e.to_str()).unwrap_or("");
         if !["png", "jpg", "jpeg"].contains(&extension.to_ascii_lowercase().as_str()) {
             eprintln!("snapshot output must end in .png, .jpg, or .jpeg");
             std::process::exit(2);
         }
         loop {
+            let volume = if let Some(rt) = &poll {
+                match rt.block_on(wxdata::level2::latest_identifier(site)) {
+                    Ok(id) => Some(id.name().to_string()),
+                    Err(e) => {
+                        eprintln!("snapshot volume check failed: {e}");
+                        std::thread::sleep(std::time::Duration::from_secs(every.unwrap().max(10)));
+                        continue;
+                    }
+                }
+            } else { None };
+            if volume.as_deref().is_some_and(|current| !snapshot_needs_refresh(last_volume.as_deref(), current, std::path::Path::new(out).exists())) {
+                std::thread::sleep(std::time::Duration::from_secs(every.unwrap().max(10)));
+                continue;
+            }
             // Render to a sibling temp file and rename over the target: a widget polling the file
             // on its own clock must never catch a half-written PNG, and rename is atomic. The
             // Keep the target extension: the encoder picks its format from that extension.
@@ -974,7 +995,10 @@ fn main() -> eframe::Result<()> {
             )
             .and_then(|_| std::fs::rename(&tmp, out).map_err(Into::into))
             {
-                Ok(()) => println!("wrote {out}"),
+                Ok(()) => {
+                    last_volume = volume;
+                    println!("wrote {out}");
+                }
                 Err(e) => {
                     eprintln!("snapshot failed: {e}");
                     let _ = std::fs::remove_file(&tmp);
@@ -1007,6 +1031,24 @@ fn main() -> eframe::Result<()> {
     single_instance::listen();
 
     hookecho::run_desktop()
+}
+
+#[cfg(not(target_os = "android"))]
+fn snapshot_needs_refresh(last: Option<&str>, current: &str, output_exists: bool) -> bool {
+    !output_exists || last != Some(current)
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod snapshot_tests {
+    use super::snapshot_needs_refresh;
+
+    #[test]
+    fn writes_only_for_new_volume_or_missing_output() {
+        assert!(snapshot_needs_refresh(None, "KTLX-new", true));
+        assert!(!snapshot_needs_refresh(Some("KTLX-new"), "KTLX-new", true));
+        assert!(snapshot_needs_refresh(Some("KTLX-old"), "KTLX-new", true));
+        assert!(snapshot_needs_refresh(Some("KTLX-new"), "KTLX-new", false));
+    }
 }
 
 /// Write `link` into the drop box the running instance polls, if there is one.
