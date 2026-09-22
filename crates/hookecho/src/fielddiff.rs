@@ -381,17 +381,31 @@ pub fn theta_e_k(temp_k: f32, dewpoint_k: f32, pressure_pa: f32) -> Option<f32> 
         return None;
     }
     let pressure_hpa = pressure_pa / 100.0;
-    let dewpoint_c = dewpoint_k - 273.15;
-    let vapor_hpa = 6.112 * (17.67 * dewpoint_c / (dewpoint_c + 243.5)).exp();
-    if vapor_hpa >= pressure_hpa {
-        return None;
-    }
+    let vapor_hpa = vapor_pressure_hpa(dewpoint_k)?;
+    if vapor_hpa >= pressure_hpa { return None; }
     let mixing_ratio = 0.622 * vapor_hpa / (pressure_hpa - vapor_hpa);
     let lcl_k = 1.0 / (1.0 / (dewpoint_k - 56.0) + (temp_k / dewpoint_k).ln() / 800.0) + 56.0;
     let theta_e = temp_k
         * (1000.0 / pressure_hpa).powf(0.2854 * (1.0 - 0.28 * mixing_ratio))
         * ((3376.0 / lcl_k - 2.54) * mixing_ratio * (1.0 + 0.81 * mixing_ratio)).exp();
     theta_e.is_finite().then_some(theta_e)
+}
+
+fn vapor_pressure_hpa(dewpoint_k: f32) -> Option<f32> {
+    if !(150.0..350.0).contains(&dewpoint_k) { return None; }
+    let c = dewpoint_k - 273.15;
+    let vapor = 6.112 * (17.67 * c / (c + 243.5)).exp();
+    (vapor.is_finite() && vapor > 0.0).then_some(vapor)
+}
+
+/// Specific humidity from 2 m dewpoint and surface pressure, kg/kg.
+pub fn specific_humidity_kg_kg(dewpoint_k: f32, pressure_pa: f32) -> Option<f32> {
+    let pressure_hpa = pressure_pa / 100.0;
+    if !(200.0..1200.0).contains(&pressure_hpa) { return None; }
+    let vapor = vapor_pressure_hpa(dewpoint_k)?;
+    if vapor >= pressure_hpa { return None; }
+    let q = 0.622 * vapor / (pressure_hpa - 0.378 * vapor);
+    (q.is_finite() && (0.0..0.1).contains(&q)).then_some(q)
 }
 
 /// Horizontal gradient magnitude at a point, expressed as native field units per 100 km.
@@ -421,26 +435,59 @@ pub fn same_analysis_object(a: &FieldFrame, b: &FieldFrame) -> bool {
         )
 }
 
+/// At least a 30 km centered span avoids treating one RTMA grid-cell fluctuation as a
+/// mesoscale gradient. Coarser native grids keep their own cell spacing.
+fn surface_derivative_step(field: &MrmsField, lat: f64) -> Option<(f64, f64, f32, f32)> {
+    if field.nx < 3 || field.ny < 3 { return None; }
+    let cos_lat = lat.to_radians().cos().abs();
+    if cos_lat < 0.01 { return None; }
+    let dlon = ((field.lon_east - field.lon_west) / field.nx as f64).abs()
+        .max(15_000.0 / (111_320.0 * cos_lat));
+    let dlat = ((field.lat_north - field.lat_south) / field.ny as f64).abs()
+        .max(15_000.0 / 111_320.0);
+    let dx_m = (2.0 * dlon * 111_320.0 * cos_lat) as f32;
+    let dy_m = (2.0 * dlat * 111_320.0) as f32;
+    (dx_m.is_finite() && dy_m.is_finite() && dx_m >= 1.0 && dy_m >= 1.0)
+        .then_some((dlon, dlat, dx_m, dy_m))
+}
+
 /// Horizontal temperature advection by a matched 10 m wind, in K/h (also °C/h).
 /// This is a surface diagnostic, not a parcel trajectory or a forecast tendency.
 pub fn temperature_advection_k_per_h(
     temperature: &MrmsField, lon: f64, lat: f64, u_ms: f32, v_ms: f32,
 ) -> Option<f32> {
-    if temperature.nx < 3 || temperature.ny < 3 || !u_ms.is_finite() || !v_ms.is_finite() {
-        return None;
-    }
-    let dlon = (temperature.lon_east - temperature.lon_west) / temperature.nx as f64;
-    let dlat = (temperature.lat_north - temperature.lat_south) / temperature.ny as f64;
+    if !u_ms.is_finite() || !v_ms.is_finite() { return None; }
+    let (dlon, dlat, dx_m, dy_m) = surface_derivative_step(temperature, lat)?;
     let west = temperature.sample_bilinear(lon - dlon, lat)?;
     let east = temperature.sample_bilinear(lon + dlon, lat)?;
     let south = temperature.sample_bilinear(lon, lat - dlat)?;
     let north = temperature.sample_bilinear(lon, lat + dlat)?;
-    let dx_m = 2.0 * dlon.abs() * 111_320.0 * lat.to_radians().cos().abs();
-    let dy_m = 2.0 * dlat.abs() * 111_320.0;
-    if dx_m < 1.0 || dy_m < 1.0 { return None; }
-    let value = -(u_ms * (east - west) / dx_m as f32
-        + v_ms * (north - south) / dy_m as f32) * 3600.0;
+    let value = -(u_ms * (east - west) / dx_m
+        + v_ms * (north - south) / dy_m) * 3600.0;
     value.is_finite().then_some(value)
+}
+
+/// Horizontal convergence of q·wind, expressed as g/kg/h at the map point.
+/// Uses 2 m humidity with 10 m wind, so this is a near-surface proxy rather than a
+/// vertically integrated moisture budget or an observed humidity tendency.
+pub fn moisture_flux_convergence_g_kg_h(
+    dewpoint: &MrmsField, pressure: &MrmsField, u: &MrmsField, v: &MrmsField,
+    lon: f64, lat: f64,
+) -> Option<f32> {
+    let (dlon, dlat, dx_m, dy_m) = surface_derivative_step(dewpoint, lat)?;
+    let flux = |x, y| -> Option<(f32, f32)> {
+        let q = specific_humidity_kg_kg(
+            dewpoint.sample_bilinear(x, y)?, pressure.sample_bilinear(x, y)?,
+        )?;
+        Some((q * u.sample_bilinear(x, y)?, q * v.sample_bilinear(x, y)?))
+    };
+    let (west, _) = flux(lon - dlon, lat)?;
+    let (east, _) = flux(lon + dlon, lat)?;
+    let (_, south) = flux(lon, lat - dlat)?;
+    let (_, north) = flux(lon, lat + dlat)?;
+    let convergence = -((east - west) / dx_m
+        + (north - south) / dy_m) * 3_600_000.0;
+    convergence.is_finite().then_some(convergence)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -467,7 +514,7 @@ pub fn objective_surface_point(
 ) -> Option<ObjectiveSurfacePoint> {
     if temperature.stamp.class != DataClass::Analysis
         || dewpoint.stamp.class != DataClass::Analysis
-        || temperature.stamp.valid_time != dewpoint.stamp.valid_time
+        || !same_analysis_object(temperature, dewpoint)
     {
         return None;
     }
@@ -910,6 +957,50 @@ mod tests {
     }
 
     #[test]
+    fn surface_moisture_convergence_uses_signed_flux_and_rejects_missing_values() {
+        let fine = grid(5, 5, -0.25, 0.25, -0.25, 0.25, 293.15);
+        let (_, _, dx, dy) = surface_derivative_step(&fine, 0.0).unwrap();
+        assert!((29_999.0..30_001.0).contains(&dx));
+        assert!((29_999.0..30_001.0).contains(&dy));
+        let q = specific_humidity_kg_kg(293.15, 100_000.0).unwrap();
+        assert!((0.014..0.015).contains(&q), "{q}");
+        assert!(specific_humidity_kg_kg(293.15, 0.0).is_none());
+        let td = grid(5, 5, -2.5, 2.5, -2.5, 2.5, 293.15);
+        let pressure = grid(5, 5, -2.5, 2.5, -2.5, 2.5, 100_000.0);
+        let v = grid(5, 5, -2.5, 2.5, -2.5, 2.5, 0.0);
+        let mut u = grid(5, 5, -2.5, 2.5, -2.5, 2.5, 0.0);
+        for row in u.values.chunks_mut(5) {
+            row.copy_from_slice(&[4.0, 3.0, 2.0, 1.0, 0.0]);
+        }
+        let convergence = moisture_flux_convergence_g_kg_h(&td, &pressure, &u, &v, 0.0, 0.0).unwrap();
+        assert!((0.4..0.6).contains(&convergence), "{convergence}");
+        for row in u.values.chunks_mut(5) { row.reverse(); }
+        let divergence = moisture_flux_convergence_g_kg_h(&td, &pressure, &u, &v, 0.0, 0.0).unwrap();
+        assert!((-0.6..-0.4).contains(&divergence), "{divergence}");
+        let mut missing = td.clone();
+        missing.values.fill(f32::NAN);
+        assert!(moisture_flux_convergence_g_kg_h(&missing, &pressure, &u, &v, 0.0, 0.0).is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_surface_moisture_contract_uses_one_valid_analysis_object() {
+        use wxdata::rtma::{fetch_latest_rtma, fetch_rtma, SurfaceField};
+        let http = reqwest::Client::new();
+        let v = fetch_latest_rtma(&http, SurfaceField::WindV10m).await.unwrap();
+        let at = v.stamp.valid_time;
+        let td = fetch_rtma(&http, SurfaceField::Dewpoint2m, at).await.unwrap();
+        let p = fetch_rtma(&http, SurfaceField::Pressure, at).await.unwrap();
+        let u = fetch_rtma(&http, SurfaceField::WindU10m, at).await.unwrap();
+        for frame in [&td, &p, &u] { assert!(same_analysis_object(&v, frame)); }
+        let value = moisture_flux_convergence_g_kg_h(
+            td.field(), p.field(), u.field(), v.field(), -97.3, 32.6,
+        ).expect("native analysis covers Dallas–Fort Worth");
+        assert!(value.is_finite());
+        eprintln!("RTMA near-surface convergence {value:+.2} g/kg/h at {at}");
+    }
+
+    #[test]
     fn objective_analysis_blends_only_a_nearby_recent_observation() {
         let valid = chrono::Utc::now();
         let frame = |descriptor, value| FieldFrame::new(
@@ -938,6 +1029,12 @@ mod tests {
         assert!((blend.dewpoint_k.unwrap() - 293.15).abs() < 0.001);
         assert!((blend.temperature_residual_k.unwrap() - 3.15).abs() < 0.001);
         assert!((blend.dewpoint_residual_k.unwrap() - 3.15).abs() < 0.001);
+        let mut unmatched = frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0);
+        unmatched.stamp.source_identity = "urma".into();
+        assert!(objective_surface_point(
+            &frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0), &unmatched,
+            &[], &[], -99.5, 39.5,
+        ).is_none());
 
         let personal = wxdata::stations::StationOb {
             id: "home".into(), name: "Home".into(),

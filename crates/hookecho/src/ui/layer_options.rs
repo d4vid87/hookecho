@@ -433,10 +433,34 @@ pub(crate) fn show(
             }
             _ => None,
         };
-        if let Some(value) = advection {
+        let moisture = match (
+            frame(FL::RtmaDewpoint2m), frame(FL::RtmaPressure),
+            frame(FL::RtmaWindU10m), frame(FL::RtmaWindV10m),
+        ) {
+            (Some(td), Some(p), Some(u), Some(v))
+                if crate::fielddiff::same_analysis_object(td, p)
+                    && crate::fielddiff::same_analysis_object(td, u)
+                    && crate::fielddiff::same_analysis_object(td, v) => {
+                crate::fielddiff::moisture_flux_convergence_g_kg_h(
+                    td.field(), p.field(), u.field(), v.field(), lon, lat,
+                )
+            }
+            _ => None,
+        };
+        if advection.is_some() || moisture.is_some() {
             ui.separator();
             ui.weak(format!("Map center · {:.2}, {:.2}", lon, lat));
-            ui.label(format!("10 m temperature advection {value:+.2} °C/h"));
+            ui.horizontal_wrapped(|ui| {
+                if let Some(value) = advection {
+                    ui.label(format!("10 m temperature advection {value:+.2} °C/h"));
+                }
+                if let Some(value) = moisture {
+                    ui.label(format!("Moisture-flux convergence {value:+.2} g/kg/h"));
+                }
+            });
+            if moisture.is_some() {
+                ui.weak("Near-surface proxy: 2 m humidity + 10 m wind, 30 km centered span; not a vertically integrated moisture budget.");
+            }
         }
         if let (Some(temp), Some(dewpoint), Some(pressure)) = (
             frame(FL::RtmaTemp2m),
