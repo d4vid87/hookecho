@@ -41,6 +41,7 @@ pub struct Parcel {
 }
 
 /// A vertical profile at a point.
+#[derive(Clone)]
 pub struct Sounding {
     pub lon: f64,
     pub lat: f64,

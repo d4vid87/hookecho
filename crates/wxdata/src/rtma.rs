@@ -192,6 +192,34 @@ pub async fn fetch_analysis(
     field: SurfaceField,
     valid: DateTime<Utc>,
 ) -> anyhow::Result<FieldFrame> {
+    let (cached, source_identity) = fetch_message(http, source, field, valid).await?;
+    let grid = crate::task::guarded(|| {
+        crate::hrrr::decode_regrid_at_resolution(&cached.bytes, 0.03, f64::NEG_INFINITY)
+    })
+    .unwrap_or_else(|_| anyhow::bail!("RTMA GRIB decode panicked"))?;
+    let valid_time = grid.time;
+    Ok(FieldFrame::new(
+        field.descriptor_for(source),
+        grid,
+        DataStamp {
+            source_identity,
+            issue_time: Some(valid_time),
+            run_time: None,
+            valid_time,
+            received_time: cached.received_at,
+            class: DataClass::Analysis,
+            quality: QualitySummary::Unknown,
+            available_members: None,
+        },
+    ))
+}
+
+async fn fetch_message(
+    http: &reqwest::Client,
+    source: Source,
+    field: SurfaceField,
+    valid: DateTime<Utc>,
+) -> anyhow::Result<(crate::object_cache::CachedObject, String)> {
     let url = object_url(source, valid);
     let (start, end) = if source == Source::Urma {
         urma_range(http, &url, field).await?
@@ -210,29 +238,62 @@ pub async fn fetch_analysis(
             .ok_or_else(|| anyhow::anyhow!("RTMA index has no {variable}:{level}"))?
     };
     let cached = crate::object_cache::fetch_range(http, &url, start, end).await?;
-    let grid = crate::task::guarded(|| {
-        crate::hrrr::decode_regrid_at_resolution(&cached.bytes, 0.03, f64::NEG_INFINITY)
-    })
-    .unwrap_or_else(|_| anyhow::bail!("RTMA GRIB decode panicked"))?;
-    let valid_time = grid.time;
     let source_identity = end.map_or_else(
         || format!("{url}#bytes={start}-"),
         |end| format!("{url}#bytes={start}-{}", end - 1),
     );
-    Ok(FieldFrame::new(
-        field.descriptor_for(source),
-        grid,
-        DataStamp {
-            source_identity,
-            issue_time: Some(valid_time),
-            run_time: None,
-            valid_time,
-            received_time: cached.received_at,
-            class: DataClass::Analysis,
-            quality: QualitySummary::Unknown,
-            available_members: None,
-        },
-    ))
+    Ok((cached, source_identity))
+}
+
+/// Two exact native-grid samples from one immutable message, for a point and its observation.
+pub struct NativeSamplePair {
+    pub source_identity: String,
+    pub valid_time: DateTime<Utc>,
+    pub received_time: DateTime<Utc>,
+    pub point: f32,
+    pub station: f32,
+}
+
+pub async fn fetch_native_pair(
+    http: &reqwest::Client,
+    source: Source,
+    field: SurfaceField,
+    valid: DateTime<Utc>,
+    point: (f64, f64),
+    station: (f64, f64),
+) -> anyhow::Result<NativeSamplePair> {
+    let (cached, source_identity) = fetch_message(http, source, field, valid).await?;
+    let received_time = cached.received_at;
+    let (actual, values) = crate::task::blocking(move || {
+        crate::task::guarded(|| {
+            use gribberish::data_message::DataMessage;
+            use gribberish::message::read_message;
+            let message = read_message(&cached.bytes, 0).ok_or_else(|| anyhow::anyhow!("no analysis GRIB message"))?;
+            let actual = message.forecast_date()?;
+            let decoded = DataMessage::try_from(&message).map_err(|e| anyhow::anyhow!("analysis decode: {e:?}"))?;
+            let (lats, lons) = decoded.metadata.latlng();
+            let data = decoded.data;
+            anyhow::ensure!(lats.len() == data.len() && lons.len() == data.len(), "analysis coordinate mismatch");
+            let targets = [point, station];
+            let mut best = [(f64::INFINITY, f32::NAN); 2];
+            for k in 0..data.len() {
+                if !data[k].is_finite() || !lats[k].is_finite() || !lons[k].is_finite() { continue; }
+                let lon = if lons[k] > 180.0 { lons[k] - 360.0 } else { lons[k] };
+                for (i, &(target_lon, target_lat)) in targets.iter().enumerate() {
+                    let dx = (lon - target_lon) * target_lat.to_radians().cos();
+                    let distance = dx * dx + (lats[k] - target_lat).powi(2);
+                    if distance < best[i].0 { best[i] = (distance, data[k] as f32); }
+                }
+            }
+            anyhow::ensure!(best.iter().all(|(distance, value)| *distance <= 0.2_f64.powi(2) && value.is_finite()), "analysis point outside native grid");
+            Ok((actual, [best[0].1, best[1].1]))
+        }).unwrap_or_else(|_| anyhow::bail!("analysis native decode panicked"))
+    }).await??;
+    anyhow::ensure!(actual == valid, "analysis valid time differs from requested hour");
+    Ok(NativeSamplePair {
+        source_identity, valid_time: actual, received_time,
+        point: values[0], station: values[1],
+    })
 }
 
 pub async fn fetch_rtma(
@@ -332,6 +393,29 @@ mod tests {
         assert!(points.iter().all(|point| point.stamp.class == DataClass::Analysis
             && (240.0..330.0).contains(&point.kelvin)));
         assert!(points.windows(2).all(|pair| pair[0].stamp.valid_time < pair[1].stamp.valid_time));
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_native_pair_reads_exact_analysis_hour() {
+        let http = reqwest::Client::new();
+        let latest = fetch_latest_rtma(&http, SurfaceField::Temperature2m).await.unwrap();
+        let at = latest.stamp.valid_time;
+        let point = fetch_native_pair(&http, Source::Rtma, SurfaceField::Temperature2m,
+            at, (-97.3, 32.6), (-97.04, 32.9)).await.unwrap();
+        assert_eq!(point.valid_time, at);
+        assert_eq!(point.source_identity, latest.stamp.source_identity);
+        assert!((240.0..330.0).contains(&point.point));
+        assert!((240.0..330.0).contains(&point.station));
+        for field in [SurfaceField::Dewpoint2m, SurfaceField::Pressure,
+            SurfaceField::WindU10m, SurfaceField::WindV10m] {
+            let other = fetch_native_pair(&http, Source::Rtma, field,
+                at, (-97.3, 32.6), (-97.04, 32.9)).await.unwrap();
+            assert_eq!(other.valid_time, at);
+            assert_eq!(other.source_identity.split_once("#bytes=").unwrap().0,
+                point.source_identity.split_once("#bytes=").unwrap().0);
+            assert!(other.point.is_finite() && other.station.is_finite());
+        }
     }
 
     #[tokio::test]

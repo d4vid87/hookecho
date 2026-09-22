@@ -428,11 +428,16 @@ pub fn gradient_per_100km(field: &MrmsField, lon: f64, lat: f64) -> Option<f32> 
 /// Compare the immutable object and valid hour, while keeping each exact range in provenance.
 pub fn same_analysis_object(a: &FieldFrame, b: &FieldFrame) -> bool {
     a.stamp.valid_time == b.stamp.valid_time
-        && a.stamp.source_identity.split_once("#bytes=").map_or(
-            a.stamp.source_identity.as_str(), |(object, _)| object,
-        ) == b.stamp.source_identity.split_once("#bytes=").map_or(
-            b.stamp.source_identity.as_str(), |(object, _)| object,
-        )
+        && same_analysis_identity(&a.stamp.source_identity, &b.stamp.source_identity)
+}
+
+fn same_analysis_identity(a: &str, b: &str) -> bool {
+    a.split_once("#bytes=").map_or(a, |(object, _)| object)
+        == b.split_once("#bytes=").map_or(b, |(object, _)| object)
+}
+
+pub fn same_native_analysis(a: &wxdata::rtma::NativeSamplePair, b: &wxdata::rtma::NativeSamplePair) -> bool {
+    a.valid_time == b.valid_time && same_analysis_identity(&a.source_identity, &b.source_identity)
 }
 
 /// At least a 30 km centered span avoids treating one RTMA grid-cell fluctuation as a
@@ -493,6 +498,9 @@ pub fn moisture_flux_convergence_g_kg_h(
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectiveSurfacePoint {
     pub station: String,
+    pub analysis_source: &'static str,
+    pub analysis_identity: String,
+    pub analysis_received_time: chrono::DateTime<chrono::Utc>,
     pub distance_km: f64,
     pub weight: f32,
     pub temperature_k: Option<f32>,
@@ -500,6 +508,82 @@ pub struct ObjectiveSurfacePoint {
     /// Observation minus native analysis at the station, in kelvin (same increment as °C).
     pub temperature_residual_k: Option<f32>,
     pub dewpoint_residual_k: Option<f32>,
+}
+
+/// The observation chosen for a surface adjustment. A sounding requires both T and Td.
+#[derive(Debug, Clone)]
+pub struct ChosenSurfaceObservation {
+    pub id: String,
+    pub lon: f64,
+    pub lat: f64,
+    pub temp_c: Option<f32>,
+    pub dewpoint_c: Option<f32>,
+    pub distance_km: f64,
+}
+
+impl ChosenSurfaceObservation {
+    fn weight(&self) -> f32 { (-(self.distance_km / 75.0).powi(2)).exp() as f32 }
+}
+
+/// Native-grid temperature and dewpoint at the point and observation station.
+pub fn objective_surface_native(
+    temperature: &wxdata::rtma::NativeSamplePair,
+    dewpoint: &wxdata::rtma::NativeSamplePair,
+    chosen: &ChosenSurfaceObservation,
+    source: wxdata::rtma::Source,
+) -> Option<ObjectiveSurfacePoint> {
+    if temperature.valid_time != dewpoint.valid_time
+        || !same_analysis_identity(&temperature.source_identity, &dewpoint.source_identity)
+    { return None; }
+    let observed_t = chosen.temp_c?;
+    let observed_td = chosen.dewpoint_c?;
+    let weight = chosen.weight();
+    Some(ObjectiveSurfacePoint {
+        station: chosen.id.clone(), analysis_source: wxdata::rtma::SurfaceField::Temperature2m.descriptor_for(source).source,
+        analysis_identity: temperature.source_identity.clone(), analysis_received_time: temperature.received_time,
+        distance_km: chosen.distance_km, weight,
+        temperature_k: Some(temperature.point + weight * (observed_t + 273.15 - temperature.point)),
+        dewpoint_k: Some(dewpoint.point + weight * (observed_td + 273.15 - dewpoint.point)),
+        temperature_residual_k: Some(observed_t + 273.15 - temperature.station),
+        dewpoint_residual_k: Some(observed_td + 273.15 - dewpoint.station),
+    })
+}
+
+pub fn nearest_surface_observation(
+    valid: chrono::DateTime<chrono::Utc>,
+    observations: &[wxdata::metar::SurfaceOb],
+    stations: &[wxdata::stations::StationOb],
+    lon: f64,
+    lat: f64,
+    require_both: bool,
+) -> Option<ChosenSurfaceObservation> {
+    // The analysis poll carries METARs in `stations` even when its layer is off.
+    let all = stations.iter()
+        .map(|ob| (ob.id.as_str(), Some(ob.network), ob.lon, ob.lat, ob.temp_c, ob.dewp_c, ob.time))
+        .chain(observations.iter().map(|ob| (ob.icao.as_str(), None, ob.lon, ob.lat,
+            ob.temp_c, ob.dewp_c,
+            ob.obs_time.and_then(|time| chrono::DateTime::from_timestamp(time, 0)))));
+    let ((id, network, station_lon, station_lat, temp_c, dewpoint_c, _), distance_km) = all
+        .filter(|(_, _, _, _, temp, dewpoint, time)| {
+            (if require_both {
+                temp.is_some_and(f32::is_finite) && dewpoint.is_some_and(f32::is_finite)
+            } else {
+                temp.is_some_and(f32::is_finite) || dewpoint.is_some_and(f32::is_finite)
+            }) && time.is_some_and(|time| (time - valid).abs() <= chrono::Duration::minutes(90))
+        })
+        .map(|ob| {
+            let dlat = (ob.3 - lat).to_radians();
+            let dlon = (ob.2 - lon).to_radians();
+            let a = (dlat / 2.0).sin().powi(2)
+                + lat.to_radians().cos() * ob.3.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+            (ob, 6371.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt()))
+        })
+        .filter(|(_, distance)| *distance <= 150.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    Some(ChosenSurfaceObservation {
+        id: network.map_or_else(|| id.to_string(), |network| format!("{}:{id}", network.label())),
+        lon: station_lon, lat: station_lat, temp_c, dewpoint_c, distance_km,
+    })
 }
 
 /// Blend the nearest recent surface observation into an analysis background at one point.
@@ -512,6 +596,30 @@ pub fn objective_surface_point(
     lon: f64,
     lat: f64,
 ) -> Option<ObjectiveSurfacePoint> {
+    objective_surface_point_with(temperature, dewpoint, observations, stations, lon, lat, false)
+}
+
+/// A sounding needs both thermodynamic observations from the same station.
+pub fn objective_surface_point_for_sounding(
+    temperature: &FieldFrame,
+    dewpoint: &FieldFrame,
+    observations: &[wxdata::metar::SurfaceOb],
+    stations: &[wxdata::stations::StationOb],
+    lon: f64,
+    lat: f64,
+) -> Option<ObjectiveSurfacePoint> {
+    objective_surface_point_with(temperature, dewpoint, observations, stations, lon, lat, true)
+}
+
+fn objective_surface_point_with(
+    temperature: &FieldFrame,
+    dewpoint: &FieldFrame,
+    observations: &[wxdata::metar::SurfaceOb],
+    stations: &[wxdata::stations::StationOb],
+    lon: f64,
+    lat: f64,
+    require_both: bool,
+) -> Option<ObjectiveSurfacePoint> {
     if temperature.stamp.class != DataClass::Analysis
         || dewpoint.stamp.class != DataClass::Analysis
         || !same_analysis_object(temperature, dewpoint)
@@ -520,40 +628,24 @@ pub fn objective_surface_point(
     }
     let background_t = temperature.sample(lon, lat).value;
     let background_td = dewpoint.sample(lon, lat).value;
-    // The analysis-only poll carries METARs in `stations` even when their map layer is off.
-    // Prefer that fresh feed on an exact station tie; the older METAR overlay is a fallback.
-    let observations = stations.iter()
-        .map(|ob| (ob.id.as_str(), Some(ob.network), ob.lon, ob.lat, ob.temp_c, ob.dewp_c, ob.time))
-        .chain(observations.iter().map(|ob| (ob.icao.as_str(), None, ob.lon, ob.lat,
-            ob.temp_c, ob.dewp_c,
-            ob.obs_time.and_then(|time| chrono::DateTime::from_timestamp(time, 0)))));
-    let ((id, network, station_lon, station_lat, observed_t, observed_td, _), distance_km) = observations
-        .filter(|(_, _, _, _, temp, dewpoint, time)| {
-            (temp.is_some_and(f32::is_finite) || dewpoint.is_some_and(f32::is_finite))
-                && time.is_some_and(|time| (time - temperature.stamp.valid_time).abs() <= chrono::Duration::minutes(90))
-        })
-        .map(|ob| {
-            let dlat = (ob.3 - lat).to_radians();
-            let dlon = (ob.2 - lon).to_radians();
-            let a = (dlat / 2.0).sin().powi(2)
-                + lat.to_radians().cos() * ob.3.to_radians().cos() * (dlon / 2.0).sin().powi(2);
-            (ob, 6371.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt()))
-        })
-        .filter(|(_, distance)| *distance <= 150.0)
-        .min_by(|a, b| a.1.total_cmp(&b.1))?;
-    let weight = (-(distance_km / 75.0).powi(2)).exp() as f32;
+    let chosen = nearest_surface_observation(
+        temperature.stamp.valid_time, observations, stations, lon, lat, require_both,
+    )?;
+    let weight = chosen.weight();
     let blend = |background: Option<f32>, observed_c: Option<f32>| {
         background.zip(observed_c).map(|(background, observed)| {
             background + weight * (observed + 273.15 - background)
         })
     };
     Some(ObjectiveSurfacePoint {
-        station: network.map_or_else(|| id.to_string(), |network| format!("{}:{id}", network.label())), distance_km, weight,
-        temperature_k: blend(background_t, observed_t),
-        dewpoint_k: blend(background_td, observed_td),
-        temperature_residual_k: observed_t.zip(temperature.sample(station_lon, station_lat).value)
+        station: chosen.id.clone(), distance_km: chosen.distance_km, weight,
+        analysis_source: temperature.descriptor.source,
+        analysis_identity: temperature.stamp.source_identity.clone(), analysis_received_time: temperature.stamp.received_time,
+        temperature_k: blend(background_t, chosen.temp_c),
+        dewpoint_k: blend(background_td, chosen.dewpoint_c),
+        temperature_residual_k: chosen.temp_c.zip(temperature.sample(chosen.lon, chosen.lat).value)
             .map(|(observed, analysis)| observed + 273.15 - analysis),
-        dewpoint_residual_k: observed_td.zip(dewpoint.sample(station_lon, station_lat).value)
+        dewpoint_residual_k: chosen.dewpoint_c.zip(dewpoint.sample(chosen.lon, chosen.lat).value)
             .map(|(observed, analysis)| observed + 273.15 - analysis),
     })
 }
@@ -576,7 +668,7 @@ pub fn objective_sounding(
     {
         return None;
     }
-    let point = objective_surface_point(
+    let point = objective_surface_point_for_sounding(
         temperature,
         dewpoint,
         observations,
@@ -584,11 +676,27 @@ pub fn objective_sounding(
         model.lon,
         model.lat,
     )?;
+    objective_sounding_surface(
+        model, point, pressure.sample(model.lon, model.lat).value?,
+        wind_u.sample(model.lon, model.lat).value?,
+        wind_v.sample(model.lon, model.lat).value?,
+    )
+}
+
+/// Same boundary replacement for fields acquired at the clicked point without map layers.
+pub fn objective_sounding_surface(
+    model: &wxdata::sounding::Sounding,
+    point: ObjectiveSurfacePoint,
+    pressure_pa: f32,
+    wind_u_ms: f32,
+    wind_v_ms: f32,
+) -> Option<(wxdata::sounding::Sounding, ObjectiveSurfacePoint)> {
+    if model.fh != 0 { return None; }
     let temp_k = point.temperature_k?;
     let dewpoint_k = point.dewpoint_k?;
-    let pressure_hpa = (pressure.sample(model.lon, model.lat).value? / 100.0) as f64;
-    let u = wind_u.sample(model.lon, model.lat).value? as f64;
-    let v = wind_v.sample(model.lon, model.lat).value? as f64;
+    let pressure_hpa = (pressure_pa / 100.0) as f64;
+    let u = wind_u_ms as f64;
+    let v = wind_v_ms as f64;
     if !(650.0..=1050.0).contains(&pressure_hpa)
         || ![temp_k, dewpoint_k].into_iter().all(f32::is_finite)
         || !u.is_finite()
@@ -1186,13 +1294,43 @@ mod tests {
             dpd_s: None,
             raw: String::new(),
         };
-        let (adjusted, _) = objective_sounding(&model, [&t, &td, &p, &u, &v], &[ob], &[]).unwrap();
+        let (adjusted, _) = objective_sounding(&model, [&t, &td, &p, &u, &v], std::slice::from_ref(&ob), &[]).unwrap();
         assert_eq!(adjusted.levels.len(), 4);
         assert_eq!(adjusted.levels[0].pressure_hpa, 950.0);
         assert!((adjusted.levels[0].temp_c - 30.0).abs() < 0.001);
         assert_eq!(adjusted.levels[0].u_ms, 8.0);
         assert_eq!(adjusted.levels[1].pressure_hpa, 925.0);
         assert_eq!(model.levels[0].pressure_hpa, 1000.0);
+        let point = objective_surface_point(&t, &td, &[], &wxdata::stations::from_metars(&[ob]), model.lon, model.lat).unwrap();
+        let (point_only, point) = objective_sounding_surface(&model, point, 95_000.0, 8.0, -2.0).unwrap();
+        assert_eq!(point_only.levels[0].pressure_hpa, adjusted.levels[0].pressure_hpa);
+        assert_eq!(point.station, "METAR:KTEST");
+        let mut partial = wxdata::stations::from_metars(&[wxdata::metar::SurfaceOb {
+            icao: "PARTIAL".into(), name: "Partial".into(), lat: 39.5, lon: -99.5,
+            temp_c: Some(31.0), dewp_c: None, wdir_deg: None, wspd_kt: 0.0,
+            wgst_kt: None, altim_mb: None, elev_m: None, obs_time: Some(valid.timestamp()),
+            flt_cat: String::new(), wvht_ft: None, dpd_s: None, raw: String::new(),
+        }]);
+        let mut complete = partial[0].clone();
+        complete.id = "COMPLETE".into();
+        complete.lon = -99.4;
+        complete.dewp_c = Some(20.0);
+        partial.push(complete);
+        let chosen = nearest_surface_observation(valid, &[], &partial, model.lon, model.lat, true).unwrap();
+        assert_eq!(chosen.id, "METAR:COMPLETE");
+        let native = |point, station| wxdata::rtma::NativeSamplePair {
+            source_identity: "rtma#bytes=0-10".into(), valid_time: valid,
+            received_time: valid, point, station,
+        };
+        let adjusted_point = objective_surface_native(
+            &native(300.0, 299.0), &native(290.0, 289.0), &chosen,
+            wxdata::rtma::Source::Rtma,
+        ).unwrap();
+        assert_eq!(adjusted_point.analysis_source, "NOAA RTMA");
+        assert!((adjusted_point.temperature_residual_k.unwrap() - 5.15).abs() < 0.001);
+        let (native_profile, _) = objective_sounding_surface(&model, adjusted_point, 95_000.0, 8.0, -2.0).unwrap();
+        assert_eq!(native_profile.levels[0].pressure_hpa, 950.0);
+        assert_eq!(native_profile.levels[1].pressure_hpa, 925.0);
         let forecast = wxdata::sounding::Sounding { fh: 1, ..model };
         assert!(objective_sounding(&forecast, [&t, &td, &p, &u, &v], &[], &[]).is_none());
     }

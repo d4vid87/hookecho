@@ -2767,6 +2767,9 @@ pub struct HookEchoApp {
     digest_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     sounding_window: ui::sounding_window::SoundingWindow,
     sounding_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
+    objective_sounding_rx: Option<std::sync::mpsc::Receiver<Option<(wxdata::sounding::Sounding, crate::fielddiff::ObjectiveSurfacePoint)>>>,
+    objective_sounding: Option<(wxdata::sounding::Sounding, crate::fielddiff::ObjectiveSurfacePoint)>,
+    objective_sounding_abort: Option<futures_util::future::AbortHandle>,
     /// The observed RAOB fetched alongside the HRRR profile, for the same click.
     raob_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
     /// Last spoken storm-position update: when, and the distance in whole miles it reported.
@@ -3751,6 +3754,9 @@ impl HookEchoApp {
             digest_rx: None,
             sounding_window: Default::default(),
             sounding_rx: None,
+            objective_sounding_rx: None,
+            objective_sounding: None,
+            objective_sounding_abort: None,
             raob_rx: None,
             chase_mode: false,
             spoke_pos: None,
@@ -6849,6 +6855,9 @@ impl HookEchoApp {
         self.sounding_window.open = true;
         self.sounding_window.busy = true;
         self.sounding_window.sounding = None;
+        if let Some(handle) = self.objective_sounding_abort.take() { handle.abort(); }
+        self.objective_sounding_rx = None;
+        self.objective_sounding = None;
         let http = self.http.clone();
         self.spawner.spawn(async move {
             let res = wxdata::sounding::fetch_at(&http, lon, lat, fh)
@@ -6856,6 +6865,53 @@ impl HookEchoApp {
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
+    }
+
+    fn fetch_objective_sounding(&mut self, model: wxdata::sounding::Sounding) {
+        if model.fh != 0 { return; }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.objective_sounding_rx = Some(rx);
+        let http = self.http.clone();
+        let source = self.analysis_source;
+        let tempest = self.settings.tempest_token.clone();
+        let wu = self.settings.wu_key.clone();
+        let synoptic = self.settings.synoptic_token.clone();
+        self.objective_sounding_abort = Some(self.spawner.spawn_abortable(async move {
+            let result = async {
+                use wxdata::rtma::SurfaceField as SF;
+                let (south, west, north, east) = analysis_station_bbox(model.lon, model.lat);
+                let metars = wxdata::metar::fetch_bbox(&http, south, west, north, east).await.unwrap_or_default();
+                let stations = wxdata::stations::fetch_all(
+                    &http, &metars, &tempest, &wu, &synoptic, model.lat, model.lon,
+                ).await;
+                let chosen = crate::fielddiff::nearest_surface_observation(
+                    model.run, &metars, &stations, model.lon, model.lat, true,
+                )?;
+                let pair = |field| {
+                    let (http, model, chosen) = (&http, &model, &chosen);
+                    async move {
+                        wxdata::rtma::fetch_native_pair(
+                            http, source, field, model.run,
+                            (model.lon, model.lat), (chosen.lon, chosen.lat),
+                        ).await.ok()
+                    }
+                };
+                let t = pair(SF::Temperature2m).await?;
+                let td = pair(SF::Dewpoint2m).await?;
+                if t.valid_time != model.run || !crate::fielddiff::same_native_analysis(&t, &td) {
+                    return None;
+                }
+                let point = crate::fielddiff::objective_surface_native(&t, &td, &chosen, source)?;
+                let pressure = pair(SF::Pressure).await?;
+                let u = pair(SF::WindU10m).await?;
+                let v = pair(SF::WindV10m).await?;
+                if [&pressure, &u, &v].into_iter().any(|sample| !crate::fielddiff::same_native_analysis(&t, sample)) {
+                    return None;
+                }
+                crate::fielddiff::objective_sounding_surface(&model, point, pressure.point, u.point, v.point)
+            }.await;
+            let _ = tx.send(result);
+        }));
     }
 
     /// The observed ascent to draw beside the model profile: the nearest radiosonde station, at
@@ -19922,11 +19978,21 @@ impl eframe::App for HookEchoApp {
                 self.sounding_window.busy = false;
                 self.sounding_rx = None;
                 match res {
-                    Ok(s) => self.sounding_window.sounding = Some(s),
+                    Ok(s) => {
+                        self.fetch_objective_sounding(s.clone());
+                        self.sounding_window.sounding = Some(s);
+                    },
                     Err(e) => {
                         self.sounding_window.error = Some(e);
                     }
                 }
+            }
+        }
+        if let Some(rx) = &self.objective_sounding_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.objective_sounding_rx = None;
+                self.objective_sounding_abort = None;
+                self.objective_sounding = result;
             }
         }
         if let Some(rx) = &self.raob_rx {
@@ -19944,7 +20010,7 @@ impl eframe::App for HookEchoApp {
                 .get(&layer)
                 .and_then(|state| state.frame.as_ref())
         };
-        let objective = self.sounding_window.sounding.as_ref().and_then(|model| {
+        let loaded_objective = self.sounding_window.sounding.as_ref().and_then(|model| {
             use crate::render::FieldLayer as FL;
             crate::fielddiff::objective_sounding(
                 model,
@@ -19955,12 +20021,18 @@ impl eframe::App for HookEchoApp {
                 &self.stations.obs,
             )
         });
+        let objective = self.objective_sounding.as_ref().or(loaded_objective.as_ref());
         self.sounding_window.show(
             ctx,
             tz,
-            objective.as_ref().map(|(s, p)| (s, p)),
+            objective.map(|(s, p)| (s, p)),
+            self.objective_sounding_rx.is_some(),
             &mut self.drawer,
         );
+        if !self.sounding_window.open {
+            if let Some(handle) = self.objective_sounding_abort.take() { handle.abort(); }
+            self.objective_sounding_rx = None;
+        }
         if std::mem::take(&mut self.sounding_window.refetch) {
             self.refetch_sounding();
         }

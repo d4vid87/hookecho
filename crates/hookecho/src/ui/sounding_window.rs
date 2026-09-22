@@ -54,6 +54,7 @@ impl SoundingWindow {
         ctx: &egui::Context,
         tz: Option<wxdata::tz::Tz>,
         objective: Option<(&Sounding, &crate::fielddiff::ObjectiveSurfacePoint)>,
+        objective_pending: bool,
         drawer: &mut crate::ui::drawer::Drawer,
     ) {
         if !self.open {
@@ -89,10 +90,14 @@ impl SoundingWindow {
                 };
                 if let Some((_, point)) = objective {
                     ui.checkbox(&mut self.show_objective, "HookEcho objective-adjusted surface");
-                    ui.weak(format!("{} · {:.0} km · {:.0}% observation weight; RTMA/URMA surface, HRRR aloft. Not an official sounding.",
-                        point.station, point.distance_km, point.weight * 100.0));
+                    ui.weak(format!("{} · {:.0} km · {:.0}% observation weight; {} surface, HRRR aloft. Not an official sounding.",
+                        point.station, point.distance_km, point.weight * 100.0, point.analysis_source));
                 } else if model.fh == 0 {
-                    ui.weak("Objective-adjusted surface requires matching RTMA/URMA temperature, dewpoint, pressure and winds plus a recent nearby observation.");
+                    ui.weak(if objective_pending {
+                        "Checking matched RTMA/URMA analysis and nearby observations…"
+                    } else {
+                        "Objective adjustment unavailable: analysis hour or nearby observation did not match."
+                    });
                 }
                 let s = if self.show_objective { objective.map_or(model, |(s, _)| s) } else { model };
                 ui.horizontal_wrapped(|ui| {
@@ -138,8 +143,9 @@ impl SoundingWindow {
                                 if self.show_objective {
                                     if let Some((_, point)) = objective {
                                         return csv.replacen("index,value\n", &format!(
-                                            "index,value\nprofile,HookEcho objective-adjusted surface\nstation,{}\nobservation_weight,{:.3}\nsurface_source,RTMA/URMA analysis\naloft_source,HRRR f00\nvalid_time,{}\n",
-                                            point.station, point.weight, s.run.to_rfc3339(),
+                                            "index,value\nprofile,HookEcho objective-adjusted surface\nstation,{}\nobservation_weight,{:.3}\nsurface_source,{}\nsurface_object,{}\nsurface_received,{}\naloft_source,HRRR f00\nvalid_time,{}\n",
+                                            point.station, point.weight, point.analysis_source,
+                                            point.analysis_identity, point.analysis_received_time.to_rfc3339(), s.run.to_rfc3339(),
                                         ), 1);
                                     }
                                 }

@@ -23,6 +23,8 @@ jobs:
         run: cargo test -p wxdata --lib live_hrrr_station_temperature_uses_one_cycle -- --ignored
       - name: Decode recent RTMA station temperatures
         run: cargo test -p wxdata --lib live_station_temperature_history_keeps_exact_hours -- --ignored
+      - name: Sample native RTMA analysis at a point and nearby station
+        run: cargo test -p wxdata --lib live_native_pair_reads_exact_analysis_hour -- --ignored
       - name: Decode same-cycle GFS station temperatures
         run: cargo test -p wxdata --lib live_gfs_station_temperature_uses_one_cycle -- --ignored
       - name: Capture cross-source valid times
