@@ -557,6 +557,8 @@ set -g status-right '#(hookecho --status --line) | %H:%M'
 `hookecho --serve` answers the same questions over HTTP, for the machine with no
 display attached:
 
+The versioned routes and authentication options are in the [local API reference](local-api.md).
+
 ```sh
 hookecho --serve             # http://127.0.0.1:8080
 hookecho --serve 9000 --bind 0.0.0.0
