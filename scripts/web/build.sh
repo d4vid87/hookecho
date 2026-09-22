@@ -29,7 +29,8 @@ wasm-bindgen --target web --no-typescript \
 wasm="web/dist/hookecho_bg.wasm"
 glue="web/dist/hookecho.js"
 
-# wasm-opt takes another ~15% off what LTO leaves behind, mostly dead-function and local pruning.
+# wasm-opt takes another ~15% off what LTO leaves behind. Convergence saves another ~6 KB gzip
+# on the main build, keeping room under the existing cap for analyst controls.
 # Optional on purpose: a dev running this on a laptop without binaryen still gets a working bundle,
 # just a fatter one. CI installs binaryen, so the deployed bundle is always optimized.
 #
@@ -38,7 +39,7 @@ glue="web/dist/hookecho.js"
 # the input didn't already use, so this is "accept what rustc produced", not "target the bleeding
 # edge" — the smoke test is what proves the result still runs.
 if command -v wasm-opt >/dev/null; then
-  wasm-opt -Os -all "$wasm" -o "$wasm.opt"
+  wasm-opt -Os --converge -all "$wasm" -o "$wasm.opt"
   mv "$wasm.opt" "$wasm"
 else
   echo "warning: wasm-opt not found (install binaryen) — bundle is ~15% larger than a CI build" >&2

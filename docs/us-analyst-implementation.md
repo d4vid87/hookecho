@@ -47,6 +47,10 @@ required geometry and archive formats. Portable cases measured 4,134,935 bytes; 
 map display, warning intersection, and native-value profile measured 4,146,896 bytes. The ceiling
 keeps a measured sub-0.1% regression margin without hiding the cost of later roadmap work.
 
+After the repeated-cut radar fix, repeated `wasm-opt -Os` passes measured 4,338,891 gzip bytes
+locally, down from 4,344,813 with one pass, under the unchanged 4,345,000-byte cap. The browser
+boot smoke passed with the converged binary; preview CI remains the release authority.
+
 Startup, resident memory, and interactive frame timing are hardware-dependent. Capture them with
 `scripts/perf/capture.sh` and the in-app performance panel on the release-test hardware before the
 foundation promotion; do not turn one developer-machine run into a universal threshold.
