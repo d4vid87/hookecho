@@ -384,11 +384,11 @@ pub async fn fetch_all(
                     match tempest_ob(client, tempest, s).await {
                         Ok(Some(ob)) => out.push(ob),
                         Ok(None) => {}
-                        Err(e) => log::warn!("tempest station {}: {e}", s.id),
+                        Err(_) => log::warn!("Tempest station observation unavailable"),
                     }
                 }
             }
-            Err(e) => log::warn!("tempest stations: {e}"),
+            Err(_) => log::warn!("Tempest station list unavailable"),
         }
     }
 
@@ -400,11 +400,11 @@ pub async fn fetch_all(
                     match wu_ob(client, wu, id).await {
                         Ok(Some(ob)) => out.push(ob),
                         Ok(None) => {}
-                        Err(e) => log::warn!("wu station {id}: {e}"),
+                        Err(_) => log::warn!("Weather Underground station observation unavailable"),
                     }
                 }
             }
-            Err(e) => log::warn!("wu stations near {lat},{lon}: {e}"),
+            Err(_) => log::warn!("Weather Underground nearby-station lookup unavailable"),
         }
     }
 
@@ -412,7 +412,7 @@ pub async fn fetch_all(
         // One request for the whole circle, unlike the per-station networks above.
         match crate::synoptic::fetch_near(client, synoptic, lat, lon, 60, 60).await {
             Ok(obs) => out.extend(obs),
-            Err(e) => log::warn!("synoptic stations near {lat},{lon}: {e}"),
+            Err(_) => log::warn!("Synoptic nearby-station lookup unavailable"),
         }
     }
 

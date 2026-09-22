@@ -151,6 +151,10 @@ pub enum FieldLayer {
     RtmaDewpoint2m,
     RtmaPressure,
     RtmaWindU10m,
+    RtmaWindV10m,
+    RtmaGust10m,
+    RtmaVisibility,
+    RtmaPrecip1h,
     /// Moving-window maximum of MRMS reflectivity with contributor history.
     MrmsReflectivityTrail,
     /// Banded precipitation from the MRMS mosaic, narrowed to snow — the snow-squall layer.
@@ -199,13 +203,17 @@ impl FieldLayer {
                 | FieldLayer::RtmaDewpoint2m
                 | FieldLayer::RtmaPressure
                 | FieldLayer::RtmaWindU10m
+                | FieldLayer::RtmaWindV10m
+                | FieldLayer::RtmaGust10m
+                | FieldLayer::RtmaVisibility
+                | FieldLayer::RtmaPrecip1h
                 | FieldLayer::MrmsReflectivityTrail
                 | FieldLayer::ModelDiff
         )
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const BASE_DRAW_ORDER: [FieldLayer; 67] = [
+    pub const BASE_DRAW_ORDER: [FieldLayer; 71] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -235,6 +243,10 @@ impl FieldLayer {
         FieldLayer::RtmaDewpoint2m,
         FieldLayer::RtmaPressure,
         FieldLayer::RtmaWindU10m,
+        FieldLayer::RtmaWindV10m,
+        FieldLayer::RtmaGust10m,
+        FieldLayer::RtmaVisibility,
+        FieldLayer::RtmaPrecip1h,
         FieldLayer::ModelDiff,
         FieldLayer::Mrms,
         FieldLayer::MrmsReflectivityTrail,
@@ -350,6 +362,10 @@ impl FieldLayer {
             FieldLayer::RtmaDewpoint2m => "rtma-dewpoint2m",
             FieldLayer::RtmaPressure => "rtma-pressure",
             FieldLayer::RtmaWindU10m => "rtma-wind-u10m",
+            FieldLayer::RtmaWindV10m => "rtma-wind-v10m",
+            FieldLayer::RtmaGust10m => "rtma-gust-10m",
+            FieldLayer::RtmaVisibility => "rtma-visibility",
+            FieldLayer::RtmaPrecip1h => "rtma-precip-1h",
             FieldLayer::MrmsReflectivityTrail => "mrms-reflectivity-trail",
             FieldLayer::ModelDiff => "model-diff",
             FieldLayer::GlmFed => "glm-fed",
@@ -410,6 +426,10 @@ impl FieldLayer {
             FL::RtmaDewpoint2m => &wxdata::rtma::DEWPOINT_DESCRIPTOR,
             FL::RtmaPressure => &wxdata::rtma::PRESSURE_DESCRIPTOR,
             FL::RtmaWindU10m => &wxdata::rtma::WIND_U_DESCRIPTOR,
+            FL::RtmaWindV10m => &wxdata::rtma::WIND_V_DESCRIPTOR,
+            FL::RtmaGust10m => &wxdata::rtma::GUST_DESCRIPTOR,
+            FL::RtmaVisibility => &wxdata::rtma::VISIBILITY_DESCRIPTOR,
+            FL::RtmaPrecip1h => &wxdata::rtma::PRECIP_DESCRIPTOR,
             FL::MrmsReflectivityTrail => &wxdata::trail::REFLECTIVITY_TRAIL_DESCRIPTOR,
             FL::SnowAnalysis => &wxdata::nohrsc::SNOWFALL_DESCRIPTOR,
             FL::SnowBands => &wxdata::banding::SNOW_BANDS_DESCRIPTOR,

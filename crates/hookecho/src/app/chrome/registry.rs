@@ -102,6 +102,7 @@ impl HookEchoApp {
                         | FL::RtmaDewpoint2m
                         | FL::RtmaPressure
                         | FL::RtmaWindU10m
+                        | FL::RtmaWindV10m
                         | FL::MrmsReflectivityTrail
                         | FL::ThunderProb
                         | FL::RefsReflectivityProb
@@ -620,6 +621,13 @@ impl HookEchoApp {
                 "Analysis",
                 "RTMA west/east wind",
                 "NOAA real-time 10 m U-wind analysis",
+                false,
+            ),
+            (
+                FL::RtmaWindV10m,
+                "Analysis",
+                "RTMA south/north wind",
+                "NOAA real-time 10 m V-wind analysis",
                 false,
             ),
             (

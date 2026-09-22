@@ -27,6 +27,8 @@ pub struct Observation {
 pub struct StationObs {
     pub station_id: String,
     pub name: String,
+    /// GeoJSON station coordinates (longitude, latitude), when the provider supplies them.
+    pub location: Option<(f64, f64)>,
     pub obs: Vec<Observation>,
 }
 
@@ -68,20 +70,26 @@ pub fn parse_observations(json: &str) -> anyhow::Result<Vec<Observation>> {
 }
 
 /// The first `n` stations from a `/stations` FeatureCollection, nearest first (the API already
-/// returns them in that order), as `(id, name)`. Split out so the picking is testable offline.
-fn station_ids(json: &str, n: usize) -> anyhow::Result<Vec<(String, String)>> {
+/// returns them in that order). GeoJSON coordinates are longitude, latitude.
+type StationCandidate = (String, String, Option<(f64, f64)>);
+
+fn station_ids(json: &str, n: usize) -> anyhow::Result<Vec<StationCandidate>> {
     let v: serde_json::Value = serde_json::from_str(json)?;
     let feats = v
         .get("features")
         .and_then(|f| f.as_array())
         .ok_or_else(|| anyhow::anyhow!("no nearby station"))?;
-    let out: Vec<(String, String)> = feats
+    let out: Vec<_> = feats
         .iter()
         .filter_map(|f| {
             let p = f.get("properties")?;
             let id = p.get("stationIdentifier")?.as_str()?.to_string();
             let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            Some((id, name.to_string()))
+            let location = f.pointer("/geometry/coordinates").and_then(|v| v.as_array())
+                .and_then(|v| Some((v.first()?.as_f64()?, v.get(1)?.as_f64()?)))
+                .filter(|(lon, lat)| lon.is_finite() && lat.is_finite()
+                    && (-180.0..=180.0).contains(lon) && (-90.0..=90.0).contains(lat));
+            Some((id, name.to_string(), location))
         })
         .take(n)
         .collect();
@@ -138,7 +146,7 @@ pub async fn fetch_nearest(
     let cutoff = chrono::Utc::now() - STALE;
     let mut best: Option<StationObs> = None;
     let mut last_err = None;
-    for (station_id, name) in candidates {
+    for (station_id, name, location) in candidates {
         let obs_json = match get(format!("{API}/stations/{station_id}/observations?limit=72")).await
         {
             Ok(j) => j,
@@ -152,6 +160,7 @@ pub async fn fetch_nearest(
         let candidate = StationObs {
             station_id,
             name,
+            location,
             obs,
         };
         if newest.is_some_and(|t| t >= cutoff) {
@@ -199,7 +208,7 @@ mod tests {
     #[test]
     fn takes_the_nearest_few_stations_in_order() {
         let json = r#"{"type":"FeatureCollection","features":[
-            {"properties":{"stationIdentifier":"KOUN","name":"Norman"}},
+            {"geometry":{"coordinates":[-97.47,35.24]},"properties":{"stationIdentifier":"KOUN","name":"Norman"}},
             {"properties":{"name":"no id here"}},
             {"properties":{"stationIdentifier":"KOKC","name":"Oklahoma City"}},
             {"properties":{"stationIdentifier":"KPWA","name":"Wiley Post"}},
@@ -207,7 +216,9 @@ mod tests {
         let s = station_ids(json, TRY_STATIONS).unwrap();
         assert_eq!(s.len(), 3, "nearest three, id-less entries skipped");
         assert_eq!(s[0].0, "KOUN");
+        assert_eq!(s[0].2, Some((-97.47, 35.24)));
         assert_eq!(s[2].0, "KPWA");
+        assert_eq!(s[2].2, None);
         assert!(station_ids(r#"{"features":[]}"#, 3).is_err());
     }
 }

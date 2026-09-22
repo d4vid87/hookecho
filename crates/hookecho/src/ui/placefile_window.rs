@@ -10,12 +10,15 @@ pub struct PlacefileStatus {
     pub title: String,
     /// Why the last load failed, if it did — a plugin's stderr usually ends up here.
     pub error: Option<String>,
+    pub attributes: Vec<String>,
 }
 
 #[derive(Default)]
 pub struct PlacefileWindow {
     pub open: bool,
     pub import_gis: bool,
+    pub export_gis: Option<String>,
+    pub restyle_gis: Option<String>,
     new_url: String,
     new_plugin: String,
     new_command: String,
@@ -62,6 +65,12 @@ impl PlacefileWindow {
                             if ui.button("✖").on_hover_text("Remove").clicked() {
                                 remove = Some(i);
                             }
+                            if cfg.url.starts_with("gis:")
+                                && st.is_some_and(|s| s.loaded)
+                                && ui.button("Export GeoJSON").clicked()
+                            {
+                                self.export_gis = Some(cfg.url.clone());
+                            }
                             ui.vertical(|ui| {
                                 let title = st
                                     .filter(|s| !s.title.is_empty())
@@ -72,6 +81,58 @@ impl PlacefileWindow {
                                 status_line(ui, st);
                             });
                         });
+                        if let Some(fields) = st
+                            .filter(|status| {
+                                cfg.url.starts_with("gis:") && !status.attributes.is_empty()
+                            })
+                            .map(|status| &status.attributes)
+                        {
+                            let mut changed = false;
+                            ui.horizontal(|ui| {
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Point label",
+                                    "gis-label",
+                                    &cfg.url,
+                                    &mut cfg.gis_label_field,
+                                    fields,
+                                );
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Color",
+                                    "gis-color",
+                                    &cfg.url,
+                                    &mut cfg.gis_color_field,
+                                    fields,
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Valid from",
+                                    "gis-start",
+                                    &cfg.url,
+                                    &mut cfg.gis_valid_start_field,
+                                    fields,
+                                );
+                                changed |= gis_field_picker(
+                                    ui,
+                                    "Valid until",
+                                    "gis-end",
+                                    &cfg.url,
+                                    &mut cfg.gis_valid_end_field,
+                                    fields,
+                                );
+                            });
+                            if cfg.gis_valid_start_field.is_some()
+                                != cfg.gis_valid_end_field.is_some()
+                            {
+                                ui.weak("Choose both date fields to filter by time.");
+                            }
+                            if changed {
+                                self.restyle_gis = Some(cfg.url.clone());
+                            }
+                        }
                         ui.separator();
                     }
                 });
@@ -97,6 +158,10 @@ impl PlacefileWindow {
                         url: self.new_url.trim().to_string(),
                         enabled: true,
                         opacity: 1.0,
+                        gis_label_field: None,
+                        gis_color_field: None,
+                        gis_valid_start_field: None,
+                        gis_valid_end_field: None,
                     });
                     self.new_url.clear();
                 }
@@ -213,4 +278,30 @@ fn status_line(ui: &mut egui::Ui, st: Option<&PlacefileStatus>) {
         }
         None => {}
     }
+}
+
+fn gis_field_picker(
+    ui: &mut egui::Ui,
+    label: &str,
+    id: &str,
+    url: &str,
+    selected: &mut Option<String>,
+    fields: &[String],
+) -> bool {
+    let response = ui.label(label);
+    if label == "Color" {
+        response.on_hover_text("Numeric columns use a graduated ramp; text categories get distinct colors. Hex colors are used directly.");
+    }
+    let mut changed = false;
+    egui::ComboBox::from_id_salt((id, url))
+        .selected_text(selected.as_deref().unwrap_or("Default"))
+        .show_ui(ui, |ui| {
+            changed |= ui.selectable_value(selected, None, "Default").changed();
+            for field in fields {
+                changed |= ui
+                    .selectable_value(selected, Some(field.clone()), field)
+                    .changed();
+            }
+        });
+    changed
 }

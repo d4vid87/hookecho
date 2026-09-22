@@ -21,6 +21,10 @@ pub enum SurfaceField {
     Dewpoint2m,
     Pressure,
     WindU10m,
+    WindV10m,
+    Gust10m,
+    Visibility,
+    Precip1h,
 }
 
 macro_rules! descriptor {
@@ -81,10 +85,32 @@ descriptor!(
     "RTMA"
 );
 
+descriptor!(WIND_V_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.wind-v-10m", "RTMA 10 m V wind", "RTMA V wind", "m s-1", "RTMA");
+descriptor!(GUST_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.gust-10m", "RTMA 10 m wind gust", "RTMA gust", "m s-1", "wind gust");
+descriptor!(VISIBILITY_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.visibility", "RTMA surface visibility", "RTMA visibility", "m", "visibility");
 descriptor!(URMA_TEMP_DESCRIPTOR, "NOAA URMA", "analysis.urma.temperature-2m", "URMA 2 m temperature", "URMA temp", "K", "URMA");
 descriptor!(URMA_DEWPOINT_DESCRIPTOR, "NOAA URMA", "analysis.urma.dewpoint-2m", "URMA 2 m dewpoint", "URMA dewpoint", "K", "URMA");
 descriptor!(URMA_PRESSURE_DESCRIPTOR, "NOAA URMA", "analysis.urma.pressure", "URMA surface pressure", "URMA pressure", "Pa", "URMA");
 descriptor!(URMA_WIND_U_DESCRIPTOR, "NOAA URMA", "analysis.urma.wind-u-10m", "URMA 10 m U wind", "URMA U wind", "m s-1", "URMA");
+descriptor!(URMA_WIND_V_DESCRIPTOR, "NOAA URMA", "analysis.urma.wind-v-10m", "URMA 10 m V wind", "URMA V wind", "m s-1", "URMA");
+descriptor!(URMA_GUST_DESCRIPTOR, "NOAA URMA", "analysis.urma.gust-10m", "URMA 10 m wind gust", "URMA gust", "m s-1", "wind gust");
+descriptor!(URMA_VISIBILITY_DESCRIPTOR, "NOAA URMA", "analysis.urma.visibility", "URMA surface visibility", "URMA visibility", "m", "visibility");
+
+macro_rules! precip_descriptor {
+    ($name:ident, $source:literal, $id:literal, $label:literal) => {
+        pub static $name: FieldDescriptor = FieldDescriptor {
+            id: FieldId($id), source: $source, family: FieldFamily::Analysis,
+            display_name: $label, short_name: "1 h precipitation",
+            search_aliases: &["hourly precipitation", "rain analysis", "QPE"],
+            units: "mm", value_kind: ValueKind::Accumulation,
+            palette_key: "qpe-1h", sampling: SamplingPolicy::Nearest,
+            missing: MissingData::Nan, time_policy: None,
+            supports_contours: false, supports_difference: false,
+        };
+    };
+}
+precip_descriptor!(PRECIP_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.precip-1h", "RTMA 1 h precipitation");
+precip_descriptor!(URMA_PRECIP_DESCRIPTOR, "NOAA URMA", "analysis.urma.precip-1h", "URMA 1 h precipitation");
 
 impl SurfaceField {
     fn index(self) -> (&'static str, &'static str) {
@@ -93,6 +119,10 @@ impl SurfaceField {
             Self::Dewpoint2m => ("DPT", "2 m above ground"),
             Self::Pressure => ("PRES", "surface"),
             Self::WindU10m => ("UGRD", "10 m above ground"),
+            Self::WindV10m => ("VGRD", "10 m above ground"),
+            Self::Gust10m => ("GUST", "10 m above ground"),
+            Self::Visibility => ("VIS", "surface"),
+            Self::Precip1h => ("APCP", "0 m above mean sea level"),
         }
     }
 
@@ -102,6 +132,10 @@ impl SurfaceField {
             Self::Dewpoint2m => &DEWPOINT_DESCRIPTOR,
             Self::Pressure => &PRESSURE_DESCRIPTOR,
             Self::WindU10m => &WIND_U_DESCRIPTOR,
+            Self::WindV10m => &WIND_V_DESCRIPTOR,
+            Self::Gust10m => &GUST_DESCRIPTOR,
+            Self::Visibility => &VISIBILITY_DESCRIPTOR,
+            Self::Precip1h => &PRECIP_DESCRIPTOR,
         }
     }
 
@@ -114,6 +148,10 @@ impl SurfaceField {
             Self::Dewpoint2m => &URMA_DEWPOINT_DESCRIPTOR,
             Self::Pressure => &URMA_PRESSURE_DESCRIPTOR,
             Self::WindU10m => &URMA_WIND_U_DESCRIPTOR,
+            Self::WindV10m => &URMA_WIND_V_DESCRIPTOR,
+            Self::Gust10m => &URMA_GUST_DESCRIPTOR,
+            Self::Visibility => &URMA_VISIBILITY_DESCRIPTOR,
+            Self::Precip1h => &URMA_PRECIP_DESCRIPTOR,
         }
     }
 }
@@ -129,6 +167,16 @@ pub fn object_url(source: Source, valid: DateTime<Utc>) -> String {
         "{root}/{prefix}.{day}/{prefix}.t{:02}z.2dvaranl_ndfd.grb2_wexp",
         valid.hour()
     )
+}
+
+/// Hourly precipitation is a separate object; its filename hour is the interval end.
+pub fn precip_object_url(source: Source, valid: DateTime<Utc>) -> String {
+    let day = valid.format("%Y%m%d");
+    let hour = valid.format("%Y%m%d%H");
+    match source {
+        Source::Rtma => format!("{RTMA_ROOT}/rtma2p5.{day}/rtma2p5.{hour}.pcp.184.grb2"),
+        Source::Urma => format!("{URMA_ROOT}/urma2p5.{day}/urma2p5.{hour}.pcp_01h.wexp.grb2"),
+    }
 }
 
 fn grib_message(bytes: &[u8]) -> Option<(u64, u8, u8, u8)> {
@@ -151,6 +199,20 @@ fn grib_message(bytes: &[u8]) -> Option<(u64, u8, u8, u8)> {
     None
 }
 
+/// Section 3 fixes the native projection, dimensions, and scan order for every field.
+fn grid_definition_bytes(raw: &[u8]) -> Option<&[u8]> {
+    if raw.get(..4)? != b"GRIB" || raw.get(7)? != &2 { return None; }
+    let mut offset = 16usize;
+    while offset + 5 <= raw.len() {
+        let length = u32::from_be_bytes(raw.get(offset..offset + 4)?.try_into().ok()?) as usize;
+        let end = offset.checked_add(length)?;
+        if length < 5 || end > raw.len() { return None; }
+        if raw[offset + 4] == 3 { return raw.get(offset..end); }
+        offset = end;
+    }
+    None
+}
+
 async fn urma_range(
     http: &reqwest::Client,
     url: &str,
@@ -161,6 +223,10 @@ async fn urma_range(
         SurfaceField::Dewpoint2m => (0, 6, 103),
         SurfaceField::Pressure => (3, 0, 1),
         SurfaceField::WindU10m => (2, 2, 103),
+        SurfaceField::WindV10m => (2, 3, 103),
+        SurfaceField::Gust10m => (2, 22, 103),
+        SurfaceField::Visibility => (19, 0, 1),
+        SurfaceField::Precip1h => (1, 8, 1),
     };
     let mut offset = 0u64;
     for _ in 0..32 {
@@ -178,6 +244,29 @@ async fn urma_range(
     anyhow::bail!("URMA object has no requested surface field")
 }
 
+/// Bolton-style equivalent potential temperature from surface temperature, dewpoint, and pressure.
+pub fn theta_e_k(temp_k: f32, dewpoint_k: f32, pressure_pa: f32) -> Option<f32> {
+    if !(temp_k > 150.0 && dewpoint_k > 150.0 && pressure_pa > 10_000.0) {
+        return None;
+    }
+    let pressure_hpa = pressure_pa / 100.0;
+    let vapor_hpa = vapor_pressure_hpa(dewpoint_k)?;
+    if vapor_hpa >= pressure_hpa { return None; }
+    let mixing_ratio = 0.622 * vapor_hpa / (pressure_hpa - vapor_hpa);
+    let lcl_k = 1.0 / (1.0 / (dewpoint_k - 56.0) + (temp_k / dewpoint_k).ln() / 800.0) + 56.0;
+    let theta_e = temp_k
+        * (1000.0 / pressure_hpa).powf(0.2854 * (1.0 - 0.28 * mixing_ratio))
+        * ((3376.0 / lcl_k - 2.54) * mixing_ratio * (1.0 + 0.81 * mixing_ratio)).exp();
+    theta_e.is_finite().then_some(theta_e)
+}
+
+pub fn vapor_pressure_hpa(dewpoint_k: f32) -> Option<f32> {
+    if !(150.0..350.0).contains(&dewpoint_k) { return None; }
+    let c = dewpoint_k - 273.15;
+    let vapor = 6.112 * (17.67 * c / (c + 243.5)).exp();
+    (vapor.is_finite() && vapor > 0.0).then_some(vapor)
+}
+
 /// Fetch one RTMA or URMA message by byte range and wrap native provenance.
 pub async fn fetch_analysis(
     http: &reqwest::Client,
@@ -185,6 +274,43 @@ pub async fn fetch_analysis(
     field: SurfaceField,
     valid: DateTime<Utc>,
 ) -> anyhow::Result<FieldFrame> {
+    let (cached, source_identity) = fetch_message(http, source, field, valid).await?;
+    let mut grid = crate::task::guarded(|| {
+        crate::hrrr::decode_regrid_at_resolution(&cached.bytes, 0.03, f64::NEG_INFINITY)
+    })
+    .unwrap_or_else(|_| anyhow::bail!("RTMA GRIB decode panicked"))?;
+    if field == SurfaceField::Precip1h {
+        grid.time += chrono::Duration::hours(1);
+    }
+    let valid_time = grid.time;
+    anyhow::ensure!(valid_time == valid, "analysis valid time differs from requested hour");
+    Ok(FieldFrame::new(
+        field.descriptor_for(source),
+        grid,
+        DataStamp {
+            source_identity,
+            issue_time: Some(valid_time),
+            run_time: None,
+            valid_time,
+            received_time: cached.received_at,
+            class: DataClass::Analysis,
+            quality: QualitySummary::Unknown,
+            available_members: None,
+        },
+    ))
+}
+
+async fn fetch_message(
+    http: &reqwest::Client,
+    source: Source,
+    field: SurfaceField,
+    valid: DateTime<Utc>,
+) -> anyhow::Result<(crate::object_cache::CachedObject, String)> {
+    if field == SurfaceField::Precip1h {
+        let url = precip_object_url(source, valid);
+        let cached = crate::object_cache::fetch_range(http, &url, 0, None).await?;
+        return Ok((cached, url));
+    }
     let url = object_url(source, valid);
     let (start, end) = if source == Source::Urma {
         urma_range(http, &url, field).await?
@@ -203,29 +329,91 @@ pub async fn fetch_analysis(
             .ok_or_else(|| anyhow::anyhow!("RTMA index has no {variable}:{level}"))?
     };
     let cached = crate::object_cache::fetch_range(http, &url, start, end).await?;
-    let grid = crate::task::guarded(|| {
-        crate::hrrr::decode_regrid_at_resolution(&cached.bytes, 0.03, f64::NEG_INFINITY)
-    })
-    .unwrap_or_else(|_| anyhow::bail!("RTMA GRIB decode panicked"))?;
-    let valid_time = grid.time;
     let source_identity = end.map_or_else(
         || format!("{url}#bytes={start}-"),
         |end| format!("{url}#bytes={start}-{}", end - 1),
     );
-    Ok(FieldFrame::new(
-        field.descriptor_for(source),
-        grid,
-        DataStamp {
-            source_identity,
-            issue_time: Some(valid_time),
-            run_time: None,
-            valid_time,
-            received_time: cached.received_at,
-            class: DataClass::Analysis,
-            quality: QualitySummary::Unknown,
-            available_members: None,
-        },
-    ))
+    Ok((cached, source_identity))
+}
+
+/// Two exact native-grid samples from one immutable message, for a point and its observation.
+pub struct NativeSamplePair {
+    pub source_identity: String,
+    pub valid_time: DateTime<Utc>,
+    pub received_time: DateTime<Utc>,
+    pub point: f32,
+    pub station: f32,
+}
+
+pub async fn fetch_native_pair(
+    http: &reqwest::Client,
+    source: Source,
+    field: SurfaceField,
+    valid: DateTime<Utc>,
+    point: (f64, f64),
+    station: (f64, f64),
+) -> anyhow::Result<NativeSamplePair> {
+    let (cached, source_identity) = fetch_message(http, source, field, valid).await?;
+    let received_time = cached.received_at;
+    let (actual, values) = crate::task::blocking(move || {
+        crate::task::guarded(|| crate::sounding::sample_grib_points(&cached.bytes, &[point, station]))
+            .unwrap_or_else(|_| anyhow::bail!("analysis native decode panicked"))
+    }).await??;
+    let mut actual = actual.ok_or_else(|| anyhow::anyhow!("analysis valid time unavailable"))?;
+    if field == SurfaceField::Precip1h {
+        actual += chrono::Duration::hours(1);
+    }
+    anyhow::ensure!(values.iter().all(|(distance, _)| *distance <= 0.2_f64.powi(2)),
+        "analysis point outside native grid");
+    anyhow::ensure!(actual == valid, "analysis valid time differs from requested hour");
+    Ok(NativeSamplePair {
+        source_identity, valid_time: actual, received_time,
+        point: values[0].1 as f32, station: values[1].1 as f32,
+    })
+}
+
+/// Derive θe on matching native RTMA/URMA grid points, then make one display grid for contours.
+pub async fn fetch_theta_e(
+    http: &reqwest::Client,
+    source: Source,
+    valid: DateTime<Utc>,
+) -> anyhow::Result<crate::mrms::MrmsField> {
+    let (temperature, t_id) = fetch_message(http, source, SurfaceField::Temperature2m, valid).await?;
+    let (dewpoint, td_id) = fetch_message(http, source, SurfaceField::Dewpoint2m, valid).await?;
+    let (pressure, p_id) = fetch_message(http, source, SurfaceField::Pressure, valid).await?;
+    fn object(id: &str) -> &str { id.split_once("#bytes=").map_or(id, |(object, _)| object) }
+    anyhow::ensure!(object(&t_id) == object(&td_id) && object(&t_id) == object(&p_id),
+        "analysis fields come from different source objects");
+    let grid = grid_definition_bytes(&temperature.bytes)
+        .ok_or_else(|| anyhow::anyhow!("analysis temperature has no grid definition"))?;
+    anyhow::ensure!(grid_definition_bytes(&dewpoint.bytes) == Some(grid)
+        && grid_definition_bytes(&pressure.bytes) == Some(grid),
+        "analysis native grid definitions differ");
+    crate::task::blocking(move || {
+        crate::task::guarded(|| {
+            use gribberish::message::read_message;
+            anyhow::ensure!(temperature.bytes.len() <= 32 * 1024 * 1024,
+                "analysis temperature GRIB exceeds 32 MiB");
+            let (t_time, lats, lons, mut values) = crate::sounding::decode_grib_grid(&temperature.bytes)?;
+            anyhow::ensure!(t_time == Some(valid) && values.len() <= 5_000_000,
+                "analysis temperature time or grid size differs");
+            let decode_values = |raw: &[u8]| -> anyhow::Result<Vec<f64>> {
+                anyhow::ensure!(raw.len() <= 32 * 1024 * 1024, "analysis GRIB exceeds 32 MiB");
+                let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no analysis GRIB message"))?;
+                anyhow::ensure!(msg.forecast_date()? == valid, "analysis valid times differ");
+                let data = msg.data().map_err(|e| anyhow::anyhow!("analysis decode: {e:?}"))?;
+                anyhow::ensure!(data.len() == values.len(), "analysis native grid lengths differ");
+                Ok(data)
+            };
+            let dewpoints = decode_values(&dewpoint.bytes)?;
+            let pressures = decode_values(&pressure.bytes)?;
+            for ((value, dewpoint), pressure) in values.iter_mut().zip(dewpoints).zip(pressures) {
+                *value = theta_e_k(*value as f32, dewpoint as f32, pressure as f32)
+                    .map_or(f64::NAN, f64::from);
+            }
+            crate::hrrr::regrid(&lats, &lons, &values, valid, 0.03, f64::NEG_INFINITY)
+        }).unwrap_or_else(|_| anyhow::bail!("analysis θe decode panicked"))
+    }).await?
 }
 
 pub async fn fetch_rtma(
@@ -278,9 +466,148 @@ pub async fn fetch_latest_urma(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no recent URMA analysis")))
 }
 
+/// One native 2 m temperature sample at a station from an exact RTMA valid hour.
+#[derive(Debug, Clone)]
+pub struct PointTemperature {
+    pub stamp: DataStamp,
+    pub kelvin: f32,
+}
+
+/// Fetch up to six consecutive hourly analyses, ending at the newest published RTMA hour.
+/// Missing hours remain gaps rather than being replaced with a different valid time.
+pub async fn fetch_point_temperature_history(
+    http: &reqwest::Client,
+    lon: f64,
+    lat: f64,
+) -> anyhow::Result<Vec<PointTemperature>> {
+    let latest = fetch_latest_rtma(http, SurfaceField::Temperature2m).await?;
+    let newest = latest.stamp.valid_time;
+    let sample = |frame: FieldFrame| {
+        Some(PointTemperature { kelvin: frame.sample(lon, lat).value?, stamp: frame.stamp })
+    };
+    let mut points: Vec<_> = sample(latest).into_iter().collect();
+    for hour in (1..=5).rev() {
+        let requested = newest - chrono::Duration::hours(hour);
+        if let Ok(frame) = fetch_rtma(http, SurfaceField::Temperature2m, requested).await {
+            if frame.stamp.valid_time == requested {
+                points.extend(sample(frame));
+            }
+        }
+    }
+    points.sort_by_key(|point| point.stamp.valid_time);
+    anyhow::ensure!(!points.is_empty(), "no RTMA temperature data at station");
+    Ok(points)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hourly_precip_fixtures_decode_complex_packing_and_end_time() {
+        // Unmodified NOMADS RTMA/URMA hourly precipitation GRIBs from the filename hours below.
+        // RTMA uses packing template 2; URMA uses template 3.
+        for (raw, end, finite) in [
+            (include_bytes!("../testdata/rtma-pcp-2026092214.grb2").as_slice(),
+             "2026-09-22T14:00:00Z", 2_387_407),
+            (include_bytes!("../testdata/urma-pcp-2026092020.grb2").as_slice(),
+             "2026-09-20T20:00:00Z", 3_744_965),
+        ] {
+            let message = gribberish::message::read_message(raw, 0).unwrap();
+            let start = message.forecast_date().unwrap();
+            assert_eq!(start + chrono::Duration::hours(1), end.parse::<DateTime<Utc>>().unwrap());
+            let values = message.data().unwrap();
+            assert_eq!(values.iter().filter(|value| value.is_finite()).count(), finite);
+            assert!(values.iter().all(|value| !value.is_finite() || *value >= 0.0));
+        }
+    }
+
+    #[test]
+    fn native_grid_definition_rejects_truncated_sections() {
+        let mut raw = vec![0; 16];
+        raw[..4].copy_from_slice(b"GRIB");
+        raw[7] = 2;
+        raw.extend_from_slice(&[0, 0, 0, 9, 3, 1, 2, 3, 4]);
+        assert_eq!(grid_definition_bytes(&raw), Some(&raw[16..]));
+        raw[19] = 10;
+        assert!(grid_definition_bytes(&raw).is_none());
+        let theta = theta_e_k(303.15, 293.15, 100_000.0).unwrap();
+        assert!((340.0..350.0).contains(&theta));
+        assert!(theta_e_k(f32::NAN, 293.15, 100_000.0).is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_station_temperature_history_keeps_exact_hours() {
+        let points = fetch_point_temperature_history(&reqwest::Client::new(), -97.3, 32.6)
+            .await.expect("RTMA station temperature");
+        eprintln!("RTMA station temperature: {} hours", points.len());
+        assert!(points.len() >= 2);
+        assert!(points.iter().all(|point| point.stamp.class == DataClass::Analysis
+            && (240.0..330.0).contains(&point.kelvin)));
+        assert!(points.windows(2).all(|pair| pair[0].stamp.valid_time < pair[1].stamp.valid_time));
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_native_pair_reads_exact_analysis_hour() {
+        let http = reqwest::Client::new();
+        let latest = fetch_latest_rtma(&http, SurfaceField::Temperature2m).await.unwrap();
+        let at = latest.stamp.valid_time;
+        let point = fetch_native_pair(&http, Source::Rtma, SurfaceField::Temperature2m,
+            at, (-97.3, 32.6), (-97.04, 32.9)).await.unwrap();
+        assert_eq!(point.valid_time, at);
+        assert_eq!(point.source_identity, latest.stamp.source_identity);
+        assert!((240.0..330.0).contains(&point.point));
+        assert!((240.0..330.0).contains(&point.station));
+        let precip = fetch_analysis(&http, Source::Rtma, SurfaceField::Precip1h, at).await.unwrap();
+        assert_eq!(precip.stamp.valid_time, at);
+        assert_eq!(precip.descriptor.value_kind, ValueKind::Accumulation);
+        assert!(precip.sample(-97.3, 32.6).value.is_some());
+        for field in [SurfaceField::Dewpoint2m, SurfaceField::Pressure,
+            SurfaceField::WindU10m, SurfaceField::WindV10m,
+            SurfaceField::Gust10m, SurfaceField::Visibility, SurfaceField::Precip1h] {
+            let other = fetch_native_pair(&http, Source::Rtma, field,
+                at, (-97.3, 32.6), (-97.04, 32.9)).await.unwrap();
+            assert_eq!(other.valid_time, at);
+            if field != SurfaceField::Precip1h {
+                assert_eq!(other.source_identity.split_once("#bytes=").unwrap().0,
+                    point.source_identity.split_once("#bytes=").unwrap().0);
+            }
+            assert!(other.point.is_finite() && other.station.is_finite());
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_theta_e_uses_matching_native_surface_fields() {
+        let http = reqwest::Client::new();
+        let latest = fetch_latest_rtma(&http, SurfaceField::Temperature2m).await.unwrap();
+        let valid = latest.stamp.valid_time;
+        let grid = fetch_theta_e(&http, Source::Rtma, valid).await.unwrap();
+        assert_eq!(grid.time, valid);
+        let value = grid.sample_bilinear(-97.3, 32.6).unwrap();
+        assert!((240.0..440.0).contains(&value), "θe {value} K");
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_v_wind_has_signed_native_values() {
+        let frame = fetch_latest_rtma(&reqwest::Client::new(), SurfaceField::WindV10m)
+            .await.expect("latest RTMA 10 m V wind");
+        assert_eq!(frame.descriptor.id.0, "analysis.rtma.wind-v-10m");
+        assert!(frame.field().values.iter().any(|value| value.is_finite()));
+        let temperature = fetch_rtma(&reqwest::Client::new(), SurfaceField::Temperature2m,
+            frame.stamp.valid_time).await.expect("same-hour RTMA temperature");
+        let u = fetch_rtma(&reqwest::Client::new(), SurfaceField::WindU10m,
+            frame.stamp.valid_time).await.expect("same-hour RTMA U wind");
+        fn object(identity: &str) -> &str { identity.split_once("#bytes=").unwrap().0 }
+        assert_eq!(object(&frame.stamp.source_identity), object(&temperature.stamp.source_identity));
+        assert_eq!(object(&frame.stamp.source_identity), object(&u.stamp.source_identity));
+        assert!(!crate::contour::contour_lines(temperature.field(), 2.0).is_empty(),
+            "the decoded native temperature grid should yield analysis isolines");
+        eprintln!("RTMA matched wind and temperature: {}", frame.stamp.source_identity);
+    }
 
     #[test]
     fn official_paths_and_index_names_are_stable() {
@@ -302,6 +629,9 @@ mod tests {
             SurfaceField::Temperature2m.descriptor_for(Source::Urma).source_id().0,
             "noaa.urma"
         );
+        assert_eq!(SurfaceField::WindV10m.index(), ("VGRD", "10 m above ground"));
+        assert_eq!(SurfaceField::Gust10m.index(), ("GUST", "10 m above ground"));
+        assert_eq!(SurfaceField::Visibility.index(), ("VIS", "surface"));
         assert_ne!(
             SurfaceField::Temperature2m.descriptor().id,
             SurfaceField::Temperature2m.descriptor_for(Source::Urma).id
@@ -340,6 +670,18 @@ mod tests {
         .unwrap();
         assert_eq!(frame.descriptor.id.0, "analysis.urma.temperature-2m");
         assert!(frame.field().values.iter().any(|value| value.is_finite()));
+        let v_wind = fetch_analysis(
+            &reqwest::Client::new(), Source::Urma, SurfaceField::WindV10m,
+            "2026-09-20T20:00:00Z".parse().unwrap(),
+        ).await.unwrap();
+        assert_eq!(v_wind.descriptor.id.0, "analysis.urma.wind-v-10m");
+        assert!(v_wind.field().values.iter().any(|value| value.is_finite()));
+        for field in [SurfaceField::Gust10m, SurfaceField::Visibility, SurfaceField::Precip1h] {
+            let decoded = fetch_analysis(&reqwest::Client::new(), Source::Urma, field,
+                "2026-09-20T20:00:00Z".parse().unwrap()).await.unwrap();
+            assert_eq!(decoded.descriptor.id, field.descriptor_for(Source::Urma).id);
+            assert!(decoded.field().values.iter().any(|value| value.is_finite()));
+        }
         println!("{}", frame.stamp.source_identity);
     }
 }

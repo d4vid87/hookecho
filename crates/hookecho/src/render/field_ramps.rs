@@ -19,6 +19,7 @@ pub enum RampScale {
 }
 
 /// A continuous color scale, or a set of labeled category slots.
+#[derive(Clone, Copy)]
 pub enum FieldScale {
     Ramp {
         lo: f32,
@@ -32,6 +33,7 @@ pub enum FieldScale {
 }
 
 /// How one field layer is colored and labeled.
+#[derive(Clone, Copy)]
 pub struct FieldRamp {
     /// Legend heading.
     pub label: &'static str,
@@ -571,6 +573,30 @@ static GLOBAL_WIND_10M: FieldRamp = FieldRamp {
     )
 };
 
+static RTMA_GUST: FieldRamp = FieldRamp {
+    label: "10 m wind gust",
+    ..GLOBAL_WIND_10M
+};
+
+static RTMA_VISIBILITY: FieldRamp = FieldRamp {
+    input_scale: 0.000_621_371, // m → statute miles; native samples stay in metres
+    ..ramp!("Surface visibility", "mi", 0.0, 10.0, RampScale::Linear, 105, &[
+        (0.0, [210, 45, 70]),
+        (0.3, [245, 155, 70]),
+        (0.6, [110, 175, 205]),
+        (1.0, [85, 100, 115]),
+    ])
+};
+
+/// Signed RTMA/URMA wind components: direction matters for advection and convergence.
+static RTMA_WIND_COMPONENT: FieldRamp = FieldRamp {
+    input_scale: 1.943_844, // m/s → kt
+    ..ramp!(
+        "10 m wind component", "kt", -60.0, 60.0, RampScale::Linear, 170,
+        &[(0.0, [55, 120, 210]), (0.5, [175, 180, 185]), (1.0, [225, 110, 65])]
+    )
+};
+
 /// Global moisture: GFS publishes precipitable water, ECMWF total precipitation. Both are
 /// millimetres of water and both answer "how wet is this air mass".
 static GLOBAL_PRECIP: FieldRamp = ramp!(
@@ -839,7 +865,10 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::RtmaTemp2m => &GLOBAL_TEMP_2M,
         FL::RtmaDewpoint2m => &GLOBAL_DEWPOINT_2M,
         FL::RtmaPressure => &GLOBAL_MSLP,
-        FL::RtmaWindU10m => &GLOBAL_WIND_10M,
+        FL::RtmaWindU10m | FL::RtmaWindV10m => &RTMA_WIND_COMPONENT,
+        FL::RtmaGust10m => &RTMA_GUST,
+        FL::RtmaVisibility => &RTMA_VISIBILITY,
+        FL::RtmaPrecip1h => &QPE_1H,
         FL::Hca => &HCA,
         FL::GlmFed => &GLM_FED,
         FL::SnowBands => &SNOW_BANDS,
@@ -902,6 +931,23 @@ mod tests {
                 assert!(lo < hi, "{l:?}: lo {lo} must be below hi {hi}");
             }
         }
+    }
+
+    #[test]
+    fn analysis_gust_and_visibility_keep_native_units_under_display_ramps() {
+        let gust = ramp_for(FieldLayer::RtmaGust10m).unwrap();
+        let visibility = ramp_for(FieldLayer::RtmaVisibility).unwrap();
+        assert!((gust.display(10.0) - 19.438_44).abs() < 0.01);
+        assert!((visibility.display(1609.344) - 1.0).abs() < 0.01);
+        assert!(visibility.index(500.0) < visibility.index(16_093.44));
+    }
+
+    #[test]
+    fn analysis_wind_palette_preserves_component_sign() {
+        let ramp = ramp_for(FieldLayer::RtmaWindV10m).unwrap();
+        assert!(ramp.index(-10.0) < ramp.index(0.0));
+        assert!(ramp.index(0.0) < ramp.index(10.0));
+        assert_eq!(ramp.display(10.0), 19.43844);
     }
 
     #[test]

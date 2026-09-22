@@ -296,7 +296,7 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
     count(match path {
         "/" => "index",
         "/status.json" | "/alerts.json" | "/obs.json" | "/health.json"
-        | "/v1/status" | "/v1/health" | "/v1/products" | "/v1/frame" | "/v1/probe" => "json",
+        | "/v1/status" | "/v1/alerts" | "/v1/health" | "/v1/products" | "/v1/frame" | "/v1/probe" => "json",
         "/cells.json" | "/v1/cells" => "cells",
         "/snapshot.png" | "/v1/snapshot.png" => "snapshot",
         "/national.png" | "/national.mp4" => "national",
@@ -326,6 +326,10 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             Err(e) => error_json(e).into(),
         },
         "/v1/status" => match cached_json(server, "/status.json") {
+            Ok(body) => ("200 OK", "application/json", body).into(),
+            Err(e) => error_json(e).into(),
+        },
+        "/v1/alerts" => match cached_json(server, "/alerts.json") {
             Ok(body) => ("200 OK", "application/json", body).into(),
             Err(e) => error_json(e).into(),
         },

@@ -795,6 +795,14 @@ pub struct PlacefileConfig {
     /// Draw opacity 0..=1, set in the Layer Manager.
     #[serde(default = "default_opacity")]
     pub opacity: f32,
+    #[serde(default)]
+    pub gis_label_field: Option<String>,
+    #[serde(default)]
+    pub gis_color_field: Option<String>,
+    #[serde(default)]
+    pub gis_valid_start_field: Option<String>,
+    #[serde(default)]
+    pub gis_valid_end_field: Option<String>,
 }
 
 fn default_opacity() -> f32 {
@@ -1498,7 +1506,9 @@ impl Settings {
     /// Persist `json`: a settings.json on native, a `localStorage` entry on the web.
     #[cfg(not(target_arch = "wasm32"))]
     fn write_saved(json: &str) -> Result<(), String> {
-        let Some(path) = Self::path() else { return Err("settings path unavailable".into()) };
+        let Some(path) = Self::path() else {
+            return Err("settings path unavailable".into());
+        };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -1511,7 +1521,9 @@ impl Settings {
     // upgrade path if offline-web ever becomes real.
     #[cfg(target_arch = "wasm32")]
     fn write_saved(json: &str) -> Result<(), String> {
-        let Some(store) = local_storage() else { return Err("browser storage unavailable".into()) };
+        let Some(store) = local_storage() else {
+            return Err("browser storage unavailable".into());
+        };
         store.set_item(WEB_KEY, json).map_err(|e| format!("{e:?}"))
     }
 
@@ -1523,7 +1535,9 @@ impl Settings {
     /// Write out, logging on error. Interactive edits use [`Self::save_checked`] so failure is
     /// visible; startup/exit callers have no UI available to report through.
     pub fn save(&self) {
-        if let Err(e) = self.save_checked() { log::warn!("settings save failed: {e}"); }
+        if let Err(e) = self.save_checked() {
+            log::warn!("settings save failed: {e}");
+        }
     }
 }
 
@@ -1584,6 +1598,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gis_style_fields_preserve_old_placefile_settings() {
+        let old = r#"{"url":"gis:counties.zip","enabled":true,"opacity":0.7}"#;
+        let mut config: PlacefileConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(config.gis_label_field, None);
+        assert_eq!(config.gis_color_field, None);
+        assert_eq!(config.gis_valid_start_field, None);
+        assert_eq!(config.gis_valid_end_field, None);
+        config.gis_label_field = Some("COUNTY".into());
+        config.gis_color_field = Some("RISK".into());
+        config.gis_valid_start_field = Some("FROM".into());
+        config.gis_valid_end_field = Some("UNTIL".into());
+        let restored: PlacefileConfig =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored, config);
+    }
+
+    #[test]
     fn field_history_is_stable_bounded_and_toggleable() {
         let mut settings = Settings::default();
         for n in 0..10 {
@@ -1592,7 +1623,14 @@ mod tests {
         settings.record_recent_field("field.5");
         assert_eq!(settings.recent_fields.len(), 8);
         assert_eq!(settings.recent_fields[0], "field.5");
-        assert_eq!(settings.recent_fields.iter().filter(|id| *id == "field.5").count(), 1);
+        assert_eq!(
+            settings
+                .recent_fields
+                .iter()
+                .filter(|id| *id == "field.5")
+                .count(),
+            1
+        );
 
         settings.toggle_favorite_field("mrms.mesh");
         assert_eq!(settings.favorite_fields, ["mrms.mesh"]);
@@ -1778,6 +1816,10 @@ mod tests {
                 url: "http://x/p.txt".to_string(),
                 enabled: true,
                 opacity: 1.0,
+                gis_label_field: None,
+                gis_color_field: None,
+                gis_valid_start_field: None,
+                gis_valid_end_field: None,
             }],
             markers: vec![Marker {
                 id: new_marker_id(),

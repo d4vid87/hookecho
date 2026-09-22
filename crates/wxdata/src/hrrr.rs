@@ -56,6 +56,23 @@ pub static CAPE_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_difference: true,
 };
 
+pub static TEMP_2M_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("model.hrrr.temperature-2m"),
+    source: "NOAA HRRR",
+    family: FieldFamily::Model,
+    display_name: "HRRR 2 m temperature",
+    short_name: "HRRR temperature",
+    search_aliases: &["surface temperature", "analysis", "forecast"],
+    units: "K",
+    value_kind: ValueKind::Scalar,
+    palette_key: "temperature",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: true,
+    supports_difference: true,
+};
+
 pub static SRH_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     id: FieldId("model.mesoscale.srh"),
     source: "NOAA regional models",
@@ -373,7 +390,7 @@ impl HrrrForecast {
                 run_time: Some(self.run),
                 valid_time,
                 received_time: Utc::now(),
-                class: if model == Model::Rap {
+                class: if model == Model::Rap || self.fcst_hour == 0 {
                     DataClass::Analysis
                 } else {
                     DataClass::Forecast
@@ -430,6 +447,39 @@ pub async fn fetch_field(
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HRRR run found")))
+}
+
+/// One native-value station sample from a single HRRR cycle.
+#[derive(Debug, Clone)]
+pub struct PointTemperature {
+    pub stamp: DataStamp,
+    pub kelvin: f32,
+}
+
+/// Current HRRR f00 analysis plus 3 h and 6 h forecasts from that same run.
+/// Unavailable forecast hours are omitted rather than silently substituted from another cycle.
+pub async fn fetch_point_temperature_trace(
+    http: &reqwest::Client,
+    lon: f64,
+    lat: f64,
+) -> anyhow::Result<Vec<PointTemperature>> {
+    let first = fetch_field(http, Model::Hrrr, "TMP", "2 m above ground", 0, f64::NEG_INFINITY).await?;
+    let run = first.run;
+    let sample = |forecast: HrrrForecast| {
+        let frame = forecast.into_frame(&TEMP_2M_DESCRIPTOR, Model::Hrrr);
+        Some(PointTemperature { kelvin: frame.sample(lon, lat).value?, stamp: frame.stamp })
+    };
+    let mut points: Vec<_> = sample(first).into_iter().collect();
+    let later = futures_util::future::join_all([3, 6].map(|hour| {
+        fetch_run_field(http, Model::Hrrr, run, hour, "TMP", "2 m above ground", f64::NEG_INFINITY)
+    })).await;
+    for (hour, field) in [3, 6].into_iter().zip(later) {
+        if let Ok(field) = field {
+            points.extend(sample(HrrrForecast { field, run, fcst_hour: hour }));
+        }
+    }
+    anyhow::ensure!(!points.is_empty(), "no HRRR temperature data at station");
+    Ok(points)
 }
 
 /// The six most recent cycles of `model` that could plausibly be posted, newest first.
@@ -1013,6 +1063,19 @@ mod tests {
         assert!(ratio < 3.0, "RAP {max} and HRRR {hmax} disagree wildly");
     }
 
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_hrrr_station_temperature_uses_one_cycle() {
+        let points = fetch_point_temperature_trace(&reqwest::Client::new(), -97.3, 32.6)
+            .await.expect("HRRR station temperature");
+        eprintln!("HRRR station temperature: {} points from run {:?}", points.len(), points[0].stamp.run_time);
+        assert!(points.iter().any(|point| point.stamp.class == DataClass::Analysis));
+        let run = points[0].stamp.run_time;
+        assert!(points.iter().all(|point| point.stamp.run_time == run
+            && (240.0..330.0).contains(&point.kelvin)));
+        assert!(points.windows(2).all(|pair| pair[0].stamp.valid_time < pair[1].stamp.valid_time));
+    }
+
     /// `cargo test -p wxdata rrfs_parallel_live -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "network"]
@@ -1233,6 +1296,17 @@ mod tests {
         assert_eq!(analysis.stamp.class, DataClass::Analysis);
         assert!(analysis.stamp.source_identity.contains("noaa-rap-pds"));
         assert_eq!(analysis.descriptor.units, "J/kg");
+
+        let hrrr_analysis = HrrrForecast {
+            field: MrmsField {
+                values: vec![300.0], nx: 1, ny: 1,
+                lon_west: -100.0, lon_east: -99.0,
+                lat_north: 40.0, lat_south: 39.0, time: run,
+            },
+            run, fcst_hour: 0,
+        }.into_frame(&TEMP_2M_DESCRIPTOR, Model::Hrrr);
+        assert_eq!(hrrr_analysis.stamp.class, DataClass::Analysis);
+        assert_eq!(hrrr_analysis.sample(-99.5, 39.5).value, Some(300.0));
 
         let swath = HrrrForecast {
             field: MrmsField {

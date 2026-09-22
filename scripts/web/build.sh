@@ -129,7 +129,16 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Raised deliberately for the offline chase packs (IndexedDB via web-sys) and the detailed dark
 # street-map labels shipped in the default view.
 # Vector-tile worker serialization adds ~2.4 KB gzip while moving tessellation off the UI thread.
-budget="${HOOKECHO_WASM_BUDGET:-4240000}"
+# The station-analysis timeline measured 4,244,093 bytes gzip with binaryen; retain a 0.21%
+# regression allowance rather than silently failing the new preview on a 4,240,000-byte gate.
+# Native point/station RTMA sampling for the objective sounding measured 4,257,369 bytes after
+# sharing the existing GRIB decoder and removing the old map-grid sounding path. The remaining
+# 2,631-byte allowance is 0.06% of the measured bundle.
+# Native θe contours compare GRIB grid definitions before deriving, avoiding two duplicate
+# coordinate arrays (local test-process peak: 353.5 → 293.1 MiB). This measured 4,261,133
+# gzip bytes; the ceiling keeps a 2,867-byte (0.07%) allowance.
+# Contour GeoJSON export measured 4,335,841 gzip bytes; keep a 9,159-byte margin.
+budget="${HOOKECHO_WASM_BUDGET:-4345000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

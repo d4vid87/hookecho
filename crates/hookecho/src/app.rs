@@ -263,6 +263,12 @@ enum OverlayMsg {
     Wind(Box<crate::wind_draw::WindField>),
     /// Nearest-station observations for a site (or an error string).
     Obs(String, Result<wxdata::obs::StationObs, String>),
+    SensorHrrr(String, Vec<wxdata::hrrr::PointTemperature>),
+    SensorRtma(String, Vec<wxdata::rtma::PointTemperature>),
+    SensorGfs(String, Vec<wxdata::global::PointTemperature>),
+    PointHrrr(String, Vec<wxdata::hrrr::PointTemperature>),
+    PointRtma(String, Vec<wxdata::rtma::PointTemperature>),
+    PointGfs(String, Vec<wxdata::global::PointTemperature>),
     /// VAD wind profile for a site.
     Vwp(String, Vec<wxdata::level3::VwpLevel>),
     /// Archived storm-based warnings for a 5-min UTC bucket (feature W).
@@ -390,6 +396,12 @@ enum OverlaySource {
         lat: f64,
         lon: f64,
     },
+    SensorHrrr { station: String, lon: f64, lat: f64 },
+    SensorRtma { station: String, lon: f64, lat: f64 },
+    SensorGfs { station: String, lon: f64, lat: f64 },
+    PointHrrr { point: String, lon: f64, lat: f64 },
+    PointRtma { point: String, lon: f64, lat: f64 },
+    PointGfs { point: String, lon: f64, lat: f64 },
     /// VAD wind profile for `site`.
     Vwp(String),
     /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
@@ -443,6 +455,7 @@ enum OverlaySource {
     /// Model contours for a field kind (surface f00, contoured off-thread), from HRRR or the RAP
     /// analysis.
     Contours(ContourKind, wxdata::hrrr::Model, crate::settings::TempUnit),
+    AnalysisContours(ContourKind, wxdata::rtma::Source, crate::settings::TempUnit),
     /// County power outages by county, from ODIN (DOE/ORNL).
     Outages,
     /// NHC tropical cyclones (feature V).
@@ -484,10 +497,12 @@ impl RequestLane {
                 "mPING reports" | "Power outages" | "River gauges" | "Electric field"
                 | "VAD profile" | "Archived warnings" => 300,
                 "Webcams" => 480,
-                "Hurricane reconnaissance" | "Aviation advisories" | "Radar observations" => 600,
+                "Hurricane reconnaissance" | "Aviation advisories" | "Radar observations"
+                | "HRRR station temperature" => 600,
+                "RTMA station temperature" => 3600,
                 "Tropical cyclones" | "Wildfires" | "Air quality"
                 | "Temporary flight restrictions" | "Wind particles" | "Freezing levels"
-                | "Model contours" => 900,
+                | "Contours" => 900,
                 "Surface analysis" | "Archived storm reports" => 1800,
                 "Highway cameras" | "Damage surveys" => 3600,
                 _ => 120,
@@ -621,6 +636,12 @@ impl OverlaySource {
             Self::GoesRgb(..) => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
+            Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
+            Self::SensorRtma { .. } => RequestLane::Feed("RTMA station temperature"),
+            Self::SensorGfs { .. } => RequestLane::Feed("GFS station temperature"),
+            Self::PointHrrr { .. } => RequestLane::Feed("HRRR selected-point temperature"),
+            Self::PointRtma { .. } => RequestLane::Feed("RTMA selected-point temperature"),
+            Self::PointGfs { .. } => RequestLane::Feed("GFS selected-point temperature"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
             Self::ArchiveWarnings(..) => RequestLane::Feed("Archived warnings"),
             Self::Aviation => RequestLane::Feed("Aviation advisories"),
@@ -635,7 +656,7 @@ impl OverlaySource {
             Self::Mill(..) => RequestLane::Feed("Field mill"),
             Self::Dat(..) => RequestLane::Feed("Damage surveys"),
             Self::Gauges(..) => RequestLane::Feed("River gauges"),
-            Self::Contours(..) => RequestLane::Feed("Model contours"),
+            Self::Contours(..) | Self::AnalysisContours(..) => RequestLane::Feed("Contours"),
             Self::Outages => RequestLane::Feed("Power outages"),
             Self::Tropical(..) => RequestLane::Feed("Tropical cyclones"),
             Self::Wind(..) => RequestLane::Feed("Wind particles"),
@@ -1032,6 +1053,24 @@ impl OverlaySource {
                     .map_err(|e| e.to_string());
                 OverlayMsg::Obs(site, r)
             }
+            OverlaySource::SensorHrrr { station, lon, lat } => {
+                OverlayMsg::SensorHrrr(station, wxdata::hrrr::fetch_point_temperature_trace(http, lon, lat).await?)
+            }
+            OverlaySource::SensorRtma { station, lon, lat } => {
+                OverlayMsg::SensorRtma(station, wxdata::rtma::fetch_point_temperature_history(http, lon, lat).await?)
+            }
+            OverlaySource::SensorGfs { station, lon, lat } => {
+                OverlayMsg::SensorGfs(station, wxdata::global::fetch_point_temperature_trace(http, lon, lat).await?)
+            }
+            OverlaySource::PointHrrr { point, lon, lat } => {
+                OverlayMsg::PointHrrr(point, wxdata::hrrr::fetch_point_temperature_trace(http, lon, lat).await?)
+            }
+            OverlaySource::PointRtma { point, lon, lat } => {
+                OverlayMsg::PointRtma(point, wxdata::rtma::fetch_point_temperature_history(http, lon, lat).await?)
+            }
+            OverlaySource::PointGfs { point, lon, lat } => {
+                OverlayMsg::PointGfs(point, wxdata::global::fetch_point_temperature_trace(http, lon, lat).await?)
+            }
             OverlaySource::Vwp(site) => {
                 let levels = wxdata::level3::fetch_vwp(http, &site).await;
                 OverlayMsg::Vwp(site, levels)
@@ -1192,6 +1231,32 @@ impl OverlaySource {
                     valid,
                 )
             }
+            OverlaySource::AnalysisContours(kind, source, temp_unit) => {
+                if kind == ContourKind::AnalysisThetaE {
+                    let latest = match source {
+                        wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, wxdata::rtma::SurfaceField::Temperature2m).await?,
+                        wxdata::rtma::Source::Urma => wxdata::rtma::fetch_latest_urma(http, wxdata::rtma::SurfaceField::Temperature2m).await?,
+                    };
+                    let valid = latest.stamp.valid_time;
+                    drop(latest);
+                    let grid = wxdata::rtma::fetch_theta_e(http, source, valid).await?;
+                    return Ok(OverlayMsg::Contours(kind, wxdata::contour::contour_lines(
+                        &grid, kind.interval(temp_unit),
+                    ), valid));
+                }
+                let field = kind.analysis_field().ok_or_else(|| anyhow::anyhow!("not an analysis contour"))?;
+                let frame = match source {
+                    wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, field).await?,
+                    wxdata::rtma::Source::Urma => wxdata::rtma::fetch_latest_urma(http, field).await?,
+                };
+                let mut grid = frame.field().clone();
+                for value in &mut grid.values {
+                    if value.is_finite() { *value = kind.to_display(*value, temp_unit); }
+                }
+                OverlayMsg::Contours(kind, wxdata::contour::contour_lines(
+                    &grid, kind.interval(temp_unit),
+                ), frame.stamp.valid_time)
+            }
             OverlaySource::Outages => OverlayMsg::Outages(wxdata::outages::fetch(http).await?),
             OverlaySource::Tropical(wind_kt, surge) => OverlayMsg::Tropical(
                 wxdata::tropical::fetch_active_opts(http, wind_kt, surge).await?,
@@ -1261,6 +1326,152 @@ pub(crate) fn draw_append(
     }
 }
 
+fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
+    let features: Vec<_> = strokes
+        .iter()
+        .filter(|stroke| stroke.points.len() >= 2)
+        .map(|stroke| {
+            anyhow::ensure!(
+                stroke.points.iter().all(|point| point[0].is_finite()
+                    && point[1].is_finite()
+                    && (-180.0..=180.0).contains(&point[0])
+                    && (-90.0..=90.0).contains(&point[1])),
+                "annotation has invalid coordinates"
+            );
+            let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
+            Ok(serde_json::json!({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": stroke.points},
+                "properties": {
+                    "source": "HookEcho annotation",
+                    "stroke": format!("#{r:02x}{g:02x}{b:02x}"),
+                    "stroke-opacity": f64::from(a) / 255.0,
+                }
+            }))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    anyhow::ensure!(!features.is_empty(), "no complete annotations to export");
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection", "features": features
+    }))?)
+}
+
+fn routes_geojson(routes: &[wxdata::route::Route]) -> anyhow::Result<String> {
+    let features: Vec<_> = routes
+        .iter()
+        .enumerate()
+        .map(|(index, route)| {
+            anyhow::ensure!(
+                route.points.len() >= 2
+                    && route.points.iter().all(|point| point[0].is_finite()
+                        && point[1].is_finite()
+                        && (-180.0..=180.0).contains(&point[0])
+                        && (-90.0..=90.0).contains(&point[1])),
+                "route has invalid coordinates"
+            );
+            Ok(serde_json::json!({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": route.points},
+                "properties": {
+                    "source": "HookEcho route",
+                    "route_index": index,
+                    "primary": index == 0,
+                    "distance_m": route.distance_m,
+                    "duration_s": route.duration_s,
+                }
+            }))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    anyhow::ensure!(!features.is_empty(), "no routes to export");
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection", "features": features
+    }))?)
+}
+
+fn alerts_geojson(
+    features: &[wxdata::overlay::GeoFeature],
+    bounds: (f64, f64, f64, f64),
+) -> anyhow::Result<String> {
+    let (vx0, vy0, vx1, vy1) = bounds;
+    let mut exported = Vec::new();
+    for feature in features {
+        let Some(alert) = &feature.alert else { continue };
+        let Some((x0, y0, x1, y1)) = feature.bbox() else { continue };
+        if x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1 { continue; }
+        let mut rings = feature.rings.clone();
+        anyhow::ensure!(!rings.is_empty(), "alert polygon has no rings");
+        for ring in &mut rings {
+            anyhow::ensure!(
+                ring.len() >= 3 && ring.iter().all(|point| point[0].is_finite()
+                    && point[1].is_finite()
+                    && (-180.0..=180.0).contains(&point[0])
+                    && (-90.0..=90.0).contains(&point[1])),
+                "alert polygon has invalid coordinates"
+            );
+            if ring.first() != ring.last() { ring.push(ring[0]); }
+        }
+        exported.push(serde_json::json!({
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": rings},
+            "properties": {
+                "source": "NWS alert",
+                "id": alert.id,
+                "event": alert.event,
+                "headline": alert.headline,
+                "area": alert.area,
+                "description": alert.description,
+                "instruction": alert.instruction,
+                "expires": alert.expires,
+                "vtec": alert.vtec,
+            }
+        }));
+    }
+    anyhow::ensure!(!exported.is_empty(), "no alert polygons in view");
+    let json = serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection", "features": exported
+    }))?;
+    anyhow::ensure!(json.len() <= 64 * 1024 * 1024, "alert GeoJSON exceeds 64 MB");
+    Ok(json)
+}
+
+fn contours_geojson(
+    lines: &[wxdata::contour::ContourLine],
+    source: &str,
+    product: &str,
+    units: Option<&str>,
+    valid: chrono::DateTime<Utc>,
+) -> anyhow::Result<String> {
+    let features: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            anyhow::ensure!(
+                line.pts.len() >= 2 && line.pts.iter().all(|&(lon, lat)| lon.is_finite()
+                    && lat.is_finite()
+                    && (-180.0..=180.0).contains(&lon)
+                    && (-90.0..=90.0).contains(&lat)),
+                "contour has invalid coordinates"
+            );
+            Ok(serde_json::json!({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": line.pts},
+                "properties": {
+                    "source": source,
+                    "product": product,
+                    "level": line.level,
+                    "units": units,
+                    "valid_time": valid,
+                }
+            }))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    anyhow::ensure!(!features.is_empty(), "no contour lines to export");
+    let json = serde_json::to_string(&serde_json::json!({
+        "type": "FeatureCollection", "features": features
+    }))?;
+    anyhow::ensure!(json.len() <= 64 * 1024 * 1024, "contour GeoJSON exceeds 64 MB");
+    Ok(json)
+}
+
 /// What a left-click on the map does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MapTool {
@@ -1300,6 +1511,10 @@ pub(crate) enum ContourKind {
     Mslp,
     T2m,
     Td2m,
+    AnalysisT2m,
+    AnalysisTd2m,
+    AnalysisPressure,
+    AnalysisThetaE,
     Cape,
     Srh,
     /// Significant Tornado Parameter (composite of several HRRR fields — see `wxdata::severe`).
@@ -1321,11 +1536,15 @@ pub(crate) enum ContourKind {
 }
 
 impl ContourKind {
-    pub(crate) const ALL: [ContourKind; 14] = [
+    pub(crate) const ALL: [ContourKind; 18] = [
         ContourKind::Off,
         ContourKind::Mslp,
         ContourKind::T2m,
         ContourKind::Td2m,
+        ContourKind::AnalysisT2m,
+        ContourKind::AnalysisTd2m,
+        ContourKind::AnalysisPressure,
+        ContourKind::AnalysisThetaE,
         ContourKind::Cape,
         ContourKind::Srh,
         ContourKind::Stp,
@@ -1337,6 +1556,19 @@ impl ContourKind {
         ContourKind::EffSrh,
         ContourKind::StpEff,
     ];
+
+    pub(crate) fn analysis_field(self) -> Option<wxdata::rtma::SurfaceField> {
+        Some(match self {
+            Self::AnalysisT2m => wxdata::rtma::SurfaceField::Temperature2m,
+            Self::AnalysisTd2m => wxdata::rtma::SurfaceField::Dewpoint2m,
+            Self::AnalysisPressure => wxdata::rtma::SurfaceField::Pressure,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn is_analysis(self) -> bool {
+        self.analysis_field().is_some() || self == Self::AnalysisThetaE
+    }
 
     /// The composite parameters, which combine several GRIB fields instead of drawing one.
     pub(crate) fn severe(self) -> Option<wxdata::severe::SevereKind> {
@@ -1373,6 +1605,10 @@ impl ContourKind {
             ContourKind::Mslp => "MSLP",
             ContourKind::T2m => "2 m temp",
             ContourKind::Td2m => "2 m dewpoint",
+            ContourKind::AnalysisT2m => "Analysis 2 m temp",
+            ContourKind::AnalysisTd2m => "Analysis 2 m dewpoint",
+            ContourKind::AnalysisPressure => "Analysis surface pressure",
+            ContourKind::AnalysisThetaE => "Analysis 2 m θe",
             ContourKind::Cape => "SB-CAPE",
             ContourKind::Srh => "0-3 km SRH",
             ContourKind::Stp => "STP (fixed)",
@@ -1392,6 +1628,10 @@ impl ContourKind {
             "mslp" => ContourKind::Mslp,
             "t2m" => ContourKind::T2m,
             "td2m" => ContourKind::Td2m,
+            "analysis-t2m" => ContourKind::AnalysisT2m,
+            "analysis-td2m" => ContourKind::AnalysisTd2m,
+            "analysis-pressure" => ContourKind::AnalysisPressure,
+            "analysis-thetae" => ContourKind::AnalysisThetaE,
             "cape" => ContourKind::Cape,
             "srh" => ContourKind::Srh,
             "stp" => ContourKind::Stp,
@@ -1409,7 +1649,7 @@ impl ContourKind {
     /// GRIB `(var, level, contour interval)` in display units, or `None` for `Off`.
     pub(crate) fn params(self) -> Option<(&'static str, &'static str, f32)> {
         match self {
-            ContourKind::Off => None,
+            ContourKind::Off | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m | ContourKind::AnalysisPressure | ContourKind::AnalysisThetaE => None,
             ContourKind::Mslp => Some(("MSLMA", "mean sea level", 2.0)), // hPa
             ContourKind::T2m => Some(("TMP", "2 m above ground", 5.0)),  // °F
             ContourKind::Td2m => Some(("DPT", "2 m above ground", 5.0)), // °F
@@ -1429,24 +1669,30 @@ impl ContourKind {
 
     pub(crate) fn interval(self, temp_unit: crate::settings::TempUnit) -> f32 {
         match (self, temp_unit) {
-            (ContourKind::T2m | ContourKind::Td2m, crate::settings::TempUnit::Celsius) => 2.0,
-            _ => self
-                .params()
-                .map_or_else(|| self.severe_interval(), |(_, _, interval)| interval),
+            (ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m, crate::settings::TempUnit::Celsius) => 2.0,
+            (ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m, _) => 5.0,
+            (ContourKind::AnalysisPressure, _) => 2.0,
+            (ContourKind::AnalysisThetaE, _) => 5.0,
+            _ => self.params().map_or_else(|| self.severe_interval(), |(_, _, interval)| interval),
         }
     }
 
     /// Convert a raw GRIB value to the display unit the interval is expressed in.
     pub(crate) fn to_display(self, raw: f32, temp_unit: crate::settings::TempUnit) -> f32 {
         match self {
-            ContourKind::Mslp => raw / 100.0, // Pa → hPa
-            ContourKind::T2m | ContourKind::Td2m => temp_unit.from_c(raw - 273.15), // K → selected unit
+            ContourKind::Mslp | ContourKind::AnalysisPressure => raw / 100.0, // Pa → hPa
+            ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m => temp_unit.from_c(raw - 273.15), // K → selected unit
             _ => raw, // CAPE / SRH as-is
         }
     }
 
     fn unit(self, temp_unit: crate::settings::TempUnit) -> Option<&'static str> {
-        matches!(self, ContourKind::T2m | ContourKind::Td2m).then(|| temp_unit.label())
+        match self {
+            ContourKind::AnalysisPressure => Some("hPa"),
+            ContourKind::AnalysisThetaE => Some("K"),
+            ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m => Some(temp_unit.label()),
+            _ => None,
+        }
     }
 
     fn display_label(self, temp_unit: crate::settings::TempUnit) -> String {
@@ -1458,9 +1704,10 @@ impl ContourKind {
 
     fn color(self) -> egui::Color32 {
         match self {
-            ContourKind::Mslp => egui::Color32::from_rgb(235, 235, 235),
-            ContourKind::T2m => egui::Color32::from_rgb(240, 120, 60),
-            ContourKind::Td2m => egui::Color32::from_rgb(90, 200, 120),
+            ContourKind::Mslp | ContourKind::AnalysisPressure => egui::Color32::from_rgb(235, 235, 235),
+            ContourKind::T2m | ContourKind::AnalysisT2m => egui::Color32::from_rgb(240, 120, 60),
+            ContourKind::Td2m | ContourKind::AnalysisTd2m => egui::Color32::from_rgb(90, 200, 120),
+            ContourKind::AnalysisThetaE => egui::Color32::from_rgb(130, 225, 205),
             ContourKind::Cape => egui::Color32::from_rgb(240, 160, 40),
             ContourKind::Srh => egui::Color32::from_rgb(190, 110, 230),
             ContourKind::Stp => egui::Color32::from_rgb(230, 60, 90),
@@ -1833,7 +2080,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         // Two global cycles behind it, so the same half hour.
         | FL::ModelDiff => 1800,
         // RTMA is hourly; poll often enough to notice a newly published analysis.
-        FL::RtmaTemp2m | FL::RtmaDewpoint2m | FL::RtmaPressure | FL::RtmaWindU10m => 300,
+        FL::RtmaTemp2m | FL::RtmaDewpoint2m | FL::RtmaPressure | FL::RtmaWindU10m | FL::RtmaWindV10m | FL::RtmaGust10m | FL::RtmaVisibility | FL::RtmaPrecip1h => 300,
         FL::Smoke => 900,
         // NBM posts hourly; the blend moves no faster than that.
         FL::ThunderProb | FL::RefsReflectivityProb => 900,
@@ -1999,18 +2246,32 @@ struct LoadedPlacefile {
     loaded: bool,
     /// Why the last load failed, if it did.
     error: Option<String>,
+    attributes: Vec<String>,
 }
 
-fn stored_gis(name: &str, content: &str) -> anyhow::Result<wxdata::placefile::Placefile> {
+fn stored_gis(
+    name: &str,
+    content: &str,
+    cfg: Option<&crate::settings::PlacefileConfig>,
+) -> anyhow::Result<(wxdata::placefile::Placefile, Vec<String>)> {
     if name.to_ascii_lowercase().ends_with(".kmz") || name.to_ascii_lowercase().ends_with(".zip") {
         use base64::Engine as _;
         let encoded = content
             .strip_prefix("base64:")
             .ok_or_else(|| anyhow::anyhow!("saved GIS archive is corrupt"))?;
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
-        wxdata::gis::archive(name, &bytes)
+        wxdata::gis::archive_with_options(
+            name,
+            &bytes,
+            wxdata::gis::GisImportOptions {
+                label_field: cfg.and_then(|cfg| cfg.gis_label_field.as_deref()),
+                color_field: cfg.and_then(|cfg| cfg.gis_color_field.as_deref()),
+                valid_start_field: cfg.and_then(|cfg| cfg.gis_valid_start_field.as_deref()),
+                valid_end_field: cfg.and_then(|cfg| cfg.gis_valid_end_field.as_deref()),
+            },
+        )
     } else {
-        wxdata::gis::parse(name, content)
+        Ok((wxdata::gis::parse(name, content)?, Vec::new()))
     }
 }
 
@@ -2699,6 +2960,9 @@ pub struct HookEchoApp {
     digest_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     sounding_window: ui::sounding_window::SoundingWindow,
     sounding_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
+    objective_sounding_rx: Option<std::sync::mpsc::Receiver<Option<(wxdata::sounding::Sounding, crate::fielddiff::ObjectiveSurfacePoint)>>>,
+    objective_sounding: Option<(wxdata::sounding::Sounding, crate::fielddiff::ObjectiveSurfacePoint)>,
+    objective_sounding_abort: Option<futures_util::future::AbortHandle>,
     /// The observed RAOB fetched alongside the HRRR profile, for the same click.
     raob_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::sounding::Sounding, String>>>,
     /// Last spoken storm-position update: when, and the distance in whole miles it reported.
@@ -2858,7 +3122,7 @@ pub struct HookEchoApp {
     contours: Vec<wxdata::contour::ContourLine>,
     contour_valid: Option<DateTime<Utc>>,
     contour_last_fetch: Option<Instant>,
-    contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model, crate::settings::TempUnit)>,
+    contour_fetched_kind: Option<(ContourKind, wxdata::hrrr::Model, wxdata::rtma::Source, crate::settings::TempUnit)>,
     /// NHC tropical suite (feature V): toggle, fetched data, refresh clock. On by default like
     /// the other severe layers — an active hurricane is not something to have to go and enable.
     show_tropical: bool,
@@ -3009,6 +3273,8 @@ pub struct HookEchoApp {
     show_stations: bool,
     stations: crate::stationlayer::Layer,
     station_last_poll: Option<Instant>,
+    station_last_center: Option<(f64, f64)>,
+    station_last_regional: Option<bool>,
     ppef_last_fetch: Option<Instant>,
     dotcam_bounds: Option<(f64, f64, f64, f64)>,
     /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
@@ -3033,8 +3299,15 @@ pub struct HookEchoApp {
     /// Sensor dashboard: open flag, latest fetch (Ok/Err), the site it's for, and a refresh clock.
     show_sensors: bool,
     sensor_data: Option<Result<wxdata::obs::StationObs, String>>,
+    sensor_history: ui::sensor_window::PointHistory,
     sensor_site: Option<String>,
     sensor_last_fetch: Option<Instant>,
+    sensor_hrrr_station: Option<String>,
+    sensor_hrrr_last_fetch: Option<Instant>,
+    sensor_rtma_station: Option<String>,
+    sensor_rtma_last_fetch: Option<Instant>,
+    sensor_gfs_station: Option<String>,
+    sensor_gfs_last_fetch: Option<Instant>,
     /// VAD hodograph: open flag, latest profile, its site, and a refresh clock.
     show_hodo: bool,
     hodo_data: Vec<wxdata::level3::VwpLevel>,
@@ -3046,6 +3319,8 @@ pub struct HookEchoApp {
     /// Tap-for-forecast: window state, the tapped point, the in-flight fetch, and a short cache
     /// keyed by rounded lat/lon.
     forecast_open: bool,
+    forecast_history: ui::sensor_window::PointHistory,
+    forecast_history_fetch: Option<Instant>,
     forecast_at: Option<(f64, f64)>,
     forecast_state: ui::forecast_window::State,
     #[allow(clippy::type_complexity)]
@@ -3061,10 +3336,10 @@ pub struct HookEchoApp {
     #[allow(clippy::type_complexity)]
     forecast_obs_rx: Option<(
         (i32, i32),
-        std::sync::mpsc::Receiver<(String, wxdata::obs::Observation)>,
+        std::sync::mpsc::Receiver<wxdata::obs::StationObs>,
     )>,
     forecast_obs_cache:
-        std::collections::HashMap<(i32, i32), (Instant, String, wxdata::obs::Observation)>,
+        std::collections::HashMap<(i32, i32), (Instant, wxdata::obs::StationObs)>,
     /// Rain-arrival alerting: per-point persistence/cooldown state, plus the current ETAs for the
     /// on-map chip.
     rain_detector: crate::rain_arrival::Detector,
@@ -3249,6 +3524,14 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
             v
         }
     }
+}
+
+/// Bounded observations around the analysis probe even when the map shows the whole country.
+/// 1.5° latitude reaches past the objective blend's 150 km cutoff at U.S. latitudes.
+fn analysis_station_bbox(lon: f64, lat: f64) -> (f64, f64, f64, f64) {
+    let dlat = 1.5;
+    let dlon = dlat / lat.to_radians().cos().abs().max(0.25);
+    (lat - dlat, lon - dlon, lat + dlat, lon + dlon)
 }
 
 impl HookEchoApp {
@@ -3664,6 +3947,9 @@ impl HookEchoApp {
             digest_rx: None,
             sounding_window: Default::default(),
             sounding_rx: None,
+            objective_sounding_rx: None,
+            objective_sounding: None,
+            objective_sounding_abort: None,
             raob_rx: None,
             chase_mode: false,
             spoke_pos: None,
@@ -3847,6 +4133,8 @@ impl HookEchoApp {
             show_stations: false,
             stations: Default::default(),
             station_last_poll: None,
+            station_last_center: None,
+            station_last_regional: None,
             ppef_last_fetch: None,
             dotcam_bounds: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -3864,13 +4152,22 @@ impl HookEchoApp {
             spotters_last_fetch: None,
             show_sensors: false,
             sensor_data: None,
+            sensor_history: Default::default(),
             sensor_site: None,
             sensor_last_fetch: None,
+            sensor_hrrr_station: None,
+            sensor_hrrr_last_fetch: None,
+            sensor_rtma_station: None,
+            sensor_rtma_last_fetch: None,
+            sensor_gfs_station: None,
+            sensor_gfs_last_fetch: None,
             show_hodo: false,
             hodo_data: Vec::new(),
             hodo_history: std::collections::VecDeque::new(),
             hodo_tab: Default::default(),
             forecast_open: false,
+            forecast_history: Default::default(),
+            forecast_history_fetch: None,
             forecast_at: None,
             forecast_state: ui::forecast_window::State::Loading,
             forecast_rx: None,
@@ -4567,6 +4864,7 @@ impl HookEchoApp {
                         last_fetch: None,
                         loaded: false,
                         error: None,
+                        attributes: Vec::new(),
                     });
                 }
             }
@@ -4585,17 +4883,21 @@ impl HookEchoApp {
                         .url
                         .strip_prefix("gis:")
                         .and_then(|_| self.settings.web_files.get(&cfg.url))
-                        .map(|text| stored_gis(&cfg.url[4..], text));
+                        .map(|text| stored_gis(&cfg.url[4..], text, Some(cfg)));
                     self.placefiles.push(LoadedPlacefile {
                         url: cfg.url.clone(),
                         enabled: cfg.enabled,
                         pf: imported
                             .as_ref()
                             .and_then(|result| result.as_ref().ok())
-                            .cloned()
+                            .map(|(file, _)| file.clone())
                             .unwrap_or_default(),
                         last_fetch: imported.as_ref().map(|_| Instant::now()),
                         loaded: imported.as_ref().is_some_and(Result::is_ok),
+                        attributes: imported
+                            .as_ref()
+                            .and_then(|result| result.as_ref().ok())
+                            .map_or_else(Vec::new, |(_, fields)| fields.clone()),
                         error: imported.and_then(Result::err).map(|error| error.to_string()),
                     });
                 }
@@ -6596,11 +6898,22 @@ impl HookEchoApp {
     /// Fetch the NWS point forecast for a tapped spot. Results are cached per ~0.05° cell for
     /// 15 minutes — the grid only updates hourly, and re-tapping the same neighborhood shouldn't
     /// re-hit the API.
-    fn fetch_point_forecast(&mut self, lon: f64, lat: f64) {
+    fn fetch_point_forecast(&mut self, ctx: &egui::Context, lon: f64, lat: f64) {
         let key = ((lat * 20.0).round() as i32, (lon * 20.0).round() as i32);
         self.forecast_at = Some((lon, lat));
         self.forecast_open = true;
         self.fetch_point_obs(key, lon, lat);
+        let point = format!("{lon:.6},{lat:.6}");
+        if self.forecast_history.site != point
+            || self.forecast_history_fetch.is_none_or(|time| time.elapsed().as_secs() >= 900)
+        {
+            self.forecast_history.record(&point, lon, lat, None, None);
+            self.forecast_history_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::PointHrrr { point: point.clone(), lon, lat });
+            self.spawn_overlay(ctx, OverlaySource::PointRtma { point: point.clone(), lon, lat });
+            self.spawn_overlay(ctx, OverlaySource::PointGfs { point, lon, lat });
+        }
+
         if let Some((when, f)) = self.forecast_cache.get(&key) {
             if when.elapsed().as_secs() < 900 {
                 self.forecast_state = ui::forecast_window::State::Ready(Box::new(f.clone()));
@@ -6661,8 +6974,8 @@ impl HookEchoApp {
         self.spawner.spawn(async move {
             match wxdata::obs::fetch_nearest(&http, lat, lon).await {
                 Ok(s) => {
-                    if let Some(o) = s.obs.first() {
-                        let _ = tx.send((s.station_id, o.clone()));
+                    if !s.obs.is_empty() {
+                        let _ = tx.send(s);
                     }
                 }
                 Err(e) => log::debug!("point obs unavailable: {e}"),
@@ -6753,6 +7066,9 @@ impl HookEchoApp {
         self.sounding_window.open = true;
         self.sounding_window.busy = true;
         self.sounding_window.sounding = None;
+        if let Some(handle) = self.objective_sounding_abort.take() { handle.abort(); }
+        self.objective_sounding_rx = None;
+        self.objective_sounding = None;
         let http = self.http.clone();
         self.spawner.spawn(async move {
             let res = wxdata::sounding::fetch_at(&http, lon, lat, fh)
@@ -6760,6 +7076,53 @@ impl HookEchoApp {
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
+    }
+
+    fn fetch_objective_sounding(&mut self, model: wxdata::sounding::Sounding) {
+        if model.fh != 0 { return; }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.objective_sounding_rx = Some(rx);
+        let http = self.http.clone();
+        let source = self.analysis_source;
+        let tempest = self.settings.tempest_token.clone();
+        let wu = self.settings.wu_key.clone();
+        let synoptic = self.settings.synoptic_token.clone();
+        self.objective_sounding_abort = Some(self.spawner.spawn_abortable(async move {
+            let result = async {
+                use wxdata::rtma::SurfaceField as SF;
+                let (south, west, north, east) = analysis_station_bbox(model.lon, model.lat);
+                let metars = wxdata::metar::fetch_bbox(&http, south, west, north, east).await.unwrap_or_default();
+                let stations = wxdata::stations::fetch_all(
+                    &http, &metars, &tempest, &wu, &synoptic, model.lat, model.lon,
+                ).await;
+                let chosen = crate::fielddiff::nearest_surface_observation(
+                    model.run, &metars, &stations, model.lon, model.lat, true,
+                )?;
+                let pair = |field| {
+                    let (http, model, chosen) = (&http, &model, &chosen);
+                    async move {
+                        wxdata::rtma::fetch_native_pair(
+                            http, source, field, model.run,
+                            (model.lon, model.lat), (chosen.lon, chosen.lat),
+                        ).await.ok()
+                    }
+                };
+                let t = pair(SF::Temperature2m).await?;
+                let td = pair(SF::Dewpoint2m).await?;
+                if t.valid_time != model.run || !crate::fielddiff::same_native_analysis(&t, &td) {
+                    return None;
+                }
+                let point = crate::fielddiff::objective_surface_native(&t, &td, &chosen, source)?;
+                let pressure = pair(SF::Pressure).await?;
+                let u = pair(SF::WindU10m).await?;
+                let v = pair(SF::WindV10m).await?;
+                if [&pressure, &u, &v].into_iter().any(|sample| !crate::fielddiff::same_native_analysis(&t, sample)) {
+                    return None;
+                }
+                crate::fielddiff::objective_sounding_surface(&model, point, pressure.point, u.point, v.point)
+            }.await;
+            let _ = tx.send(result);
+        }));
     }
 
     /// The observed ascent to draw beside the model profile: the nearest radiosonde station, at
@@ -7779,7 +8142,39 @@ impl HookEchoApp {
                 None => self.toast(ToastKind::Info, "Trail has no frames yet"),
             }
         }
-        if actions.export_local_tracks_csv || actions.export_local_tracks_json {
+        if actions.export_contours {
+            let source = if self.contour_kind.is_analysis() {
+                match self.analysis_source {
+                    wxdata::rtma::Source::Rtma => "RTMA",
+                    wxdata::rtma::Source::Urma => "URMA",
+                }
+            } else {
+                self.env_model.label()
+            };
+            let product = self.contour_kind.display_label(self.settings.temp_unit);
+            let unit = self.contour_kind.unit(self.settings.temp_unit);
+            match self.contour_valid {
+                Some(valid) => match contours_geojson(&self.contours, source, &product, unit, valid) {
+                    Ok(json) => match crate::dialog::save_bytes(
+                        &format!("hookecho-contours-{}.geojson", valid.format("%Y%m%d-%H%MZ")),
+                        "geojson",
+                        json.as_bytes(),
+                    ) {
+                        crate::dialog::Saved::Where(where_) => self.toast(
+                            ToastKind::Success,
+                            format!("Contours exported to {where_}"),
+                        ),
+                        crate::dialog::Saved::Failed(error) => {
+                            self.toast(ToastKind::Error, error)
+                        }
+                        crate::dialog::Saved::Cancelled => {}
+                    },
+                    Err(error) => self.toast(ToastKind::Error, error.to_string()),
+                },
+                None => self.toast(ToastKind::Info, "Contours are still loading"),
+            }
+        }
+        if actions.export_local_tracks_csv || actions.export_local_tracks_json || actions.export_local_tracks_geojson {
             let tracks = self.compute_local_tracks();
             if tracks.is_empty() {
                 self.toast(ToastKind::Info, "Storm history needs at least two decoded radar volumes");
@@ -7789,6 +8184,12 @@ impl HookEchoApp {
                         "hookecho-storm-history.csv",
                         "csv",
                         Ok(wxdata::celltrack::tracks_csv(&tracks)),
+                    )
+                } else if actions.export_local_tracks_geojson {
+                    (
+                        "hookecho-storm-history.geojson",
+                        "geojson",
+                        wxdata::celltrack::tracks_geojson(&tracks),
                     )
                 } else {
                     (
@@ -9101,6 +9502,27 @@ impl HookEchoApp {
                         self.sensor_site = Some(site);
                     }
                 }
+                OverlayMsg::SensorHrrr(station, points) => {
+                    if self.sensor_data.as_ref().and_then(|data| data.as_ref().ok())
+                        .is_some_and(|current| current.station_id == station) {
+                        self.sensor_history.record_hrrr(&station, &points);
+                    }
+                }
+                OverlayMsg::SensorRtma(station, points) => {
+                    if self.sensor_data.as_ref().and_then(|data| data.as_ref().ok())
+                        .is_some_and(|current| current.station_id == station) {
+                        self.sensor_history.record_rtma(&station, &points);
+                    }
+                }
+                OverlayMsg::SensorGfs(station, points) => {
+                    if self.sensor_data.as_ref().and_then(|data| data.as_ref().ok())
+                        .is_some_and(|current| current.station_id == station) {
+                        self.sensor_history.record_gfs(&station, &points);
+                    }
+                }
+                OverlayMsg::PointHrrr(point, points) => self.forecast_history.record_hrrr(&point, &points),
+                OverlayMsg::PointRtma(point, points) => self.forecast_history.record_rtma(&point, &points),
+                OverlayMsg::PointGfs(point, points) => self.forecast_history.record_gfs(&point, &points),
                 OverlayMsg::Vwp(site, levels) => {
                     if self.views[self.active].site.as_deref() == Some(site.as_str()) {
                         // A site change starts a new time series; mixing radars on one axis would
@@ -9725,49 +10147,56 @@ impl HookEchoApp {
     /// The poll is what fills every open card's ring buffer, so it keeps running while any card is
     /// open even if the layer itself has been switched off.
     fn sync_stations(&mut self, ctx: &egui::Context) {
-        if !self.show_stations && self.stations.cards.is_empty() {
-            return;
-        }
+        use crate::render::FieldLayer as FL;
+        let analysis_needed = self.views[self.active].fields_on.contains(&FL::RtmaTemp2m)
+            && self.views[self.active].fields_on.contains(&FL::RtmaDewpoint2m);
+        let station_layer = self.show_stations || !self.stations.cards.is_empty();
+        if !station_layer && !analysis_needed { return; }
+
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
-        // A continental view would ask for thousands of stations to draw a dot each; the cards are
-        // a close-in tool, so the layer waits until the view is regional.
-        if (max_lon - min_lon) > 20.0 {
-            return;
-        }
-        if self
-            .station_last_poll
-            .is_none_or(|t| t.elapsed().as_secs() >= 60)
-        {
+        let regional_layer = station_layer && (max_lon - min_lon) <= 20.0;
+        if !regional_layer && !analysis_needed { return; }
+        let (lon, lat) = crate::render::mercator::world_to_lonlat(
+            self.views[self.active].camera.center.0,
+            self.views[self.active].camera.center.1,
+        );
+        // Analysis needs only observations near its map-center probe, even in national view.
+        let bbox = if regional_layer {
+            (min_lat, min_lon, max_lat, max_lon)
+        } else {
+            analysis_station_bbox(lon, lat)
+        };
+        let cadence = if regional_layer { 60 } else { 300 };
+        let moved = self.station_last_center.is_none_or(|(old_lon, old_lat)| {
+            (lon - old_lon).abs() > 1.0 || (lat - old_lat).abs() > 1.0
+        });
+        if moved || self.station_last_regional != Some(regional_layer)
+            || self.station_last_poll.is_none_or(|t| t.elapsed().as_secs() >= cadence) {
             self.station_last_poll = Some(Instant::now());
-            // Still-only cameras (every camera, on a phone) get a fresh frame on the same clock.
-            let (rt, http) = (self.spawner.clone(), self.http.clone());
-            self.stations.refresh_stills(&rt, &http, ctx);
-            self.spawn_overlay(
-                ctx,
-                OverlaySource::Stations {
-                    bbox: (min_lat, min_lon, max_lat, max_lon),
-                    center: ((min_lat + max_lat) * 0.5, (min_lon + max_lon) * 0.5),
-                    tempest: self.settings.tempest_token.clone(),
-                    wu: self.settings.wu_key.clone(),
-                    synoptic: self.settings.synoptic_token.clone(),
-                },
-            );
-            if !self.settings.field_mill_url.is_empty() {
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::Mill(self.settings.field_mill_url.clone()),
-                );
+            self.station_last_center = Some((lon, lat));
+            self.station_last_regional = Some(regional_layer);
+            if regional_layer {
+                // Card stills and electric fields belong to the visible station layer.
+                let (rt, http) = (self.spawner.clone(), self.http.clone());
+                self.stations.refresh_stills(&rt, &http, ctx);
+            }
+            self.spawn_overlay(ctx, OverlaySource::Stations {
+                bbox,
+                center: (lat, lon),
+                tempest: self.settings.tempest_token.clone(),
+                wu: self.settings.wu_key.clone(),
+                synoptic: self.settings.synoptic_token.clone(),
+            });
+            if regional_layer && !self.settings.field_mill_url.is_empty() {
+                self.spawn_overlay(ctx, OverlaySource::Mill(self.settings.field_mill_url.clone()));
             }
         }
-        if self
-            .ppef_last_fetch
-            .is_none_or(|t| t.elapsed().as_secs() >= 300)
-        {
+        if !regional_layer { return; }
+        if self.ppef_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300) {
             self.ppef_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Ppef);
         }
-        // The camera catalog is megabytes of slow-changing agency data: fetch it per view box, not
-        // per tick.
+        // The camera catalog is megabytes of slow-changing agency data: fetch it per view box.
         let bbox = (
             (min_lon * 2.0).round() / 2.0,
             (min_lat * 2.0).round() / 2.0,
@@ -10065,7 +10494,7 @@ impl HookEchoApp {
             self.contour_fetched_kind = None;
             return;
         }
-        let key = (self.contour_kind, self.env_model, self.settings.temp_unit);
+        let key = (self.contour_kind, self.env_model, self.analysis_source, self.settings.temp_unit);
         let changed = self.contour_fetched_kind != Some(key);
         let stale = self
             .contour_last_fetch
@@ -10077,10 +10506,12 @@ impl HookEchoApp {
         if changed || stale {
             self.contour_last_fetch = Some(Instant::now());
             self.contour_fetched_kind = Some(key);
-            self.spawn_overlay(
-                ctx,
-                OverlaySource::Contours(self.contour_kind, self.env_model, self.settings.temp_unit),
-            );
+            let source = if self.contour_kind.is_analysis() {
+                OverlaySource::AnalysisContours(self.contour_kind, self.analysis_source, self.settings.temp_unit)
+            } else {
+                OverlaySource::Contours(self.contour_kind, self.env_model, self.settings.temp_unit)
+            };
+            self.spawn_overlay(ctx, source);
         }
     }
 
@@ -10289,7 +10720,7 @@ impl HookEchoApp {
         &self,
     ) -> impl Iterator<Item = (&wxdata::placefile::PlaceItem, f32, usize)> {
         let range = self.view_range_nmi();
-        let now = Utc::now();
+        let now = self.placefile_time();
         // Configured placefiles in Layer-Manager order, then plugin output on top of them: a
         // plugin is something the user wrote for this session, so it should not be buried.
         let sources = self
@@ -10321,11 +10752,18 @@ impl HookEchoApp {
         })
     }
 
+    fn placefile_time(&self) -> chrono::DateTime<Utc> {
+        self.views[self.active]
+            .timeline
+            .selected_time()
+            .or_else(|| self.views[self.active].volume.as_ref().map(|volume| volume.time))
+            .unwrap_or_else(Utc::now)
+    }
+
     /// [`Self::placefile_labels`] memoised for the frame's inputs — it deep-clones every item's
     /// strings, and ran once per frame over every enabled placefile.
     fn placefile_labels_cached(&mut self) -> std::sync::Arc<[PlaceLabel]> {
-        // Time is in the inputs because items have on/off windows and thresholds; a minute's
-        // granularity is finer than any placefile's own cadence.
+        // Include the selected frame's exact second so archive scrubbing changes timed labels.
         let fingerprint: usize = self
             .placefiles
             .iter()
@@ -10334,7 +10772,7 @@ impl HookEchoApp {
             + self.pf_icon_tex.len();
         let key = (
             fingerprint,
-            chrono::Utc::now().timestamp() / 60,
+            self.placefile_time().timestamp(),
             self.view_range_nmi() as i32,
         );
         if self
@@ -12454,7 +12892,7 @@ impl HookEchoApp {
                         }
                     }
                     MapTool::Sounding => self.fetch_sounding(lon, lat),
-                    MapTool::Forecast => self.fetch_point_forecast(lon, lat),
+                    MapTool::Forecast => self.fetch_point_forecast(ctx, lon, lat),
                     MapTool::Chase => {
                         self.chase_mode = true;
                         self.chase_pos = Some((lon, lat));
@@ -13466,7 +13904,10 @@ impl HookEchoApp {
                     .map(|t| crate::timefmt::fmt_clock(t, self.active_tz(), false))
                     .unwrap_or_default();
                 let text = format!(
-                    "HRRR {} contours — valid {vt}",
+                    "{} {} contours — valid {vt}",
+                    if self.contour_kind.is_analysis() {
+                        match self.analysis_source { wxdata::rtma::Source::Rtma => "RTMA", wxdata::rtma::Source::Urma => "URMA" }
+                    } else { self.env_model.label() },
                     self.contour_kind.display_label(self.settings.temp_unit)
                 );
                 let font = egui::FontId::proportional(12.0);
@@ -15626,8 +16067,7 @@ impl HookEchoApp {
             .map(|(_, stamp)| stamp)?;
         let analysis_time = self.views[pane]
             .timeline
-            .current()
-            .and_then(|id| id.date_time())
+            .selected_time()
             .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))?;
         let tolerance = self
             .settings
@@ -15829,7 +16269,7 @@ impl HookEchoApp {
             .iter()
             .map(|stroke| crate::casefile::CaseStroke {
                 points: stroke.points.clone(),
-                rgba: stroke.color.to_array(),
+                rgba: stroke.color.to_srgba_unmultiplied(),
             })
             .collect();
         crate::casefile::CaseManifest::new(
@@ -15859,6 +16299,59 @@ impl HookEchoApp {
                 crate::dialog::Saved::Cancelled => {}
             },
             Err(error) => self.toast(ToastKind::Error, format!("Case export failed: {error}")),
+        }
+    }
+
+    fn export_annotations(&mut self) {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%MZ");
+        match annotations_geojson(&self.strokes) {
+            Ok(json) => match crate::dialog::save_bytes(
+                &format!("hookecho-annotations-{stamp}.geojson"),
+                "geojson",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => self.toast(
+                    ToastKind::Success,
+                    format!("Annotations exported to {where_}"),
+                ),
+                crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, error.to_string()),
+        }
+    }
+
+    fn export_routes(&mut self) {
+        match routes_geojson(&self.routes) {
+            Ok(json) => match crate::dialog::save_bytes(
+                "hookecho-routes.geojson",
+                "geojson",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Routes exported to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, error.to_string()),
+        }
+    }
+
+    fn export_alerts_in_view(&mut self, bounds: (f64, f64, f64, f64)) {
+        match alerts_geojson(self.active_alert_features(), bounds) {
+            Ok(json) => match crate::dialog::save_bytes(
+                "hookecho-alerts.geojson",
+                "geojson",
+                json.as_bytes(),
+            ) {
+                crate::dialog::Saved::Where(where_) => {
+                    self.toast(ToastKind::Success, format!("Alerts exported to {where_}"))
+                }
+                crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                crate::dialog::Saved::Cancelled => {}
+            },
+            Err(error) => self.toast(ToastKind::Error, error.to_string()),
         }
     }
 
@@ -16219,6 +16712,12 @@ impl HookEchoApp {
                         self.routes.clear();
                         self.route_rx = None;
                     }
+                    if ui
+                        .add_enabled(!self.routes.is_empty(), egui::Button::new("Export GeoJSON…"))
+                        .clicked()
+                    {
+                        self.export_routes();
+                    }
                 });
                 if let Some(route) = self.routes.first() {
                     ui.weak(format!(
@@ -16413,7 +16912,13 @@ impl HookEchoApp {
                         self.request_capture(ui.ctx(), ShotDest::Clipboard);
                     }
                     if ui.button("Export active field CSV…").clicked() {
-                        self.export_active_field_csv();
+                        self.export_active_field("csv");
+                    }
+                    if ui.button("Export active field GeoTIFF…").clicked() {
+                        self.export_active_field("tif");
+                    }
+                    if ui.button("Export active field NetCDF…").clicked() {
+                        self.export_active_field("nc");
                     }
                     toggle(ui, &mut self.settings.share_card, "Caption shared images")
                         .on_hover_text(
@@ -16556,25 +17061,35 @@ impl HookEchoApp {
         });
     }
 
-    fn export_active_field_csv(&mut self) {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_active_field(&mut self, ext: &str) {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
-            .find(|layer| self.views[self.active].fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(&layer))
-            .and_then(|state| state.frame.clone());
+            .filter(|layer| self.views[self.active].fields_on.contains(layer))
+            .find_map(|layer| self.fields.get(&layer).and_then(|state| state.frame.clone()));
         let Some(frame) = frame else {
             self.toast(ToastKind::Info, "No scalar field is active");
             return;
         };
-        let name = format!("hookecho-{}.csv", frame.descriptor.id.0);
-        let Some(path) = crate::dialog::save_path(&name, "csv") else {
+        let name = format!("hookecho-{}.{}", frame.descriptor.id.0, ext);
+        let Some(path) = crate::dialog::save_path(&name, ext) else {
             return;
         };
-        let result = std::fs::File::create(&path).and_then(|file| {
-            frame.write_csv(std::io::BufWriter::new(file))
-        });
+        let result = if ext == "nc" {
+            frame.write_netcdf(&path).map(|()| None)
+        } else {
+            std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|file| {
+                let output = std::io::BufWriter::new(file);
+                if ext == "tif" {
+                    frame.write_geotiff(output).map(|()| None)
+                } else {
+                    frame.write_csv(output).map(Some).map_err(anyhow::Error::from)
+                }
+            })
+        };
         match result {
-            Ok(rows) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
+            Ok(Some(rows)) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
+            Ok(None) => self.toast(ToastKind::Success, "Exported native-value field"),
             Err(error) => {
                 let _ = std::fs::remove_file(&path);
                 self.toast(ToastKind::Error, format!("Field export failed: {error}"));
@@ -16936,8 +17451,8 @@ impl HookEchoApp {
                     import.text()
                 };
                 match content {
-                    Ok(content) => match stored_gis(&name, &content) {
-                        Ok(file) => {
+                    Ok(content) => match stored_gis(&name, &content, None) {
+                        Ok((file, _)) => {
                             let key = format!("gis:{name}");
                             let items = file.items.len();
                             self.settings.web_files.insert(key.clone(), content);
@@ -16946,6 +17461,10 @@ impl HookEchoApp {
                                     url: key.clone(),
                                     enabled: true,
                                     opacity: 1.0,
+                                    gis_label_field: None,
+                                    gis_color_field: None,
+                                    gis_valid_start_field: None,
+                                    gis_valid_end_field: None,
                                 });
                             }
                             self.placefiles.retain(|loaded| loaded.url != key);
@@ -18877,6 +19396,10 @@ impl eframe::App for HookEchoApp {
             (FL::RtmaDewpoint2m, wxdata::rtma::SurfaceField::Dewpoint2m),
             (FL::RtmaPressure, wxdata::rtma::SurfaceField::Pressure),
             (FL::RtmaWindU10m, wxdata::rtma::SurfaceField::WindU10m),
+            (FL::RtmaWindV10m, wxdata::rtma::SurfaceField::WindV10m),
+            (FL::RtmaGust10m, wxdata::rtma::SurfaceField::Gust10m),
+            (FL::RtmaVisibility, wxdata::rtma::SurfaceField::Visibility),
+            (FL::RtmaPrecip1h, wxdata::rtma::SurfaceField::Precip1h),
         ] {
             let stale = self.field_wanted(layer)
                 && self.fields.get(&layer).is_some_and(|state| {
@@ -19289,6 +19812,32 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
+        if self.show_sensors
+            && self.sensor_site.as_deref() == self.views[self.active].site.as_deref()
+        {
+            if let Some((station, (lon, lat))) = self.sensor_data.as_ref()
+                .and_then(|data| data.as_ref().ok())
+                .and_then(|station| station.location.map(|point| (station.station_id.clone(), point))) {
+                if self.sensor_hrrr_station.as_deref() != Some(station.as_str())
+                    || self.sensor_hrrr_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 600) {
+                    self.sensor_hrrr_station = Some(station.clone());
+                    self.sensor_hrrr_last_fetch = Some(Instant::now());
+                    self.spawn_overlay(ctx, OverlaySource::SensorHrrr { station: station.clone(), lon, lat });
+                }
+                if self.sensor_rtma_station.as_deref() != Some(station.as_str())
+                    || self.sensor_rtma_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 3600) {
+                    self.sensor_rtma_station = Some(station.clone());
+                    self.sensor_rtma_last_fetch = Some(Instant::now());
+                    self.spawn_overlay(ctx, OverlaySource::SensorRtma { station: station.clone(), lon, lat });
+                }
+                if self.sensor_gfs_station.as_deref() != Some(station.as_str())
+                    || self.sensor_gfs_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 3600) {
+                    self.sensor_gfs_station = Some(station.clone());
+                    self.sensor_gfs_last_fetch = Some(Instant::now());
+                    self.spawn_overlay(ctx, OverlaySource::SensorGfs { station, lon, lat });
+                }
+            }
+        }
         // VAD hodograph: fetch when open and the site changed or the 5-min clock elapsed.
         if self.show_hodo {
             if let Some(site) = self.views[self.active].site.clone() {
@@ -19530,12 +20079,29 @@ impl eframe::App for HookEchoApp {
                 items: lp.pf.items.len(),
                 title: lp.pf.title.clone(),
                 error: lp.error.clone(),
+                attributes: lp.attributes.clone(),
             })
             .collect();
         self.placefile_window
             .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
+        if let Some(url) = self.placefile_window.restyle_gis.take() {
+            self.placefiles.retain(|loaded| loaded.url != url);
+            self.placefile_label_cache = None;
+        }
         if std::mem::take(&mut self.placefile_window.import_gis) {
             crate::dialog::request_open(crate::dialog::ImportKind::Gis, "");
+        }
+        if let Some(url) = self.placefile_window.export_gis.take() {
+            if let Some(file) = self.placefiles.iter().find(|file| file.url == url && file.loaded) {
+                match wxdata::gis::export_geojson(&file.pf) {
+                    Ok(json) => match crate::dialog::save_bytes("hookecho-overlay.geojson", "geojson", json.as_bytes()) {
+                        crate::dialog::Saved::Where(where_) => self.toast(ToastKind::Success, format!("Exported GeoJSON to {where_}")),
+                        crate::dialog::Saved::Failed(error) => self.toast(ToastKind::Error, error),
+                        crate::dialog::Saved::Cancelled => {},
+                    },
+                    Err(error) => self.toast(ToastKind::Error, error.to_string()),
+                }
+            }
         }
         // Names come from the action registry, so a layer reads the same here as in the layers
         // panel — the enum's Debug spelling ("Mrms") is not a label.
@@ -19772,11 +20338,21 @@ impl eframe::App for HookEchoApp {
                 self.sounding_window.busy = false;
                 self.sounding_rx = None;
                 match res {
-                    Ok(s) => self.sounding_window.sounding = Some(s),
+                    Ok(s) => {
+                        self.fetch_objective_sounding(s.clone());
+                        self.sounding_window.sounding = Some(s);
+                    },
                     Err(e) => {
                         self.sounding_window.error = Some(e);
                     }
                 }
+            }
+        }
+        if let Some(rx) = &self.objective_sounding_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.objective_sounding_rx = None;
+                self.objective_sounding_abort = None;
+                self.objective_sounding = result;
             }
         }
         if let Some(rx) = &self.raob_rx {
@@ -19789,7 +20365,17 @@ impl eframe::App for HookEchoApp {
             }
         }
         let tz = self.active_tz();
-        self.sounding_window.show(ctx, tz, &mut self.drawer);
+        self.sounding_window.show(
+            ctx,
+            tz,
+            self.objective_sounding.as_ref().map(|(s, p)| (s, p)),
+            self.objective_sounding_rx.is_some(),
+            &mut self.drawer,
+        );
+        if !self.sounding_window.open {
+            if let Some(handle) = self.objective_sounding_abort.take() { handle.abort(); }
+            self.objective_sounding_rx = None;
+        }
         if std::mem::take(&mut self.sounding_window.refetch) {
             self.refetch_sounding();
         }
@@ -19831,11 +20417,11 @@ impl eframe::App for HookEchoApp {
             }
         }
         if let Some((key, rx)) = &self.forecast_obs_rx {
-            if let Ok((station, ob)) = rx.try_recv() {
+            if let Ok(station) = rx.try_recv() {
                 let key = *key;
                 self.forecast_obs_rx = None;
                 self.forecast_obs_cache
-                    .insert(key, (Instant::now(), station, ob));
+                    .insert(key, (Instant::now(), station));
             }
         }
         if self.forecast_open {
@@ -19843,17 +20429,20 @@ impl eframe::App for HookEchoApp {
             let tz = self.active_tz();
             let minute = self.minute_profile(at).map(|m| m.to_vec());
             let key = ((at.1 * 20.0).round() as i32, (at.0 * 20.0).round() as i32);
-            let now = self
-                .forecast_obs_cache
-                .get(&key)
-                .map(|(_, station, ob)| (station.as_str(), ob));
+            let now = self.forecast_obs_cache.get(&key).map(|(_, station)| station);
+            let frame = |layer| self.fields.get(&layer).and_then(|state| state.frame.as_ref());
+            self.forecast_history.record(
+                &format!("{:.6},{:.6}", at.0, at.1), at.0, at.1,
+                frame(crate::render::FieldLayer::RtmaTemp2m),
+                frame(crate::render::FieldLayer::GlobalTemp2m),
+            );
             if !ui::forecast_window::show(
                 ctx,
                 &self.forecast_state,
                 at,
                 tz,
                 minute.as_deref(),
-                now,
+                (now, &self.forecast_history),
                 &mut self.popovers,
             ) {
                 self.forecast_open = false;
@@ -20122,8 +20711,22 @@ impl eframe::App for HookEchoApp {
             }
         }
         let tz = self.active_tz();
+        if let Some((station_id, (lon, lat))) = self.views[self.active].site.as_deref()
+            .filter(|site| self.sensor_site.as_deref() == Some(*site))
+            .and_then(|_| self.sensor_data.as_ref()?.as_ref().ok())
+            .and_then(|station| station.location.map(|point| (station.station_id.as_str(), point))) {
+            let frame = |layer| self.fields.get(&layer).and_then(|state| state.frame.as_ref());
+            self.sensor_history.record(
+                station_id, lon, lat,
+                frame(crate::render::FieldLayer::RtmaTemp2m),
+                frame(crate::render::FieldLayer::GlobalTemp2m),
+            );
+        }
         if self.show_sensors
-            && !ui::sensor_window::show(ctx, self.sensor_data.as_ref(), tz, &mut self.drawer)
+            && !ui::sensor_window::show(
+                ctx, self.sensor_data.as_ref(),
+                Some(&self.sensor_history), tz, &mut self.drawer,
+            )
         {
             self.show_sensors = false;
         }
@@ -21136,10 +21739,18 @@ mod tests {
     }
 
     #[test]
+    fn analysis_station_query_covers_blend_radius_without_national_download() {
+        let (south, west, north, east) = super::analysis_station_bbox(-97.3, 35.3);
+        assert!(south < 35.3 - 1.35 && north > 35.3 + 1.35);
+        assert!(west < -97.3 - 1.65 && east > -97.3 + 1.65);
+        assert!(east - west < 5.0);
+    }
+
+    #[test]
     fn temperature_contours_follow_the_selected_unit() {
         use crate::settings::TempUnit;
 
-        for kind in [ContourKind::T2m, ContourKind::Td2m] {
+        for kind in [ContourKind::T2m, ContourKind::Td2m, ContourKind::AnalysisT2m, ContourKind::AnalysisTd2m] {
             assert_eq!(kind.interval(TempUnit::Fahrenheit), 5.0);
             assert_eq!(kind.interval(TempUnit::Celsius), 2.0);
             assert!((kind.to_display(273.15, TempUnit::Fahrenheit) - 32.0).abs() < 1e-4);
@@ -21155,6 +21766,23 @@ mod tests {
             "the fetch key must change with units"
         );
         assert_eq!(ContourKind::Mslp.interval(TempUnit::Celsius), 2.0);
+        assert_eq!(ContourKind::AnalysisT2m.analysis_field(), Some(wxdata::rtma::SurfaceField::Temperature2m));
+        assert_eq!(ContourKind::AnalysisTd2m.analysis_field(), Some(wxdata::rtma::SurfaceField::Dewpoint2m));
+        assert_eq!(ContourKind::AnalysisPressure.analysis_field(), Some(wxdata::rtma::SurfaceField::Pressure));
+        assert_eq!(ContourKind::AnalysisPressure.interval(TempUnit::Fahrenheit), 2.0);
+        assert_eq!(ContourKind::AnalysisPressure.to_display(100_000.0, TempUnit::Fahrenheit), 1000.0);
+        assert!(ContourKind::AnalysisPressure.display_label(TempUnit::Fahrenheit).ends_with("hPa"));
+        assert!(ContourKind::AnalysisThetaE.is_analysis());
+        assert_eq!(ContourKind::AnalysisThetaE.interval(TempUnit::Celsius), 5.0);
+        assert_eq!(ContourKind::AnalysisThetaE.to_display(330.0, TempUnit::Celsius), 330.0);
+        assert!(ContourKind::AnalysisThetaE.display_label(TempUnit::Celsius).ends_with('K'));
+        assert_eq!(ContourKind::AnalysisT2m.params(), None);
+        assert_ne!(
+            (ContourKind::AnalysisT2m, wxdata::rtma::Source::Rtma),
+            (ContourKind::AnalysisT2m, wxdata::rtma::Source::Urma),
+            "a source switch must re-fetch contours"
+        );
+
     }
 
     #[test]
@@ -21312,6 +21940,122 @@ mod tests {
         strokes.pop(); // Undo
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].color, red);
+    }
+
+    #[test]
+    fn drawn_annotations_export_coordinates_and_style_as_geojson() {
+        let strokes = vec![Stroke2d {
+            points: vec![[-97.5, 35.2], [-97.4, 35.3]],
+            color: egui::Color32::from_rgba_unmultiplied(255, 80, 80, 128),
+        }];
+        let json: serde_json::Value =
+            serde_json::from_str(&annotations_geojson(&strokes).unwrap()).unwrap();
+        assert_eq!(json["features"][0]["geometry"]["type"], "LineString");
+        assert_eq!(json["features"][0]["geometry"]["coordinates"][1][0], -97.4);
+        assert_eq!(json["features"][0]["properties"]["stroke"], "#ff5050");
+        assert_eq!(json["features"][0]["properties"]["stroke-opacity"], 128.0 / 255.0);
+        assert!(annotations_geojson(&[Stroke2d {
+            points: vec![[f64::NAN, 35.0], [-97.0, 35.0]],
+            color: egui::Color32::WHITE,
+        }])
+        .unwrap_err()
+        .to_string()
+        .contains("invalid coordinates"));
+    }
+
+    #[test]
+    fn calculated_routes_export_geometry_eta_and_alternatives() {
+        let routes = vec![
+            wxdata::route::Route {
+                points: vec![[-97.5, 35.2], [-96.8, 32.8]],
+                distance_m: 331_000.0,
+                duration_s: 12_000.0,
+            },
+            wxdata::route::Route {
+                points: vec![[-97.5, 35.2], [-97.0, 33.0]],
+                distance_m: 340_000.0,
+                duration_s: 12_600.0,
+            },
+        ];
+        let json: serde_json::Value =
+            serde_json::from_str(&routes_geojson(&routes).unwrap()).unwrap();
+        assert_eq!(json["features"].as_array().unwrap().len(), 2);
+        assert_eq!(json["features"][0]["properties"]["primary"], true);
+        assert_eq!(json["features"][0]["properties"]["distance_m"], 331_000.0);
+        assert_eq!(json["features"][1]["properties"]["duration_s"], 12_600.0);
+        assert_eq!(json["features"][1]["geometry"]["coordinates"][1][1], 33.0);
+    }
+
+    #[test]
+    fn alerts_in_view_export_polygon_holes_and_nws_metadata() {
+        let alert = wxdata::overlay::AlertInfo {
+            id: "urn:alert:1".into(),
+            event: "Tornado Warning".into(),
+            headline: "Tornado Warning issued".into(),
+            area: "Cleveland County".into(),
+            description: "Move to shelter.".into(),
+            instruction: "Take cover now.".into(),
+            expires: chrono::DateTime::parse_from_rfc3339("2026-09-22T18:00:00Z")
+                .ok().map(|time| time.with_timezone(&chrono::Utc)),
+            max_hail_in: None,
+            max_wind: Some("70 MPH".into()),
+            tornado_detection: Some("RADAR INDICATED".into()),
+            damage_threat: None,
+            source: Some("Radar indicated".into()),
+            motion: None,
+            vtec: Some("/O.NEW.KOUN.TO.W.0001.260922T1700Z-260922T1800Z/".into()),
+        };
+        let feature = wxdata::overlay::GeoFeature {
+            rings: vec![
+                vec![[-98.0, 35.0], [-97.0, 35.0], [-97.0, 36.0], [-98.0, 35.0]],
+                vec![[-97.8, 35.2], [-97.6, 35.2], [-97.7, 35.4], [-97.8, 35.2]],
+            ],
+            fill: [255, 0, 0, 50],
+            stroke: [255, 0, 0, 255],
+            kind: wxdata::overlay::FeatureKind::Warning,
+            title: "Tornado Warning".into(),
+            detail: "bulletin".into(),
+            alert: Some(alert),
+        };
+        let json: serde_json::Value = serde_json::from_str(
+            &alerts_geojson(&[feature], (-99.0, 34.0, -96.0, 37.0)).unwrap(),
+        ).unwrap();
+        assert_eq!(json["features"][0]["geometry"]["coordinates"].as_array().unwrap().len(), 2);
+        assert_eq!(json["features"][0]["properties"]["event"], "Tornado Warning");
+        assert_eq!(json["features"][0]["properties"]["id"], "urn:alert:1");
+        assert!(alerts_geojson(&[], (-180.0, -90.0, 180.0, 90.0)).is_err());
+    }
+
+    #[test]
+    fn contours_export_level_source_units_and_valid_time() {
+        let valid = chrono::DateTime::parse_from_rfc3339("2026-09-22T18:00:00Z")
+            .unwrap().with_timezone(&chrono::Utc);
+        let mut line = wxdata::contour::ContourLine {
+            level: 1000.0,
+            pts: vec![(-98.0, 35.0), (-97.0, 36.0)],
+            bbox: (-98.0, 35.0, -97.0, 36.0),
+        };
+        let json: serde_json::Value = serde_json::from_str(
+            &contours_geojson(
+                std::slice::from_ref(&line),
+                "HRRR",
+                "MSLP",
+                Some("hPa"),
+                valid,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["features"][0]["geometry"]["type"], "LineString");
+        assert_eq!(json["features"][0]["properties"]["source"], "HRRR");
+        assert_eq!(json["features"][0]["properties"]["level"], 1000.0);
+        assert_eq!(json["features"][0]["properties"]["units"], "hPa");
+        assert_eq!(
+            json["features"][0]["properties"]["valid_time"],
+            "2026-09-22T18:00:00Z"
+        );
+        line.pts[0].0 = f64::NAN;
+        assert!(contours_geojson(&[line], "HRRR", "MSLP", Some("hPa"), valid).is_err());
     }
 }
 

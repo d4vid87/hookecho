@@ -349,6 +349,16 @@ impl HookEchoApp {
                         {
                             self.strokes.clear();
                         }
+                        if ui
+                            .add_enabled(
+                                self.strokes.iter().any(|stroke| stroke.points.len() >= 2),
+                                egui::Button::new("Export"),
+                            )
+                            .on_hover_text("Export annotations as GeoJSON")
+                            .clicked()
+                        {
+                            self.export_annotations();
+                        }
                     });
                 });
             });

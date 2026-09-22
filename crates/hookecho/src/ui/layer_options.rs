@@ -36,6 +36,8 @@ pub struct UiActions {
     pub export_trail: bool,
     pub export_local_tracks_csv: bool,
     pub export_local_tracks_json: bool,
+    pub export_local_tracks_geojson: bool,
+    pub export_contours: bool,
     pub load_gefs_distribution: bool,
     pub load_gefs_postage: bool,
 }
@@ -91,6 +93,7 @@ pub(crate) fn show(
     analysis_source: &mut wxdata::rtma::Source,
     analysis_point: (f64, f64),
     metars: &[wxdata::metar::SurfaceOb],
+    stations: &[wxdata::stations::StationOb],
     // Model difference: which field, and the two valid times the last fetch actually compared.
     diff_field: &mut crate::fielddiff::DiffField,
     diff_valid: Option<&(String, String)>,
@@ -131,6 +134,8 @@ pub(crate) fn show(
             descriptor.family == wxdata::field::FieldFamily::Satellite
         })
     });
+    let surface_analysis_on = [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m, FL::RtmaGust10m, FL::RtmaVisibility, FL::RtmaPrecip1h]
+        .iter().any(|layer| on.contains(layer));
     let sections = [
         ("Storm cells", filters.show_cells),
         ("Alerts", filters.show_alerts),
@@ -138,12 +143,7 @@ pub(crate) fn show(
         ("Outlooks", true),
         ("Environment", true),
         ("Global forecast", global_on),
-        (
-            "Surface analysis",
-            [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m]
-                .iter()
-                .any(|layer| on.contains(layer)),
-        ),
+        ("Surface analysis", surface_analysis_on),
         ("Model comparison", on.contains(&FL::ModelDiff)),
         ("Lightning", show_glm || on.contains(&FL::Lightning)),
         ("Satellite", satellite_on),
@@ -413,7 +413,7 @@ pub(crate) fn show(
             wxdata::rtma::Source::Urma => "Delayed retrospective analysis",
         });
         if *analysis_source != before {
-            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m] {
+            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m, FL::RtmaGust10m, FL::RtmaVisibility, FL::RtmaPrecip1h] {
                 if let Some(state) = fields.get_mut(&layer) {
                     state.last_fetch = None;
                 }
@@ -421,15 +421,55 @@ pub(crate) fn show(
             changed = true;
         }
         let frame = |layer| fields.get(&layer).and_then(|state| state.frame.as_ref());
+        let (lon, lat) = analysis_point;
+        let advection = match (
+            frame(FL::RtmaTemp2m), frame(FL::RtmaWindU10m), frame(FL::RtmaWindV10m),
+        ) {
+            (Some(temp), Some(u), Some(v)) if crate::fielddiff::same_analysis_object(temp, u)
+                && crate::fielddiff::same_analysis_object(temp, v) => {
+                u.sample(lon, lat).value.zip(v.sample(lon, lat).value)
+                    .and_then(|(u, v)| crate::fielddiff::temperature_advection_k_per_h(
+                        temp.field(), lon, lat, u, v,
+                    ))
+            }
+            _ => None,
+        };
+        let moisture = match (
+            frame(FL::RtmaDewpoint2m), frame(FL::RtmaPressure),
+            frame(FL::RtmaWindU10m), frame(FL::RtmaWindV10m),
+        ) {
+            (Some(td), Some(p), Some(u), Some(v))
+                if crate::fielddiff::same_analysis_object(td, p)
+                    && crate::fielddiff::same_analysis_object(td, u)
+                    && crate::fielddiff::same_analysis_object(td, v) => {
+                crate::fielddiff::moisture_flux_convergence_g_kg_h(
+                    td.field(), p.field(), u.field(), v.field(), lon, lat,
+                )
+            }
+            _ => None,
+        };
+        if advection.is_some() || moisture.is_some() {
+            ui.separator();
+            ui.weak(format!("Map center · {:.2}, {:.2}", lon, lat));
+            ui.horizontal_wrapped(|ui| {
+                if let Some(value) = advection {
+                    ui.label(format!("10 m temperature advection {value:+.2} °C/h"));
+                }
+                if let Some(value) = moisture {
+                    ui.label(format!("Moisture-flux convergence {value:+.2} g/kg/h"));
+                }
+            });
+            if moisture.is_some() {
+                ui.weak("Near-surface proxy: 2 m humidity + 10 m wind, 30 km centered span; not a vertically integrated moisture budget.");
+            }
+        }
         if let (Some(temp), Some(dewpoint), Some(pressure)) = (
             frame(FL::RtmaTemp2m),
             frame(FL::RtmaDewpoint2m),
             frame(FL::RtmaPressure),
         ) {
-            let matched = temp.stamp.valid_time == dewpoint.stamp.valid_time
-                && temp.stamp.valid_time == pressure.stamp.valid_time
-                && temp.stamp.source_identity == dewpoint.stamp.source_identity
-                && temp.stamp.source_identity == pressure.stamp.source_identity;
+            let matched = crate::fielddiff::same_analysis_object(temp, dewpoint)
+                && crate::fielddiff::same_analysis_object(temp, pressure);
             if matched {
                 let (lon, lat) = analysis_point;
                 let theta_e = temp
@@ -452,7 +492,7 @@ pub(crate) fn show(
                     });
                 }
                 if let Some(blend) = crate::fielddiff::objective_surface_point(
-                    temp, dewpoint, metars, lon, lat,
+                    temp, dewpoint, metars, stations, lon, lat,
                 ) {
                     ui.separator();
                     ui.strong("HookEcho objective analysis");
@@ -466,7 +506,15 @@ pub(crate) fn show(
                     });
                     ui.weak(format!("{} · {:.0} km · {:.0}% observation weight",
                         blend.station, blend.distance_km, blend.weight * 100.0));
-                    ui.weak("Nearest METAR innovation, ≤90 min old, 75 km decay; not an official SPC analysis.");
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(residual) = blend.temperature_residual_k {
+                            ui.label(format!("Station − analysis: T {residual:+.1} °C"));
+                        }
+                        if let Some(residual) = blend.dewpoint_residual_k {
+                            ui.label(format!("Td {residual:+.1} °C"));
+                        }
+                    });
+                    ui.weak("Nearest surface observation, ≤90 min old, 75 km decay; not an official SPC analysis.");
                 }
             } else {
                 ui.weak("Diagnostics wait for matching analysis times.");
@@ -705,7 +753,7 @@ pub(crate) fn show(
             changed = true;
         }
 
-        // Model contours (isolines) — MSLP / 2 m temp / dewpoint / SB-CAPE / 0-3 km SRH.
+        // Model or surface-analysis isolines, labeled with the selected source and valid time.
         ui.label("Contours");
         egui::ComboBox::from_id_salt("environment_contours")
             .width(ui.available_width() - 8.0)
@@ -719,7 +767,27 @@ pub(crate) fn show(
                 }
             })
             .response
-            .on_hover_text("Draw a surface field as labeled contour lines (f00)");
+            .on_hover_text("Draw labeled model f00 or RTMA/URMA analysis contours.");
+        if *contour_kind != crate::app::ContourKind::Off {
+            actions.export_contours |= ui.button("Export contour GeoJSON…").clicked();
+        }
+        if *contour_kind == crate::app::ContourKind::AnalysisThetaE {
+            ui.weak("HookEcho θe: native 2 m temperature/dewpoint + surface pressure, Bolton method; not an official SPC analysis.");
+        }
+        if contour_kind.is_analysis() && !surface_analysis_on {
+            let before = *analysis_source;
+            ui.horizontal(|ui| {
+                ui.label("Analysis source:");
+                ui.selectable_value(analysis_source, wxdata::rtma::Source::Rtma, "RTMA");
+                ui.selectable_value(analysis_source, wxdata::rtma::Source::Urma, "URMA");
+            });
+            if *analysis_source != before {
+                for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m, FL::RtmaGust10m, FL::RtmaVisibility, FL::RtmaPrecip1h] {
+                    if let Some(state) = fields.get_mut(&layer) { state.last_fetch = None; }
+                }
+                changed = true;
+            }
+        }
     }
 
     // Everything below belongs to a layer that has to be on for it to mean anything.
@@ -756,6 +824,7 @@ pub(crate) fn show(
         ui.horizontal(|ui| {
             actions.export_local_tracks_csv |= ui.button("Export CSV…").clicked();
             actions.export_local_tracks_json |= ui.button("Export JSON…").clicked();
+            actions.export_local_tracks_geojson |= ui.button("Export GeoJSON…").clicked();
         });
     }
 
