@@ -929,7 +929,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Desktop-widget mode: `hookecho --snapshot out.png [SITE] [--size N|WIDTHxHEIGHT] [--zoom Z]
+    // Desktop-widget mode: `hookecho --snapshot out.png|out.jpg [SITE] [--size N|WIDTHxHEIGHT] [--zoom Z]
     // [--every SECS]`. The same off-screen render `--headless` and the server's `/snapshot.png`
     // use, written where conky, a desktop wallpaper script or `feh --reload` can pick it up.
     if let Some(pos) = args.iter().position(|a| a == "--snapshot") {
@@ -959,11 +959,16 @@ fn main() -> eframe::Result<()> {
             flag_value(&args, "--zoom").and_then(|v| v.parse().ok()),
         );
         let every = flag_value(&args, "--every").and_then(|v| v.parse::<u64>().ok());
+        let extension = std::path::Path::new(out).extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !["png", "jpg", "jpeg"].contains(&extension.to_ascii_lowercase().as_str()) {
+            eprintln!("snapshot output must end in .png, .jpg, or .jpeg");
+            std::process::exit(2);
+        }
         loop {
             // Render to a sibling temp file and rename over the target: a widget polling the file
             // on its own clock must never catch a half-written PNG, and rename is atomic. The
-            // `.png` stays on the end because the encoder picks its format from the extension.
-            let tmp = format!("{out}.tmp.png");
+            // Keep the target extension: the encoder picks its format from that extension.
+            let tmp = format!("{out}.tmp.{extension}");
             match headless::run(
                 &tmp, site, moment, 0, true, None, None, None, None, basemap, false,
             )

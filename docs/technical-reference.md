@@ -658,10 +658,11 @@ straight to a file:
 
 ```sh
 hookecho --snapshot ~/.cache/radar.png KTLX --size 480 --zoom 7 --every 120
+hookecho --snapshot ~/.cache/radar.jpg KTLX --size 1920x1080 --every 120
 ```
 
 It renders, renames the finished file into place (so a widget polling on its own
-clock never catches a half-written PNG), and repeats. Point conky, `feh
+clock never catches a half-written PNG or JPEG), and repeats. Point conky, `feh
 --reload`, or a wallpaper script at the file.
 
 There's a container for it, if that's easier than a systemd unit:

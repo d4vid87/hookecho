@@ -3154,8 +3154,19 @@ fn render_to_png_stamped(
     if let Some(stamp) = stamp {
         crate::chrome::draw(&mut rgba, width, height, stamp);
     }
-    image::save_buffer(out_path, &rgba, width, height, image::ColorType::Rgba8)?;
+    save_render_image(out_path, &rgba, width, height)?;
     println!("wrote {out_path}");
+    Ok(())
+}
+
+fn save_render_image(path: &str, rgba: &[u8], width: u32, height: u32) -> anyhow::Result<()> {
+    if std::path::Path::new(path).extension().and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg")) {
+        let rgb: Vec<u8> = rgba.as_chunks::<4>().0.iter().flat_map(|pixel| pixel[..3].iter().copied()).collect();
+        image::save_buffer(path, &rgb, width, height, image::ColorType::Rgb8)?;
+    } else {
+        image::save_buffer(path, rgba, width, height, image::ColorType::Rgba8)?;
+    }
     Ok(())
 }
 
@@ -3188,6 +3199,14 @@ mod golden_tests {
     fn output_dimensions_preserve_aspect_and_bound_resources() {
         assert_eq!(clamp_dimensions(1920, 1080), (1920, 1080));
         assert_eq!(clamp_dimensions(10, 9000), (256, 4096));
+    }
+
+    #[test]
+    fn jpeg_snapshot_accepts_renderer_rgba() {
+        let path = std::env::temp_dir().join(format!("hookecho-{}.jpg", std::process::id()));
+        save_render_image(path.to_str().unwrap(), &[255, 0, 0, 255], 1, 1).unwrap();
+        assert_eq!(image::open(&path).unwrap().width(), 1);
+        std::fs::remove_file(path).unwrap();
     }
 
     /// A deterministic synthetic sweep: a 90° wedge plus three range rings.
