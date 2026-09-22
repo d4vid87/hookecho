@@ -221,7 +221,7 @@ fn dashboard(
         if let Some(history) = history.filter(|history| history.site == station.station_id) {
             ui.separator();
             ui.strong(format!("Loaded temperature history at {}", station.station_id));
-            ui.weak("RTMA: recent 6 hours · HRRR/GFS: current run · Other global: viewed frames. Observations above cover 24 hours.");
+            ui.weak("RTMA: recent 6 hours · HRRR: current run · GFS: recent analyses and current forecast · Other global: viewed frames.");
             temperature_comparison(ui, &station.obs, history);
             if history.analysis.is_empty() && history.hrrr.is_empty() && history.forecast.is_empty() {
                 ui.weak("Waiting for station analysis and forecast samples.");
@@ -258,8 +258,8 @@ fn dashboard(
 /// no line is drawn across missing hours or between forecast steps.
 pub(crate) fn temperature_comparison(ui: &mut egui::Ui, observations: &[Observation], history: &PointHistory) {
     let now = Utc::now();
-    let start = now - chrono::Duration::hours(6);
-    let end = now + chrono::Duration::hours(6);
+    let start = now - chrono::Duration::hours(24);
+    let end = now + chrono::Duration::hours(12);
     let observed = observations.iter().filter_map(|ob| Some((ob.time?, ob.temp_c?)))
         .map(|(time, c)| (time, c_to_f(c)));
     let series = [
@@ -281,7 +281,7 @@ pub(crate) fn temperature_comparison(ui: &mut egui::Ui, observations: &[Observat
     let plot = rect.shrink2(egui::vec2(12.0, 8.0));
     let painter = ui.painter();
     painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
-    let middle = plot.left() + plot.width() * 0.5;
+    let middle = plot.left() + plot.width() * (24.0 / 36.0);
     painter.line_segment([egui::pos2(middle, plot.top()), egui::pos2(middle, plot.bottom())],
         egui::Stroke::new(1.0, ui.visuals().weak_text_color()));
     for (_, color, points) in &series {
@@ -296,11 +296,16 @@ pub(crate) fn temperature_comparison(ui: &mut egui::Ui, observations: &[Observat
             ui.colored_label(*color, *label);
         }
     });
-    ui.columns(3, |cols| {
-        cols[0].weak("−6 h");
-        cols[1].weak("now");
-        cols[2].weak("+6 h");
-    });
+    let (axis, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::hover());
+    let axis_text = ui.visuals().weak_text_color();
+    let font = egui::FontId::proportional(11.0);
+    for (x, align, label) in [
+        (plot.left(), egui::Align2::LEFT_TOP, "−24 h"),
+        (middle, egui::Align2::CENTER_TOP, "now"),
+        (plot.right(), egui::Align2::RIGHT_TOP, "+12 h"),
+    ] {
+        ui.painter().text(egui::pos2(x, axis.top()), align, label, font.clone(), axis_text);
+    }
     ui.weak(format!("{lo:.0}–{hi:.0} °F · exact points only"));
 }
 
@@ -465,5 +470,9 @@ mod tests {
             start - chrono::Duration::seconds(1), 75.0).is_none());
         assert!(temperature_plot_point(rect, start, end, 50.0, 100.0,
             start, f32::NAN).is_none());
+        let now = start + chrono::Duration::hours(24);
+        let wide = temperature_plot_point(rect, start, start + chrono::Duration::hours(36),
+            50.0, 100.0, now, 75.0).unwrap();
+        assert_eq!(wide.x, 90.0);
     }
 }

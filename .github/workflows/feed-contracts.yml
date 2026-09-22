@@ -28,7 +28,7 @@ jobs:
       - name: Derive native-grid RTMA equivalent potential temperature
         run: cargo test -p wxdata --lib live_theta_e_uses_matching_native_surface_fields -- --ignored
       - name: Decode same-cycle GFS station temperatures
-        run: cargo test -p wxdata --lib live_gfs_station_temperature_uses_one_cycle -- --ignored
+        run: cargo test -p wxdata --lib live_gfs_station_temperature_includes_prior_analyses -- --ignored
       - name: Capture cross-source valid times
         run: |
           python3 scripts/cross-source-capture.py --self-test
