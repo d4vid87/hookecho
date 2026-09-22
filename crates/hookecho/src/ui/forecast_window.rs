@@ -23,9 +23,10 @@ pub fn show(
     at: (f64, f64),
     tz: Option<wxdata::tz::Tz>,
     minute: Option<&[Option<f32>]>,
-    now: Option<(&str, &wxdata::obs::Observation)>,
+    comparison: (Option<&wxdata::obs::StationObs>, &crate::ui::sensor_window::PointHistory),
     popovers: &mut crate::ui::popover::Popovers,
 ) -> bool {
+    let (now, history) = comparison;
     let mut open = true;
     popovers
         .card(ctx, "forecast", egui::Window::new("Forecast"))
@@ -40,8 +41,8 @@ pub fn show(
                     }
                 }
             });
-            if let Some((station, o)) = now {
-                ui.label(conditions_line(o, station));
+            if let Some(station) = now.and_then(|station| station.obs.first().map(|ob| (station, ob))) {
+                ui.label(conditions_line(station.1, &station.0.station_id));
             }
             ui.weak(almanac_line(at, tz));
             ui.separator();
@@ -49,6 +50,13 @@ pub fn show(
                 minute_strip(ui, m);
                 ui.add_space(6.0);
             }
+            ui.strong("Temperature at selected point");
+            ui.weak("Nearest station observations; model values sampled at the map point. RTMA: recent 6 hours · HRRR/GFS: current run.");
+            crate::ui::sensor_window::temperature_comparison(
+                ui, now.map(|station| station.obs.as_slice()).unwrap_or(&[]), history,
+            );
+            if !history.has_samples() { ui.weak("Waiting for analysis and forecast samples."); }
+            ui.separator();
             match state {
                 State::Loading => {
                     ui.horizontal(|ui| {

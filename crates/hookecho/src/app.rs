@@ -266,6 +266,9 @@ enum OverlayMsg {
     SensorHrrr(String, Vec<wxdata::hrrr::PointTemperature>),
     SensorRtma(String, Vec<wxdata::rtma::PointTemperature>),
     SensorGfs(String, Vec<wxdata::global::PointTemperature>),
+    PointHrrr(String, Vec<wxdata::hrrr::PointTemperature>),
+    PointRtma(String, Vec<wxdata::rtma::PointTemperature>),
+    PointGfs(String, Vec<wxdata::global::PointTemperature>),
     /// VAD wind profile for a site.
     Vwp(String, Vec<wxdata::level3::VwpLevel>),
     /// Archived storm-based warnings for a 5-min UTC bucket (feature W).
@@ -396,6 +399,9 @@ enum OverlaySource {
     SensorHrrr { station: String, lon: f64, lat: f64 },
     SensorRtma { station: String, lon: f64, lat: f64 },
     SensorGfs { station: String, lon: f64, lat: f64 },
+    PointHrrr { point: String, lon: f64, lat: f64 },
+    PointRtma { point: String, lon: f64, lat: f64 },
+    PointGfs { point: String, lon: f64, lat: f64 },
     /// VAD wind profile for `site`.
     Vwp(String),
     /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
@@ -632,6 +638,9 @@ impl OverlaySource {
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
             Self::SensorRtma { .. } => RequestLane::Feed("RTMA station temperature"),
             Self::SensorGfs { .. } => RequestLane::Feed("GFS station temperature"),
+            Self::PointHrrr { .. } => RequestLane::Feed("HRRR selected-point temperature"),
+            Self::PointRtma { .. } => RequestLane::Feed("RTMA selected-point temperature"),
+            Self::PointGfs { .. } => RequestLane::Feed("GFS selected-point temperature"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
             Self::ArchiveWarnings(..) => RequestLane::Feed("Archived warnings"),
             Self::Aviation => RequestLane::Feed("Aviation advisories"),
@@ -1051,6 +1060,15 @@ impl OverlaySource {
             }
             OverlaySource::SensorGfs { station, lon, lat } => {
                 OverlayMsg::SensorGfs(station, wxdata::global::fetch_point_temperature_trace(http, lon, lat).await?)
+            }
+            OverlaySource::PointHrrr { point, lon, lat } => {
+                OverlayMsg::PointHrrr(point, wxdata::hrrr::fetch_point_temperature_trace(http, lon, lat).await?)
+            }
+            OverlaySource::PointRtma { point, lon, lat } => {
+                OverlayMsg::PointRtma(point, wxdata::rtma::fetch_point_temperature_history(http, lon, lat).await?)
+            }
+            OverlaySource::PointGfs { point, lon, lat } => {
+                OverlayMsg::PointGfs(point, wxdata::global::fetch_point_temperature_trace(http, lon, lat).await?)
             }
             OverlaySource::Vwp(site) => {
                 let levels = wxdata::level3::fetch_vwp(http, &site).await;
@@ -3073,6 +3091,8 @@ pub struct HookEchoApp {
     /// Tap-for-forecast: window state, the tapped point, the in-flight fetch, and a short cache
     /// keyed by rounded lat/lon.
     forecast_open: bool,
+    forecast_history: ui::sensor_window::PointHistory,
+    forecast_history_fetch: Option<Instant>,
     forecast_at: Option<(f64, f64)>,
     forecast_state: ui::forecast_window::State,
     #[allow(clippy::type_complexity)]
@@ -3088,10 +3108,10 @@ pub struct HookEchoApp {
     #[allow(clippy::type_complexity)]
     forecast_obs_rx: Option<(
         (i32, i32),
-        std::sync::mpsc::Receiver<(String, wxdata::obs::Observation)>,
+        std::sync::mpsc::Receiver<wxdata::obs::StationObs>,
     )>,
     forecast_obs_cache:
-        std::collections::HashMap<(i32, i32), (Instant, String, wxdata::obs::Observation)>,
+        std::collections::HashMap<(i32, i32), (Instant, wxdata::obs::StationObs)>,
     /// Rain-arrival alerting: per-point persistence/cooldown state, plus the current ETAs for the
     /// on-map chip.
     rain_detector: crate::rain_arrival::Detector,
@@ -3905,6 +3925,8 @@ impl HookEchoApp {
             hodo_history: std::collections::VecDeque::new(),
             hodo_tab: Default::default(),
             forecast_open: false,
+            forecast_history: Default::default(),
+            forecast_history_fetch: None,
             forecast_at: None,
             forecast_state: ui::forecast_window::State::Loading,
             forecast_rx: None,
@@ -6617,11 +6639,22 @@ impl HookEchoApp {
     /// Fetch the NWS point forecast for a tapped spot. Results are cached per ~0.05° cell for
     /// 15 minutes — the grid only updates hourly, and re-tapping the same neighborhood shouldn't
     /// re-hit the API.
-    fn fetch_point_forecast(&mut self, lon: f64, lat: f64) {
+    fn fetch_point_forecast(&mut self, ctx: &egui::Context, lon: f64, lat: f64) {
         let key = ((lat * 20.0).round() as i32, (lon * 20.0).round() as i32);
         self.forecast_at = Some((lon, lat));
         self.forecast_open = true;
         self.fetch_point_obs(key, lon, lat);
+        let point = format!("{lon:.6},{lat:.6}");
+        if self.forecast_history.site != point
+            || self.forecast_history_fetch.is_none_or(|time| time.elapsed().as_secs() >= 900)
+        {
+            self.forecast_history.record(&point, lon, lat, None, None);
+            self.forecast_history_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::PointHrrr { point: point.clone(), lon, lat });
+            self.spawn_overlay(ctx, OverlaySource::PointRtma { point: point.clone(), lon, lat });
+            self.spawn_overlay(ctx, OverlaySource::PointGfs { point, lon, lat });
+        }
+
         if let Some((when, f)) = self.forecast_cache.get(&key) {
             if when.elapsed().as_secs() < 900 {
                 self.forecast_state = ui::forecast_window::State::Ready(Box::new(f.clone()));
@@ -6682,8 +6715,8 @@ impl HookEchoApp {
         self.spawner.spawn(async move {
             match wxdata::obs::fetch_nearest(&http, lat, lon).await {
                 Ok(s) => {
-                    if let Some(o) = s.obs.first() {
-                        let _ = tx.send((s.station_id, o.clone()));
+                    if !s.obs.is_empty() {
+                        let _ = tx.send(s);
                     }
                 }
                 Err(e) => log::debug!("point obs unavailable: {e}"),
@@ -9146,6 +9179,9 @@ impl HookEchoApp {
                         self.sensor_history.record_gfs(&station, &points);
                     }
                 }
+                OverlayMsg::PointHrrr(point, points) => self.forecast_history.record_hrrr(&point, &points),
+                OverlayMsg::PointRtma(point, points) => self.forecast_history.record_rtma(&point, &points),
+                OverlayMsg::PointGfs(point, points) => self.forecast_history.record_gfs(&point, &points),
                 OverlayMsg::Vwp(site, levels) => {
                     if self.views[self.active].site.as_deref() == Some(site.as_str()) {
                         // A site change starts a new time series; mixing radars on one axis would
@@ -12499,7 +12535,7 @@ impl HookEchoApp {
                         }
                     }
                     MapTool::Sounding => self.fetch_sounding(lon, lat),
-                    MapTool::Forecast => self.fetch_point_forecast(lon, lat),
+                    MapTool::Forecast => self.fetch_point_forecast(ctx, lon, lat),
                     MapTool::Chase => {
                         self.chase_mode = true;
                         self.chase_pos = Some((lon, lat));
@@ -19890,11 +19926,11 @@ impl eframe::App for HookEchoApp {
             }
         }
         if let Some((key, rx)) = &self.forecast_obs_rx {
-            if let Ok((station, ob)) = rx.try_recv() {
+            if let Ok(station) = rx.try_recv() {
                 let key = *key;
                 self.forecast_obs_rx = None;
                 self.forecast_obs_cache
-                    .insert(key, (Instant::now(), station, ob));
+                    .insert(key, (Instant::now(), station));
             }
         }
         if self.forecast_open {
@@ -19902,17 +19938,20 @@ impl eframe::App for HookEchoApp {
             let tz = self.active_tz();
             let minute = self.minute_profile(at).map(|m| m.to_vec());
             let key = ((at.1 * 20.0).round() as i32, (at.0 * 20.0).round() as i32);
-            let now = self
-                .forecast_obs_cache
-                .get(&key)
-                .map(|(_, station, ob)| (station.as_str(), ob));
+            let now = self.forecast_obs_cache.get(&key).map(|(_, station)| station);
+            let frame = |layer| self.fields.get(&layer).and_then(|state| state.frame.as_ref());
+            self.forecast_history.record(
+                &format!("{:.6},{:.6}", at.0, at.1), at.0, at.1,
+                frame(crate::render::FieldLayer::RtmaTemp2m),
+                frame(crate::render::FieldLayer::GlobalTemp2m),
+            );
             if !ui::forecast_window::show(
                 ctx,
                 &self.forecast_state,
                 at,
                 tz,
                 minute.as_deref(),
-                now,
+                (now, &self.forecast_history),
                 &mut self.popovers,
             ) {
                 self.forecast_open = false;

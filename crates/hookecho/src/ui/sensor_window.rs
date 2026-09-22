@@ -25,6 +25,10 @@ struct Reading {
 }
 
 impl PointHistory {
+    pub fn has_samples(&self) -> bool {
+        !self.analysis.is_empty() || !self.hrrr.is_empty() || !self.forecast.is_empty()
+    }
+
     pub fn record(
         &mut self,
         site: &str,
@@ -218,7 +222,7 @@ fn dashboard(
             ui.separator();
             ui.strong(format!("Loaded temperature history at {}", station.station_id));
             ui.weak("RTMA: recent 6 hours · HRRR/GFS: current run · Other global: viewed frames. Observations above cover 24 hours.");
-            temperature_comparison(ui, station, history);
+            temperature_comparison(ui, &station.obs, history);
             if history.analysis.is_empty() && history.hrrr.is_empty() && history.forecast.is_empty() {
                 ui.weak("Waiting for station analysis and forecast samples.");
             }
@@ -252,11 +256,11 @@ fn dashboard(
 
 /// Same time and temperature axes for observations and every loaded source. Dots are exact samples;
 /// no line is drawn across missing hours or between forecast steps.
-fn temperature_comparison(ui: &mut egui::Ui, station: &StationObs, history: &PointHistory) {
+pub(crate) fn temperature_comparison(ui: &mut egui::Ui, observations: &[Observation], history: &PointHistory) {
     let now = Utc::now();
     let start = now - chrono::Duration::hours(6);
     let end = now + chrono::Duration::hours(6);
-    let observed = station.obs.iter().filter_map(|ob| Some((ob.time?, ob.temp_c?)))
+    let observed = observations.iter().filter_map(|ob| Some((ob.time?, ob.temp_c?)))
         .map(|(time, c)| (time, c_to_f(c)));
     let series = [
         ("Observed", egui::Color32::from_rgb(255, 145, 95), observed.collect::<Vec<_>>()),
