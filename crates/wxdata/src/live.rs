@@ -8,7 +8,7 @@
 //!
 //! All merged state lives on this task; the UI thread only ever receives a finished `Scan`.
 
-use crate::level2::{elevation_angles, Scan};
+use crate::level2::{elevation_angles, Moment, Scan};
 use nexrad_data::aws::realtime::{
     assemble_volume, download_chunk, Chunk, ChunkIdentifier, ChunkIterator, ChunkType,
 };
@@ -517,7 +517,16 @@ fn stitch(base: &Sweep, partial: &Sweep) -> Sweep {
             by_az.insert(radial.azimuth_number(), radial.clone());
         }
     }
-    Sweep::new(base.elevation_number(), by_az.into_values().collect())
+    Sweep::new(partial.elevation_number(), by_az.into_values().collect())
+}
+
+/// A repeated low cut may have a new elevation number; split surveillance/Doppler cuts at the
+/// same angle must stay separate because they carry different moments.
+fn same_cut_type(a: &Sweep, b: &Sweep) -> bool {
+    Moment::ALL.iter().all(|moment| {
+        let carries = |sweep: &Sweep| sweep.radials().iter().any(|r| moment.select(r).is_some());
+        carries(a) == carries(b)
+    })
 }
 
 /// Merge `partial` into `base`, newest-wins by elevation number.
@@ -547,7 +556,13 @@ pub fn merge_scan(base: &Scan, partial: Scan) -> (Scan, Vec<f32>) {
                 }
             }
             None => {
-                sweeps.push(ps.clone());
+                let previous = sweeps.iter().filter(|s| {
+                    s.elevation_angle_degrees().zip(ps.elevation_angle_degrees())
+                        .is_some_and(|(a, b)| (a - b).abs() < 0.15)
+                        && same_cut_type(s, ps)
+                }).max_by_key(|s| s.radials().iter().map(|r| r.collection_timestamp()).max());
+                let next = previous.map_or_else(|| ps.clone(), |old| stitch(old, ps));
+                sweeps.push(next);
                 changed_nums.push(en);
             }
         }
@@ -623,9 +638,23 @@ mod tests {
 
     // A sweep covering `azimuths` (as azimuth numbers), collected at `t_ms`.
     fn wedge(elevation_number: u8, azimuths: std::ops::Range<u16>, t_ms: i64) -> Sweep {
+        wedge_with_moment(elevation_number, azimuths, t_ms, Moment::Reflectivity)
+    }
+
+    fn wedge_with_moment(
+        elevation_number: u8,
+        azimuths: std::ops::Range<u16>,
+        t_ms: i64,
+        moment: Moment,
+    ) -> Sweep {
         let radials = azimuths
             .map(|az| {
                 let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![100]);
+                let (reflectivity, velocity) = if moment == Moment::Velocity {
+                    (None, Some(data))
+                } else {
+                    (Some(data), None)
+                };
                 Radial::new(
                     t_ms,
                     az,
@@ -634,8 +663,8 @@ mod tests {
                     RadialStatus::ScanStart,
                     elevation_number,
                     0.5,
-                    Some(data),
-                    None,
+                    reflectivity,
+                    velocity,
                     None,
                     None,
                     None,
@@ -749,6 +778,39 @@ mod tests {
         assert_eq!(ages[2], AzimuthAge::Older);
         assert_eq!(ages[3], AzimuthAge::Older);
         assert_eq!(ages[4], AzimuthAge::Missing);
+    }
+
+    #[test]
+    fn repeated_low_cut_with_new_elevation_number_retains_older_azimuths() {
+        use crate::level2::{azimuth_age, bin_scan, AzimuthAge, Moment};
+        let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
+        let base = Scan::with_site(site, vcp(212), vec![wedge(1, 0..720, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge(4, 0..120, 301_000)]);
+        let (merged, changed) = merge_scan(&base, partial);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(merged.sweeps().len(), 2, "keep cut chronology intact");
+        assert_eq!(merged.sweeps()[1].elevation_number(), 4);
+        assert_eq!(merged.sweeps()[1].radials().len(), 720);
+        let ages = azimuth_age(&merged, Moment::Reflectivity, 0, 300_000).unwrap();
+        assert_eq!(ages[0], AzimuthAge::Current);
+        assert_eq!(ages[120], AzimuthAge::Older);
+        let image = bin_scan(&merged, Moment::Reflectivity, 0).unwrap();
+        assert!(image.data[120 * image.gate_count] > 1, "older sector disappeared from display");
+
+        let (merged, _) = merge_scan(&merged, Scan::new(vcp(212), vec![wedge(4, 120..240, 302_000)]));
+        let ages = azimuth_age(&merged, Moment::Reflectivity, 0, 300_000).unwrap();
+        assert_eq!(merged.sweeps()[1].radials().len(), 720);
+        assert_eq!(ages[180], AzimuthAge::Current);
+        assert_eq!(ages[240], AzimuthAge::Older);
+    }
+
+    #[test]
+    fn repeated_split_cut_does_not_borrow_radials_from_another_moment() {
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..720, 1_000)]);
+        let partial = Scan::new(vcp(212), vec![wedge_with_moment(2, 0..120, 301_000, Moment::Velocity)]);
+        let (merged, _) = merge_scan(&base, partial);
+        assert_eq!(merged.sweeps()[1].radials().len(), 120);
+        assert!(merged.sweeps()[1].radials().iter().all(|r| r.reflectivity().is_none()));
     }
 
     #[test]

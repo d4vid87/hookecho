@@ -336,6 +336,8 @@ Instead of waiting for a sweep/volume boundary:
 - [x] show age since radar timestamp and age since local receipt separately
 - [x] keep animation smooth while updates stream
 
+Repeated-cut coverage is checked by `live::tests::repeated_low_cut_with_new_elevation_number_retains_older_azimuths` and `repeated_split_cut_does_not_borrow_radials_from_another_moment`.
+
 ## B3. Latency dashboard
 
 Add a compact source/latency diagnostic:
