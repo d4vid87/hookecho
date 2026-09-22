@@ -615,7 +615,7 @@ pub(crate) fn show(
                 ui.separator();
                 ui.label(egui::RichText::new("Forecast day").small().strong());
                 ui.horizontal_wrapped(|ui| {
-                    for day in 1u8..=8 {
+                    for day in 1u8..=3 {
                         if ui
                             .selectable_label(filters.outlook_day == day, format!("Day {day}"))
                             .clicked()
@@ -641,8 +641,6 @@ pub(crate) fn show(
                             }
                         }
                     });
-                } else if filters.outlook_day >= 4 {
-                    ui.weak("Experimental severe-weather probability");
                 }
 
                 ui.add_space(4.0);

@@ -526,7 +526,7 @@ pub(crate) fn primary_controls(
         ui.label(RichText::new("SPC Convective Outlook").strong());
         ui.label(RichText::new("Forecast day").size(12.0).strong());
         ui.horizontal_wrapped(|ui| {
-            for day in 1u8..=8 {
+            for day in 1u8..=3 {
                 if ui.selectable_label(outlook_day == day, format!("Day {day}")).clicked() {
                     chosen = Some(PaletteAction::SetOutlookDay(if outlook_day == day { 0 } else { day }));
                 }
@@ -1158,9 +1158,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        for expected in ["Forecast day", "Day 8", "Layer", "Hail", "● HIGH"] {
+        for expected in ["Forecast day", "Day 3", "Layer", "Hail", "● HIGH"] {
             assert!(text.contains(&expected), "missing {expected}: {text:?}");
         }
+        assert!(!text.contains(&"Day 4"));
     }
 
     #[test]
@@ -1192,7 +1193,7 @@ mod tests {
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("test_outlook_day"), active));
             })
         };
-        for day in 1u8..=8 {
+        for day in 1u8..=3 {
             for expected in [day, 0, day] {
                 let output = frame(Vec::new());
                 assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
@@ -1238,7 +1239,7 @@ mod tests {
             ("MRMS", PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)),
             ("Storm tracks", PaletteAction::ToggleOverlay(crate::app::OverlayToggle::Tracks)),
             ("Storm attributes", PaletteAction::OpenWindow(crate::app::AppWindow::StormTable)),
-            ("Day 8", PaletteAction::SetOutlookDay(8)),
+            ("Day 3", PaletteAction::SetOutlookDay(3)),
             ("Hail", PaletteAction::SetOutlookKind(3)),
             ("Workspace: Chase", PaletteAction::ApplyWorkspace(0)),
         ] {

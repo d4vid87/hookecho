@@ -9072,7 +9072,7 @@ impl HookEchoApp {
                 }
                 self.rebuild_overlays();
             }
-            PaletteAction::SetOutlookDay(day) if day <= 8 => {
+            PaletteAction::SetOutlookDay(day) if day <= 3 => {
                 self.filters.outlook_day = day;
                 if day > 0 && self.outlook_features[(day - 1) as usize].is_empty() {
                     self.spawn_overlay(ctx, OverlaySource::Outlook(day, self.outlook_kind_for_day()));
