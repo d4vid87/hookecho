@@ -133,7 +133,7 @@ pub(crate) fn show(
             descriptor.family == wxdata::field::FieldFamily::Satellite
         })
     });
-    let surface_analysis_on = [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m]
+    let surface_analysis_on = [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m, FL::RtmaGust10m, FL::RtmaVisibility]
         .iter().any(|layer| on.contains(layer));
     let sections = [
         ("Storm cells", filters.show_cells),
@@ -412,7 +412,7 @@ pub(crate) fn show(
             wxdata::rtma::Source::Urma => "Delayed retrospective analysis",
         });
         if *analysis_source != before {
-            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m] {
+            for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m, FL::RtmaGust10m, FL::RtmaVisibility] {
                 if let Some(state) = fields.get_mut(&layer) {
                     state.last_fetch = None;
                 }
@@ -778,7 +778,7 @@ pub(crate) fn show(
                 ui.selectable_value(analysis_source, wxdata::rtma::Source::Urma, "URMA");
             });
             if *analysis_source != before {
-                for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m] {
+                for layer in [FL::RtmaTemp2m, FL::RtmaDewpoint2m, FL::RtmaPressure, FL::RtmaWindU10m, FL::RtmaWindV10m, FL::RtmaGust10m, FL::RtmaVisibility] {
                     if let Some(state) = fields.get_mut(&layer) { state.last_fetch = None; }
                 }
                 changed = true;

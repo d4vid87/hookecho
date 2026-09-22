@@ -80,6 +80,7 @@ Selected-point temperature history samples native GFS f00 from the three precedi
 
 | Feed | Source | Cadence | Latency | Key |
 | --- | --- | --- | --- | --- |
+| CONUS RTMA / URMA temperature, dewpoint, pressure, 10 m U/V wind, 10 m gust, surface visibility | [NOAA NOMADS RTMA filter](https://nomads.ncep.noaa.gov/gribfilter.php?ds=rtma2p5) / [NCEP RTMA system](https://emc.ncep.noaa.gov/emc/pages/numerical_forecast_systems/rtma.php) | hourly analysis | valid-data age shown from decoded frame | no |
 | Warning verification (POD, FAR, CSI, lead time) | IEM "Cow" (`mesonet.agron.iastate.edu`) | on demand, per office and day | the report database's own lag (days) | no |
 | Ionospheric electric field (PPEF) | NOAA/NCEI PPEF model | 5 min | ~1 h ahead (a forecast) | no |
 | Ground electric field | a field mill you run and point the app at | yours | yours | no |

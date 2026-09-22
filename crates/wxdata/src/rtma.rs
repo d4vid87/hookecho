@@ -22,6 +22,8 @@ pub enum SurfaceField {
     Pressure,
     WindU10m,
     WindV10m,
+    Gust10m,
+    Visibility,
 }
 
 macro_rules! descriptor {
@@ -83,11 +85,15 @@ descriptor!(
 );
 
 descriptor!(WIND_V_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.wind-v-10m", "RTMA 10 m V wind", "RTMA V wind", "m s-1", "RTMA");
+descriptor!(GUST_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.gust-10m", "RTMA 10 m wind gust", "RTMA gust", "m s-1", "wind gust");
+descriptor!(VISIBILITY_DESCRIPTOR, "NOAA RTMA", "analysis.rtma.visibility", "RTMA surface visibility", "RTMA visibility", "m", "visibility");
 descriptor!(URMA_TEMP_DESCRIPTOR, "NOAA URMA", "analysis.urma.temperature-2m", "URMA 2 m temperature", "URMA temp", "K", "URMA");
 descriptor!(URMA_DEWPOINT_DESCRIPTOR, "NOAA URMA", "analysis.urma.dewpoint-2m", "URMA 2 m dewpoint", "URMA dewpoint", "K", "URMA");
 descriptor!(URMA_PRESSURE_DESCRIPTOR, "NOAA URMA", "analysis.urma.pressure", "URMA surface pressure", "URMA pressure", "Pa", "URMA");
 descriptor!(URMA_WIND_U_DESCRIPTOR, "NOAA URMA", "analysis.urma.wind-u-10m", "URMA 10 m U wind", "URMA U wind", "m s-1", "URMA");
 descriptor!(URMA_WIND_V_DESCRIPTOR, "NOAA URMA", "analysis.urma.wind-v-10m", "URMA 10 m V wind", "URMA V wind", "m s-1", "URMA");
+descriptor!(URMA_GUST_DESCRIPTOR, "NOAA URMA", "analysis.urma.gust-10m", "URMA 10 m wind gust", "URMA gust", "m s-1", "wind gust");
+descriptor!(URMA_VISIBILITY_DESCRIPTOR, "NOAA URMA", "analysis.urma.visibility", "URMA surface visibility", "URMA visibility", "m", "visibility");
 
 impl SurfaceField {
     fn index(self) -> (&'static str, &'static str) {
@@ -97,6 +103,8 @@ impl SurfaceField {
             Self::Pressure => ("PRES", "surface"),
             Self::WindU10m => ("UGRD", "10 m above ground"),
             Self::WindV10m => ("VGRD", "10 m above ground"),
+            Self::Gust10m => ("GUST", "10 m above ground"),
+            Self::Visibility => ("VIS", "surface"),
         }
     }
 
@@ -107,6 +115,8 @@ impl SurfaceField {
             Self::Pressure => &PRESSURE_DESCRIPTOR,
             Self::WindU10m => &WIND_U_DESCRIPTOR,
             Self::WindV10m => &WIND_V_DESCRIPTOR,
+            Self::Gust10m => &GUST_DESCRIPTOR,
+            Self::Visibility => &VISIBILITY_DESCRIPTOR,
         }
     }
 
@@ -120,6 +130,8 @@ impl SurfaceField {
             Self::Pressure => &URMA_PRESSURE_DESCRIPTOR,
             Self::WindU10m => &URMA_WIND_U_DESCRIPTOR,
             Self::WindV10m => &URMA_WIND_V_DESCRIPTOR,
+            Self::Gust10m => &URMA_GUST_DESCRIPTOR,
+            Self::Visibility => &URMA_VISIBILITY_DESCRIPTOR,
         }
     }
 }
@@ -182,6 +194,8 @@ async fn urma_range(
         SurfaceField::Pressure => (3, 0, 1),
         SurfaceField::WindU10m => (2, 2, 103),
         SurfaceField::WindV10m => (2, 3, 103),
+        SurfaceField::Gust10m => (2, 22, 103),
+        SurfaceField::Visibility => (19, 0, 1),
     };
     let mut offset = 0u64;
     for _ in 0..32 {
@@ -485,7 +499,8 @@ mod tests {
         assert!((240.0..330.0).contains(&point.point));
         assert!((240.0..330.0).contains(&point.station));
         for field in [SurfaceField::Dewpoint2m, SurfaceField::Pressure,
-            SurfaceField::WindU10m, SurfaceField::WindV10m] {
+            SurfaceField::WindU10m, SurfaceField::WindV10m,
+            SurfaceField::Gust10m, SurfaceField::Visibility] {
             let other = fetch_native_pair(&http, Source::Rtma, field,
                 at, (-97.3, 32.6), (-97.04, 32.9)).await.unwrap();
             assert_eq!(other.valid_time, at);
@@ -547,6 +562,8 @@ mod tests {
             "noaa.urma"
         );
         assert_eq!(SurfaceField::WindV10m.index(), ("VGRD", "10 m above ground"));
+        assert_eq!(SurfaceField::Gust10m.index(), ("GUST", "10 m above ground"));
+        assert_eq!(SurfaceField::Visibility.index(), ("VIS", "surface"));
         assert_ne!(
             SurfaceField::Temperature2m.descriptor().id,
             SurfaceField::Temperature2m.descriptor_for(Source::Urma).id
@@ -591,6 +608,12 @@ mod tests {
         ).await.unwrap();
         assert_eq!(v_wind.descriptor.id.0, "analysis.urma.wind-v-10m");
         assert!(v_wind.field().values.iter().any(|value| value.is_finite()));
+        for field in [SurfaceField::Gust10m, SurfaceField::Visibility] {
+            let decoded = fetch_analysis(&reqwest::Client::new(), Source::Urma, field,
+                "2026-09-20T20:00:00Z".parse().unwrap()).await.unwrap();
+            assert_eq!(decoded.descriptor.id, field.descriptor_for(Source::Urma).id);
+            assert!(decoded.field().values.iter().any(|value| value.is_finite()));
+        }
         println!("{}", frame.stamp.source_identity);
     }
 }
