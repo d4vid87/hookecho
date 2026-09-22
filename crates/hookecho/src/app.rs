@@ -3077,6 +3077,8 @@ pub struct HookEchoApp {
     show_stations: bool,
     stations: crate::stationlayer::Layer,
     station_last_poll: Option<Instant>,
+    station_last_center: Option<(f64, f64)>,
+    station_last_regional: Option<bool>,
     ppef_last_fetch: Option<Instant>,
     dotcam_bounds: Option<(f64, f64, f64, f64)>,
     /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
@@ -3326,6 +3328,14 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
             v
         }
     }
+}
+
+/// Bounded observations around the analysis probe even when the map shows the whole country.
+/// 1.5° latitude reaches past the objective blend's 150 km cutoff at U.S. latitudes.
+fn analysis_station_bbox(lon: f64, lat: f64) -> (f64, f64, f64, f64) {
+    let dlat = 1.5;
+    let dlon = dlat / lat.to_radians().cos().abs().max(0.25);
+    (lat - dlat, lon - dlon, lat + dlat, lon + dlon)
 }
 
 impl HookEchoApp {
@@ -3924,6 +3934,8 @@ impl HookEchoApp {
             show_stations: false,
             stations: Default::default(),
             station_last_poll: None,
+            station_last_center: None,
+            station_last_regional: None,
             ppef_last_fetch: None,
             dotcam_bounds: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -9836,49 +9848,56 @@ impl HookEchoApp {
     /// The poll is what fills every open card's ring buffer, so it keeps running while any card is
     /// open even if the layer itself has been switched off.
     fn sync_stations(&mut self, ctx: &egui::Context) {
-        if !self.show_stations && self.stations.cards.is_empty() {
-            return;
-        }
+        use crate::render::FieldLayer as FL;
+        let analysis_needed = self.views[self.active].fields_on.contains(&FL::RtmaTemp2m)
+            && self.views[self.active].fields_on.contains(&FL::RtmaDewpoint2m);
+        let station_layer = self.show_stations || !self.stations.cards.is_empty();
+        if !station_layer && !analysis_needed { return; }
+
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
-        // A continental view would ask for thousands of stations to draw a dot each; the cards are
-        // a close-in tool, so the layer waits until the view is regional.
-        if (max_lon - min_lon) > 20.0 {
-            return;
-        }
-        if self
-            .station_last_poll
-            .is_none_or(|t| t.elapsed().as_secs() >= 60)
-        {
+        let regional_layer = station_layer && (max_lon - min_lon) <= 20.0;
+        if !regional_layer && !analysis_needed { return; }
+        let (lon, lat) = crate::render::mercator::world_to_lonlat(
+            self.views[self.active].camera.center.0,
+            self.views[self.active].camera.center.1,
+        );
+        // Analysis needs only observations near its map-center probe, even in national view.
+        let bbox = if regional_layer {
+            (min_lat, min_lon, max_lat, max_lon)
+        } else {
+            analysis_station_bbox(lon, lat)
+        };
+        let cadence = if regional_layer { 60 } else { 300 };
+        let moved = self.station_last_center.is_none_or(|(old_lon, old_lat)| {
+            (lon - old_lon).abs() > 1.0 || (lat - old_lat).abs() > 1.0
+        });
+        if moved || self.station_last_regional != Some(regional_layer)
+            || self.station_last_poll.is_none_or(|t| t.elapsed().as_secs() >= cadence) {
             self.station_last_poll = Some(Instant::now());
-            // Still-only cameras (every camera, on a phone) get a fresh frame on the same clock.
-            let (rt, http) = (self.spawner.clone(), self.http.clone());
-            self.stations.refresh_stills(&rt, &http, ctx);
-            self.spawn_overlay(
-                ctx,
-                OverlaySource::Stations {
-                    bbox: (min_lat, min_lon, max_lat, max_lon),
-                    center: ((min_lat + max_lat) * 0.5, (min_lon + max_lon) * 0.5),
-                    tempest: self.settings.tempest_token.clone(),
-                    wu: self.settings.wu_key.clone(),
-                    synoptic: self.settings.synoptic_token.clone(),
-                },
-            );
-            if !self.settings.field_mill_url.is_empty() {
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::Mill(self.settings.field_mill_url.clone()),
-                );
+            self.station_last_center = Some((lon, lat));
+            self.station_last_regional = Some(regional_layer);
+            if regional_layer {
+                // Card stills and electric fields belong to the visible station layer.
+                let (rt, http) = (self.spawner.clone(), self.http.clone());
+                self.stations.refresh_stills(&rt, &http, ctx);
+            }
+            self.spawn_overlay(ctx, OverlaySource::Stations {
+                bbox,
+                center: (lat, lon),
+                tempest: self.settings.tempest_token.clone(),
+                wu: self.settings.wu_key.clone(),
+                synoptic: self.settings.synoptic_token.clone(),
+            });
+            if regional_layer && !self.settings.field_mill_url.is_empty() {
+                self.spawn_overlay(ctx, OverlaySource::Mill(self.settings.field_mill_url.clone()));
             }
         }
-        if self
-            .ppef_last_fetch
-            .is_none_or(|t| t.elapsed().as_secs() >= 300)
-        {
+        if !regional_layer { return; }
+        if self.ppef_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 300) {
             self.ppef_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Ppef);
         }
-        // The camera catalog is megabytes of slow-changing agency data: fetch it per view box, not
-        // per tick.
+        // The camera catalog is megabytes of slow-changing agency data: fetch it per view box.
         let bbox = (
             (min_lon * 2.0).round() / 2.0,
             (min_lat * 2.0).round() / 2.0,
@@ -21273,6 +21292,14 @@ mod tests {
         let far = Utc.with_ymd_and_hms(2026, 5, 1, 22, 0, 0).unwrap();
         assert_eq!(super::nearest_goes(&times, far), None);
         assert_eq!(super::nearest_goes(&[], t(0)), None);
+    }
+
+    #[test]
+    fn analysis_station_query_covers_blend_radius_without_national_download() {
+        let (south, west, north, east) = super::analysis_station_bbox(-97.3, 35.3);
+        assert!(south < 35.3 - 1.35 && north > 35.3 + 1.35);
+        assert!(west < -97.3 - 1.65 && east > -97.3 + 1.65);
+        assert!(east - west < 5.0);
     }
 
     #[test]

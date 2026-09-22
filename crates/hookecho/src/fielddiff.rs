@@ -520,12 +520,13 @@ pub fn objective_surface_point(
     }
     let background_t = temperature.sample(lon, lat).value;
     let background_td = dewpoint.sample(lon, lat).value;
-    let observations = observations
-        .iter()
-        .map(|ob| (ob.icao.as_str(), None, ob.lon, ob.lat, ob.temp_c, ob.dewp_c,
-            ob.obs_time.and_then(|time| chrono::DateTime::from_timestamp(time, 0))))
-        .chain(stations.iter().filter(|ob| ob.network != wxdata::stations::Network::Metar)
-            .map(|ob| (ob.id.as_str(), Some(ob.network), ob.lon, ob.lat, ob.temp_c, ob.dewp_c, ob.time)));
+    // The analysis-only poll carries METARs in `stations` even when their map layer is off.
+    // Prefer that fresh feed on an exact station tie; the older METAR overlay is a fallback.
+    let observations = stations.iter()
+        .map(|ob| (ob.id.as_str(), Some(ob.network), ob.lon, ob.lat, ob.temp_c, ob.dewp_c, ob.time))
+        .chain(observations.iter().map(|ob| (ob.icao.as_str(), None, ob.lon, ob.lat,
+            ob.temp_c, ob.dewp_c,
+            ob.obs_time.and_then(|time| chrono::DateTime::from_timestamp(time, 0)))));
     let ((id, network, station_lon, station_lat, observed_t, observed_td, _), distance_km) = observations
         .filter(|(_, _, _, _, temp, dewpoint, time)| {
             (temp.is_some_and(f32::is_finite) || dewpoint.is_some_and(f32::is_finite))
@@ -1018,6 +1019,7 @@ mod tests {
             wgst_kt: None, altim_mb: None, elev_m: None, obs_time: Some(valid.timestamp()),
             flt_cat: String::new(), wvht_ft: None, dpd_s: None, raw: String::new(),
         };
+        let metar_station = wxdata::stations::from_metars(std::slice::from_ref(&observation));
         let blend = objective_surface_point(
             &frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0),
             &frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0),
@@ -1029,6 +1031,13 @@ mod tests {
         assert!((blend.dewpoint_k.unwrap() - 293.15).abs() < 0.001);
         assert!((blend.temperature_residual_k.unwrap() - 3.15).abs() < 0.001);
         assert!((blend.dewpoint_residual_k.unwrap() - 3.15).abs() < 0.001);
+        let hidden_layer_blend = objective_surface_point(
+            &frame(&wxdata::rtma::TEMP_DESCRIPTOR, 300.0),
+            &frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0),
+            &[], &metar_station, -99.5, 39.5,
+        ).unwrap();
+        assert_eq!(hidden_layer_blend.station, "METAR:KTEST");
+        assert_eq!(hidden_layer_blend.temperature_k, blend.temperature_k);
         let mut unmatched = frame(&wxdata::rtma::DEWPOINT_DESCRIPTOR, 290.0);
         unmatched.stamp.source_identity = "urma".into();
         assert!(objective_surface_point(
