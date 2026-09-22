@@ -503,9 +503,9 @@ fn sample_nearest(raw: &[u8], lon: f64, lat: f64) -> anyhow::Result<f64> {
 /// Decode once and return native nearest values for all requested coordinates.
 /// The caller decides whether its source requires an exact GRIB valid-time match.
 pub(crate) type GribPointSamples = (Option<DateTime<Utc>>, Vec<(f64, f64)>);
-pub(crate) fn sample_grib_points(
-    raw: &[u8], points: &[(f64, f64)],
-) -> anyhow::Result<GribPointSamples> {
+pub(crate) type GribGrid = (Option<DateTime<Utc>>, Vec<f64>, Vec<f64>, Vec<f64>);
+
+pub(crate) fn decode_grib_grid(raw: &[u8]) -> anyhow::Result<GribGrid> {
     use gribberish::data_message::DataMessage;
     use gribberish::message::read_message;
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;
@@ -514,6 +514,13 @@ pub(crate) fn sample_grib_points(
     let (lats, lons) = dm.metadata.latlng();
     let data = dm.data;
     anyhow::ensure!(lats.len() == data.len() && lons.len() == data.len(), "latlng/data mismatch");
+    Ok((valid, lats, lons, data))
+}
+
+pub(crate) fn sample_grib_points(
+    raw: &[u8], points: &[(f64, f64)],
+) -> anyhow::Result<GribPointSamples> {
+    let (valid, lats, lons, data) = decode_grib_grid(raw)?;
     let mut best = vec![(f64::INFINITY, f64::NAN); points.len()];
     for k in 0..data.len() {
         if !data[k].is_finite() || !lats[k].is_finite() || !lons[k].is_finite() { continue; }

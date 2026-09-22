@@ -767,7 +767,10 @@ pub(crate) fn show(
             })
             .response
             .on_hover_text("Draw labeled model f00 or RTMA/URMA analysis contours.");
-        if contour_kind.analysis_field().is_some() && !surface_analysis_on {
+        if *contour_kind == crate::app::ContourKind::AnalysisThetaE {
+            ui.weak("HookEcho θe: native 2 m temperature/dewpoint + surface pressure, Bolton method; not an official SPC analysis.");
+        }
+        if contour_kind.is_analysis() && !surface_analysis_on {
             let before = *analysis_source;
             ui.horizontal(|ui| {
                 ui.label("Analysis source:");

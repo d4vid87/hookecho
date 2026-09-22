@@ -1232,6 +1232,18 @@ impl OverlaySource {
                 )
             }
             OverlaySource::AnalysisContours(kind, source, temp_unit) => {
+                if kind == ContourKind::AnalysisThetaE {
+                    let latest = match source {
+                        wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, wxdata::rtma::SurfaceField::Temperature2m).await?,
+                        wxdata::rtma::Source::Urma => wxdata::rtma::fetch_latest_urma(http, wxdata::rtma::SurfaceField::Temperature2m).await?,
+                    };
+                    let valid = latest.stamp.valid_time;
+                    drop(latest);
+                    let grid = wxdata::rtma::fetch_theta_e(http, source, valid).await?;
+                    return Ok(OverlayMsg::Contours(kind, wxdata::contour::contour_lines(
+                        &grid, kind.interval(temp_unit),
+                    ), valid));
+                }
                 let field = kind.analysis_field().ok_or_else(|| anyhow::anyhow!("not an analysis contour"))?;
                 let frame = match source {
                     wxdata::rtma::Source::Rtma => wxdata::rtma::fetch_latest_rtma(http, field).await?,
@@ -1355,6 +1367,8 @@ pub(crate) enum ContourKind {
     Td2m,
     AnalysisT2m,
     AnalysisTd2m,
+    AnalysisPressure,
+    AnalysisThetaE,
     Cape,
     Srh,
     /// Significant Tornado Parameter (composite of several HRRR fields — see `wxdata::severe`).
@@ -1376,13 +1390,15 @@ pub(crate) enum ContourKind {
 }
 
 impl ContourKind {
-    pub(crate) const ALL: [ContourKind; 16] = [
+    pub(crate) const ALL: [ContourKind; 18] = [
         ContourKind::Off,
         ContourKind::Mslp,
         ContourKind::T2m,
         ContourKind::Td2m,
         ContourKind::AnalysisT2m,
         ContourKind::AnalysisTd2m,
+        ContourKind::AnalysisPressure,
+        ContourKind::AnalysisThetaE,
         ContourKind::Cape,
         ContourKind::Srh,
         ContourKind::Stp,
@@ -1399,8 +1415,13 @@ impl ContourKind {
         Some(match self {
             Self::AnalysisT2m => wxdata::rtma::SurfaceField::Temperature2m,
             Self::AnalysisTd2m => wxdata::rtma::SurfaceField::Dewpoint2m,
+            Self::AnalysisPressure => wxdata::rtma::SurfaceField::Pressure,
             _ => return None,
         })
+    }
+
+    pub(crate) fn is_analysis(self) -> bool {
+        self.analysis_field().is_some() || self == Self::AnalysisThetaE
     }
 
     /// The composite parameters, which combine several GRIB fields instead of drawing one.
@@ -1440,6 +1461,8 @@ impl ContourKind {
             ContourKind::Td2m => "2 m dewpoint",
             ContourKind::AnalysisT2m => "Analysis 2 m temp",
             ContourKind::AnalysisTd2m => "Analysis 2 m dewpoint",
+            ContourKind::AnalysisPressure => "Analysis surface pressure",
+            ContourKind::AnalysisThetaE => "Analysis 2 m θe",
             ContourKind::Cape => "SB-CAPE",
             ContourKind::Srh => "0-3 km SRH",
             ContourKind::Stp => "STP (fixed)",
@@ -1461,6 +1484,8 @@ impl ContourKind {
             "td2m" => ContourKind::Td2m,
             "analysis-t2m" => ContourKind::AnalysisT2m,
             "analysis-td2m" => ContourKind::AnalysisTd2m,
+            "analysis-pressure" => ContourKind::AnalysisPressure,
+            "analysis-thetae" => ContourKind::AnalysisThetaE,
             "cape" => ContourKind::Cape,
             "srh" => ContourKind::Srh,
             "stp" => ContourKind::Stp,
@@ -1478,7 +1503,7 @@ impl ContourKind {
     /// GRIB `(var, level, contour interval)` in display units, or `None` for `Off`.
     pub(crate) fn params(self) -> Option<(&'static str, &'static str, f32)> {
         match self {
-            ContourKind::Off | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m => None,
+            ContourKind::Off | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m | ContourKind::AnalysisPressure | ContourKind::AnalysisThetaE => None,
             ContourKind::Mslp => Some(("MSLMA", "mean sea level", 2.0)), // hPa
             ContourKind::T2m => Some(("TMP", "2 m above ground", 5.0)),  // °F
             ContourKind::Td2m => Some(("DPT", "2 m above ground", 5.0)), // °F
@@ -1500,6 +1525,8 @@ impl ContourKind {
         match (self, temp_unit) {
             (ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m, crate::settings::TempUnit::Celsius) => 2.0,
             (ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m, _) => 5.0,
+            (ContourKind::AnalysisPressure, _) => 2.0,
+            (ContourKind::AnalysisThetaE, _) => 5.0,
             _ => self.params().map_or_else(|| self.severe_interval(), |(_, _, interval)| interval),
         }
     }
@@ -1507,14 +1534,19 @@ impl ContourKind {
     /// Convert a raw GRIB value to the display unit the interval is expressed in.
     pub(crate) fn to_display(self, raw: f32, temp_unit: crate::settings::TempUnit) -> f32 {
         match self {
-            ContourKind::Mslp => raw / 100.0, // Pa → hPa
+            ContourKind::Mslp | ContourKind::AnalysisPressure => raw / 100.0, // Pa → hPa
             ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m => temp_unit.from_c(raw - 273.15), // K → selected unit
             _ => raw, // CAPE / SRH as-is
         }
     }
 
     fn unit(self, temp_unit: crate::settings::TempUnit) -> Option<&'static str> {
-        matches!(self, ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m).then(|| temp_unit.label())
+        match self {
+            ContourKind::AnalysisPressure => Some("hPa"),
+            ContourKind::AnalysisThetaE => Some("K"),
+            ContourKind::T2m | ContourKind::Td2m | ContourKind::AnalysisT2m | ContourKind::AnalysisTd2m => Some(temp_unit.label()),
+            _ => None,
+        }
     }
 
     fn display_label(self, temp_unit: crate::settings::TempUnit) -> String {
@@ -1526,9 +1558,10 @@ impl ContourKind {
 
     fn color(self) -> egui::Color32 {
         match self {
-            ContourKind::Mslp => egui::Color32::from_rgb(235, 235, 235),
+            ContourKind::Mslp | ContourKind::AnalysisPressure => egui::Color32::from_rgb(235, 235, 235),
             ContourKind::T2m | ContourKind::AnalysisT2m => egui::Color32::from_rgb(240, 120, 60),
             ContourKind::Td2m | ContourKind::AnalysisTd2m => egui::Color32::from_rgb(90, 200, 120),
+            ContourKind::AnalysisThetaE => egui::Color32::from_rgb(130, 225, 205),
             ContourKind::Cape => egui::Color32::from_rgb(240, 160, 40),
             ContourKind::Srh => egui::Color32::from_rgb(190, 110, 230),
             ContourKind::Stp => egui::Color32::from_rgb(230, 60, 90),
@@ -10263,7 +10296,7 @@ impl HookEchoApp {
         if changed || stale {
             self.contour_last_fetch = Some(Instant::now());
             self.contour_fetched_kind = Some(key);
-            let source = if self.contour_kind.analysis_field().is_some() {
+            let source = if self.contour_kind.is_analysis() {
                 OverlaySource::AnalysisContours(self.contour_kind, self.analysis_source, self.settings.temp_unit)
             } else {
                 OverlaySource::Contours(self.contour_kind, self.env_model, self.settings.temp_unit)
@@ -13655,7 +13688,7 @@ impl HookEchoApp {
                     .unwrap_or_default();
                 let text = format!(
                     "{} {} contours — valid {vt}",
-                    if self.contour_kind.analysis_field().is_some() {
+                    if self.contour_kind.is_analysis() {
                         match self.analysis_source { wxdata::rtma::Source::Rtma => "RTMA", wxdata::rtma::Source::Urma => "URMA" }
                     } else { self.env_model.label() },
                     self.contour_kind.display_label(self.settings.temp_unit)
@@ -21400,6 +21433,14 @@ mod tests {
         assert_eq!(ContourKind::Mslp.interval(TempUnit::Celsius), 2.0);
         assert_eq!(ContourKind::AnalysisT2m.analysis_field(), Some(wxdata::rtma::SurfaceField::Temperature2m));
         assert_eq!(ContourKind::AnalysisTd2m.analysis_field(), Some(wxdata::rtma::SurfaceField::Dewpoint2m));
+        assert_eq!(ContourKind::AnalysisPressure.analysis_field(), Some(wxdata::rtma::SurfaceField::Pressure));
+        assert_eq!(ContourKind::AnalysisPressure.interval(TempUnit::Fahrenheit), 2.0);
+        assert_eq!(ContourKind::AnalysisPressure.to_display(100_000.0, TempUnit::Fahrenheit), 1000.0);
+        assert!(ContourKind::AnalysisPressure.display_label(TempUnit::Fahrenheit).ends_with("hPa"));
+        assert!(ContourKind::AnalysisThetaE.is_analysis());
+        assert_eq!(ContourKind::AnalysisThetaE.interval(TempUnit::Celsius), 5.0);
+        assert_eq!(ContourKind::AnalysisThetaE.to_display(330.0, TempUnit::Celsius), 330.0);
+        assert!(ContourKind::AnalysisThetaE.display_label(TempUnit::Celsius).ends_with('K'));
         assert_eq!(ContourKind::AnalysisT2m.params(), None);
         assert_ne!(
             (ContourKind::AnalysisT2m, wxdata::rtma::Source::Rtma),

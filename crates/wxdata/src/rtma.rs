@@ -157,6 +157,20 @@ fn grib_message(bytes: &[u8]) -> Option<(u64, u8, u8, u8)> {
     None
 }
 
+/// Section 3 fixes the native projection, dimensions, and scan order for every field.
+fn grid_definition_bytes(raw: &[u8]) -> Option<&[u8]> {
+    if raw.get(..4)? != b"GRIB" || raw.get(7)? != &2 { return None; }
+    let mut offset = 16usize;
+    while offset + 5 <= raw.len() {
+        let length = u32::from_be_bytes(raw.get(offset..offset + 4)?.try_into().ok()?) as usize;
+        let end = offset.checked_add(length)?;
+        if length < 5 || end > raw.len() { return None; }
+        if raw[offset + 4] == 3 { return raw.get(offset..end); }
+        offset = end;
+    }
+    None
+}
+
 async fn urma_range(
     http: &reqwest::Client,
     url: &str,
@@ -183,6 +197,29 @@ async fn urma_range(
             .ok_or_else(|| anyhow::anyhow!("URMA GRIB offsets overflowed"))?;
     }
     anyhow::bail!("URMA object has no requested surface field")
+}
+
+/// Bolton-style equivalent potential temperature from surface temperature, dewpoint, and pressure.
+pub fn theta_e_k(temp_k: f32, dewpoint_k: f32, pressure_pa: f32) -> Option<f32> {
+    if !(temp_k > 150.0 && dewpoint_k > 150.0 && pressure_pa > 10_000.0) {
+        return None;
+    }
+    let pressure_hpa = pressure_pa / 100.0;
+    let vapor_hpa = vapor_pressure_hpa(dewpoint_k)?;
+    if vapor_hpa >= pressure_hpa { return None; }
+    let mixing_ratio = 0.622 * vapor_hpa / (pressure_hpa - vapor_hpa);
+    let lcl_k = 1.0 / (1.0 / (dewpoint_k - 56.0) + (temp_k / dewpoint_k).ln() / 800.0) + 56.0;
+    let theta_e = temp_k
+        * (1000.0 / pressure_hpa).powf(0.2854 * (1.0 - 0.28 * mixing_ratio))
+        * ((3376.0 / lcl_k - 2.54) * mixing_ratio * (1.0 + 0.81 * mixing_ratio)).exp();
+    theta_e.is_finite().then_some(theta_e)
+}
+
+pub fn vapor_pressure_hpa(dewpoint_k: f32) -> Option<f32> {
+    if !(150.0..350.0).contains(&dewpoint_k) { return None; }
+    let c = dewpoint_k - 273.15;
+    let vapor = 6.112 * (17.67 * c / (c + 243.5)).exp();
+    (vapor.is_finite() && vapor > 0.0).then_some(vapor)
 }
 
 /// Fetch one RTMA or URMA message by byte range and wrap native provenance.
@@ -278,6 +315,50 @@ pub async fn fetch_native_pair(
     })
 }
 
+/// Derive θe on matching native RTMA/URMA grid points, then make one display grid for contours.
+pub async fn fetch_theta_e(
+    http: &reqwest::Client,
+    source: Source,
+    valid: DateTime<Utc>,
+) -> anyhow::Result<crate::mrms::MrmsField> {
+    let (temperature, t_id) = fetch_message(http, source, SurfaceField::Temperature2m, valid).await?;
+    let (dewpoint, td_id) = fetch_message(http, source, SurfaceField::Dewpoint2m, valid).await?;
+    let (pressure, p_id) = fetch_message(http, source, SurfaceField::Pressure, valid).await?;
+    fn object(id: &str) -> &str { id.split_once("#bytes=").map_or(id, |(object, _)| object) }
+    anyhow::ensure!(object(&t_id) == object(&td_id) && object(&t_id) == object(&p_id),
+        "analysis fields come from different source objects");
+    let grid = grid_definition_bytes(&temperature.bytes)
+        .ok_or_else(|| anyhow::anyhow!("analysis temperature has no grid definition"))?;
+    anyhow::ensure!(grid_definition_bytes(&dewpoint.bytes) == Some(grid)
+        && grid_definition_bytes(&pressure.bytes) == Some(grid),
+        "analysis native grid definitions differ");
+    crate::task::blocking(move || {
+        crate::task::guarded(|| {
+            use gribberish::message::read_message;
+            anyhow::ensure!(temperature.bytes.len() <= 32 * 1024 * 1024,
+                "analysis temperature GRIB exceeds 32 MiB");
+            let (t_time, lats, lons, mut values) = crate::sounding::decode_grib_grid(&temperature.bytes)?;
+            anyhow::ensure!(t_time == Some(valid) && values.len() <= 5_000_000,
+                "analysis temperature time or grid size differs");
+            let decode_values = |raw: &[u8]| -> anyhow::Result<Vec<f64>> {
+                anyhow::ensure!(raw.len() <= 32 * 1024 * 1024, "analysis GRIB exceeds 32 MiB");
+                let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no analysis GRIB message"))?;
+                anyhow::ensure!(msg.forecast_date()? == valid, "analysis valid times differ");
+                let data = msg.data().map_err(|e| anyhow::anyhow!("analysis decode: {e:?}"))?;
+                anyhow::ensure!(data.len() == values.len(), "analysis native grid lengths differ");
+                Ok(data)
+            };
+            let dewpoints = decode_values(&dewpoint.bytes)?;
+            let pressures = decode_values(&pressure.bytes)?;
+            for ((value, dewpoint), pressure) in values.iter_mut().zip(dewpoints).zip(pressures) {
+                *value = theta_e_k(*value as f32, dewpoint as f32, pressure as f32)
+                    .map_or(f64::NAN, f64::from);
+            }
+            crate::hrrr::regrid(&lats, &lons, &values, valid, 0.03, f64::NEG_INFINITY)
+        }).unwrap_or_else(|_| anyhow::bail!("analysis θe decode panicked"))
+    }).await?
+}
+
 pub async fn fetch_rtma(
     http: &reqwest::Client,
     field: SurfaceField,
@@ -365,6 +446,20 @@ pub async fn fetch_point_temperature_history(
 mod tests {
     use super::*;
 
+    #[test]
+    fn native_grid_definition_rejects_truncated_sections() {
+        let mut raw = vec![0; 16];
+        raw[..4].copy_from_slice(b"GRIB");
+        raw[7] = 2;
+        raw.extend_from_slice(&[0, 0, 0, 9, 3, 1, 2, 3, 4]);
+        assert_eq!(grid_definition_bytes(&raw), Some(&raw[16..]));
+        raw[19] = 10;
+        assert!(grid_definition_bytes(&raw).is_none());
+        let theta = theta_e_k(303.15, 293.15, 100_000.0).unwrap();
+        assert!((340.0..350.0).contains(&theta));
+        assert!(theta_e_k(f32::NAN, 293.15, 100_000.0).is_none());
+    }
+
     #[tokio::test]
     #[ignore = "network"]
     async fn live_station_temperature_history_keeps_exact_hours() {
@@ -398,6 +493,18 @@ mod tests {
                 point.source_identity.split_once("#bytes=").unwrap().0);
             assert!(other.point.is_finite() && other.station.is_finite());
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_theta_e_uses_matching_native_surface_fields() {
+        let http = reqwest::Client::new();
+        let latest = fetch_latest_rtma(&http, SurfaceField::Temperature2m).await.unwrap();
+        let valid = latest.stamp.valid_time;
+        let grid = fetch_theta_e(&http, Source::Rtma, valid).await.unwrap();
+        assert_eq!(grid.time, valid);
+        let value = grid.sample_bilinear(-97.3, 32.6).unwrap();
+        assert!((240.0..440.0).contains(&value), "θe {value} K");
     }
 
     #[tokio::test]

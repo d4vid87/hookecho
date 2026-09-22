@@ -375,34 +375,16 @@ fn metrics(errors: impl IntoIterator<Item = f32>) -> anyhow::Result<Verification
     })
 }
 
-/// Bolton-style equivalent potential temperature from surface temperature, dewpoint, and pressure.
+/// Bolton-style equivalent potential temperature from native surface thermodynamics.
 pub fn theta_e_k(temp_k: f32, dewpoint_k: f32, pressure_pa: f32) -> Option<f32> {
-    if !(temp_k > 150.0 && dewpoint_k > 150.0 && pressure_pa > 10_000.0) {
-        return None;
-    }
-    let pressure_hpa = pressure_pa / 100.0;
-    let vapor_hpa = vapor_pressure_hpa(dewpoint_k)?;
-    if vapor_hpa >= pressure_hpa { return None; }
-    let mixing_ratio = 0.622 * vapor_hpa / (pressure_hpa - vapor_hpa);
-    let lcl_k = 1.0 / (1.0 / (dewpoint_k - 56.0) + (temp_k / dewpoint_k).ln() / 800.0) + 56.0;
-    let theta_e = temp_k
-        * (1000.0 / pressure_hpa).powf(0.2854 * (1.0 - 0.28 * mixing_ratio))
-        * ((3376.0 / lcl_k - 2.54) * mixing_ratio * (1.0 + 0.81 * mixing_ratio)).exp();
-    theta_e.is_finite().then_some(theta_e)
-}
-
-fn vapor_pressure_hpa(dewpoint_k: f32) -> Option<f32> {
-    if !(150.0..350.0).contains(&dewpoint_k) { return None; }
-    let c = dewpoint_k - 273.15;
-    let vapor = 6.112 * (17.67 * c / (c + 243.5)).exp();
-    (vapor.is_finite() && vapor > 0.0).then_some(vapor)
+    wxdata::rtma::theta_e_k(temp_k, dewpoint_k, pressure_pa)
 }
 
 /// Specific humidity from 2 m dewpoint and surface pressure, kg/kg.
 pub fn specific_humidity_kg_kg(dewpoint_k: f32, pressure_pa: f32) -> Option<f32> {
     let pressure_hpa = pressure_pa / 100.0;
     if !(200.0..1200.0).contains(&pressure_hpa) { return None; }
-    let vapor = vapor_pressure_hpa(dewpoint_k)?;
+    let vapor = wxdata::rtma::vapor_pressure_hpa(dewpoint_k)?;
     if vapor >= pressure_hpa { return None; }
     let q = 0.622 * vapor / (pressure_hpa - 0.378 * vapor);
     (q.is_finite() && (0.0..0.1).contains(&q)).then_some(q)
