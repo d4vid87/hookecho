@@ -79,7 +79,11 @@ impl Pack {
             self.volumes.len(),
             if self.volumes.len() == 1 { "" } else { "s" },
             self.satellite.len() + self.mrms.len() + self.overlays.len(),
-            if self.satellite.len() + self.mrms.len() + self.overlays.len() == 1 { "" } else { "s" },
+            if self.satellite.len() + self.mrms.len() + self.overlays.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
             self.bytes / 1024.0 / 1024.0
         )
     }
@@ -441,6 +445,8 @@ mod tests {
                 url: "gis:damage.geojson".into(),
                 enabled: true,
                 opacity: 1.0,
+                gis_label_field: None,
+                gis_color_field: None,
             }],
             saved_at: 1_780_000_000,
             bytes: 32.0 * 1024.0 * 1024.0,
@@ -448,7 +454,10 @@ mod tests {
         let back: Pack = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(back, p);
         assert_eq!(back.key(), "KTLX-2026-05-20");
-        assert_eq!(back.label(), "KTLX 2026-05-20 — 1 volume, 3 weather files, 32 MB");
+        assert_eq!(
+            back.label(),
+            "KTLX 2026-05-20 — 1 volume, 3 weather files, 32 MB"
+        );
         let old: Pack = serde_json::from_str(
             r#"{"site":"KTLX","date":"2026-05-20","volumes":[],"saved_at":1,"bytes":0}"#,
         )

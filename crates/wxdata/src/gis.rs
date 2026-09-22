@@ -320,9 +320,20 @@ fn append(items: &mut Vec<PlaceItem>, geometry: GeometryValue, label: &str) {
 /// Read a KMZ or zipped Shapefile. Archives are bounded before decompression and Shapefiles must
 /// declare a supported CRS in a matching `.prj`.
 pub fn archive(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
+    archive_styled(name, bytes, None, None).map(|(file, _)| file)
+}
+
+/// Import a zipped Shapefile with optional DBF-backed label and color fields. The returned
+/// names are the available DBF columns for the layer's styling controls.
+pub fn archive_styled(
+    name: &str,
+    bytes: &[u8],
+    label_field: Option<&str>,
+    color_field: Option<&str>,
+) -> anyhow::Result<(Placefile, Vec<String>)> {
     let files = zip_entries(bytes)?;
     if let Some((entry, content)) = files.iter().find(|(entry, _)| entry.ends_with(".kml")) {
-        return kml(entry, std::str::from_utf8(content)?);
+        return Ok((kml(entry, std::str::from_utf8(content)?)?, Vec::new()));
     }
     let (shp_name, shp) = files
         .iter()
@@ -336,7 +347,208 @@ pub fn archive(name: &str, bytes: &[u8]) -> anyhow::Result<Placefile> {
         .ok_or_else(|| {
             anyhow::anyhow!("Shapefile archive is missing its matching .prj CRS file")
         })?;
-    shapefile(name, shp, &CrsTransform::from_wkt(&projection)?)
+    let dbf = files
+        .iter()
+        .find(|(entry, _)| entry == &format!("{stem}.dbf"))
+        .map(|(_, content)| DbfTable::new(content))
+        .transpose()?;
+    let fields = dbf.as_ref().map_or_else(Vec::new, |table| {
+        table
+            .fields
+            .iter()
+            .map(|field| field.name.clone())
+            .collect()
+    });
+    let style = dbf
+        .as_ref()
+        .map(|table| DbfStyle::new(table, label_field, color_field))
+        .transpose()?;
+    Ok((
+        shapefile(
+            name,
+            shp,
+            &CrsTransform::from_wkt(&projection)?,
+            dbf.as_ref(),
+            style.as_ref(),
+        )?,
+        fields,
+    ))
+}
+
+struct DbfField {
+    name: String,
+    kind: u8,
+    offset: usize,
+    len: usize,
+}
+
+struct DbfTable<'a> {
+    bytes: &'a [u8],
+    fields: Vec<DbfField>,
+    count: usize,
+    header: usize,
+    record: usize,
+}
+
+impl<'a> DbfTable<'a> {
+    fn new(bytes: &'a [u8]) -> anyhow::Result<Self> {
+        anyhow::ensure!(bytes.len() >= 33, "DBF header is truncated");
+        let count = le_u32(bytes, 4)? as usize;
+        let header = le_u16(bytes, 8)? as usize;
+        let record = le_u16(bytes, 10)? as usize;
+        anyhow::ensure!(
+            count <= 100_000 && header >= 33 && record > 0 && header <= bytes.len(),
+            "invalid DBF dimensions"
+        );
+        anyhow::ensure!(
+            count
+                .checked_mul(record)
+                .and_then(|size| header.checked_add(size))
+                .is_some_and(|end| end <= bytes.len()),
+            "DBF records are truncated"
+        );
+        let mut fields = Vec::new();
+        let mut offset = 1usize;
+        let mut at = 32usize;
+        while at < header && bytes[at] != 0x0d {
+            anyhow::ensure!(at + 32 <= header, "DBF field descriptor is truncated");
+            let descriptor = &bytes[at..at + 32];
+            let name_end = descriptor[..11]
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(11);
+            let name = String::from_utf8_lossy(&descriptor[..name_end])
+                .trim()
+                .to_string();
+            let len = descriptor[16] as usize;
+            anyhow::ensure!(
+                !name.is_empty() && len > 0 && offset + len <= record,
+                "invalid DBF field"
+            );
+            fields.push(DbfField {
+                name,
+                kind: descriptor[11],
+                offset,
+                len,
+            });
+            offset += len;
+            at += 32;
+        }
+        anyhow::ensure!(
+            at < header && bytes[at] == 0x0d,
+            "DBF field list is unterminated"
+        );
+        Ok(Self {
+            bytes,
+            fields,
+            count,
+            header,
+            record,
+        })
+    }
+
+    fn value(&self, row: usize, field: usize) -> std::borrow::Cow<'_, str> {
+        let column = &self.fields[field];
+        let at = self.header + row * self.record + column.offset;
+        String::from_utf8_lossy(self.bytes[at..at + column.len].trim_ascii())
+    }
+
+    fn deleted(&self, row: usize) -> bool {
+        self.bytes[self.header + row * self.record] == b'*'
+    }
+
+    fn field(&self, name: &str) -> anyhow::Result<usize> {
+        self.fields
+            .iter()
+            .position(|field| field.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| anyhow::anyhow!("DBF has no attribute named {name}"))
+    }
+}
+
+struct DbfStyle {
+    label: Option<usize>,
+    color: Option<usize>,
+    numeric: Option<(f64, f64)>,
+}
+
+impl DbfStyle {
+    fn new(table: &DbfTable<'_>, label: Option<&str>, color: Option<&str>) -> anyhow::Result<Self> {
+        let label = match label {
+            Some(name) => Some(table.field(name)?),
+            None => table.fields.iter().position(|field| {
+                ["name", "title", "label"]
+                    .iter()
+                    .any(|candidate| field.name.eq_ignore_ascii_case(candidate))
+            }),
+        };
+        let color = color.map(|name| table.field(name)).transpose()?;
+        let numeric = color
+            .filter(|field| matches!(table.fields[*field].kind, b'N' | b'F'))
+            .and_then(|field| {
+                (0..table.count)
+                    .filter(|row| !table.deleted(*row))
+                    .filter_map(|row| {
+                        table
+                            .value(row, field)
+                            .parse::<f64>()
+                            .ok()
+                            .filter(|value| value.is_finite())
+                    })
+                    .fold(None, |range: Option<(f64, f64)>, value| {
+                        Some(range.map_or((value, value), |(min, max)| {
+                            (min.min(value), max.max(value))
+                        }))
+                    })
+            });
+        Ok(Self {
+            label,
+            color,
+            numeric,
+        })
+    }
+
+    fn color(&self, table: &DbfTable<'_>, row: usize) -> Option<[u8; 3]> {
+        let field = self.color?;
+        let value = table.value(row, field);
+        if value.is_empty() {
+            return None;
+        }
+        if matches!(table.fields[field].kind, b'N' | b'F') {
+            if let (Some((min, max)), Ok(number)) = (self.numeric, value.parse::<f64>()) {
+                let fraction = if max > min {
+                    ((number - min) / (max - min)).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                return Some([
+                    (40.0 + 210.0 * fraction) as u8,
+                    (170.0 - 90.0 * fraction) as u8,
+                    (235.0 - 190.0 * fraction) as u8,
+                ]);
+            }
+            return None;
+        }
+        let hex = value.trim_start_matches('#');
+        if hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Some([
+                u8::from_str_radix(&hex[..2], 16).ok()?,
+                u8::from_str_radix(&hex[2..4], 16).ok()?,
+                u8::from_str_radix(&hex[4..], 16).ok()?,
+            ]);
+        }
+        const COLORS: [[u8; 3]; 6] = [
+            [84, 192, 232],
+            [250, 181, 83],
+            [124, 205, 128],
+            [204, 136, 222],
+            [236, 111, 106],
+            [120, 179, 245],
+        ];
+        let hash = value.bytes().fold(0u32, |hash, byte| {
+            hash.wrapping_mul(16777619) ^ u32::from(byte)
+        });
+        Some(COLORS[(hash as usize) % COLORS.len()])
+    }
 }
 
 enum CrsTransform {
@@ -475,7 +687,13 @@ fn le_u16(bytes: &[u8], offset: usize) -> anyhow::Result<u16> {
     Ok(u16::from_le_bytes(value.try_into().expect("two bytes")))
 }
 
-fn shapefile(name: &str, bytes: &[u8], crs: &CrsTransform) -> anyhow::Result<Placefile> {
+fn shapefile(
+    name: &str,
+    bytes: &[u8],
+    crs: &CrsTransform,
+    dbf: Option<&DbfTable<'_>>,
+    style: Option<&DbfStyle>,
+) -> anyhow::Result<Placefile> {
     anyhow::ensure!(bytes.len() >= 100, "Shapefile header is truncated");
     anyhow::ensure!(be_u32(bytes, 0)? == 9994, "invalid Shapefile header");
     let mut file = Placefile {
@@ -498,11 +716,46 @@ fn shapefile(name: &str, bytes: &[u8], crs: &CrsTransform) -> anyhow::Result<Pla
             .checked_add(length)
             .filter(|end| *end <= bytes.len())
             .ok_or_else(|| anyhow::anyhow!("Shapefile record is truncated"))?;
-        parse_shape(&bytes[offset..end], name, crs, &mut file.items)?;
+        anyhow::ensure!(
+            dbf.is_none_or(|table| features < table.count),
+            "Shapefile has more records than DBF"
+        );
+        if !dbf.is_some_and(|table| table.deleted(features)) {
+            let label = dbf
+                .zip(style)
+                .and_then(|(table, style)| style.label.map(|field| table.value(features, field)))
+                .filter(|value| !value.is_empty());
+            let first = file.items.len();
+            parse_shape(
+                &bytes[offset..end],
+                label.as_deref().unwrap_or(name),
+                crs,
+                &mut file.items,
+            )?;
+            if let Some((table, style)) = dbf.zip(style) {
+                if let Some(rgb) = style.color(table, features) {
+                    for item in &mut file.items[first..] {
+                        match &mut item.kind {
+                            PlaceKind::Line { color, .. } | PlaceKind::Icon { color, .. } => {
+                                *color = [rgb[0], rgb[1], rgb[2], 255]
+                            }
+                            PlaceKind::Polygon { color, .. } => {
+                                *color = [rgb[0], rgb[1], rgb[2], 72]
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
         offset = end;
         features += 1;
         anyhow::ensure!(features <= 100_000, "Shapefile exceeds 100,000 features");
     }
+    anyhow::ensure!(
+        dbf.is_none_or(|table| features == table.count),
+        "Shapefile and DBF record counts differ"
+    );
     anyhow::ensure!(
         !file.items.is_empty(),
         "Shapefile contains no supported geometry"
@@ -794,8 +1047,37 @@ mod tests {
         shp[108..112].copy_from_slice(&1u32.to_le_bytes());
         shp[112..120].copy_from_slice(&(-10_798_000.0f64).to_le_bytes());
         shp[120..128].copy_from_slice(&(4_139_370.0f64).to_le_bytes());
-        let bytes = test_zip(&[("layer.shp", &shp), ("layer.prj", wkt.as_bytes())], false);
-        let file = archive("layer.zip", &bytes).unwrap();
+        let mut dbf = vec![0u8; 117];
+        dbf[0] = 3;
+        dbf[4..8].copy_from_slice(&1u32.to_le_bytes());
+        dbf[8..10].copy_from_slice(&97u16.to_le_bytes());
+        dbf[10..12].copy_from_slice(&20u16.to_le_bytes());
+        dbf[32..36].copy_from_slice(b"NAME");
+        dbf[43] = b'C';
+        dbf[48] = 12;
+        dbf[64..69].copy_from_slice(b"COLOR");
+        dbf[75] = b'C';
+        dbf[80] = 7;
+        dbf[96] = 0x0d;
+        dbf[97] = b' ';
+        dbf[98..110].copy_from_slice(b"County test ");
+        dbf[110..117].copy_from_slice(b"#ff8000");
+        let bytes = test_zip(
+            &[
+                ("layer.shp", &shp),
+                ("layer.prj", wkt.as_bytes()),
+                ("layer.dbf", &dbf),
+            ],
+            false,
+        );
+        let (file, fields) =
+            archive_styled("layer.zip", &bytes, Some("NAME"), Some("COLOR")).unwrap();
+        assert_eq!(fields, ["NAME", "COLOR"]);
+        let PlaceKind::Icon { color, hover, .. } = &file.items[0].kind else {
+            panic!("expected icon")
+        };
+        assert_eq!(color, &[255, 128, 0, 255]);
+        assert_eq!(hover, "County test");
         let exported: serde_json::Value =
             serde_json::from_str(&export_geojson(&file).unwrap()).unwrap();
         let pos = &exported["features"][0]["geometry"]["coordinates"];
@@ -803,5 +1085,37 @@ mod tests {
         let lat = pos[1].as_f64().unwrap();
         assert!((-98.0..-96.0).contains(&lon), "longitude: {lon}");
         assert!((34.0..36.0).contains(&lat), "latitude: {lat}");
+        assert!(archive_styled("layer.zip", &bytes, None, Some("MISSING"))
+            .unwrap_err()
+            .to_string()
+            .contains("no attribute"));
+        dbf[75] = b'N';
+        dbf[110..117].copy_from_slice(b"     42");
+        let numeric = test_zip(
+            &[
+                ("layer.shp", &shp),
+                ("layer.prj", wkt.as_bytes()),
+                ("layer.dbf", &dbf),
+            ],
+            false,
+        );
+        let (file, _) = archive_styled("layer.zip", &numeric, None, Some("COLOR")).unwrap();
+        let PlaceKind::Icon { color, .. } = &file.items[0].kind else {
+            panic!("expected icon")
+        };
+        assert_eq!(color, &[145, 125, 140, 255]);
+        dbf.truncate(115);
+        let truncated = test_zip(
+            &[
+                ("layer.shp", &shp),
+                ("layer.prj", wkt.as_bytes()),
+                ("layer.dbf", &dbf),
+            ],
+            false,
+        );
+        assert!(archive("layer.zip", &truncated)
+            .unwrap_err()
+            .to_string()
+            .contains("DBF records are truncated"));
     }
 }

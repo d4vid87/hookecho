@@ -2100,18 +2100,28 @@ struct LoadedPlacefile {
     loaded: bool,
     /// Why the last load failed, if it did.
     error: Option<String>,
+    attributes: Vec<String>,
 }
 
-fn stored_gis(name: &str, content: &str) -> anyhow::Result<wxdata::placefile::Placefile> {
+fn stored_gis(
+    name: &str,
+    content: &str,
+    cfg: Option<&crate::settings::PlacefileConfig>,
+) -> anyhow::Result<(wxdata::placefile::Placefile, Vec<String>)> {
     if name.to_ascii_lowercase().ends_with(".kmz") || name.to_ascii_lowercase().ends_with(".zip") {
         use base64::Engine as _;
         let encoded = content
             .strip_prefix("base64:")
             .ok_or_else(|| anyhow::anyhow!("saved GIS archive is corrupt"))?;
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
-        wxdata::gis::archive(name, &bytes)
+        wxdata::gis::archive_styled(
+            name,
+            &bytes,
+            cfg.and_then(|cfg| cfg.gis_label_field.as_deref()),
+            cfg.and_then(|cfg| cfg.gis_color_field.as_deref()),
+        )
     } else {
-        wxdata::gis::parse(name, content)
+        Ok((wxdata::gis::parse(name, content)?, Vec::new()))
     }
 }
 
@@ -4704,6 +4714,7 @@ impl HookEchoApp {
                         last_fetch: None,
                         loaded: false,
                         error: None,
+                        attributes: Vec::new(),
                     });
                 }
             }
@@ -4722,17 +4733,21 @@ impl HookEchoApp {
                         .url
                         .strip_prefix("gis:")
                         .and_then(|_| self.settings.web_files.get(&cfg.url))
-                        .map(|text| stored_gis(&cfg.url[4..], text));
+                        .map(|text| stored_gis(&cfg.url[4..], text, Some(cfg)));
                     self.placefiles.push(LoadedPlacefile {
                         url: cfg.url.clone(),
                         enabled: cfg.enabled,
                         pf: imported
                             .as_ref()
                             .and_then(|result| result.as_ref().ok())
-                            .cloned()
+                            .map(|(file, _)| file.clone())
                             .unwrap_or_default(),
                         last_fetch: imported.as_ref().map(|_| Instant::now()),
                         loaded: imported.as_ref().is_some_and(Result::is_ok),
+                        attributes: imported
+                            .as_ref()
+                            .and_then(|result| result.as_ref().ok())
+                            .map_or_else(Vec::new, |(_, fields)| fields.clone()),
                         error: imported.and_then(Result::err).map(|error| error.to_string()),
                     });
                 }
@@ -17189,8 +17204,8 @@ impl HookEchoApp {
                     import.text()
                 };
                 match content {
-                    Ok(content) => match stored_gis(&name, &content) {
-                        Ok(file) => {
+                    Ok(content) => match stored_gis(&name, &content, None) {
+                        Ok((file, _)) => {
                             let key = format!("gis:{name}");
                             let items = file.items.len();
                             self.settings.web_files.insert(key.clone(), content);
@@ -17199,6 +17214,8 @@ impl HookEchoApp {
                                     url: key.clone(),
                                     enabled: true,
                                     opacity: 1.0,
+                                    gis_label_field: None,
+                                    gis_color_field: None,
                                 });
                             }
                             self.placefiles.retain(|loaded| loaded.url != key);
@@ -19813,10 +19830,14 @@ impl eframe::App for HookEchoApp {
                 items: lp.pf.items.len(),
                 title: lp.pf.title.clone(),
                 error: lp.error.clone(),
+                attributes: lp.attributes.clone(),
             })
             .collect();
         self.placefile_window
             .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
+        if let Some(url) = self.placefile_window.restyle_gis.take() {
+            self.placefiles.retain(|loaded| loaded.url != url);
+        }
         if std::mem::take(&mut self.placefile_window.import_gis) {
             crate::dialog::request_open(crate::dialog::ImportKind::Gis, "");
         }

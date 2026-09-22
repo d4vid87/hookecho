@@ -10,6 +10,7 @@ pub struct PlacefileStatus {
     pub title: String,
     /// Why the last load failed, if it did — a plugin's stderr usually ends up here.
     pub error: Option<String>,
+    pub attributes: Vec<String>,
 }
 
 #[derive(Default)]
@@ -17,6 +18,7 @@ pub struct PlacefileWindow {
     pub open: bool,
     pub import_gis: bool,
     pub export_gis: Option<String>,
+    pub restyle_gis: Option<String>,
     new_url: String,
     new_plugin: String,
     new_command: String,
@@ -63,8 +65,10 @@ impl PlacefileWindow {
                             if ui.button("✖").on_hover_text("Remove").clicked() {
                                 remove = Some(i);
                             }
-                            if cfg.url.starts_with("gis:") && st.is_some_and(|s| s.loaded)
-                                && ui.button("Export GeoJSON").clicked() {
+                            if cfg.url.starts_with("gis:")
+                                && st.is_some_and(|s| s.loaded)
+                                && ui.button("Export GeoJSON").clicked()
+                            {
                                 self.export_gis = Some(cfg.url.clone());
                             }
                             ui.vertical(|ui| {
@@ -77,6 +81,71 @@ impl PlacefileWindow {
                                 status_line(ui, st);
                             });
                         });
+                        if let Some(fields) = st
+                            .filter(|status| cfg.url.starts_with("gis:") && !status.attributes.is_empty())
+                            .map(|status| &status.attributes)
+                        {
+                            ui.horizontal(|ui| {
+                                ui.label("Point label");
+                                egui::ComboBox::from_id_salt(("gis-label", &cfg.url))
+                                    .selected_text(
+                                        cfg.gis_label_field.as_deref().unwrap_or("Default"),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        if ui
+                                            .selectable_value(
+                                                &mut cfg.gis_label_field,
+                                                None,
+                                                "Default",
+                                            )
+                                            .changed()
+                                        {
+                                            self.restyle_gis = Some(cfg.url.clone());
+                                        }
+                                        for field in fields {
+                                            if ui
+                                                .selectable_value(
+                                                    &mut cfg.gis_label_field,
+                                                    Some(field.clone()),
+                                                    field,
+                                                )
+                                                .changed()
+                                            {
+                                                self.restyle_gis = Some(cfg.url.clone());
+                                            }
+                                        }
+                                    });
+                                ui.label("Color").on_hover_text("Numeric columns use a graduated ramp; text categories get distinct colors. Hex colors are used directly.");
+                                egui::ComboBox::from_id_salt(("gis-color", &cfg.url))
+                                    .selected_text(
+                                        cfg.gis_color_field.as_deref().unwrap_or("Default"),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        if ui
+                                            .selectable_value(
+                                                &mut cfg.gis_color_field,
+                                                None,
+                                                "Default",
+                                            )
+                                            .changed()
+                                        {
+                                            self.restyle_gis = Some(cfg.url.clone());
+                                        }
+                                        for field in fields {
+                                            if ui
+                                                .selectable_value(
+                                                    &mut cfg.gis_color_field,
+                                                    Some(field.clone()),
+                                                    field,
+                                                )
+                                                .changed()
+                                            {
+                                                self.restyle_gis = Some(cfg.url.clone());
+                                            }
+                                        }
+                                    });
+                            });
+                        }
                         ui.separator();
                     }
                 });
@@ -102,6 +171,8 @@ impl PlacefileWindow {
                         url: self.new_url.trim().to_string(),
                         enabled: true,
                         opacity: 1.0,
+                        gis_label_field: None,
+                        gis_color_field: None,
                     });
                     self.new_url.clear();
                 }
