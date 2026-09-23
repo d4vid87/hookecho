@@ -819,6 +819,15 @@ mod tests {
     }
 
     #[test]
+    fn cut_chronology_uses_latest_collection_when_sweeps_overlap() {
+        let long_cut = stitch(&wedge(5, 0..1, 1_000), &wedge(5, 1..2, 500_000));
+        let scan = Scan::new(vcp(212), vec![long_cut, wedge(4, 0..1, 301_000)]);
+        let cuts = crate::level2::cut_chronology(&scan);
+        assert_eq!(cuts.iter().map(|cut| cut.elevation_number).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(cuts[1].ended_at_ms, 500_000);
+    }
+
+    #[test]
     fn an_expired_prior_volume_does_not_fill_new_gaps() {
         let base = Scan::new(vcp(212), vec![wedge(1, 0..720, 1_000)]);
         let partial = Scan::new(vcp(212), vec![wedge(1, 0..120, 901_000)]);

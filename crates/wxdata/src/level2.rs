@@ -726,8 +726,8 @@ pub fn elevation_angles(scan: &Scan) -> Vec<f32> {
     angles
 }
 
-/// Acquisition order of the cuts currently held in a volume. A live revisit can borrow older
-/// azimuths until it finishes; only radials that belong to the cut itself determine its time.
+/// Order cuts by their latest collected radial. A live revisit can borrow older azimuths until it
+/// finishes; only radials that belong to the cut itself determine its time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CutTime {
     pub elevation_number: u8,
@@ -759,7 +759,7 @@ pub fn cut_chronology(scan: &Scan) -> Vec<CutTime> {
             })
         })
         .collect();
-    cuts.sort_unstable_by_key(|cut| (cut.started_at_ms, cut.elevation_number));
+    cuts.sort_unstable_by_key(|cut| (cut.ended_at_ms, cut.elevation_number));
     cuts
 }
 
