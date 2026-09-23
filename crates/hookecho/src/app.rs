@@ -2722,17 +2722,84 @@ enum PanelSection { #[default] Radar, Overlays, Alerts, Tools }
 
 struct ModeSession {
     workspace: crate::workspace::Workspace,
-    thresholds: Vec<([Option<f32>; Moment::ALL.len()], [bool; Moment::ALL.len()])>,
-    times: Vec<(chrono::NaiveDate, bool, Option<chrono::DateTime<chrono::Utc>>)>,
-    radar: Vec<PaneRadarSession>,
+    panes: Vec<PaneSession>,
     inspector: bool,
 }
 
 #[derive(Clone, Copy)]
-struct PaneRadarSession {
-    show: bool,
+struct PaneSession {
+    thresholds: [Option<f32>; Moment::ALL.len()],
+    threshold_enabled: [bool; Moment::ALL.len()],
+    date: chrono::NaiveDate,
+    following: bool,
+    time: Option<chrono::DateTime<chrono::Utc>>,
+    show_radar: bool,
     follow_low_cut: bool,
     cut: Option<(i64, Moment, usize)>,
+}
+
+impl PaneSession {
+    fn capture(view: &MapView) -> Self {
+        Self {
+            thresholds: view.thresholds,
+            threshold_enabled: view.threshold_enabled,
+            date: view.timeline.date,
+            following: view.timeline.following,
+            time: view.timeline.selected_time(),
+            show_radar: view.show_radar,
+            follow_low_cut: view.follow_low_cut,
+            cut: view.cut_selection,
+        }
+    }
+
+    fn restore(self, view: &mut MapView) {
+        view.thresholds = self.thresholds;
+        view.threshold_enabled = self.threshold_enabled;
+        view.timeline.date = self.date;
+        view.timeline.following = self.following;
+        view.timeline.seek_target = if self.following { None } else { self.time };
+        view.timeline.frames_key = None;
+        view.timeline.frames.clear();
+        view.timeline.listing = false;
+        view.timeline.playing = false;
+        view.show_radar = self.show_radar;
+        view.follow_low_cut = self.follow_low_cut;
+        view.cut_selection = self.cut;
+    }
+}
+
+#[cfg(test)]
+mod mode_session_tests {
+    use super::*;
+
+    #[test]
+    fn restores_disabled_threshold_and_archive_time_without_retaining_frames() {
+        let mut view = MapView::new(
+            Some("KFWS".to_string()),
+            crate::render::mercator::Camera::at_lonlat(-97.3, 32.6, 8.0),
+        );
+        let i = Moment::Reflectivity.index();
+        view.thresholds[i] = Some(27.0);
+        view.threshold_enabled[i] = false;
+        view.timeline.following = false;
+        view.timeline.date = chrono::NaiveDate::from_ymd_opt(2026, 9, 22).unwrap();
+        let time = chrono::DateTime::parse_from_rfc3339("2026-09-22T21:00:00Z")
+            .unwrap().with_timezone(&chrono::Utc);
+        view.timeline.seek_target = Some(time);
+        view.show_radar = false;
+        let saved = PaneSession::capture(&view);
+        view.thresholds[i] = Some(16.0);
+        view.threshold_enabled[i] = true;
+        view.timeline.following = true;
+        view.timeline.seek_target = None;
+        view.show_radar = true;
+        saved.restore(&mut view);
+        assert_eq!(view.thresholds[i], Some(27.0));
+        assert!(!view.threshold_enabled[i]);
+        assert_eq!(view.timeline.selected_time(), Some(time));
+        assert!(!view.timeline.following);
+        assert!(!view.show_radar);
+    }
 }
 
 pub struct HookEchoApp {
@@ -16583,15 +16650,7 @@ impl HookEchoApp {
         workspace.chrome = None;
         ModeSession {
             workspace,
-            thresholds: self.views.iter().map(|v| (v.thresholds, v.threshold_enabled)).collect(),
-            times: self.views.iter().map(|v| {
-                (v.timeline.date, v.timeline.following, v.timeline.selected_time())
-            }).collect(),
-            radar: self.views.iter().map(|v| PaneRadarSession {
-                show: v.show_radar,
-                follow_low_cut: v.follow_low_cut,
-                cut: v.cut_selection,
-            }).collect(),
+            panes: self.views.iter().map(PaneSession::capture).collect(),
             inspector: self.analyst_inspector_open,
         }
     }
@@ -16599,22 +16658,8 @@ impl HookEchoApp {
     fn restore_mode_session(&mut self, session: ModeSession, ctx: &egui::Context) {
         self.apply_workspace_raw(&session.workspace, ctx);
         for (i, view) in self.views.iter_mut().enumerate() {
-            if let Some(&(thresholds, enabled)) = session.thresholds.get(i) {
-                view.thresholds = thresholds;
-                view.threshold_enabled = enabled;
-            }
-            if let Some(&(date, following, time)) = session.times.get(i) {
-                view.timeline.date = date;
-                view.timeline.following = following;
-                view.timeline.seek_target = if following { None } else { time };
-                view.timeline.frames_key = None;
-                view.timeline.frames.clear();
-                view.timeline.playing = false;
-            }
-            if let Some(radar) = session.radar.get(i) {
-                view.show_radar = radar.show;
-                view.follow_low_cut = radar.follow_low_cut;
-                view.cut_selection = radar.cut;
+            if let Some(&pane) = session.panes.get(i) {
+                pane.restore(view);
             }
         }
         self.analyst_inspector_open = session.inspector;

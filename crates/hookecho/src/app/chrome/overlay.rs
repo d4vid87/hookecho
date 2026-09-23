@@ -386,9 +386,13 @@ impl HookEchoApp {
             } else {
                 "Radar & tools".to_string()
             };
+            let sheet_area = egui::Rect::from_min_max(
+                egui::pos2(chrome.left(), (phone_top(ctx) + if analyst_dock { 190.0 } else { 100.0 }).min(chrome.bottom() - 160.0)),
+                chrome.max,
+            );
             let rect = crate::app::mobile::sheet::modal_sheet(
                 ctx,
-                chrome,
+                sheet_area,
                 match section {
                     PanelSection::Radar => "m_panel_radar",
                     PanelSection::Overlays => "m_panel_overlays",
@@ -497,6 +501,7 @@ impl HookEchoApp {
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 238).show(ui, |ui| {
                     ui.set_width(width);
+                    if phone(ctx) { ui.spacing_mut().interact_size.y = 44.0; }
                     ui.horizontal(|ui| {
                         let menu = ui.button(egui_phosphor::regular::LIST)
                             .named_toggle("Show or hide the panel", self.panel_open);
@@ -540,7 +545,7 @@ impl HookEchoApp {
                         });
                     }
                     if self.analyst_open && !self.drawer.is_open() {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(format!("Pane {}", self.active + 1));
                             ui.menu_button("Preset ▾", |ui| {
                                 for (i, label) in ["Tornado", "Hail", "Mesoscale", "Forecast"].iter().enumerate() {
