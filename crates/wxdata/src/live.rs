@@ -791,6 +791,11 @@ mod tests {
         assert_eq!(merged.sweeps().len(), 2, "keep cut chronology intact");
         assert_eq!(merged.sweeps()[1].elevation_number(), 4);
         assert_eq!(merged.sweeps()[1].radials().len(), 720);
+        let reversed = Scan::new(vcp(212), merged.sweeps().iter().rev().cloned().collect());
+        let cuts = crate::level2::cut_chronology(&reversed);
+        assert_eq!(cuts.iter().map(|cut| cut.elevation_number).collect::<Vec<_>>(), vec![1, 4]);
+        assert_eq!(cuts[1].started_at_ms, 301_000,
+            "retained prior radials must not backdate the revisit");
         let ages = azimuth_age(&merged, Moment::Reflectivity, 0, 300_000).unwrap();
         assert_eq!(ages[0], AzimuthAge::Current);
         assert_eq!(ages[120], AzimuthAge::Older);

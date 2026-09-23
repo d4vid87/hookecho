@@ -14,18 +14,32 @@ impl HookEchoApp {
         use egui_phosphor::regular as ph;
         let accent = crate::theme::accent(self.settings.theme);
         let tz = self.active_tz();
+        let latest_cut = self.views[self.active].volume.as_ref().and_then(|volume| {
+            volume
+                .live_status
+                .as_ref()
+                .filter(|status| status.stream_active)
+                .and_then(|_| volume.cuts.last())
+                .and_then(|cut| chrono::DateTime::from_timestamp_millis(cut.ended_at_ms))
+        });
         let fresh = self.views[self.active]
             .volume
             .as_ref()
-            .is_some_and(|v| (chrono::Utc::now() - v.time).num_seconds() < 900);
+            .is_some_and(|v| {
+                (chrono::Utc::now() - latest_cut.unwrap_or(v.time)).num_seconds() < 900
+            });
         // Site and data age used to live in the docked status bar; the clock belongs with the clock.
         let site = self.views[self.active]
             .site
             .clone()
             .unwrap_or_else(|| "no site".to_string());
         let age = self.views[self.active].volume.as_ref().map(|v| {
-            let secs = (Utc::now() - v.time).num_seconds().max(0);
-            format!("Scan {} ago", humanize(secs))
+            let secs = (Utc::now() - latest_cut.unwrap_or(v.time)).num_seconds().max(0);
+            format!(
+                "{} {} ago",
+                if latest_cut.is_some() { "Cut" } else { "Scan" },
+                humanize(secs)
+            )
         });
         let loading = self.views[self.active].loading;
         // Which mechanism is actually feeding the pane: the sweep-by-sweep chunk stream, or the
@@ -164,9 +178,8 @@ impl HookEchoApp {
                             // "5:10:35 PM CDT" ran off the edge and under the age readout. When
                             // the room is not there the seconds and the zone go first: a phone's
                             // zone is the one it is standing in.
-                            None => t
-                                .current()
-                                .and_then(|id| id.date_time())
+                            None => latest_cut.filter(|_| t.following && !t.playing)
+                                .or_else(|| t.current().and_then(|id| id.date_time()))
                                 .map(|d| match tz {
                                     Some(tz) if narrow || ui.available_width() < 190.0 => {
                                         d.with_timezone(&tz).format("%-I:%M %p").to_string()

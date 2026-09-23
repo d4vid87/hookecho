@@ -72,6 +72,8 @@ pub struct Volume {
     pub vcp: String,
     /// Sorted, deduped tilt angles; the tilt index selects into this.
     pub elevations: Vec<f32>,
+    /// Acquisition order, including repeated low-level cuts at the same display tilt.
+    pub cuts: Vec<level2::CutTime>,
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
     pub moments: [bool; Moment::ALL.len()],
     binned: LruCache<(Moment, usize, bool), BinnedSweep>,
@@ -86,6 +88,7 @@ impl Volume {
     pub fn new(scan: Arc<Scan>, name: String, time: DateTime<Utc>) -> Self {
         let vcp = scan.coverage_pattern_number().to_string();
         let elevations = level2::elevation_angles(&scan);
+        let cuts = level2::cut_chronology(&scan);
         let moments = level2::available_moments(&scan);
         Self {
             scan,
@@ -93,6 +96,7 @@ impl Volume {
             time,
             vcp,
             elevations,
+            cuts,
             moments,
             binned: LruCache::new(NonZeroUsize::new(BINNED_CACHE).unwrap()),
             live: false,
@@ -138,6 +142,7 @@ impl Volume {
             }
         }
         self.elevations = new_elev;
+        self.cuts = level2::cut_chronology(&self.scan);
         self.moments = level2::available_moments(&self.scan);
         self.vcp = self.scan.coverage_pattern_number().to_string();
         self.name = name;
