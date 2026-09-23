@@ -78,6 +78,9 @@ impl HookEchoApp {
         if !cuts.is_empty() {
             let mut chosen = None;
             ui.collapsing("Cut chronology", |ui| {
+                if compact(ui.ctx()) {
+                    ui.spacing_mut().interact_size.y = 48.0;
+                }
                 for (cut, carries) in cuts {
                     if let Some(time) = chrono::DateTime::from_timestamp_millis(cut.ended_at_ms) {
                         let label = format!(
