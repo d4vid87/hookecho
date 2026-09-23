@@ -17,6 +17,14 @@ pub enum MapQuality {
     Full,
 }
 
+/// Which public Level II feed supplies the live radar pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RadarFeed {
+    #[default]
+    Automatic,
+    ArchiveOnly,
+}
+
 /// egui theme preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Theme {
@@ -130,6 +138,8 @@ pub struct Settings {
     pub default_site: String,
     /// Seconds between live-update polls for the newest volume.
     pub poll_interval_secs: u64,
+    /// Manual fallback when the low-latency chunk feed is unreliable.
+    pub radar_feed: RadarFeed,
     pub theme: Theme,
     /// UI density (spacing/type token table). Comfortable by default; Compact restores the
     /// pre-0.12 pro-dense desktop metrics.
@@ -1194,6 +1204,7 @@ impl Default for Settings {
             mping_key: String::new(),
             etop_dbz: default_etop_dbz(),
             poll_interval_secs: 30,
+            radar_feed: RadarFeed::default(),
             theme: Theme::Dark,
             density: Density::default(),
             accent: None,
@@ -1797,6 +1808,7 @@ mod tests {
             density: Density::Compact,
             accent: Some([255, 0, 128]),
             poll_interval_secs: 45,
+            radar_feed: RadarFeed::ArchiveOnly,
             theme: Theme::Synthwave,
             presets: vec!["KTLX".to_string(), "KOUN".to_string()],
             palettes: BTreeMap::from([("REF".to_string(), "/tmp/foo.pal".to_string())]),
@@ -2042,6 +2054,7 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.default_site, "KDMX");
         assert_eq!(s.poll_interval_secs, 30, "missing field defaults");
+        assert_eq!(s.radar_feed, RadarFeed::Automatic, "older settings keep live-first behavior");
     }
 
     /// The Android alert service (`android/app/src/main/kotlin/.../AlertService.kt`) parses

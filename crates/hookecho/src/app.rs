@@ -2351,6 +2351,7 @@ enum DataMsg {
     Live {
         view: usize,
         site: String,
+        gen: u64,
         name: String,
         time: DateTime<Utc>,
         /// Already shared with the streaming task's running volume (see `live::Update`).
@@ -2389,6 +2390,17 @@ enum DataMsg {
         site: String,
         err: String,
     },
+}
+
+fn live_update_is_current(
+    stream: Option<&(usize, String, u64)>,
+    view: usize,
+    site: &str,
+    gen: u64,
+) -> bool {
+    stream.is_some_and(|(active_view, active_site, active_gen)| {
+        *active_view == view && active_site == site && *active_gen == gen
+    })
 }
 
 impl DataMsg {
@@ -11235,6 +11247,8 @@ impl HookEchoApp {
                 }
                 DataMsg::Live {
                     view,
+                    site,
+                    gen,
                     name,
                     time,
                     scan,
@@ -11242,6 +11256,11 @@ impl HookEchoApp {
                     status,
                     ..
                 } => {
+                    if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly
+                        || !live_update_is_current(self.live_stream.as_ref(), view, &site, gen)
+                    {
+                        continue; // queued results from a replaced stream cannot overwrite the feed
+                    }
                     let v = &mut self.views[view];
                     if v.timeline.playing {
                         continue; // looping pane owns its displayed frame (cf. Volume above)
@@ -11321,6 +11340,7 @@ impl HookEchoApp {
             // WSR-88D-shaped file that isn't there and decodes garbage.
             let want = v.timeline.following
                 && !v.timeline.playing
+                && self.settings.radar_feed == crate::settings::RadarFeed::Automatic
                 && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
                 && v.volume.is_some();
             (
@@ -11344,6 +11364,11 @@ impl HookEchoApp {
                 self.live_stream = None;
                 // A new site shouldn't inherit the old one's 60 s retry gate.
                 self.last_stream_attempt = None;
+                if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly {
+                    self.views[idx].last_poll = None;
+                    self.views[idx].live_stream_ended();
+                    ctx.request_repaint(); // archive poll on the next frame
+                }
             }
         }
 
@@ -11389,6 +11414,7 @@ impl HookEchoApp {
                 let _ = cb_tx.send(DataMsg::Live {
                     view: view_idx,
                     site: cb_site.clone(),
+                    gen,
                     name: u.name,
                     time: u.time,
                     scan: u.scan,
@@ -11728,6 +11754,12 @@ impl HookEchoApp {
                     .is_none_or(|t| t.elapsed().as_secs() >= self.poll_interval_secs());
                 let current_name = if looping {
                     v.timeline.frames.last().map(|id| id.name().to_string())
+                } else if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly
+                    && v.volume.as_ref().is_some_and(|vol| vol.live_status.is_some())
+                {
+                    // Replace a partial streamed scan with the complete archive object even
+                    // when both have the same volume name.
+                    None
                 } else {
                     v.volume.as_ref().map(|vol| vol.name.clone())
                 };
@@ -21710,6 +21742,16 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn replaced_chunk_stream_cannot_update_a_pane() {
+        let current = (1, "KTLX".to_string(), 8);
+        assert!(super::live_update_is_current(Some(&current), 1, "KTLX", 8));
+        assert!(!super::live_update_is_current(Some(&current), 1, "KTLX", 7));
+        assert!(!super::live_update_is_current(Some(&current), 0, "KTLX", 8));
+        assert!(!super::live_update_is_current(Some(&current), 1, "KFWS", 8));
+        assert!(!super::live_update_is_current(None, 1, "KTLX", 8));
+    }
+
     #[test]
     fn scan_progress_ring_paints_missing_old_and_new_segments() {
         use wxdata::level2::AzimuthAge;
