@@ -543,7 +543,7 @@ pub(crate) fn primary_controls(
                 }
             }
         });
-        ui.collapsing("Risk key", |ui| { ui.horizontal_wrapped(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (label, color) in [
                 ("TSTM", Color32::from_rgb(85, 170, 85)),
                 ("MRGL", Color32::from_rgb(65, 145, 75)),
@@ -554,7 +554,7 @@ pub(crate) fn primary_controls(
             ] {
                 ui.colored_label(color, RichText::new(format!("● {label}")).small());
             }
-        }); });
+        });
     }
     chosen
 }
