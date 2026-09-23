@@ -8768,6 +8768,7 @@ impl HookEchoApp {
 
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
+            self.views[self.active].follow_low_cut = false;
         }
         if self.settings.precip_tint != precip_tint {
             self.settings.precip_tint = precip_tint;
@@ -9133,7 +9134,11 @@ impl HookEchoApp {
             PaletteAction::TogglePanel => self.panel_open = !self.panel_open,
             PaletteAction::Reload => self.trigger_reload(ctx),
             PaletteAction::InstantReplay => self.instant_replay(),
-            PaletteAction::GoLive => self.views[self.active].timeline.go_head(),
+            PaletteAction::GoLive => {
+                let view = &mut self.views[self.active];
+                view.timeline.go_head();
+                view.pin_low_cut();
+            }
             PaletteAction::CopyViewLink => {
                 let v = &self.views[self.active];
                 let c = v.camera.center;
@@ -11248,6 +11253,7 @@ impl HookEchoApp {
                             v.volume = Some(volume);
                         }
                     }
+                    v.pin_low_cut();
                     v.loading = false;
                     v.error = None;
                     v.fetch_failures = 0;
@@ -11410,6 +11416,7 @@ impl HookEchoApp {
             A::Palette(p) => self.apply_palette(p, ctx),
             A::TiltUp => {
                 let v = &mut self.views[self.active];
+                v.follow_low_cut = false;
                 if let Some(vol) = &v.volume {
                     if v.tilt + 1 < vol.elevations.len() {
                         v.tilt += 1;
@@ -11418,6 +11425,7 @@ impl HookEchoApp {
             }
             A::TiltDown => {
                 let v = &mut self.views[self.active];
+                v.follow_low_cut = false;
                 v.tilt = v.tilt.saturating_sub(1);
             }
             A::OpenSiteDialog => {
@@ -16228,6 +16236,7 @@ impl HookEchoApp {
             v.srv = srv;
             if let Some(&t) = picks.get(i) {
                 v.tilt = t;
+                v.follow_low_cut = false;
             }
         }
         // Four heights of one storm only reads if all four look at the same place.
@@ -17149,6 +17158,7 @@ impl HookEchoApp {
             v.timeline.seek_target = Some(t);
         } else {
             v.timeline.go_head();
+            v.pin_low_cut();
         }
     }
 
