@@ -20,11 +20,13 @@ If HookEcho is useful to you, please [give the project a star](https://github.co
 
 <a id="screenshots"></a>
 
-![Moore, Oklahoma, 20 May 2013 — KTLX 0.5° reflectivity, replayed from the archive](shots/hero.gif)
+![Radar mode with the short product panel over a KTLX archive replay](shots/radar-mode.gif)
 
-<sub>**KTLX 0.5° reflectivity — Moore, Oklahoma, 20 May 2013.** Replayed from the
-public archive inside the app, one scan every few seconds, with the tornado
-warning that was in force at the time.</sub>
+<sub>**Radar mode — KTLX, May 20, 2013.** Actual current interface over an archived storm; not live weather.</sub>
+
+![Analyst Workstation switching between linked radar products and a single map](shots/analyst-mode.gif)
+
+<sub>**Analyst mode.** Linked four-pane comparison with an inspector. Radar restores the earlier single-map view.</sub>
 
 ![HRRR 10 m wind drawn as drifting particles across the CONUS](shots/wind.gif)
 
@@ -67,59 +69,42 @@ Versioned `v*` releases are the stable channel. Every push to `main` also
 refreshes a [`latest`](https://github.com/d4vid87/hookecho/releases/tag/latest) rolling prerelease carrying the
 same artifacts, if you want the newest work without waiting for a tag.
 
-First launch asks one question: which radar do you open to. Let it use your
-location and it picks the nearest one and gets out of the way; otherwise search
-the list. Everything else — map, theme, accent color, how warnings reach you —
-has a default and lives in **Settings**. The card also offers a 60-second tour:
-four stops spotlighted on the live map, two of which you finish by doing the
-thing rather than reading about it. Neither is forced, and both re-run from the
-panel's **App** section, `Ctrl+K`, or **Settings → General**.
+First launch can choose a nearby radar from your location; you can also search
+for a site. Everything else — map, theme, accent color, how warnings reach you —
+has a default and lives in **Settings**. A short tour is optional.
 
 ## The interface
 
-HookEcho is a full-bleed map with its controls floating over it — no menu
-bar, no docked columns eating the weather, and no title bar either: the window
-is borderless and its three buttons float with the rest of the chrome. Drag it
-by the empty strip along the top edge, double-click that strip to maximize, and
-resize from any edge or corner. If your window manager disagrees with any of
-that, `--decorated` hands the frame back to it.
+HookEcho opens in **Radar**, a full-bleed single map. The fixed header keeps
+**Radar | Analyst**, search, and Settings reachable above the panel. The menu
+has four task sections: **Radar** (site, product, tilt, threshold), **Overlays**
+(storm tracks, MRMS, storm attributes, SPC outlook), **Alerts** (warning count
+and list), and **Tools** (catalog and saved workspaces). Ctrl+S focuses search;
+Escape closes search or the menu.
 
-- **The panel** holds everything: the site, the current product and its
-  tilt, the expert knobs for that product, then every layer, window and tool —
-  one icon-led row each, described in plain English, filed under collapsible
-  categories that carry their own count, with the layer options, map settings and
-  app commands under them. Search it with `Ctrl+K`; Enter runs the top match.
-  Drag a row by its icon to pin it above the rest of its category. It opens from
-  the search pill in the top-left corner or the layers button on the right edge,
-  and closes to nothing — the map runs edge to edge underneath it.
-- Its **Alerts tab** lists every alert covering your view, worst first, badged
-  with the count. Click a row to fly there and read the bulletin.
+**Analyst** uses the same header plus a fixed toolbar for presets, pane count,
+linked map/time, active pane and Inspector. Returning to Radar restores the
+earlier single map; Analyst resumes its arrangement. The [interface guide](INTERFACE.md)
+explains mode sessions and workspace persistence.
+
+- **The menu** shows one task at a time. Alerts do not expand automatically.
 - **The scrubber** floats along the bottom: site, clock, play, a LIVE badge that
   snaps back to the newest scan, and a time track marked with one tick per volume
   and labelled by the hour, in the radar's own timezone. Drag it or click anywhere
   on it. The shaded stretch at the live end is the loop the play button cycles.
   Right-click the badge for the archive day, loop and playback speed.
-- **The right edge** carries the control column — layers, background map, and an
-  alert bell badged with the number of alerts in view — and the color scale for the product each pane is
-  showing — a thin bar floating over the map, spanning only the values the color
-  table actually paints.
+- **The map edge** carries the color scale for the selected product.
 
-That's the whole of it. Searching for a place is the same box — type a name and
-take the **Fly to** row at the bottom of the results.
-
-| Search everything | One panel for everything |
+| Radar mode | Analyst Workstation |
 |---|---|
-| ![Searching for "hail" over the Joplin supercell](shots/products.jpg) | ![The panel over the Mayfield supercell](shots/layers.jpg) |
-| <sub>Joplin, MO — 22 May 2011</sub> | <sub>Mayfield, KY — 11 Dec 2021</sub> |
+| ![Single map with a short Radar section](shots/radar-mode.jpg) | ![Four products with the inspector](shots/analyst-mode.jpg) |
 
 Radar times read in **the selected radar's local time**, not Zulu — a KEPZ pane
 shows MDT while a KTLX pane shows CDT, side by side. Settings → Units puts it
 back to UTC if you'd rather work in Zulu.
 
-Every expert control is still there, in the panel's **Layer options** section,
-which shows a layer's settings only once that layer is on — so the forecast-hour
-slider appears when you turn on future radar, and stays out of the way when you
-haven't.
+Advanced product settings remain collapsed until requested. The Tools section
+provides search for less common fields and actions.
 
 Search a place in the panel and it flies there, with a **Save marker** button
 if you want to keep it. Markers are what the warning, lightning and rain-arrival
@@ -470,9 +455,8 @@ are maintained separately and require a connected Android device to recapture.
 
 ![HookEcho mobile browser replaying the Moore, Oklahoma tornado of 20 May 2013](shots/mobile/hero.gif)
 
-<sub>**The same Rust app, rebuilt around the phone.** KTLX 0.5° reflectivity,
-20 May 2013, stepped out of the archive as the hook closes off, with the tornado
-warnings of the day counting on the alert badge.</sub>
+<sub>**Earlier Android capture.** KTLX 0.5° reflectivity, 20 May 2013, stepped
+through the archive. The current compact controls are shown below.</sub>
 
 Android is not the desktop squeezed onto a smaller screen — and it is no longer
 an app of its own either. The phone had its own chrome once: a persistent sheet
@@ -481,12 +465,11 @@ surfaces the shared action registry already fed. They are gone. What is here is
 the same floating chrome the desktop draws, over the same renderer and the same
 data paths, laid out for a thumb:
 
-| | |
-|---|---|
-| ![The map, with the search pill, the control column and the scrubber floating over it](shots/mobile/map.jpg) | ![The layers and tools sheet](shots/mobile/layers.jpg) |
-| **Map first.** The radar owns the screen. One pill names the site and its VCP, a column of buttons runs down the thumb's side, and the scrubber floats along the bottom edge. | **Panels come up as sheets.** The same described, categorized registry the desktop panel uses, with the tilt strip and product options above it. |
-| ![Alerts in view, listed in the sheet](shots/mobile/alerts.jpg) | Use the search pill to find a place or radar site. |
-| **Alerts in view** on their own tab of that sheet — tap one to fly there and read the bulletin. | **Nearest first.** The site picker sorts by distance from wherever you are looking, over every WSR-88D, TDWR and DWD radar the app can fetch. |
+![The current Radar section in a phone-sized browser sheet](shots/mobile/radar-mode.jpg)
+
+**Current compact layout.** The fixed Radar | Analyst switch and four task
+sections stay above the sheet. This is a browser capture at phone width; Android
+system controls differ. The site picker still sorts nearby radar sites first.
 
 - Every tool window — soundings, cross-sections, settings, the site picker — is
   a full-screen surface, because that is what the compact width class is for.
@@ -878,7 +861,7 @@ ones worth knowing before you look:
 | `R` | instant replay from the in-RAM buffer |
 | `Page Up` / `Page Down` | tilt up / down |
 | `1`–`6` | products: reflectivity, velocity, spectrum width, ZDR, PHI, CC |
-| `Ctrl+K` | command palette |
+| `Ctrl+S` | open and focus global search |
 | `L` | the panel |
 | `A` | the alert panel |
 | `Z` | cycle the basemap |
@@ -952,12 +935,12 @@ cargo run --release -- --headless-rules KTLX                # would your alert r
 ```
 
 ```sh
-cargo test    # 303 offline unit tests
+cargo test
 ```
 
-The desktop screenshots in this reference are regenerated by `scripts/shots/shoot.sh`,
-which drives the real binary on a nested X display — see
-[`scripts/shots/README.md`](../scripts/shots/README.md).
+The mode screenshots and clips above were captured from the released web app
+over a fixed KTLX archive scene. The older scientific gallery is regenerated
+by `scripts/shots/shoot.sh`; see [`scripts/shots/README.md`](../scripts/shots/README.md).
 
 ## Community
 

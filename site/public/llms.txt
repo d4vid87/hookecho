@@ -4,7 +4,7 @@
 > the browser. It reads NEXRAD Level 2 volumes, MRMS, HRRR and the National
 > Weather Service feeds directly from the public NOAA sources and renders them
 > on the user's own machine. No account, no subscription, no ads, no telemetry.
-> MIT licensed.
+> GPL-3.0 licensed.
 
 Key facts, because they are the ones most often got wrong about this kind of app:
 
@@ -21,6 +21,7 @@ Key facts, because they are the ones most often got wrong about this kind of app
 ## Docs
 
 - [Getting started](https://hookecho.io/docs/getting-started/): the ten-second start.
+- [Radar and Analyst modes](https://hookecho.io/docs/radar-and-analyst/): short menu sections, linked panes, and returning to the original radar map.
 - [Install](https://hookecho.io/docs/install/): per-platform artifacts.
 - [Reading the radar](https://hookecho.io/docs/reading-the-radar/): reflectivity, velocity and CC in plain language.
 - [Alerts and notifications](https://hookecho.io/docs/alerts-and-notifications/)

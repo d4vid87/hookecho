@@ -1,7 +1,7 @@
 ---
 title: Install
 description: Download HookEcho for Windows, macOS, Linux or Android — or run it in the browser with nothing to install.
-order: 2
+order: 3
 ---
 
 [The download page](/download/) helps you choose the right build for your machine.

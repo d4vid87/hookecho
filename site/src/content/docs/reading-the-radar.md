@@ -1,7 +1,7 @@
 ---
 title: Reading the radar
 description: What the colours actually mean — reflectivity, velocity and the dual-pol products, in plain language.
-order: 3
+order: 4
 ---
 
 A radar sends out a pulse and listens for what comes back. Everything on the
@@ -59,7 +59,7 @@ over a few gates. Compare storm-relative velocity and successive scans; neither 
 
 **Is it hail?** Reflectivity over about 50 dBZ is the candidate; compare with CC
 and ZDR for supporting evidence. These are clues, not a direct hail-size measurement. The **storm attributes** table
-(<kbd>Ctrl</kbd>+<kbd>K</kbd> → "cells") lists every tracked cell with its hail
+(**Overlays → Storm attributes**) lists every tracked cell with its hail
 size, tops and VIL, sorted — click a row to fly there.
 
 **Is it a tornado?** The debris signature is all three together at low tilt: a
@@ -77,8 +77,8 @@ your head.
 
 Climbing the tilts tells you how a storm leans. A rotating column that stands
 straight up through several tilts is a much bigger deal than one that falls
-apart at the second sweep. One action in <kbd>Ctrl</kbd>+<kbd>K</kbd> puts four
-tilts side by side to make that easy to see.
+apart at the second sweep. Choose **Analyst** and select four panes to compare
+products or tilts side by side; use **Maps** and **Time** to link them.
 
 ## A caveat about old storms
 

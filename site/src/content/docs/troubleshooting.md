@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting
 description: Step-by-step checks for missing data, slow playback, notification problems and useful bug reports.
-order: 7
+order: 8
 ---
 
 ## The map opens, but radar is missing

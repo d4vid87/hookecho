@@ -1,7 +1,7 @@
 ---
 title: Alerts and notifications
 description: Get told when weather is coming to a place you care about, without watching the screen.
-order: 4
+order: 5
 ---
 
 Alerting is built around **markers** — the places you've saved. Search a place in

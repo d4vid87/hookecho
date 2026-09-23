@@ -16,15 +16,35 @@ No account. No ads. No API key. Free and open source.
 [Visit the website](https://hookecho.io/) ·
 [Get help](https://github.com/d4vid87/hookecho/issues)
 
-![HookEcho replaying the Moore, Oklahoma tornado of May 20, 2013](docs/shots/hero.gif)
+![HookEcho Radar mode with a short product panel over an archived Oklahoma storm](docs/shots/radar-mode.gif)
 
-## On Android
+*Current interface, KTLX archive replay · May 20, 2013.*
 
-<img src="site/public/shots/hookecho-android.gif" alt="HookEcho radar and layers recorded on an Android phone" width="320">
+## On a phone
 
-Recorded on a Samsung Galaxy S24 Ultra. [Watch both phone demos](https://hookecho.io/#android).
+<img src="docs/shots/mobile/radar-mode.jpg" alt="The current short Radar sheet on a phone-sized browser" width="320">
 
-## Current interface
+Browser capture of the current interface. [Phone instructions](https://hookecho.io/docs/on-your-phone/) include the Android build.
+
+## Radar and Analyst
+
+**Radar** opens with one map and a timeline. Its short menu separates Radar,
+Overlays, Alerts, and Tools. The fixed header keeps Radar, Analyst, search, and
+Settings within reach even when the menu is closed.
+
+**Analyst** adds linked panes, presets, an active-pane label, and an optional
+inspector. Choose Radar again to restore the single map you left; return to
+Analyst to resume its arrangement. Save a workspace to keep it across restarts.
+
+| Radar mode | Analyst Workstation |
+| --- | --- |
+| ![Single radar view with the Radar section open](docs/shots/radar-mode.jpg) | ![Four radar products and the analyst inspector](docs/shots/analyst-mode.jpg) |
+
+![Switching into Analyst and back to Radar](docs/shots/analyst-mode.gif)
+
+[Follow the mode and menu guide](docs/INTERFACE.md) · [Read it on hookecho.io](https://hookecho.io/docs/radar-and-analyst/)
+
+## More weather views
 
 | Reflectivity | Velocity |
 | --- | --- |
@@ -108,15 +128,18 @@ main map.
 
 ## Find your way around
 
-- **Search box:** find a place, radar, setting, or weather layer.
+- **Radar | Analyst:** choose one map or resume your analysis arrangement.
+- **Search or Ctrl+S:** find a place, radar, setting, or weather layer. Escape closes search or the menu.
 - **Play button:** animate recent radar pictures.
 - **Timeline:** move backward through recent scans or forward into future radar.
 - **LIVE button:** jump back to current conditions.
-- **Layers button:** turn warnings, lightning, forecasts, and other information on or off.
-- **Map button:** choose a different background map.
-- **Alert bell:** see warnings covering the area on screen.
+- **Radar section:** site, product, tilt, threshold, and custom locations.
+- **Overlays section:** storm tracks, MRMS, storm attributes, and SPC outlook.
+- **Alerts section:** see warnings covering the area on screen. It stays closed until you open it.
+- **Tools section:** search the product catalog and open saved workspaces.
+- **Settings gear:** open Settings directly from the fixed header.
 
-![HookEcho showing the layer panel over a historic storm](docs/shots/layers.jpg)
+![HookEcho showing the current Radar section over a historic storm](docs/shots/radar-mode.jpg)
 
 ## Made for different kinds of weather watchers
 
@@ -163,6 +186,7 @@ sources, workspaces, remote control, Home Assistant, MQTT, plugins, command-line
 development, and testing.
 
 - [User guide](docs/GUIDE.md)
+- [Radar and Analyst interface](docs/INTERFACE.md)
 - [Weather-data guide](docs/DATA.md)
 - [Plugin guide](docs/plugins.md)
 - [Sync guide](docs/sync.md)

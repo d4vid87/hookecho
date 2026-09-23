@@ -11,7 +11,7 @@ interface Props {
   jsonld?: object;
 }
 
-const { title, description, image = "/shots/alltilts.jpg?v=0dc4ee0", jsonld } = Astro.props;
+const { title, description, image = "/shots/analyst-mode-20260923.webp", jsonld } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
 const social = new URL(image, Astro.site);
 const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
@@ -309,6 +309,8 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
     .header-cta { font-size: 0.82rem; }
   }
   @media (max-width: 430px) {
+    .head-inner { gap: 0.4rem; }
+    .header-cta { padding-inline: 0.55rem; font-size: 0.78rem; white-space: nowrap; }
     .foot-grid { grid-template-columns: 1fr; }
     .foot-about { grid-column: auto; }
   }

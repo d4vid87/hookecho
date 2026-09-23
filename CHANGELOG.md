@@ -7,6 +7,23 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Radar and Analyst navigation - 2026-09-23 (rolling release)
+
+- A fixed **Radar | Analyst** switch keeps both ways of working reachable with
+  the menu closed, Settings open, or a section scrolled. Radar restores the
+  previous single-map view; Analyst resumes its last pane arrangement.
+- The long mixed panel is now four short task sections: **Radar**, **Overlays**,
+  **Alerts**, and **Tools**. Site, product, tilt, threshold and Custom locations
+  stay together; SPC Day 1–3 and the risk legend stay together; alerts remain
+  closed until opened.
+- The Analyst toolbar holds presets, pane count, map/time links, active-pane
+  label, and Inspector above the scrolling content. Mode switching retains
+  products, overlays, thresholds (even disabled ones), and selected archive
+  time during the session. Saved workspaces continue to persist across restarts.
+- **Ctrl+S** focuses search, **Escape** closes search or the menu, and Settings
+  opens from the fixed header in one click. The same task sections work as a
+  fixed-header sheet on compact screens.
+
 ## Analyst Workstation - 2026-09-22 (rolling release)
 
 The U.S. analyst workstation is live in the web app and rolling desktop and
