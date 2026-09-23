@@ -20131,10 +20131,7 @@ impl eframe::App for HookEchoApp {
         self.mobile_occlusion.clear();
         if !self.panel_open { self.drawer.resume(); }
         self.drawer.begin_frame(ctx);
-        if self.panel_open
-            && !self.drawer.is_open()
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
+        if self.panel_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.panel_open = false;
             self.sidebar_focus_search = false;
         }
