@@ -378,6 +378,8 @@ For a sampled gate expose:
 
 The optional per-pane control is in the Analyst inspector. `view::tests::low_cut_follow_is_live_only_and_leaves_missing_tilts_alone` covers live pinning, archive browsing, and sites without a 0.5° cut; the live path applies it after each partial scan update.
 
+The inspector lists cuts by their radar collection times, including repeated angles, and the live scrubber clock/age uses the newest collected cut. Playback still uses volume slots; cut-level scrubbing remains open.
+
 ## B6. Feed failover
 
 - [ ] provider priority list

@@ -50,6 +50,22 @@ impl HookEchoApp {
                 ui.weak("Waiting for live scan updates");
             }
         }
+        if let Some(volume) = &self.views[self.active].volume {
+            if !volume.cuts.is_empty() {
+                ui.collapsing("Cut chronology", |ui| {
+                    for cut in &volume.cuts {
+                        if let Some(time) = chrono::DateTime::from_timestamp_millis(cut.ended_at_ms) {
+                            ui.label(format!(
+                                "Cut {} · {:.1}° · {} UTC",
+                                cut.elevation_number,
+                                cut.elevation_deg,
+                                time.format("%H:%M:%S")
+                            ));
+                        }
+                    }
+                });
+            }
+        }
         if let Some([lon, lat]) = self.linked_probe {
             ui.label(format!("Probe  {lat:.3}°, {lon:.3}°"));
         } else {

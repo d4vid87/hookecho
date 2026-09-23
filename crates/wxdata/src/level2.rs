@@ -726,6 +726,43 @@ pub fn elevation_angles(scan: &Scan) -> Vec<f32> {
     angles
 }
 
+/// Order cuts by their latest collected radial. A live revisit can borrow older azimuths until it
+/// finishes; only radials that belong to the cut itself determine its time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CutTime {
+    pub elevation_number: u8,
+    pub elevation_deg: f32,
+    pub started_at_ms: i64,
+    pub ended_at_ms: i64,
+}
+
+pub fn cut_chronology(scan: &Scan) -> Vec<CutTime> {
+    let mut cuts: Vec<_> = scan
+        .sweeps()
+        .iter()
+        .filter_map(|sweep| {
+            let elevation_number = sweep.elevation_number();
+            let elevation_deg = sweep.elevation_angle_degrees()?;
+            let (first_ms, last_ms) = sweep
+                .radials()
+                .iter()
+                .filter(|radial| radial.elevation_number() == elevation_number)
+                .fold((i64::MAX, i64::MIN), |(first, last), radial| {
+                    let time = radial.collection_timestamp();
+                    (first.min(time), last.max(time))
+                });
+            (first_ms != i64::MAX).then_some(CutTime {
+                elevation_number,
+                elevation_deg,
+                started_at_ms: first_ms,
+                ended_at_ms: last_ms,
+            })
+        })
+        .collect();
+    cuts.sort_unstable_by_key(|cut| (cut.ended_at_ms, cut.elevation_number));
+    cuts
+}
+
 /// Use the newest cut at a displayed tilt, while respecting split cuts that carry different
 /// moments. SAILS/MRLE repeats share one tilt button but have distinct collection times.
 fn selected_sweep(scan: &Scan, moment: Moment, tilt: usize) -> Option<&Sweep> {
