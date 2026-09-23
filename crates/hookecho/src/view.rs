@@ -355,6 +355,52 @@ impl MapView {
             .map(|(end, _, _)| end)
     }
 
+    /// Resolve the cut cursor against the displayed completed volume. The timeline keeps volume
+    /// identifiers for loading; this supplies its ordered subframes only once that volume arrives.
+    pub fn sync_cut_playback(&mut self) {
+        if !self.timeline.cut_playback {
+            return;
+        }
+        if self.custom_product.is_some() {
+            self.timeline.enable_cut_playback(false);
+            self.cut_selection = None;
+            return;
+        }
+        let cuts = self.volume.as_ref().and_then(|volume| {
+            (volume.live_status.is_none()
+                && self.timeline.current().is_some_and(|id| id.name() == volume.name))
+            .then(|| {
+                volume
+                    .cuts
+                    .iter()
+                    .copied()
+                    .filter(|cut| level2::cut_has_moment(&volume.scan, *cut, self.moment))
+                    .collect::<Vec<_>>()
+            })
+        });
+        let Some(cuts) = cuts else {
+            self.timeline.set_cut_count(0);
+            self.cut_selection = None;
+            return;
+        };
+        self.timeline.set_cut_count(cuts.len());
+        let Some(cut) = cuts.get(self.timeline.cut_index) else {
+            self.cut_selection = None;
+            return;
+        };
+        if let Some(tilt) = self.volume.as_ref().and_then(|volume| {
+            volume
+                .elevations
+                .iter()
+                .position(|angle| (*angle - cut.elevation_deg).abs() < 0.15)
+        }) {
+            self.tilt = tilt;
+            self.cut_selection = Some((cut.ended_at_ms, self.moment, tilt));
+        } else {
+            self.cut_selection = None;
+        }
+    }
+
     /// Forget every kept volume. The site changed, so none of them is of anywhere being looked at.
     pub fn forget_recent(&mut self) {
         self.recent.clear();
@@ -463,15 +509,16 @@ mod tests {
     fn scan_at(elevations: &[f32]) -> Arc<Scan> {
         let sweeps: Vec<Sweep> = elevations
             .iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(i, e)| {
                 let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![106u8]);
                 let radial = Radial::new(
-                    0,
+                    (i as i64 + 1) * 1_000,
                     0,
                     0.0,
                     0.5,
                     RadialStatus::ScanStart,
-                    1,
+                    (i + 1) as u8,
                     *e,
                     Some(data),
                     None,
@@ -481,7 +528,7 @@ mod tests {
                     None,
                     None,
                 );
-                Sweep::new(1, vec![radial])
+                Sweep::new((i + 1) as u8, vec![radial])
             })
             .collect();
         let vcp = VolumeCoveragePattern::new(
@@ -536,6 +583,27 @@ mod tests {
         view.moment = Moment::Reflectivity;
         view.show_volume(scan_at(&[0.5]), "second".into(), Utc::now());
         assert_eq!(view.selected_cut_ms(), None);
+    }
+
+    #[test]
+    fn cut_playback_uses_decoded_collection_order_and_tilt() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.28, 35.33, 7.0));
+        let id = wxdata::level2::Identifier::new("KTLX20260819_000000_V06".into());
+        let next = wxdata::level2::Identifier::new("KTLX20260819_000500_V06".into());
+        view.timeline.set_frames(vec![id.clone(), next.clone()], ("KTLX".into(), view.timeline.date));
+        view.show_volume(scan_at(&[0.5, 1.5]), id.name().into(), Utc::now());
+        view.timeline.enable_cut_playback(true);
+        view.sync_cut_playback();
+        assert_eq!((view.timeline.cut_count, view.selected_cut_ms(), view.tilt), (2, Some(1_000), 0));
+        view.timeline.step_cut(1);
+        view.sync_cut_playback();
+        assert_eq!((view.selected_cut_ms(), view.tilt), (Some(2_000), 1));
+        view.timeline.step_cut(1);
+        view.sync_cut_playback();
+        assert_eq!(view.selected_cut_ms(), None, "old volume is not the new playhead");
+        view.show_volume(scan_at(&[0.5, 1.5]), next.name().into(), Utc::now());
+        view.sync_cut_playback();
+        assert_eq!((view.timeline.cut_count, view.selected_cut_ms()), (2, Some(1_000)));
     }
 
     /// A lap of a loop must not re-bin what it binned last lap. This is the whole wave: before it,

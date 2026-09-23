@@ -40,6 +40,11 @@ pub struct Timeline {
     pub replay: Option<(usize, usize)>,
     /// Forecast hours appended after the newest observed frame (HRRR "future radar" scrub tail).
     pub forecast_hours: u8,
+    /// Play completed radar cuts in collection order inside each volume.
+    pub cut_playback: bool,
+    pub cut_index: usize,
+    pub cut_count: usize,
+    cut_reverse_pending: bool,
     last_advance: Option<Instant>,
 }
 
@@ -60,6 +65,10 @@ impl Default for Timeline {
             replay_span_min: 0,
             replay: None,
             forecast_hours: 6,
+            cut_playback: false,
+            cut_index: 0,
+            cut_count: 0,
+            cut_reverse_pending: false,
             last_advance: None,
         }
     }
@@ -147,6 +156,9 @@ impl Timeline {
         // A listing for another site or day is a different axis; the old bounds mean nothing on it.
         if switched_site {
             self.replay = None;
+            self.cut_index = 0;
+            self.cut_count = 0;
+            self.cut_reverse_pending = false;
         }
         // While live-looping, a fresh listing must not yank the playhead to the head — the loop
         // owns the playhead. Only clamp it back into range if it now points past the end.
@@ -192,6 +204,9 @@ impl Timeline {
     /// the first frame.
     pub fn toggle_play(&mut self) {
         self.playing = !self.playing;
+        if self.cut_playback {
+            return; // continue from this cut; the volume loop wraps after the last cut
+        }
         if self.playing && self.at_head() && !self.frames.is_empty() {
             if self.following {
                 // Live: loop the tail window, stay pinned so new volumes keep arriving.
@@ -258,8 +273,113 @@ impl Timeline {
         self.following = self.playhead + 1 == self.frames.len();
     }
 
+    pub fn enable_cut_playback(&mut self, enabled: bool) {
+        if enabled && self.following && self.frames.len() > 1 {
+            // The newest volume may still be receiving chunks. Start on the last completed
+            // archive volume, whose cut chronology can be replayed without changing underneath us.
+            self.playhead = self.frames.len() - 2;
+        }
+        self.cut_playback = enabled;
+        self.cut_index = 0;
+        self.cut_count = 0;
+        self.cut_reverse_pending = false;
+        self.playing = false;
+        if enabled {
+            self.following = false;
+            self.replay = None;
+        }
+    }
+
+    /// The decoded volume supplies cuts only after it reaches the pane. A zero count holds
+    /// playback rather than skipping an unloaded volume on the wall clock.
+    pub fn set_cut_count(&mut self, count: usize) {
+        self.cut_count = count;
+        if count > 0 {
+            self.cut_index = if self.cut_reverse_pending {
+                count - 1
+            } else {
+                self.cut_index.min(count - 1)
+            };
+            self.cut_reverse_pending = false;
+        }
+    }
+
+    pub fn step_cut(&mut self, delta: i32) {
+        if !self.cut_playback {
+            self.step(delta);
+            return;
+        }
+        if self.cut_count == 0 || delta.unsigned_abs() != 1 {
+            self.step(delta);
+            self.following = false;
+            return;
+        }
+        self.playing = false;
+        self.replay = None;
+        if delta > 0 && self.cut_index + 1 < self.cut_count {
+            self.cut_index += 1;
+        } else if delta < 0 && self.cut_index > 0 {
+            self.cut_index -= 1;
+        } else {
+            let old = self.playhead;
+            self.step(delta);
+            if self.playhead != old {
+                self.cut_count = 0;
+                self.cut_index = 0;
+                self.cut_reverse_pending = delta < 0;
+            }
+        }
+        self.following = false;
+    }
+
+    pub fn scrub_to(&mut self, slot: usize, fraction_in_slot: f32) {
+        let same_volume = slot == self.playhead;
+        self.playhead = slot;
+        self.playing = false;
+        self.replay = None;
+        self.cut_reverse_pending = false;
+        if self.cut_playback {
+            if same_volume && self.cut_count > 0 {
+                self.cut_index = ((fraction_in_slot * self.cut_count as f32) as usize)
+                    .min(self.cut_count - 1);
+            } else {
+                self.cut_index = 0;
+                self.cut_count = 0;
+            }
+            self.following = false;
+        } else {
+            self.following = slot + 1 == self.frames.len();
+        }
+    }
+
+    pub fn tick_cut(&mut self) -> bool {
+        if !self.cut_playback {
+            return self.tick();
+        }
+        if !self.playing || self.cut_count == 0 {
+            return false;
+        }
+        if self.cut_index + 1 >= self.cut_count {
+            let old = self.playhead;
+            let advanced = self.tick();
+            if self.playhead != old {
+                self.cut_index = 0;
+                self.cut_count = 0;
+                self.following = false;
+            }
+            return advanced;
+        }
+        if self.last_advance.is_some_and(|t| t.elapsed() < self.frame_interval()) {
+            return false;
+        }
+        self.last_advance = Some(Instant::now());
+        self.cut_index += 1;
+        true
+    }
+
     /// Jump to the newest frame and re-pin to live.
     pub fn go_head(&mut self) {
+        self.enable_cut_playback(false);
         self.replay = None;
         self.following = true;
         self.playing = false;
@@ -271,6 +391,9 @@ impl Timeline {
         self.following = false;
         self.playing = false;
         self.playhead = 0;
+        self.cut_index = 0;
+        self.cut_count = 0;
+        self.cut_reverse_pending = false;
     }
 
     /// How long until the next playback frame is due, or `None` when not playing. The UI turns
@@ -278,7 +401,7 @@ impl Timeline {
     /// happen to be drawn, which the idle heartbeat caps at 4/s on Android and 10/s on desktop
     /// no matter what speed the user picked.
     pub fn time_to_next_frame(&self) -> Option<std::time::Duration> {
-        if !self.playing || self.frames.is_empty() {
+        if !self.playing || self.frames.is_empty() || (self.cut_playback && self.cut_count == 0) {
             return None;
         }
         let interval = self.frame_interval();
@@ -341,6 +464,68 @@ fn frame_interval(speed: f32, degraded: bool) -> std::time::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cut_steps_follow_each_volume_and_reverse_into_its_last_cut() {
+        let mut t = Timeline::default();
+        t.set_frames(day("KTLX", 2), ("KTLX".into(), t.date));
+        t.playhead = 0;
+        t.enable_cut_playback(true);
+        t.set_cut_count(3);
+        t.step_cut(1);
+        assert_eq!((t.playhead, t.cut_index), (0, 1));
+        t.step_cut(1);
+        assert_eq!((t.playhead, t.cut_index), (0, 2));
+        t.step_cut(1);
+        assert_eq!((t.playhead, t.cut_count), (1, 0));
+        t.set_cut_count(2);
+        assert_eq!(t.cut_index, 0);
+        t.step_cut(-1);
+        assert_eq!((t.playhead, t.cut_count), (0, 0));
+        t.set_cut_count(3);
+        assert_eq!(t.cut_index, 2);
+        assert!(!t.following);
+    }
+
+    #[test]
+    fn cut_playback_waits_for_decoded_volume_between_scans() {
+        let mut t = Timeline::default();
+        t.set_frames(day("KTLX", 2), ("KTLX".into(), t.date));
+        t.playhead = 0;
+        t.enable_cut_playback(true);
+        t.playing = true;
+        assert!(!t.tick_cut());
+        assert!(t.time_to_next_frame().is_none());
+        t.set_cut_count(2);
+        assert!(t.tick_cut());
+        assert_eq!((t.playhead, t.cut_index), (0, 1));
+        t.last_advance = None;
+        assert!(t.tick_cut());
+        assert_eq!((t.playhead, t.cut_count), (1, 0));
+        assert!(!t.tick_cut(), "do not skip the unloaded next volume");
+    }
+
+    #[test]
+    fn live_cut_playback_starts_on_last_completed_volume() {
+        let mut t = Timeline::default();
+        t.set_frames(day("KTLX", 3), ("KTLX".into(), t.date));
+        assert_eq!(t.playhead, 2);
+        t.enable_cut_playback(true);
+        assert_eq!(t.playhead, 1);
+        assert!(!t.following);
+    }
+
+    #[test]
+    fn first_frame_rewinds_cut_playback_to_first_cut() {
+        let mut t = Timeline::default();
+        t.set_frames(day("KTLX", 2), ("KTLX".into(), t.date));
+        t.enable_cut_playback(true);
+        t.set_cut_count(3);
+        t.step_cut(1);
+        t.go_begin();
+        t.set_cut_count(3);
+        assert_eq!((t.playhead, t.cut_index), (0, 0));
+    }
 
     // `Identifier` has no cheap public constructor, so the populated-frame paths are exercised
     // by the app integration; here we lock the empty-list safety and the index arithmetic that

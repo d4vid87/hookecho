@@ -373,12 +373,12 @@ For a sampled gate expose:
 - [x] parse/display current VCP details
 - [x] identify repeated low-level cuts
 - [x] show scan strategy in analyst panel
-- [ ] make timeline order reflect actual sweep chronology
+- [x] make timeline order reflect actual sweep chronology
 - [x] allow “follow newest 0.5° cut” mode independent of full-volume completion
 
 The optional per-pane control is in the Analyst inspector. `view::tests::low_cut_follow_is_live_only_and_leaves_missing_tilts_alone` covers live pinning, archive browsing, and sites without a 0.5° cut; the live path applies it after each partial scan update.
 
-The inspector lists cuts by their radar collection times, including repeated angles, and the live scrubber clock/age uses the newest collected cut. Selecting a cut in a completed volume now bins and probes that cut at its actual time. The main playback track still uses volume slots; cut-level timeline playback remains open.
+The inspector lists cuts by their radar collection times, including repeated angles, and the live scrubber clock/age uses the newest collected cut. Selecting a cut in a completed volume bins and probes that cut at its actual time. The optional "Play radar cuts" transport mode steps and plays cuts in collection order inside each completed volume, including repeated angles; the track shows position within the volume and waits for the next decoded volume. `timeline::tests::cut_steps_follow_each_volume_and_reverse_into_its_last_cut`, `timeline::tests::cut_playback_waits_for_decoded_volume_between_scans`, and `view::tests::cut_playback_uses_decoded_collection_order_and_tilt` cover the timeline and rendered selection.
 
 ## B6. Feed failover
 

@@ -81,7 +81,7 @@ impl HookEchoApp {
                 if compact(ui.ctx()) {
                     ui.spacing_mut().interact_size.y = 48.0;
                 }
-                for (cut, carries) in cuts {
+                for &(cut, carries) in &cuts {
                     if let Some(time) = chrono::DateTime::from_timestamp_millis(cut.ended_at_ms) {
                         let label = format!(
                             "Cut {} · {:.1}° · {} UTC",
@@ -121,8 +121,18 @@ impl HookEchoApp {
                     }
                     view.timeline.playing = false;
                     view.timeline.following = false;
+                    if view.timeline.cut_playback {
+                        if let Some(index) = cuts
+                            .iter()
+                            .filter(|(_, carries)| *carries)
+                            .position(|(candidate, _)| *candidate == cut)
+                        {
+                            view.timeline.cut_index = index;
+                        }
+                    }
                     view.cut_selection = Some((cut.ended_at_ms, view.moment, view.tilt));
                 } else {
+                    view.timeline.enable_cut_playback(false);
                     view.cut_selection = None;
                 }
             }

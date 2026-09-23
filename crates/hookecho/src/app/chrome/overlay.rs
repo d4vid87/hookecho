@@ -58,11 +58,6 @@ impl HookEchoApp {
             self.panel_open = true;
             self.show_alert_panel = false;
         }
-        if self.panel_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.panel_open = false;
-            self.sidebar_focus_search = false;
-            return;
-        }
         if self.primary_surface() != PrimarySurface::Panel {
             return;
         }
