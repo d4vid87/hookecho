@@ -108,7 +108,6 @@ impl HookEchoApp {
         // One body, two presentations: a floating card beside the map on a desktop, a modal
         // bottom sheet on a phone. The content is identical — that is the point of the wave, and
         // why the phone's own menu sheet could be deleted rather than kept in sync.
-        let alerts_tab_was = alerts_tab;
         let sheets_layout = sheets(ctx);
         let analyst_dock = self.analyst_open;
         let mut sheet_close = false;
@@ -381,10 +380,11 @@ impl HookEchoApp {
             }
         };
         if sheets(ctx) {
-            let title = if alerts_tab_was {
-                format!("Alerts in view ({alert_count})")
-            } else {
-                "Radar & tools".to_string()
+            let title = match section {
+                PanelSection::Radar => "Radar".to_string(),
+                PanelSection::Overlays => "Overlays".to_string(),
+                PanelSection::Alerts => format!("Alerts in view ({alert_count})"),
+                PanelSection::Tools => "Tools".to_string(),
             };
             let sheet_area = egui::Rect::from_min_max(
                 egui::pos2(chrome.left(), (phone_top(ctx) + if analyst_dock { 190.0 } else { 100.0 }).min(chrome.bottom() - 160.0)),
@@ -482,10 +482,7 @@ impl HookEchoApp {
         }
     }
 
-    /// The way into the panel: one pill in the corner the map can spare.
-    ///
-    /// ponytail: the pill is a button, not a second search field. One query lives in the panel;
-    /// two would need two states to keep in sync for no extra reach.
+    /// Fixed mode, section, and search controls remain reachable above the scrolling panel.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
         let mut switch_to = None;
         let mut open_settings = false;

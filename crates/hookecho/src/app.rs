@@ -16686,6 +16686,7 @@ impl HookEchoApp {
         self.panel_section = PanelSection::Radar;
         self.show_alert_panel = false;
         self.panel_open = false;
+        ctx.data_mut(|data| data.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
     }
 
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
