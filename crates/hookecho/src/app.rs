@@ -2714,6 +2714,27 @@ fn distinct_tilts(elevations: &[f32], want: usize) -> Vec<usize> {
 /// How many buttons the right-edge control column shows — the badge lane stacks below them.
 const CONTROL_BUTTONS: usize = 6;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode { Radar, Analyst }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+enum PanelSection { #[default] Radar, Overlays, Alerts, Tools }
+
+struct ModeSession {
+    workspace: crate::workspace::Workspace,
+    thresholds: Vec<([Option<f32>; Moment::ALL.len()], [bool; Moment::ALL.len()])>,
+    times: Vec<(chrono::NaiveDate, bool, Option<chrono::DateTime<chrono::Utc>>)>,
+    radar: Vec<PaneRadarSession>,
+    inspector: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PaneRadarSession {
+    show: bool,
+    follow_low_cut: bool,
+    cut: Option<(i64, Moment, usize)>,
+}
+
 pub struct HookEchoApp {
     /// The native runtime, kept alive for as long as the app is. Work is spawned through
     /// `spawner`, which is the same thing natively and the browser's event loop on the web.
@@ -3256,6 +3277,9 @@ pub struct HookEchoApp {
     /// Optional analyst layout; the plain map remains the startup default.
     analyst_open: bool,
     analyst_inspector_open: bool,
+    radar_session: Option<ModeSession>,
+    analyst_session: Option<ModeSession>,
+    panel_section: PanelSection,
     /// Is the background picker slid out beside the control column?
     basemap_open: bool,
     sidebar_focus_search: bool,
@@ -4164,6 +4188,9 @@ impl HookEchoApp {
             panel_open: false,
             analyst_open: false,
             analyst_inspector_open: true,
+            radar_session: None,
+            analyst_session: None,
+            panel_section: PanelSection::Radar,
             basemap_open: false,
             sidebar_focus_search: false,
             show_cheatsheet: false,
@@ -9122,6 +9149,7 @@ impl HookEchoApp {
             PaletteAction::ExportRegionStats => self.export_region_stats(),
             PaletteAction::ExportDetectorHistory => self.export_detector_history(),
             PaletteAction::SetPanes(n) => {
+                if n > 1 { self.switch_mode(ViewMode::Analyst, ctx); }
                 self.set_pane_count(n);
                 if n > 1 {
                     self.hint(
@@ -9131,7 +9159,7 @@ impl HookEchoApp {
                     );
                 }
             }
-            PaletteAction::ApplyAnalystPreset(preset) => self.apply_analyst_preset(preset),
+            PaletteAction::ApplyAnalystPreset(preset) => self.apply_analyst_preset(preset, ctx),
             PaletteAction::AllTilts => self.apply_all_tilts(),
             PaletteAction::CycleBasemap => {
                 let (mb, mt) = (
@@ -11469,6 +11497,7 @@ impl HookEchoApp {
                 let showing = self.panel_open && self.show_alert_panel;
                 self.panel_open = !showing;
                 self.show_alert_panel = true;
+                self.panel_section = PanelSection::Alerts;
             }
             A::ToggleObs => {
                 self.obs_mode = !self.obs_mode;
@@ -11487,6 +11516,7 @@ impl HookEchoApp {
                 // Hidden: bring it back and land in the search box. Visible: focus the search,
                 // which is what the key always did.
                 self.panel_open = true;
+                self.panel_section = PanelSection::Tools;
                 self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
             }
@@ -11505,6 +11535,7 @@ impl HookEchoApp {
                 self.mobile_chrome_hidden = false;
                 self.drawer.show_search();
                 self.panel_open = true;
+                self.panel_section = PanelSection::Tools;
                 self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
             }
@@ -16244,8 +16275,9 @@ impl HookEchoApp {
     /// Four panes of the SAME product at four different tilts — the layout you build by hand
     /// every time you want to see how a couplet leans with height.
     ///
-    fn apply_analyst_preset(&mut self, preset: u8) {
+    fn apply_analyst_preset(&mut self, preset: u8, ctx: &egui::Context) {
         let Some((moments, fields)) = analyst_preset(preset) else { return };
+        self.switch_mode(ViewMode::Analyst, ctx);
         self.set_pane_count(4);
         for (i, view) in self.views.iter_mut().enumerate() {
             view.moment = moments[i];
@@ -16546,7 +16578,81 @@ impl HookEchoApp {
 
     /// Restore a saved arrangement. Panes come back empty of data and fill through the normal
     /// poll, exactly as a freshly split pane does.
+    fn capture_mode_session(&mut self) -> ModeSession {
+        let mut workspace = self.capture_workspace();
+        workspace.chrome = None;
+        ModeSession {
+            workspace,
+            thresholds: self.views.iter().map(|v| (v.thresholds, v.threshold_enabled)).collect(),
+            times: self.views.iter().map(|v| {
+                (v.timeline.date, v.timeline.following, v.timeline.selected_time())
+            }).collect(),
+            radar: self.views.iter().map(|v| PaneRadarSession {
+                show: v.show_radar,
+                follow_low_cut: v.follow_low_cut,
+                cut: v.cut_selection,
+            }).collect(),
+            inspector: self.analyst_inspector_open,
+        }
+    }
+
+    fn restore_mode_session(&mut self, session: ModeSession, ctx: &egui::Context) {
+        self.apply_workspace_raw(&session.workspace, ctx);
+        for (i, view) in self.views.iter_mut().enumerate() {
+            if let Some(&(thresholds, enabled)) = session.thresholds.get(i) {
+                view.thresholds = thresholds;
+                view.threshold_enabled = enabled;
+            }
+            if let Some(&(date, following, time)) = session.times.get(i) {
+                view.timeline.date = date;
+                view.timeline.following = following;
+                view.timeline.seek_target = if following { None } else { time };
+                view.timeline.frames_key = None;
+                view.timeline.frames.clear();
+                view.timeline.playing = false;
+            }
+            if let Some(radar) = session.radar.get(i) {
+                view.show_radar = radar.show;
+                view.follow_low_cut = radar.follow_low_cut;
+                view.cut_selection = radar.cut;
+            }
+        }
+        self.analyst_inspector_open = session.inspector;
+    }
+
+    fn switch_mode(&mut self, target: ViewMode, ctx: &egui::Context) {
+        let current = if self.analyst_open { ViewMode::Analyst } else { ViewMode::Radar };
+        if current == target { return; }
+        let outgoing = self.capture_mode_session();
+        match current {
+            ViewMode::Radar => self.radar_session = Some(outgoing),
+            ViewMode::Analyst => self.analyst_session = Some(outgoing),
+        }
+        let incoming = match target {
+            ViewMode::Radar => self.radar_session.take(),
+            ViewMode::Analyst => self.analyst_session.take(),
+        };
+        if let Some(session) = incoming {
+            self.restore_mode_session(session, ctx);
+        } else if target == ViewMode::Radar {
+            self.set_pane_count(1);
+        }
+        self.analyst_open = target == ViewMode::Analyst;
+        self.panel_section = PanelSection::Radar;
+        self.show_alert_panel = false;
+        self.panel_open = false;
+    }
+
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
+        let mode = if ws.panes.len() > 1 || ws.chrome.as_ref().is_some_and(|c| c.analyst_open) {
+            ViewMode::Analyst
+        } else { ViewMode::Radar };
+        self.switch_mode(mode, ctx);
+        self.apply_workspace_raw(ws, ctx);
+        self.analyst_open = mode == ViewMode::Analyst;
+    }
+
+    fn apply_workspace_raw(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
         if ws.panes.is_empty() {
             return;
         }
