@@ -493,6 +493,7 @@ impl HookEchoApp {
             560.0
         };
         egui::Area::new(egui::Id::new("search_pill"))
+            .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, if phone(ctx) { phone_top(ctx) } else { 10.0 }))
             .show(ctx, |ui| {

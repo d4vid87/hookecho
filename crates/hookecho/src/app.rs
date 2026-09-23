@@ -13552,7 +13552,7 @@ impl HookEchoApp {
             // Same union as the sidebar uses, so this picker doesn't blink either.
             let have = self.views[idx].moments();
             egui::Area::new(egui::Id::new(("pane_product", idx)))
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .fixed_pos(prect.left_top() + egui::vec2(6.0, 6.0))
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style())
