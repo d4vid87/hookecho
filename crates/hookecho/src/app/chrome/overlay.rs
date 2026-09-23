@@ -10,7 +10,7 @@ use crate::ui::a11y::Named as _;
 /// The floating panel's geometry: left margin, top offset, width.
 const PANEL_X: f32 = 10.0;
 // Keep the menu/search pill visible above the panel so there is always a way back.
-const PANEL_TOP: f32 = 58.0;
+const PANEL_TOP: f32 = 104.0;
 const PANEL_W: f32 = 372.0;
 const RIGHT_PANEL: egui::Vec2 = egui::vec2(-70.0, 44.0);
 /// What the scrubber pill needs along the bottom edge, plus a margin.
@@ -73,7 +73,8 @@ impl HookEchoApp {
         let (mut chosen, mut fly_to) = (None, None);
         let mut opts = ui::layer_options::UiActions::default();
         let mut focus_search = std::mem::take(&mut self.sidebar_focus_search);
-        let mut alerts_tab = self.show_alert_panel;
+        let section = if self.show_alert_panel { PanelSection::Alerts } else { self.panel_section };
+        let alerts_tab = section == PanelSection::Alerts;
         let settings_id = egui::Id::new("panel_settings_page");
         let mut settings_page =
             ctx.data_mut(|d| d.get_temp::<Option<&'static str>>(settings_id).flatten());
@@ -100,60 +101,20 @@ impl HookEchoApp {
         let mut hide = false;
         // Height budget: the search pill above, the scrubber pill below (which is centred and
         // grows with the window, so on a narrow one it would otherwise run under this panel).
-        let max_h = (self.chrome_rect.height() - PANEL_TOP - SCRUBBER_CLEARANCE).max(160.0);
+        let panel_top = PANEL_TOP + if self.analyst_open { 54.0 } else { 0.0 };
+        let max_h = (self.chrome_rect.height() - panel_top - SCRUBBER_CLEARANCE).max(160.0);
         // Read before the body closure takes `&mut self`.
         let chrome = self.chrome_rect;
         // One body, two presentations: a floating card beside the map on a desktop, a modal
         // bottom sheet on a phone. The content is identical — that is the point of the wave, and
         // why the phone's own menu sheet could be deleted rather than kept in sync.
-        let alerts_tab_was = alerts_tab;
         let sheets_layout = sheets(ctx);
         let analyst_dock = self.analyst_open;
         let mut sheet_close = false;
         let mut body = |ui: &mut egui::Ui| {
-            if !alerts_tab && settings_page.is_none() {
-                if self.analyst_open {
-                    if phone(ctx) {
-                        ui.spacing_mut().interact_size.y = 48.0;
-                    }
-                    ui.horizontal(|ui| {
-                        ui.heading("Analyst Workstation");
-                        if ui.button("Settings").named("Open settings").clicked() {
-                            chosen = Some(PaletteAction::OpenWindow(AppWindow::Settings));
-                        }
-                        if ui.button("Close").named("Close Analyst Workstation").clicked() {
-                            self.analyst_open = false;
-                            self.panel_open = false;
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        for (i, label) in ["Tornado", "Hail", "Mesoscale", "Forecast"].iter().enumerate() {
-                            if ui.button(*label).named(&format!("Open {label} analysis layout")).clicked() {
-                                chosen = Some(PaletteAction::ApplyAnalystPreset(i as u8));
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        for n in [1, 2, 4] {
-                            if ui.selectable_label(self.views.len() == n, format!("{n} pane{}", if n == 1 { "" } else { "s" })).clicked() {
-                                chosen = Some(PaletteAction::SetPanes(n));
-                            }
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut self.link_cameras, "Link maps");
-                        ui.checkbox(&mut self.link_times, "Link time");
-                        ui.checkbox(&mut self.analyst_inspector_open, "Inspector");
-                    });
-                    ui.separator();
-                } else if ui.button("Open Analyst Workstation  →").named("Open Analyst Workstation").clicked() {
-                    self.analyst_open = true;
-                    self.analyst_inspector_open = !sheets_layout;
-                }
-            }
-            if !alerts_tab && settings_page.is_none() {
+            if section == PanelSection::Radar && settings_page.is_none() {
                 self.product_section(ui, &mut opts);
-                ui.add_space(12.0);
+                return;
             }
             crate::ui::style::glass(ui, 250).show(ui, |ui| {
                 if let Some(page) = settings_page.filter(|_| !alerts_tab) {
@@ -255,61 +216,19 @@ impl HookEchoApp {
                     }
                     return;
                 }
-                if !alerts_tab {
+                if section == PanelSection::Overlays {
                     if let Some(action) = ui::layers_panel::primary_controls(
                         ui, &entries, self.filters.outlook_day, self.filters.outlook_kind, self.analyst_open,
                     ) { chosen = Some(action); }
-                    ui.add_space(12.0);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.heading("Severe weather alerts");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button(format!("Alerts  {alert_count}")).clicked() {
-                                alerts_tab = true;
-                            }
-                        });
-                    });
+                    return;
+                }
+                if section == PanelSection::Alerts {
+                    ui.heading("Severe weather alerts");
                     let mut show_alerts = self.filters.show_alerts;
                     if ui.checkbox(&mut show_alerts, "Show warnings on map").changed() {
                         chosen = Some(PaletteAction::ToggleOverlay(OverlayToggle::Alerts));
                     }
                     ui.separator();
-                    if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
-                        chosen = Some(action);
-                    }
-                    ui.add_space(12.0);
-                    ui.separator();
-                }
-                // One title and one way out. The previous brand + Data/Alerts tab row looked like
-                // three unrelated navigation systems before the actual layer controls even began.
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(if alerts_tab { "Alerts" } else if self.analyst_open { "Product browser" } else { "Optional settings and Tools" })
-                            .size(17.0)
-                            .strong(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !phone(ctx)
-                            && ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(egui_phosphor::regular::X).size(14.0),
-                                    )
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                                )
-                                .named("Close this panel")
-                                .clicked()
-                        {
-                            hide = true;
-                        }
-                        if alerts_tab && ui.small_button("‹ All controls").clicked() {
-                            alerts_tab = false;
-                        }
-                    });
-                });
-                ui.add_space(6.0);
-                if alerts_tab {
                     alert_hit = ui::alert_panel::body(
                         ui,
                         &feats,
@@ -319,6 +238,13 @@ impl HookEchoApp {
                     );
                     return;
                 }
+                ui.menu_button("Workspaces ▾", |ui| {
+                    if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
+                        chosen = Some(action);
+                        ui.close();
+                    }
+                });
+                ui.separator();
                 // A drag rewrites the order in place, so persist it when it moves.
                 let order_was = self.settings.layer_order.clone();
                 let optional_action = ui::layers_panel::body(
@@ -428,7 +354,6 @@ impl HookEchoApp {
                 ui.add_space(4.0);
                 for (label, icon) in [
                     ("Map settings", egui_phosphor::regular::GEAR),
-                    ("Settings", egui_phosphor::regular::SLIDERS_HORIZONTAL),
                     ("Share this view", egui_phosphor::regular::SHARE_NETWORK),
                 ] {
                     if ui
@@ -438,9 +363,7 @@ impl HookEchoApp {
                         )
                         .clicked()
                     {
-                        if label == "Settings" {
-                            chosen = Some(PaletteAction::OpenWindow(crate::app::AppWindow::Settings));
-                        } else if label == "Share this view" {
+                        if label == "Share this view" {
                             settings_page = Some("Preferences");
                             ctx.data_mut(|d| d.insert_temp(egui::Id::new("preferences_section"), "Share"));
                         } else {
@@ -457,15 +380,25 @@ impl HookEchoApp {
             }
         };
         if sheets(ctx) {
-            let title = if alerts_tab_was {
-                format!("Alerts in view ({alert_count})")
-            } else {
-                "Radar & tools".to_string()
+            let title = match section {
+                PanelSection::Radar => "Radar".to_string(),
+                PanelSection::Overlays => "Overlays".to_string(),
+                PanelSection::Alerts => format!("Alerts in view ({alert_count})"),
+                PanelSection::Tools => "Tools".to_string(),
             };
+            let sheet_area = egui::Rect::from_min_max(
+                egui::pos2(chrome.left(), (phone_top(ctx) + if analyst_dock { 190.0 } else { 100.0 }).min(chrome.bottom() - 160.0)),
+                chrome.max,
+            );
             let rect = crate::app::mobile::sheet::modal_sheet(
                 ctx,
-                chrome,
-                "m_panel",
+                sheet_area,
+                match section {
+                    PanelSection::Radar => "m_panel_radar",
+                    PanelSection::Overlays => "m_panel_overlays",
+                    PanelSection::Alerts => "m_panel_alerts",
+                    PanelSection::Tools => "m_panel_tools",
+                },
                 &title,
                 &mut sheet_close,
                 body,
@@ -479,16 +412,16 @@ impl HookEchoApp {
                 .default_size(PANEL_W)
                 .size_range(300.0..=480.0)
                 .show(root, |ui| {
-                    ui.add_space(48.0);
+                    ui.add_space(panel_top - 10.0);
                     egui::ScrollArea::vertical()
-                        .id_salt(("analyst_product_scroll", settings_page_was, alerts_tab_was))
+                        .id_salt(("analyst_product_scroll", settings_page_was, section))
                         .show(ui, |ui| body(ui));
                 });
             self.mobile_occlusion.push(panel.response.rect);
         } else {
             let panel = egui::Area::new(egui::Id::new("panel"))
                 .constrain_to(chrome)
-                .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, PANEL_TOP))
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, panel_top))
                 .show(ctx, |ui| {
                     ui.set_width(if phone(ctx) {
                         crate::ui::m3::RAIL_W
@@ -497,7 +430,7 @@ impl HookEchoApp {
                     });
                     ui.set_max_height(max_h);
                     egui::ScrollArea::vertical()
-                        .id_salt(("floating_panel_scroll", settings_page_was, alerts_tab_was))
+                            .id_salt(("floating_panel_scroll", settings_page_was, section))
                         .max_height(max_h)
                         .show(ui, |ui| {
                             body(ui);
@@ -506,7 +439,8 @@ impl HookEchoApp {
             self.mobile_occlusion.push(panel.response.rect);
         }
         ctx.data_mut(|d| d.insert_temp(settings_id, settings_page));
-        self.show_alert_panel = alerts_tab;
+        self.panel_section = section;
+        self.show_alert_panel = section == PanelSection::Alerts;
         self.settings.mute_alerts = muted;
         if hide || sheet_close {
             self.panel_open = false;
@@ -548,131 +482,91 @@ impl HookEchoApp {
         }
     }
 
-    /// The way into the panel: one pill in the corner the map can spare.
-    ///
-    /// ponytail: the pill is a button, not a second search field. One query lives in the panel;
-    /// two would need two states to keep in sync for no extra reach.
+    /// Fixed mode, section, and search controls remain reachable above the scrolling panel.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
-        // Drawer pages have their own persistent Back/Close header. The panel, however, must
-        // never hide the control that opens and closes it.
-        if self.primary_surface() == PrimarySurface::Drawer {
-            return;
-        }
-        let accent = crate::theme::accent(self.settings.theme);
+        let mut switch_to = None;
+        let mut open_settings = false;
         let mut anchor = None;
-        // The phone's pill also carries the radar context — site and VCP — which the desktop keeps
-        // in the scrubber. There is no room for both readouts down there on a 400 pt screen, and
-        // the site is the one control a phone user reaches for most.
-        let site = self.views[self.active]
-            .site
-            .clone()
-            .unwrap_or_else(|| "\u{2014}".to_string());
-        // Just the number on a phone: "VCP 12: Precipitation, fast update" is a desktop caption
-        // and it pushed the search glyph off the pill.
-        let vcp = self.views[self.active]
-            .volume
-            .as_ref()
-            .map(|v| v.vcp.split(" (").next().unwrap_or_default().to_string())
-            .unwrap_or_default();
         let width = if phone(ctx) {
-            // Clear of the chrome-hide eye in the opposite corner, which is a 48 pt target with
-            // a margin of its own.
-            (self.chrome_rect.width() - crate::ui::m3::SP_3 * 3.0 - 48.0).max(180.0)
+            (self.chrome_rect.width() - 20.0).max(280.0)
         } else {
-            PANEL_W
-        };
-        let (x, y) = if phone(ctx) {
-            (crate::ui::m3::SP_3, phone_top(ctx))
-        } else {
-            (PANEL_X, 10.0)
+            560.0
         };
         egui::Area::new(egui::Id::new("search_pill"))
+            .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(x, y))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, if phone(ctx) { phone_top(ctx) } else { 10.0 }))
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 238).show(ui, |ui| {
                     ui.set_width(width);
+                    if phone(ctx) { ui.spacing_mut().interact_size.y = 44.0; }
                     ui.horizontal(|ui| {
-                        let menu = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(egui_phosphor::regular::LIST)
-                                    .size(if phone(ctx) { 20.0 } else { 16.0 })
-                                    .color(if self.panel_open {
-                                        accent
-                                    } else {
-                                        ui.visuals().text_color()
-                                    }),
-                            )
-                            .fill(egui::Color32::TRANSPARENT)
-                            .stroke(egui::Stroke::NONE),
-                        );
-                        // The tour's "everything else" stop points here: the pill is always on
-                        // screen, where the panel it opens is not.
+                        let menu = ui.button(egui_phosphor::regular::LIST)
+                            .named_toggle("Show or hide the panel", self.panel_open);
                         anchor = Some(menu.rect);
-                        if menu
-                            .named_toggle("Show or hide the panel", self.panel_open)
-                            .clicked()
-                        {
+                        if menu.clicked() {
                             self.panel_open = !self.panel_open;
                         }
-                        if phone(ctx) {
-                            let label = ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(format!("{site}  {vcp}"))
-                                            .size(crate::ui::m3::T_LABEL_LG),
-                                    )
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                                )
-                                .named("Change radar site");
-                            if label.clicked() && self.site_dialog.is_none() {
-                                self.site_dialog = Some(Default::default());
+                        for (label, mode) in [("Radar", ViewMode::Radar), ("Analyst", ViewMode::Analyst)] {
+                            if ui.selectable_label(self.analyst_open == (mode == ViewMode::Analyst), label)
+                                .named(if mode == ViewMode::Radar { "Switch to Radar view" } else { "Switch to Analyst view" }).clicked() {
+                                switch_to = Some(mode);
                             }
                         }
-                        let hint = egui::RichText::new(if phone(ctx) {
-                            egui_phosphor::regular::MAGNIFYING_GLASS.to_string()
-                        } else {
-                            format!(
-                                "{}  Search layers, tools, places",
-                                egui_phosphor::regular::MAGNIFYING_GLASS
-                            )
-                        })
-                        .size(crate::ui::style::FONT_BASE)
-                        .weak();
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let search = ui.add(
-                                egui::Button::new(hint)
-                                    .min_size(if phone(ctx) {
-                                        egui::vec2(40.0, 32.0)
-                                    } else {
-                                        egui::vec2(PANEL_W - 74.0, 26.0)
-                                    })
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                            );
-                            if search.clicked() {
-                                self.panel_open = true;
-                                self.show_alert_panel = false;
-                                self.sidebar_focus_search = true;
+                        if ui.button(if phone(ctx) { "⌕" } else { "⌕ Search" })
+                            .named("Search layers, tools, places").clicked() {
+                            self.panel_open = true;
+                            self.panel_section = PanelSection::Tools;
+                            self.show_alert_panel = false;
+                            self.sidebar_focus_search = true;
+                            self.drawer.show_search();
+                        }
+                        if ui.button(egui_phosphor::regular::GEAR).named("Open settings").clicked() {
+                            open_settings = true;
+                        }
+                    });
+                    if self.panel_open && !self.drawer.is_open() {
+                        ui.horizontal(|ui| {
+                            let (count, _) = self.alert_badge();
+                            for (label, target) in [
+                                ("Radar".to_string(), PanelSection::Radar),
+                                ("Overlays".to_string(), PanelSection::Overlays),
+                                (format!("Alerts {count}"), PanelSection::Alerts),
+                                ("Tools".to_string(), PanelSection::Tools),
+                            ] {
+                                if ui.selectable_label(self.panel_section == target, label).clicked() {
+                                    self.panel_section = target;
+                                    self.show_alert_panel = target == PanelSection::Alerts;
+                                    ctx.data_mut(|d| d.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
+                                }
                             }
                         });
-                    });
+                    }
+                    if self.analyst_open && !self.drawer.is_open() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!("Pane {}", self.active + 1));
+                            ui.menu_button("Preset ▾", |ui| {
+                                for (i, label) in ["Tornado", "Hail", "Mesoscale", "Forecast"].iter().enumerate() {
+                                    if ui.button(*label).clicked() {
+                                        self.apply_palette(PaletteAction::ApplyAnalystPreset(i as u8), ctx);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            for n in [1, 2, 4] {
+                                if ui.selectable_label(self.views.len() == n, n.to_string()).clicked() {
+                                    self.set_pane_count(n);
+                                }
+                            }
+                            ui.checkbox(&mut self.link_cameras, "Maps").on_hover_text("Link map positions");
+                            ui.checkbox(&mut self.link_times, "Time").on_hover_text("Link timelines");
+                            ui.checkbox(&mut self.analyst_inspector_open, "Inspector");
+                        });
+                    }
                 });
             });
-        if !phone(ctx) && !self.analyst_open {
-            egui::Area::new(egui::Id::new("analyst_workbench_entry"))
-                .constrain_to(self.chrome_rect)
-                .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X + PANEL_W + 8.0, 10.0))
-                .show(ctx, |ui| {
-                    crate::ui::style::glass(ui, 238).show(ui, |ui| {
-                        if ui.button("Analyze").named("Open Analyst Workstation").clicked() {
-                            self.analyst_open = true;
-                            self.panel_open = true;
-                        }
-                    });
-                });
-        }
+        if let Some(mode) = switch_to { self.switch_mode(mode, ctx); }
+        if open_settings { self.apply_palette(PaletteAction::OpenWindow(AppWindow::Settings), ctx); }
         self.tour_anchors.menu = anchor;
     }
 

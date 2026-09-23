@@ -2714,6 +2714,94 @@ fn distinct_tilts(elevations: &[f32], want: usize) -> Vec<usize> {
 /// How many buttons the right-edge control column shows — the badge lane stacks below them.
 const CONTROL_BUTTONS: usize = 6;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode { Radar, Analyst }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+enum PanelSection { #[default] Radar, Overlays, Alerts, Tools }
+
+struct ModeSession {
+    workspace: crate::workspace::Workspace,
+    panes: Vec<PaneSession>,
+    inspector: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PaneSession {
+    thresholds: [Option<f32>; Moment::ALL.len()],
+    threshold_enabled: [bool; Moment::ALL.len()],
+    date: chrono::NaiveDate,
+    following: bool,
+    time: Option<chrono::DateTime<chrono::Utc>>,
+    show_radar: bool,
+    follow_low_cut: bool,
+    cut: Option<(i64, Moment, usize)>,
+}
+
+impl PaneSession {
+    fn capture(view: &MapView) -> Self {
+        Self {
+            thresholds: view.thresholds,
+            threshold_enabled: view.threshold_enabled,
+            date: view.timeline.date,
+            following: view.timeline.following,
+            time: view.timeline.selected_time(),
+            show_radar: view.show_radar,
+            follow_low_cut: view.follow_low_cut,
+            cut: view.cut_selection,
+        }
+    }
+
+    fn restore(self, view: &mut MapView) {
+        view.thresholds = self.thresholds;
+        view.threshold_enabled = self.threshold_enabled;
+        view.timeline.date = self.date;
+        view.timeline.following = self.following;
+        view.timeline.seek_target = if self.following { None } else { self.time };
+        view.timeline.frames_key = None;
+        view.timeline.frames.clear();
+        view.timeline.listing = false;
+        view.timeline.playing = false;
+        view.show_radar = self.show_radar;
+        view.follow_low_cut = self.follow_low_cut;
+        view.cut_selection = self.cut;
+    }
+}
+
+#[cfg(test)]
+mod mode_session_tests {
+    use super::*;
+
+    #[test]
+    fn restores_disabled_threshold_and_archive_time_without_retaining_frames() {
+        let mut view = MapView::new(
+            Some("KFWS".to_string()),
+            crate::render::mercator::Camera::at_lonlat(-97.3, 32.6, 8.0),
+        );
+        let i = Moment::Reflectivity.index();
+        view.thresholds[i] = Some(27.0);
+        view.threshold_enabled[i] = false;
+        view.timeline.following = false;
+        view.timeline.date = chrono::NaiveDate::from_ymd_opt(2026, 9, 22).unwrap();
+        let time = chrono::DateTime::parse_from_rfc3339("2026-09-22T21:00:00Z")
+            .unwrap().with_timezone(&chrono::Utc);
+        view.timeline.seek_target = Some(time);
+        view.show_radar = false;
+        let saved = PaneSession::capture(&view);
+        view.thresholds[i] = Some(16.0);
+        view.threshold_enabled[i] = true;
+        view.timeline.following = true;
+        view.timeline.seek_target = None;
+        view.show_radar = true;
+        saved.restore(&mut view);
+        assert_eq!(view.thresholds[i], Some(27.0));
+        assert!(!view.threshold_enabled[i]);
+        assert_eq!(view.timeline.selected_time(), Some(time));
+        assert!(!view.timeline.following);
+        assert!(!view.show_radar);
+    }
+}
+
 pub struct HookEchoApp {
     /// The native runtime, kept alive for as long as the app is. Work is spawned through
     /// `spawner`, which is the same thing natively and the browser's event loop on the web.
@@ -3256,6 +3344,9 @@ pub struct HookEchoApp {
     /// Optional analyst layout; the plain map remains the startup default.
     analyst_open: bool,
     analyst_inspector_open: bool,
+    radar_session: Option<ModeSession>,
+    analyst_session: Option<ModeSession>,
+    panel_section: PanelSection,
     /// Is the background picker slid out beside the control column?
     basemap_open: bool,
     sidebar_focus_search: bool,
@@ -4164,6 +4255,9 @@ impl HookEchoApp {
             panel_open: false,
             analyst_open: false,
             analyst_inspector_open: true,
+            radar_session: None,
+            analyst_session: None,
+            panel_section: PanelSection::Radar,
             basemap_open: false,
             sidebar_focus_search: false,
             show_cheatsheet: false,
@@ -8618,22 +8712,22 @@ impl HookEchoApp {
                         }
                     });
                 });
-                for pair in [
-                    [("Reflectivity", Moment::Reflectivity, false), ("Velocity", Moment::Velocity, false)],
-                    [("Storm relative", Moment::Velocity, true), ("Correlation", Moment::CorrelationCoefficient, false)],
-                ] {
-                    ui.columns(2, |columns| {
-                        for (column, (label, m, relative)) in columns.iter_mut().zip(pair) {
-                            let selected = custom_product.is_none()
-                                && moment == m
-                                && (m != Moment::Velocity || srv == relative);
-                            if column.add_sized([column.available_width(), 38.0], egui::Button::new(label).selected(selected)).clicked() {
-                                pick = Some((m, relative));
-                            }
+                ui.horizontal(|ui| {
+                    for (label, m) in [("Reflectivity", Moment::Reflectivity), ("Velocity", Moment::Velocity)] {
+                        if ui.selectable_label(custom_product.is_none() && moment == m && !srv, label).clicked() {
+                            pick = Some((m, false));
                         }
-                    });
-                }
-                ui.menu_button("More radar products", |ui| {
+                    }
+                    ui.menu_button("More ▾", |ui| {
+                    for (label, m, relative) in [
+                        ("Storm relative", Moment::Velocity, true),
+                        ("Correlation", Moment::CorrelationCoefficient, false),
+                    ] {
+                        if ui.selectable_label(custom_product.is_none() && moment == m && (m != Moment::Velocity || srv == relative), label).clicked() {
+                            pick = Some((m, relative));
+                            ui.close();
+                        }
+                    }
                     for product in crate::products::PRODUCTS {
                         if ui.button(product.name).clicked() {
                             pick = Some((product.moment, false));
@@ -8655,8 +8749,9 @@ impl HookEchoApp {
                             }
                         }
                     }
+                    });
                 });
-                ui.add_space(8.0);
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(
                         egui::RichText::new(egui_phosphor::regular::BROADCAST)
@@ -8681,10 +8776,9 @@ impl HookEchoApp {
                             .on_hover_text("Radar source freshness");
                     });
                 });
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
-                    .size(style::FONT_TITLE).strong());
                 ui.add_space(6.0);
+                ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
+                    .size(style::FONT_BASE).strong());
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("Tilt")
@@ -8708,6 +8802,13 @@ impl HookEchoApp {
                                 }
                             }
                         });
+                    if moment == Moment::Reflectivity {
+                        ui.checkbox(&mut thr_on, "Threshold");
+                        if thr_on {
+                            let t = thr.get_or_insert(16.0);
+                            ui.add(egui::DragValue::new(t).range(vmin..=vmax).suffix(" dBZ"));
+                        }
+                    }
                 });
                 egui::CollapsingHeader::new("Product settings")
                     .default_open(false)
@@ -8752,23 +8853,19 @@ impl HookEchoApp {
                         }
                         // Threshold for the active moment. The slider value stays internal (m/s
                         // for velocity); display honors the Units setting.
-                        let f = unit_factor as f64;
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut thr_on, "Threshold").on_hover_text(
-                                "Hide everything below a value \u{2014} cuts light rain out of the picture",
-                            );
-                            if thr_on {
-                                let t = thr.get_or_insert((vmin + vmax) * 0.5);
-                                ui.add(
-                                    egui::Slider::new(t, vmin..=vmax)
+                        if moment != Moment::Reflectivity {
+                            let f = unit_factor as f64;
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut thr_on, "Threshold");
+                                if thr_on {
+                                    let t = thr.get_or_insert((vmin + vmax) * 0.5);
+                                    ui.add(egui::Slider::new(t, vmin..=vmax)
                                         .custom_formatter(move |v, _| format!("{:.0}", v * f))
-                                        .custom_parser(move |s| {
-                                            s.parse::<f64>().ok().map(|x| x / f)
-                                        })
-                                        .suffix(unit_label),
-                                );
-                            }
-                        });
+                                        .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
+                                        .suffix(unit_label));
+                                }
+                            });
+                        }
                     });
                 ui.add_space(8.0);
                 if ui.add_sized([ui.available_width(), 40.0], egui::Button::new(format!("{}  Custom locations", egui_phosphor::regular::MAP_PIN))).clicked() {
@@ -9119,6 +9216,7 @@ impl HookEchoApp {
             PaletteAction::ExportRegionStats => self.export_region_stats(),
             PaletteAction::ExportDetectorHistory => self.export_detector_history(),
             PaletteAction::SetPanes(n) => {
+                if n > 1 { self.switch_mode(ViewMode::Analyst, ctx); }
                 self.set_pane_count(n);
                 if n > 1 {
                     self.hint(
@@ -9128,7 +9226,7 @@ impl HookEchoApp {
                     );
                 }
             }
-            PaletteAction::ApplyAnalystPreset(preset) => self.apply_analyst_preset(preset),
+            PaletteAction::ApplyAnalystPreset(preset) => self.apply_analyst_preset(preset, ctx),
             PaletteAction::AllTilts => self.apply_all_tilts(),
             PaletteAction::CycleBasemap => {
                 let (mb, mt) = (
@@ -11466,6 +11564,7 @@ impl HookEchoApp {
                 let showing = self.panel_open && self.show_alert_panel;
                 self.panel_open = !showing;
                 self.show_alert_panel = true;
+                self.panel_section = PanelSection::Alerts;
             }
             A::ToggleObs => {
                 self.obs_mode = !self.obs_mode;
@@ -11484,6 +11583,7 @@ impl HookEchoApp {
                 // Hidden: bring it back and land in the search box. Visible: focus the search,
                 // which is what the key always did.
                 self.panel_open = true;
+                self.panel_section = PanelSection::Tools;
                 self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
             }
@@ -11502,6 +11602,7 @@ impl HookEchoApp {
                 self.mobile_chrome_hidden = false;
                 self.drawer.show_search();
                 self.panel_open = true;
+                self.panel_section = PanelSection::Tools;
                 self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
             }
@@ -13451,7 +13552,7 @@ impl HookEchoApp {
             // Same union as the sidebar uses, so this picker doesn't blink either.
             let have = self.views[idx].moments();
             egui::Area::new(egui::Id::new(("pane_product", idx)))
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .fixed_pos(prect.left_top() + egui::vec2(6.0, 6.0))
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style())
@@ -16241,8 +16342,9 @@ impl HookEchoApp {
     /// Four panes of the SAME product at four different tilts — the layout you build by hand
     /// every time you want to see how a couplet leans with height.
     ///
-    fn apply_analyst_preset(&mut self, preset: u8) {
+    fn apply_analyst_preset(&mut self, preset: u8, ctx: &egui::Context) {
         let Some((moments, fields)) = analyst_preset(preset) else { return };
+        self.switch_mode(ViewMode::Analyst, ctx);
         self.set_pane_count(4);
         for (i, view) in self.views.iter_mut().enumerate() {
             view.moment = moments[i];
@@ -16543,7 +16645,60 @@ impl HookEchoApp {
 
     /// Restore a saved arrangement. Panes come back empty of data and fill through the normal
     /// poll, exactly as a freshly split pane does.
+    fn capture_mode_session(&mut self) -> ModeSession {
+        let mut workspace = self.capture_workspace();
+        workspace.chrome = None;
+        ModeSession {
+            workspace,
+            panes: self.views.iter().map(PaneSession::capture).collect(),
+            inspector: self.analyst_inspector_open,
+        }
+    }
+
+    fn restore_mode_session(&mut self, session: ModeSession, ctx: &egui::Context) {
+        self.apply_workspace_raw(&session.workspace, ctx);
+        for (i, view) in self.views.iter_mut().enumerate() {
+            if let Some(&pane) = session.panes.get(i) {
+                pane.restore(view);
+            }
+        }
+        self.analyst_inspector_open = session.inspector;
+    }
+
+    fn switch_mode(&mut self, target: ViewMode, ctx: &egui::Context) {
+        let current = if self.analyst_open { ViewMode::Analyst } else { ViewMode::Radar };
+        if current == target { return; }
+        let outgoing = self.capture_mode_session();
+        match current {
+            ViewMode::Radar => self.radar_session = Some(outgoing),
+            ViewMode::Analyst => self.analyst_session = Some(outgoing),
+        }
+        let incoming = match target {
+            ViewMode::Radar => self.radar_session.take(),
+            ViewMode::Analyst => self.analyst_session.take(),
+        };
+        if let Some(session) = incoming {
+            self.restore_mode_session(session, ctx);
+        } else if target == ViewMode::Radar {
+            self.set_pane_count(1);
+        }
+        self.analyst_open = target == ViewMode::Analyst;
+        self.panel_section = PanelSection::Radar;
+        self.show_alert_panel = false;
+        self.panel_open = false;
+        ctx.data_mut(|data| data.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
+    }
+
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
+        let mode = if ws.panes.len() > 1 || ws.chrome.as_ref().is_some_and(|c| c.analyst_open) {
+            ViewMode::Analyst
+        } else { ViewMode::Radar };
+        self.switch_mode(mode, ctx);
+        self.apply_workspace_raw(ws, ctx);
+        self.analyst_open = mode == ViewMode::Analyst;
+    }
+
+    fn apply_workspace_raw(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
         if ws.panes.is_empty() {
             return;
         }
@@ -20131,10 +20286,7 @@ impl eframe::App for HookEchoApp {
         self.mobile_occlusion.clear();
         if !self.panel_open { self.drawer.resume(); }
         self.drawer.begin_frame(ctx);
-        if self.panel_open
-            && !self.drawer.is_open()
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
+        if self.panel_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.panel_open = false;
             self.sidebar_focus_search = false;
         }

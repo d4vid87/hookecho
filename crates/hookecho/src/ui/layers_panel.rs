@@ -509,21 +509,23 @@ pub(crate) fn primary_controls(
             ("Storm attributes", PaletteAction::OpenWindow(AppWindow::StormTable)),
             ("SPC Outlook", PaletteAction::OpenOutlooks),
         ];
-    ui.horizontal_wrapped(|ui| {
-        for (label, action) in controls {
-            let on = if action == PaletteAction::OpenOutlooks { spc_open } else {
-                entries.iter().any(|e| e.action == action && e.on == Some(true))
+    for pair in controls.chunks(2) {
+        ui.columns(2, |columns| {
+        for (column, (label, action)) in columns.iter_mut().zip(pair.iter()) {
+            let on = if *action == PaletteAction::OpenOutlooks { spc_open } else {
+                entries.iter().any(|e| e.action == *action && e.on == Some(true))
             };
-            if ui.add(egui::Button::new(RichText::new(label).size(12.0)).selected(on)).clicked() {
-                if action == PaletteAction::OpenOutlooks { spc_open = !spc_open; }
-                else { chosen = Some(action); }
+            if column.add_sized([column.available_width(), 32.0], egui::Button::new(RichText::new(*label).size(12.0)).selected(on)).clicked() {
+                if *action == PaletteAction::OpenOutlooks { spc_open = !spc_open; }
+                else { chosen = Some(*action); }
             }
         }
-    });
+        });
+    }
     ui.ctx().data_mut(|d| d.insert_temp(open_id, spc_open));
     if spc_open {
-        ui.add_space(12.0);
-        ui.label(RichText::new("SPC Convective Outlook").strong());
+        ui.add_space(6.0);
+        ui.label(RichText::new("SPC outlook").strong());
         ui.label(RichText::new("Forecast day").size(12.0).strong());
         ui.horizontal_wrapped(|ui| {
             for day in 1u8..=3 {
