@@ -8718,7 +8718,7 @@ impl HookEchoApp {
                             pick = Some((m, false));
                         }
                     }
-                    ui.menu_button("More ▾", |ui| {
+                    ui.menu_button("More", |ui| {
                     for (label, m, relative) in [
                         ("Storm relative", Moment::Velocity, true),
                         ("Correlation", Moment::CorrelationCoefficient, false),
