@@ -513,7 +513,12 @@ impl HookEchoApp {
                                 switch_to = Some(mode);
                             }
                         }
-                        if ui.button(if phone(ctx) { "⌕" } else { "⌕ Search" })
+                        let search_label = if phone(ctx) {
+                            egui_phosphor::regular::MAGNIFYING_GLASS.to_owned()
+                        } else {
+                            format!("{} Search", egui_phosphor::regular::MAGNIFYING_GLASS)
+                        };
+                        if ui.button(search_label)
                             .named("Search layers, tools, places").clicked() {
                             self.panel_open = true;
                             self.panel_section = PanelSection::Tools;
@@ -545,7 +550,7 @@ impl HookEchoApp {
                     if self.analyst_open && !self.drawer.is_open() {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(format!("Pane {}", self.active + 1));
-                            ui.menu_button("Preset ▾", |ui| {
+                            ui.menu_button("Preset", |ui| {
                                 for (i, label) in ["Tornado", "Hail", "Mesoscale", "Forecast"].iter().enumerate() {
                                     if ui.button(*label).clicked() {
                                         self.apply_palette(PaletteAction::ApplyAnalystPreset(i as u8), ctx);
@@ -553,14 +558,30 @@ impl HookEchoApp {
                                     }
                                 }
                             });
-                            for n in [1, 2, 4] {
-                                if ui.selectable_label(self.views.len() == n, n.to_string()).clicked() {
-                                    self.set_pane_count(n);
+                            if sheets(ctx) {
+                                ui.menu_button("Layout", |ui| {
+                                    ui.label("Panes");
+                                    for n in [1, 2, 4] {
+                                        if ui.selectable_label(self.views.len() == n, n.to_string()).clicked() {
+                                            self.set_pane_count(n);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
+                                    ui.checkbox(&mut self.link_cameras, "Link maps");
+                                    ui.checkbox(&mut self.link_times, "Link time");
+                                    ui.checkbox(&mut self.analyst_inspector_open, "Inspector");
+                                });
+                            } else {
+                                for n in [1, 2, 4] {
+                                    if ui.selectable_label(self.views.len() == n, n.to_string()).clicked() {
+                                        self.set_pane_count(n);
+                                    }
                                 }
+                                ui.checkbox(&mut self.link_cameras, "Maps").on_hover_text("Link map positions");
+                                ui.checkbox(&mut self.link_times, "Time").on_hover_text("Link timelines");
+                                ui.checkbox(&mut self.analyst_inspector_open, "Inspector");
                             }
-                            ui.checkbox(&mut self.link_cameras, "Maps").on_hover_text("Link map positions");
-                            ui.checkbox(&mut self.link_times, "Time").on_hover_text("Link timelines");
-                            ui.checkbox(&mut self.analyst_inspector_open, "Inspector");
                         });
                     }
                 });

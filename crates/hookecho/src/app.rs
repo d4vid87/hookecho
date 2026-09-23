@@ -8718,7 +8718,7 @@ impl HookEchoApp {
                             pick = Some((m, false));
                         }
                     }
-                    ui.menu_button("More ▾", |ui| {
+                    ui.menu_button("More", |ui| {
                     for (label, m, relative) in [
                         ("Storm relative", Moment::Velocity, true),
                         ("Correlation", Moment::CorrelationCoefficient, false),
@@ -21187,9 +21187,16 @@ impl eframe::App for HookEchoApp {
         self.show_broadcast_overlay(ctx);
         self.show_toasts(ctx);
 
+        // A compact Android screen paints one pane at a time. Fetch its siblings only when
+        // selected; otherwise four-pane Analyst eagerly decodes three invisible radar volumes.
+        let phone_solo = cfg!(target_os = "android")
+            && self.views.len() > 1
+            && chrome::compact(ctx);
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
         for idx in 0..self.views.len() {
-            self.sync_pane(idx, ctx);
+            if !phone_solo || idx == self.active {
+                self.sync_pane(idx, ctx);
+            }
         }
         self.sync_overlay();
 

@@ -83,7 +83,7 @@ pub(crate) fn modal_sheet<R>(
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Rect {
     let size_id = Id::new((id, "size"));
-    let mut size: u8 = ctx.memory(|m| m.data.get_temp(size_id).unwrap_or(1));
+    let mut size: u8 = ctx.memory(|m| m.data.get_temp(size_id).unwrap_or(default_size(id)));
     let h = content.height()
         * match size {
             0 => 0.58,
@@ -198,4 +198,22 @@ pub(crate) fn modal_sheet<R>(
             );
         });
     rect
+}
+
+fn default_size(id: &str) -> u8 {
+    if id.starts_with("m_panel_") {
+        0
+    } else {
+        1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn navigation_sheets_start_short_and_other_sheets_keep_their_size() {
+        assert_eq!(super::default_size("m_panel_radar"), 0);
+        assert_eq!(super::default_size("m_panel_alerts"), 0);
+        assert_eq!(super::default_size("settings"), 1);
+    }
 }
