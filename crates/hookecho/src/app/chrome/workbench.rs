@@ -42,28 +42,89 @@ impl HookEchoApp {
                 ui.colored_label(egui::Color32::from_rgb(255, 186, 86), "Older scan");
                 ui.colored_label(egui::Color32::from_gray(110), "Not received");
             });
-            if !self.views[self.active]
-                .volume.as_ref()
+            if !view
+                .volume
+                .as_ref()
                 .and_then(|volume| volume.live_status.as_ref())
                 .is_some_and(|status| status.stream_active && status.volume_start_ms.is_some())
             {
                 ui.weak("Waiting for live scan updates");
             }
         }
-        if let Some(volume) = &self.views[self.active].volume {
-            if !volume.cuts.is_empty() {
-                ui.collapsing("Cut chronology", |ui| {
-                    for cut in &volume.cuts {
-                        if let Some(time) = chrono::DateTime::from_timestamp_millis(cut.ended_at_ms) {
-                            ui.label(format!(
-                                "Cut {} · {:.1}° · {} UTC",
-                                cut.elevation_number,
-                                cut.elevation_deg,
-                                time.format("%H:%M:%S")
-                            ));
+        let selectable = view.custom_product.is_none()
+            && view.volume.as_ref().is_some_and(|v| v.live_status.is_none());
+        let cuts = view
+            .volume
+            .as_ref()
+            .map(|volume| {
+                volume
+                    .cuts
+                    .iter()
+                    .copied()
+                    .map(|cut| {
+                        (
+                            cut,
+                            selectable
+                                && wxdata::level2::cut_has_moment(
+                                    &volume.scan,
+                                    cut,
+                                    view.moment,
+                                ),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !cuts.is_empty() {
+            let mut chosen = None;
+            ui.collapsing("Cut chronology", |ui| {
+                if compact(ui.ctx()) {
+                    ui.spacing_mut().interact_size.y = 48.0;
+                }
+                for (cut, carries) in cuts {
+                    if let Some(time) = chrono::DateTime::from_timestamp_millis(cut.ended_at_ms) {
+                        let label = format!(
+                            "Cut {} · {:.1}° · {} UTC",
+                            cut.elevation_number,
+                            cut.elevation_deg,
+                            time.format("%H:%M:%S")
+                        );
+                        if carries {
+                            if ui
+                                .selectable_label(
+                                    view.selected_cut_ms() == Some(cut.ended_at_ms),
+                                    label,
+                                )
+                                .clicked()
+                            {
+                                chosen = Some(
+                                    (view.selected_cut_ms() != Some(cut.ended_at_ms))
+                                        .then_some(cut),
+                                );
+                            }
+                        } else {
+                            ui.weak(label);
                         }
                     }
-                });
+                }
+            });
+            if let Some(cut) = chosen {
+                if let Some(cut) = cut {
+                    if let Some(volume) = &view.volume {
+                        if let Some(tilt) = volume
+                            .elevations
+                            .iter()
+                            .position(|angle| (*angle - cut.elevation_deg).abs() < 0.15)
+                        {
+                            view.tilt = tilt;
+                        }
+                    }
+                    view.timeline.playing = false;
+                    view.timeline.following = false;
+                    view.cut_selection = Some((cut.ended_at_ms, view.moment, view.tilt));
+                } else {
+                    view.cut_selection = None;
+                }
             }
         }
         if let Some([lon, lat]) = self.linked_probe {
@@ -90,9 +151,12 @@ impl HookEchoApp {
                 frame.stamp.source_identity,
                 frame.stamp.valid_time.format("%H:%M UTC"),
                 frame.stamp.quality.label(),
-            )).or_else(|| view.volume.as_ref().map(|volume| format!(
-                "{site} · {product} · valid {}", volume.time.format("%H:%M UTC")
-            ))).unwrap_or_else(|| format!("{site} · {product} · waiting for data")) + &health;
+            )).or_else(|| view.volume.as_ref().map(|volume| {
+                let time = view.selected_cut_ms()
+                    .and_then(chrono::DateTime::from_timestamp_millis)
+                    .unwrap_or(volume.time);
+                format!("{site} · {product} · valid {}", time.format("%H:%M UTC"))
+            })).unwrap_or_else(|| format!("{site} · {product} · waiting for data")) + &health;
             let probe = self.linked_probe.and_then(|[lon, lat]| {
                 self.field_probe_at(i, lon, lat)
                     .or_else(|| self.radar_probe_at(i, lon, lat))

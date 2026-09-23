@@ -76,7 +76,7 @@ pub struct Volume {
     pub cuts: Vec<level2::CutTime>,
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
     pub moments: [bool; Moment::ALL.len()],
-    binned: LruCache<(Moment, usize, bool), BinnedSweep>,
+    binned: LruCache<(Moment, usize, bool, Option<i64>), BinnedSweep>,
     /// Set once a live chunk has been merged in. Such a volume is still being written — half its
     /// tilts may not have arrived — so it must never be kept and shown again later in place of
     /// the complete archived volume of the same name.
@@ -133,7 +133,7 @@ impl Volume {
                         .binned
                         .iter()
                         .map(|(k, _)| *k)
-                        .filter(|(_, t, _)| *t == idx)
+                        .filter(|(_, t, _, _)| *t == idx)
                         .collect();
                     for k in stale {
                         self.binned.pop(&k);
@@ -163,9 +163,19 @@ impl Volume {
         tilt: usize,
         dealias: bool,
     ) -> anyhow::Result<&BinnedSweep> {
+        self.binned_at(moment, tilt, dealias, None)
+    }
+
+    pub fn binned_at(
+        &mut self,
+        moment: Moment,
+        tilt: usize,
+        dealias: bool,
+        cut_end_ms: Option<i64>,
+    ) -> anyhow::Result<&BinnedSweep> {
         let scan = Arc::clone(&self.scan);
-        self.binned.try_get_or_insert((moment, tilt, dealias), || {
-            level2::bin_scan_opts(&scan, moment, tilt, dealias)
+        self.binned.try_get_or_insert((moment, tilt, dealias, cut_end_ms), || {
+            level2::bin_scan_opts_at(&scan, moment, tilt, dealias, cut_end_ms)
         })
     }
 
@@ -193,6 +203,8 @@ pub struct MapView {
     /// Name of a saved user-defined radar product, or `None` for a native moment.
     pub custom_product: Option<String>,
     pub tilt: usize,
+    /// Selected cut within the shown volume; `None` follows its newest matching sweep.
+    pub cut_selection: Option<(i64, Moment, usize)>,
     /// Opt-in live mode: keep this pane on the newest available 0.5° revisit.
     pub follow_low_cut: bool,
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
@@ -251,6 +263,7 @@ impl MapView {
             moment: Moment::Reflectivity,
             custom_product: None,
             tilt: 0,
+            cut_selection: None,
             follow_low_cut: false,
             thresholds,
             threshold_enabled,
@@ -307,6 +320,7 @@ impl MapView {
     /// `scan` is only used when this pane has never binned that volume; it is an `Arc` from the
     /// app's decoded-volume cache either way, so the two paths hold the same allocation.
     pub fn show_volume(&mut self, scan: Arc<Scan>, name: String, time: DateTime<Utc>) {
+        self.cut_selection = None;
         let vol = self
             .recent
             .pop(&name)
@@ -331,6 +345,14 @@ impl MapView {
         }) {
             self.tilt = index;
         }
+    }
+
+    pub fn selected_cut_ms(&self) -> Option<i64> {
+        self.cut_selection
+            .filter(|(_, moment, tilt)| {
+                self.custom_product.is_none() && *moment == self.moment && *tilt == self.tilt
+            })
+            .map(|(end, _, _)| end)
     }
 
     /// Forget every kept volume. The site changed, so none of them is of anywhere being looked at.
@@ -501,6 +523,19 @@ mod tests {
         view.timeline.following = true;
         view.show_volume(scan_at(&[1.5, 2.5]), "other".into(), Utc::now());
         assert_eq!(view.tilt, 1, "a radar without a 0.5° cut keeps its tilt");
+    }
+
+    #[test]
+    fn cut_selection_tracks_product_and_resets_on_volume_change() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.28, 35.33, 7.0));
+        view.show_volume(scan_at(&[0.5]), "first".into(), Utc::now());
+        view.cut_selection = Some((1_000, Moment::Reflectivity, 0));
+        assert_eq!(view.selected_cut_ms(), Some(1_000));
+        view.moment = Moment::Velocity;
+        assert_eq!(view.selected_cut_ms(), None);
+        view.moment = Moment::Reflectivity;
+        view.show_volume(scan_at(&[0.5]), "second".into(), Utc::now());
+        assert_eq!(view.selected_cut_ms(), None);
     }
 
     /// A lap of a loop must not re-bin what it binned last lap. This is the whole wave: before it,

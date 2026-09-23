@@ -22,6 +22,9 @@ impl HookEchoApp {
                 .and_then(|_| volume.cuts.last())
                 .and_then(|cut| chrono::DateTime::from_timestamp_millis(cut.ended_at_ms))
         });
+        let selected_cut = self.views[self.active]
+            .selected_cut_ms()
+            .and_then(chrono::DateTime::from_timestamp_millis);
         let fresh = self.views[self.active]
             .volume
             .as_ref()
@@ -178,7 +181,8 @@ impl HookEchoApp {
                             // "5:10:35 PM CDT" ran off the edge and under the age readout. When
                             // the room is not there the seconds and the zone go first: a phone's
                             // zone is the one it is standing in.
-                            None => latest_cut.filter(|_| t.following && !t.playing)
+                            None => selected_cut
+                                .or_else(|| latest_cut.filter(|_| t.following && !t.playing))
                                 .or_else(|| t.current().and_then(|id| id.date_time()))
                                 .map(|d| match tz {
                                     Some(tz) if narrow || ui.available_width() < 190.0 => {
