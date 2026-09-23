@@ -149,7 +149,7 @@ impl HookEchoApp {
                         ui.checkbox(&mut self.analyst_inspector_open, "Inspector");
                     });
                     ui.separator();
-                } else if ui.button("Open Analyst Workstation  →").named("Open Analyst Workstation").clicked() {
+                } else if phone(ctx) && ui.button("Open Analyst Workstation  →").named("Open Analyst Workstation").clicked() {
                     self.analyst_open = true;
                     self.analyst_inspector_open = !sheets_layout;
                 }
