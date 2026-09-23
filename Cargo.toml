@@ -44,7 +44,9 @@ opt-level = "s"
 [profile.web.package.hookecho]
 opt-level = "z"
 
-# ...except the crates that actually spend the CPU. A Level 2 volume is a gzip wrapper around ~130
+# ...except the crates that actually spend the CPU. wxdata at level 2 saves ~12 KB gzip versus
+# level 3; the Level 2 decoder and bzip2 implementation below retain full optimization. A Level 2
+# volume is a gzip wrapper around ~130
 # bzip2-compressed records, and it is decoded before the first pixel of radar exists; shrinking
 # these costs more seconds on screen than it saves on the wire.
 [profile.web.package.nexrad-decode]
@@ -54,7 +56,7 @@ opt-level = 3
 [profile.web.package.libbz2-rs-sys]
 opt-level = 3
 [profile.web.package.wxdata]
-opt-level = 3
+opt-level = 2
 [profile.web.package.miniz_oxide]
 opt-level = 3
 

@@ -344,11 +344,23 @@ pub fn sample_native(
     lon: f64,
     lat: f64,
 ) -> Option<NativeGateSample> {
+    sample_native_at(scan, moment, tilt, lon, lat, None)
+}
+
+/// Sample the newest matching cut collected no later than `cut_end_ms`.
+pub fn sample_native_at(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    lon: f64,
+    lat: f64,
+    cut_end_ms: Option<i64>,
+) -> Option<NativeGateSample> {
     if moment == Moment::SpecificDifferentialPhase {
         return None; // KDP is derived during binning; there is no transmitted native gate.
     }
     let site = scan.site()?;
-    let sweep = selected_sweep(scan, moment, tilt)?;
+    let sweep = selected_sweep_at(scan, moment, tilt, cut_end_ms)?;
     let elevation_deg = sweep.elevation_angle_degrees()?;
     let (ground_range_km, bearing) =
         crate::xsection::dist_bearing(site.longitude() as f64, site.latitude() as f64, lon, lat);
@@ -763,9 +775,35 @@ pub fn cut_chronology(scan: &Scan) -> Vec<CutTime> {
     cuts
 }
 
+pub fn cut_has_moment(scan: &Scan, cut: CutTime, moment: Moment) -> bool {
+    scan.sweeps().iter().any(|sweep| {
+        sweep.elevation_number() == cut.elevation_number
+            && sweep
+                .radials()
+                .iter()
+                .filter(|radial| radial.elevation_number() == cut.elevation_number)
+                .map(|radial| radial.collection_timestamp())
+                .max()
+                == Some(cut.ended_at_ms)
+            && sweep.radials().iter().any(|radial| {
+                radial.elevation_number() == cut.elevation_number
+                    && moment.select(radial).is_some()
+            })
+    })
+}
+
 /// Use the newest cut at a displayed tilt, while respecting split cuts that carry different
 /// moments. SAILS/MRLE repeats share one tilt button but have distinct collection times.
 fn selected_sweep(scan: &Scan, moment: Moment, tilt: usize) -> Option<&Sweep> {
+    selected_sweep_at(scan, moment, tilt, None)
+}
+
+fn selected_sweep_at(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    cut_end_ms: Option<i64>,
+) -> Option<&Sweep> {
     let target = *elevation_angles(scan).get(tilt)?;
     scan.sweeps()
         .iter()
@@ -775,10 +813,21 @@ fn selected_sweep(scan: &Scan, moment: Moment, tilt: usize) -> Option<&Sweep> {
                 .is_some_and(|angle| (angle - target).abs() < 0.15)
         })
         .filter_map(|sweep| {
+            let number = sweep.elevation_number();
+            if cut_end_ms.is_some_and(|limit| {
+                sweep.radials().iter()
+                    .filter(|radial| radial.elevation_number() == number)
+                    .map(|radial| radial.collection_timestamp())
+                    .max().is_none_or(|end| end > limit)
+            }) {
+                return None;
+            }
             sweep
                 .radials()
                 .iter()
-                .filter(|radial| moment.select(radial).is_some())
+                .filter(|radial| {
+                    radial.elevation_number() == number && moment.select(radial).is_some()
+                })
                 .map(|radial| radial.collection_timestamp())
                 .max()
                 .map(|time| (time, sweep))
@@ -862,8 +911,19 @@ pub fn bin_scan_opts(
     tilt: usize,
     dealias: bool,
 ) -> anyhow::Result<BinnedSweep> {
+    bin_scan_opts_at(scan, moment, tilt, dealias, None)
+}
+
+/// Bin the newest matching cut collected no later than `cut_end_ms`.
+pub fn bin_scan_opts_at(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    dealias: bool,
+    cut_end_ms: Option<i64>,
+) -> anyhow::Result<BinnedSweep> {
     crate::stats::bump(crate::stats::Counter::SweepsBinned);
-    let sweep = selected_sweep(scan, moment, tilt)
+    let sweep = selected_sweep_at(scan, moment, tilt, cut_end_ms)
         .ok_or_else(|| anyhow::anyhow!("no sweep carries requested moment at this tilt"))?;
 
     let (lat, lon) = scan
@@ -1452,15 +1512,17 @@ mod tests {
     }
 
     // A radial carrying only the given moment (others None).
-    fn radial_with(moment: Moment, elevation: f32) -> Radial {
-        radial_with_at(moment, elevation, 0)
-    }
-
     fn radial_with_at(moment: Moment, elevation: f32, collected_at: i64) -> Radial {
-        radial_with_at_az(moment, elevation, collected_at, 0)
+        radial_with_at_az(moment, elevation, collected_at, 0, 1)
     }
 
-    fn radial_with_at_az(moment: Moment, elevation: f32, collected_at: i64, azimuth: u16) -> Radial {
+    fn radial_with_at_az(
+        moment: Moment,
+        elevation: f32,
+        collected_at: i64,
+        azimuth: u16,
+        number: u8,
+    ) -> Radial {
         let raw = vec![106u8];
         let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, raw);
         let (refl, vel) = match moment {
@@ -1474,7 +1536,7 @@ mod tests {
             azimuth as f32 * 0.5,
             0.5,
             nexrad_model::data::RadialStatus::ScanStart,
-            1,
+            number,
             elevation,
             refl,
             vel,
@@ -1511,8 +1573,8 @@ mod tests {
     // and bin_scan for VEL must pick the Doppler cut, not error on the surveillance cut.
     #[test]
     fn bin_scan_picks_split_cut_sweep_carrying_moment() {
-        let surveillance = Sweep::new(1, vec![radial_with(Moment::Reflectivity, 0.48)]);
-        let doppler = Sweep::new(1, vec![radial_with(Moment::Velocity, 0.52)]);
+        let surveillance = Sweep::new(1, vec![radial_with_at(Moment::Reflectivity, 0.48, 1_000)]);
+        let doppler = Sweep::new(1, vec![radial_with_at(Moment::Velocity, 0.52, 2_000)]);
         let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
         let scan = Scan::with_site(site, minimal_vcp(), vec![surveillance, doppler]);
 
@@ -1521,6 +1583,9 @@ mod tests {
             vec![0.48],
             "split cut collapses to one tilt"
         );
+        let cuts = cut_chronology(&scan);
+        assert!(!cut_has_moment(&scan, cuts[0], Moment::Velocity));
+        assert!(cut_has_moment(&scan, cuts[1], Moment::Velocity));
         assert!(
             bin_scan(&scan, Moment::Velocity, 0).is_ok(),
             "VEL found on Doppler cut"
@@ -1534,12 +1599,15 @@ mod tests {
     #[test]
     fn repeated_low_cut_uses_newest_matching_sweep_for_display_and_probe() {
         let old = Sweep::new(1, vec![radial_with_at(Moment::Reflectivity, 0.48, 1_000)]);
-        let velocity = Sweep::new(2, vec![radial_with_at(Moment::Velocity, 0.50, 2_000)]);
-        let new = Sweep::new(3, vec![radial_with_at(Moment::Reflectivity, 0.52, 3_000)]);
+        let velocity = Sweep::new(2, vec![radial_with_at_az(Moment::Velocity, 0.50, 2_000, 0, 2)]);
+        let new = Sweep::new(3, vec![radial_with_at_az(Moment::Reflectivity, 0.52, 3_000, 0, 3)]);
         let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
         let scan = Scan::with_site(site, minimal_vcp(), vec![old, velocity, new]);
 
         assert_eq!(elevation_angles(&scan).len(), 1);
+        let new_cut = cut_chronology(&scan).into_iter().find(|cut| cut.elevation_number == 3).unwrap();
+        assert!(cut_has_moment(&scan, new_cut, Moment::Reflectivity));
+        assert!(!cut_has_moment(&scan, new_cut, Moment::Velocity));
         assert_eq!(
             selected_sweep(&scan, Moment::Reflectivity, 0)
                 .unwrap()
@@ -1560,13 +1628,37 @@ mod tests {
         );
         let sample = sample_native(&scan, Moment::Reflectivity, 0, -97.28, 35.35).unwrap();
         assert_eq!(sample.collected_at.timestamp_millis(), 3_000);
+        assert_eq!(
+            bin_scan_opts_at(&scan, Moment::Reflectivity, 0, false, Some(1_000))
+                .unwrap()
+                .elevation_deg,
+            0.48,
+        );
+        let old = sample_native_at(&scan, Moment::Reflectivity, 0, -97.28, 35.35, Some(1_000))
+            .unwrap();
+        assert_eq!(old.collected_at.timestamp_millis(), 1_000);
+        assert!(bin_scan_opts_at(&scan, Moment::Reflectivity, 0, false, Some(999)).is_err());
+    }
+
+    #[test]
+    fn a_cut_with_later_radials_is_not_visible_at_an_earlier_playhead() {
+        let old = Sweep::new(1, vec![radial_with_at(Moment::Reflectivity, 0.5, 500)]);
+        let future = Sweep::new(2, vec![
+            radial_with_at_az(Moment::Reflectivity, 0.5, 1_000, 0, 2),
+            radial_with_at_az(Moment::Velocity, 0.5, 3_000, 1, 2),
+        ]);
+        let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
+        let scan = Scan::with_site(site, minimal_vcp(), vec![old, future]);
+        let sample = sample_native_at(&scan, Moment::Reflectivity, 0, -97.28, 35.35, Some(2_000))
+            .unwrap();
+        assert_eq!(sample.collected_at.timestamp_millis(), 500);
     }
 
     #[test]
     fn scan_progress_distinguishes_current_older_and_missing_azimuths() {
         let sweep = Sweep::new(1, vec![
-            radial_with_at_az(Moment::Reflectivity, 0.5, 1_000, 0),
-            radial_with_at_az(Moment::Reflectivity, 0.5, 3_000, 1),
+            radial_with_at_az(Moment::Reflectivity, 0.5, 1_000, 0, 1),
+            radial_with_at_az(Moment::Reflectivity, 0.5, 3_000, 1, 1),
         ]);
         let scan = Scan::new(minimal_vcp(), vec![sweep]);
         let age = azimuth_age(&scan, Moment::Reflectivity, 0, 2_000).unwrap();

@@ -2432,6 +2432,7 @@ type ShownKey = (
     // Precipitation-tint generation: `None` when the tint is off, else the grid revision, so a
     // new precipitation-type grid or toggling the tint rebuilds the image.
     Option<u32>,
+    Option<i64>,
     Option<u64>,
 );
 
@@ -11570,6 +11571,7 @@ impl HookEchoApp {
             let v = &mut self.views[idx];
             v.loaded_site = v.site.clone();
             v.volume = None;
+            v.cut_selection = None;
             v.forget_recent();
             v.moments_seen = [false; Moment::ALL.len()];
             v.error = None;
@@ -11668,6 +11670,9 @@ impl HookEchoApp {
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
         if should_advance_timeline(next_pending, self.gesture_live) {
             self.views[idx].timeline.tick();
+        }
+        if self.views[idx].timeline.following {
+            self.views[idx].cut_selection = None;
         }
         // Playback paces itself rather than riding whatever the idle heartbeat happens to give
         // it: ask for a repaint exactly when the next frame is due.
@@ -11982,7 +11987,7 @@ impl HookEchoApp {
             return self.pane_custom_radar(idx, data, &name);
         }
         self.pane_custom_sweep.remove(&idx);
-        let (moment, tilt, threshold, smooth, storm_uv) = {
+        let (moment, tilt, threshold, smooth, storm_uv, cut_end_ms) = {
             let v = &self.views[idx];
             (
                 v.moment,
@@ -11990,6 +11995,7 @@ impl HookEchoApp {
                 v.active_threshold(),
                 v.smooth,
                 v.storm_motion_uv(),
+                v.selected_cut_ms(),
             )
         };
         // The pane's product list is the union over every volume from this site, so a single frame
@@ -12034,6 +12040,7 @@ impl HookEchoApp {
             uv_key,
             dealias,
             self.settings.precip_tint.then_some(self.precip_flag_gen),
+            cut_end_ms,
             None,
         );
         let lut_gen = self.palettes.gen.wrapping_add(
@@ -12067,7 +12074,7 @@ impl HookEchoApp {
             if vol.elevations.is_empty() {
                 return (None, true);
             }
-            vol.binned(moment, tilt, dealias).map(|s| {
+            vol.binned_at(moment, tilt, dealias, cut_end_ms).map(|s| {
                 to_upload(
                     s,
                     table,
@@ -12165,6 +12172,7 @@ impl HookEchoApp {
             smooth,
             None,
             false,
+            None,
             None,
             Some(product_hash),
         );
@@ -12305,12 +12313,13 @@ impl HookEchoApp {
             let view = &self.views[idx];
             let volume = view.volume.as_ref()?;
             (
-                wxdata::level2::sample_native(
+                wxdata::level2::sample_native_at(
                     &volume.scan,
                     view.moment,
                     view.tilt,
                     lon,
                     lat,
+                    view.selected_cut_ms(),
                 )?,
                 view.site.clone().unwrap_or_else(|| "Radar".into()),
                 volume.vcp.clone(),
@@ -12334,10 +12343,11 @@ impl HookEchoApp {
             && self.settings.dealias_velocity
             && !wxdata::tdwr::is_tdwr(&site)
         {
+            let cut_end_ms = self.views[idx].selected_cut_ms();
             self.views[idx]
                 .volume
                 .as_mut()
-                .and_then(|volume| volume.binned(moment, tilt, true).ok())
+                .and_then(|volume| volume.binned_at(moment, tilt, true, cut_end_ms).ok())
                 .and_then(|sweep| sweep.sample_at(lon, lat))
                 .and_then(|gate| gate.value)
                 .map(|value| format!("\nDealiased: {value:.2} {}", moment.units()))
@@ -21036,11 +21046,16 @@ impl eframe::App for HookEchoApp {
                 let active = self.active.min(n - 1);
                 let leader = &self.views[active].timeline;
                 if let Some(source) = leader.current().cloned() {
-                    if let Some(time) = source.date_time() {
+                    let selected_cut = self.views[active].selected_cut_ms();
+                    if let Some(time) = selected_cut
+                        .and_then(chrono::DateTime::from_timestamp_millis)
+                        .or_else(|| source.date_time())
+                    {
                         let (following, playing) = (leader.following, leader.playing);
                         for (i, view) in self.views.iter_mut().enumerate() {
                             if i != active
-                                && (!self.lock_source_frame
+                                && (selected_cut.is_some()
+                                    || !self.lock_source_frame
                                     || !view.timeline.align_to_source(
                                         &source, following, playing,
                                     ))
