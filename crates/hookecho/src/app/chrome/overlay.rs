@@ -73,6 +73,9 @@ impl HookEchoApp {
         let (mut chosen, mut fly_to) = (None, None);
         let mut opts = ui::layer_options::UiActions::default();
         let mut focus_search = std::mem::take(&mut self.sidebar_focus_search);
+        let browser_id = egui::Id::new("optional_controls_open");
+        let mut browser_open = ctx.data_mut(|d| d.get_temp::<bool>(browser_id).unwrap_or(false))
+            || focus_search || !query.trim().is_empty();
         let mut alerts_tab = self.show_alert_panel;
         let settings_id = egui::Id::new("panel_settings_page");
         let mut settings_page =
@@ -273,43 +276,21 @@ impl HookEchoApp {
                     if ui.checkbox(&mut show_alerts, "Show warnings on map").changed() {
                         chosen = Some(PaletteAction::ToggleOverlay(OverlayToggle::Alerts));
                     }
-                    ui.separator();
-                    if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
-                        chosen = Some(action);
-                    }
-                    ui.add_space(12.0);
-                    ui.separator();
-                }
-                // One title and one way out. The previous brand + Data/Alerts tab row looked like
-                // three unrelated navigation systems before the actual layer controls even began.
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(if alerts_tab { "Alerts" } else if self.analyst_open { "Product browser" } else { "Optional settings and Tools" })
-                            .size(17.0)
-                            .strong(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !phone(ctx)
-                            && ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(egui_phosphor::regular::X).size(14.0),
-                                    )
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                                )
-                                .named("Close this panel")
-                                .clicked()
-                        {
-                            hide = true;
-                        }
-                        if alerts_tab && ui.small_button("‹ All controls").clicked() {
-                            alerts_tab = false;
+                    ui.horizontal(|ui| {
+                        ui.menu_button("Workspaces ▾", |ui| {
+                            if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
+                                chosen = Some(action);
+                                ui.close();
+                            }
+                        });
+                        if ui.button("⚙ Settings").named("Open settings").clicked() {
+                            chosen = Some(PaletteAction::OpenWindow(AppWindow::Settings));
                         }
                     });
-                });
-                ui.add_space(6.0);
+                    ui.separator();
+                }
                 if alerts_tab {
+                    if ui.button("‹ Radar controls").clicked() { alerts_tab = false; }
                     alert_hit = ui::alert_panel::body(
                         ui,
                         &feats,
@@ -319,6 +300,12 @@ impl HookEchoApp {
                     );
                     return;
                 }
+                if ui.button(if browser_open { "⌄  More settings and tools" } else { "›  More settings and tools" })
+                    .named_toggle("Show optional settings and tools", browser_open).clicked() {
+                    browser_open = !browser_open;
+                }
+                if !browser_open { return; }
+                ui.add_space(6.0);
                 // A drag rewrites the order in place, so persist it when it moves.
                 let order_was = self.settings.layer_order.clone();
                 let optional_action = ui::layers_panel::body(
@@ -506,6 +493,7 @@ impl HookEchoApp {
             self.mobile_occlusion.push(panel.response.rect);
         }
         ctx.data_mut(|d| d.insert_temp(settings_id, settings_page));
+        ctx.data_mut(|d| d.insert_temp(browser_id, browser_open));
         self.show_alert_panel = alerts_tab;
         self.settings.mute_alerts = muted;
         if hide || sheet_close {

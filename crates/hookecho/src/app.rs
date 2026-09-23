@@ -8618,22 +8618,22 @@ impl HookEchoApp {
                         }
                     });
                 });
-                for pair in [
-                    [("Reflectivity", Moment::Reflectivity, false), ("Velocity", Moment::Velocity, false)],
-                    [("Storm relative", Moment::Velocity, true), ("Correlation", Moment::CorrelationCoefficient, false)],
-                ] {
-                    ui.columns(2, |columns| {
-                        for (column, (label, m, relative)) in columns.iter_mut().zip(pair) {
-                            let selected = custom_product.is_none()
-                                && moment == m
-                                && (m != Moment::Velocity || srv == relative);
-                            if column.add_sized([column.available_width(), 38.0], egui::Button::new(label).selected(selected)).clicked() {
-                                pick = Some((m, relative));
-                            }
+                ui.horizontal(|ui| {
+                    for (label, m) in [("Reflectivity", Moment::Reflectivity), ("Velocity", Moment::Velocity)] {
+                        if ui.selectable_label(custom_product.is_none() && moment == m && !srv, label).clicked() {
+                            pick = Some((m, false));
                         }
-                    });
-                }
-                ui.menu_button("More radar products", |ui| {
+                    }
+                    ui.menu_button("More ▾", |ui| {
+                    for (label, m, relative) in [
+                        ("Storm relative", Moment::Velocity, true),
+                        ("Correlation", Moment::CorrelationCoefficient, false),
+                    ] {
+                        if ui.selectable_label(custom_product.is_none() && moment == m && (m != Moment::Velocity || srv == relative), label).clicked() {
+                            pick = Some((m, relative));
+                            ui.close();
+                        }
+                    }
                     for product in crate::products::PRODUCTS {
                         if ui.button(product.name).clicked() {
                             pick = Some((product.moment, false));
@@ -8655,8 +8655,9 @@ impl HookEchoApp {
                             }
                         }
                     }
+                    });
                 });
-                ui.add_space(8.0);
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(
                         egui::RichText::new(egui_phosphor::regular::BROADCAST)
@@ -8681,10 +8682,9 @@ impl HookEchoApp {
                             .on_hover_text("Radar source freshness");
                     });
                 });
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
-                    .size(style::FONT_TITLE).strong());
                 ui.add_space(6.0);
+                ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
+                    .size(style::FONT_BASE).strong());
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("Tilt")
@@ -8708,6 +8708,13 @@ impl HookEchoApp {
                                 }
                             }
                         });
+                    if moment == Moment::Reflectivity {
+                        ui.checkbox(&mut thr_on, "Threshold");
+                        if thr_on {
+                            let t = thr.get_or_insert(16.0);
+                            ui.add(egui::DragValue::new(t).range(vmin..=vmax).suffix(" dBZ"));
+                        }
+                    }
                 });
                 egui::CollapsingHeader::new("Product settings")
                     .default_open(false)
@@ -8752,23 +8759,19 @@ impl HookEchoApp {
                         }
                         // Threshold for the active moment. The slider value stays internal (m/s
                         // for velocity); display honors the Units setting.
-                        let f = unit_factor as f64;
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut thr_on, "Threshold").on_hover_text(
-                                "Hide everything below a value \u{2014} cuts light rain out of the picture",
-                            );
-                            if thr_on {
-                                let t = thr.get_or_insert((vmin + vmax) * 0.5);
-                                ui.add(
-                                    egui::Slider::new(t, vmin..=vmax)
+                        if moment != Moment::Reflectivity {
+                            let f = unit_factor as f64;
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut thr_on, "Threshold");
+                                if thr_on {
+                                    let t = thr.get_or_insert((vmin + vmax) * 0.5);
+                                    ui.add(egui::Slider::new(t, vmin..=vmax)
                                         .custom_formatter(move |v, _| format!("{:.0}", v * f))
-                                        .custom_parser(move |s| {
-                                            s.parse::<f64>().ok().map(|x| x / f)
-                                        })
-                                        .suffix(unit_label),
-                                );
-                            }
-                        });
+                                        .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
+                                        .suffix(unit_label));
+                                }
+                            });
+                        }
                     });
                 ui.add_space(8.0);
                 if ui.add_sized([ui.available_width(), 40.0], egui::Button::new(format!("{}  Custom locations", egui_phosphor::regular::MAP_PIN))).clicked() {
