@@ -13,6 +13,30 @@ const ktlx = (extra = "") => `${app}/#goto=KTLX,-97.28,35.33,8${extra}`;
 
 const sections = [
   {
+    id: "radar-mode",
+    eyebrow: "Radar mode",
+    title: "A clear map for the weather right now",
+    body:
+      "One map and one timeline are the default. Open the short Radar section for site, " +
+      "reflectivity or velocity, tilt, threshold and custom locations. Overlays holds storm " +
+      "tracks, MRMS, storm attributes and SPC outlook; Alerts stays closed until you open it.",
+    shot: "/shots/radar-mode-20260923.webp",
+    alt: "Radar mode with one archived storm map and a short product panel",
+    link: { href: ktlx(",thr:16"), label: "Open Radar mode" },
+  },
+  {
+    id: "analyst-mode",
+    eyebrow: "Analyst Workstation",
+    title: "Compare four products without losing your place",
+    body:
+      "Choose Analyst in the fixed header, then select a preset or a pane count. The toolbar " +
+      "keeps map and time links and Inspector in reach; each product edit targets the active pane. " +
+      "Choose Radar again and the previous single-map view returns. Analyst resumes where you left it.",
+    shot: "/shots/analyst-mode-20260923.webp",
+    alt: "Analyst Workstation with four radar products and an inspector",
+    link: { href: "/docs/radar-and-analyst/", label: "Follow the Analyst guide" },
+  },
+  {
     id: "radar",
     eyebrow: "Level 2, every tilt",
     title: "The volume, not a picture of it",

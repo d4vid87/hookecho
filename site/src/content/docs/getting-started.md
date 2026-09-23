@@ -19,34 +19,31 @@ You should now see the map, a radar timestamp, and the colour scale. An empty
 map can mean dry weather; check the timestamp before assuming data is missing.
 If the first scan never appears, use [Troubleshooting](/docs/troubleshooting/).
 
-![HookEcho showing reflectivity and the playback timeline during a historic storm](/shots/reflectivity-1280.webp)
+![HookEcho Radar mode showing reflectivity and the playback timeline during a historic storm](/shots/radar-mode-20260923.webp)
 
 *Example archive screenshot, not current weather.*
 
 ## What you're looking at
 
-The app is a full-bleed map with three floating pieces over it:
+The app is a full-bleed map with three main controls over it:
 
-- **The search pill**, top-left. It opens **the panel**, which holds everything:
-  the current radar, the product you're viewing, its tilt, and every layer,
-  window and tool the app has — each described in plain English.
-- **The control column**, on the right edge: layers, the background map, and an
-  alert bell badged with the number of warnings covering your view. The colour
-  scale for whatever you're looking at floats there too.
+- **The fixed header**, top-left. **Radar | Analyst** changes between one map
+  and an optional workbench. The menu button opens short **Radar, Overlays,
+  Alerts, Tools** sections; search and Settings remain beside the mode switch.
+- **The colour scale**, on the map edge, shows what the selected product means.
 - **The scrubber**, along the bottom: the radar's clock, a play button, a LIVE
   badge, and a time track with one tick per scan.
 
-Nothing is docked. The map runs edge to edge underneath all of it.
+Radar mode keeps one map. In Analyst, the inspector can dock beside linked panes.
 
 ## If you remember one thing
 
-Open the search pill, or press <kbd>Ctrl</kbd>+<kbd>K</kbd>. It searches the panel, and Enter runs the top
-match. Every action in the app is in there — products, layers, windows, and
-"Fly to" for any place name. You never have to learn where anything lives.
+Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to open and focus the global search. It finds
+products, layers, tools, and places. <kbd>Escape</kbd> closes search or the menu.
 
 ## Watch a storm, right now
 
-1. Pick the radar nearest the storm — <kbd>Ctrl</kbd>+<kbd>K</kbd>, type the ID
+1. Pick the radar nearest the storm — <kbd>Ctrl</kbd>+<kbd>S</kbd>, type the ID
    or the city.
 2. Leave the product on **Reflectivity (Z)**. That's where the rain and hail are.
 3. Switch to **Velocity (V)** to see what the storm is *doing* — which way the
@@ -72,6 +69,7 @@ actually in force at the moment you're parked on, not today's.
 
 ## Next
 
+- [Radar and Analyst modes](/docs/radar-and-analyst/) — the four menu sections, pane presets, and returning to your radar view.
 - [Install it](/docs/install/) on your other machines.
 - [Reading the radar](/docs/reading-the-radar/) — what the colours mean.
 - [Join the Discord](https://discord.gg/VNMW2Gyg4V) if you get stuck or want to

@@ -1,7 +1,7 @@
 ---
 title: On your phone
 description: The Android app — the same radar, in your pocket and out in the field.
-order: 5
+order: 6
 ---
 
 The Android build is the same Rust application as the desktop one, with an
@@ -12,13 +12,17 @@ interface built for a phone. Install it from
 
 ## Getting around
 
-Same three floating pieces as the desktop app: a search pill, an alert badge,
-and the scrubber along the bottom. Anything you'd browse rather than watch opens
-as a sheet you can drag up from the bottom.
+The **Radar | Analyst** switch remains at the top. The menu opens Radar,
+Overlays, Alerts, or Tools in a sheet with a fixed header; the timeline stays
+below the map. Search and Settings remain available from the header.
+
+![The Radar section in a phone-sized browser](/showcase/phone-mode-20260923.webp)
+
+*Browser capture of the current layout; Android's system controls may differ.*
 
 - **Long-press** the map to inspect what's under your finger.
 - **Double-tap and drag** up or down to zoom with one hand.
-- **Swipe sideways** to move between panes.
+- **Use the pane strip** to move between analyst panes without panning the map.
 - The app buzzes on scrubber ticks, sheet snaps, and new warnings.
 
 ## Notifications with the app closed

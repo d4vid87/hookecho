@@ -1,7 +1,7 @@
 ---
 title: FAQ and glossary
 description: Common questions, common problems, and where to find what all the abbreviations mean.
-order: 8
+order: 9
 ---
 
 ## Questions

@@ -7,29 +7,21 @@ parts that need a filesystem or GPS.
 
 ## Getting oriented
 
-First launch asks for one thing — your home radar — and offers to find the
-nearest one from your location. It also offers a 60-second tour of the live map;
-take it or skip it, and re-run either from the panel's **App** section, `Ctrl+K`,
-or **Settings → General**. Everything else has a default and lives in
-**Settings**. After that the whole app is a full-bleed map with three floating pieces — the
-**panel** (site, product, tilt, every layer, window, tool and setting), opened
-from the search pill top-left or the control column on the **right edge** (which
-also carries the color scale for what you're looking at), and the **scrubber**
-(the timeline, floating along the bottom). Tools you browse rather than watch —
-settings, the event library, alert rules — open as pages in a slide-over
-**drawer** on that same left edge, one page at a time, with a back arrow to the
-page you came from.
-Anything you click *on the map* — a storm cell, a warning polygon, one of your
-own markers — answers in a card next to the click instead.
+First launch offers to find a nearby radar from your location. The app opens
+in **Radar** mode: one map with a timeline at the bottom. At the top left, a
+fixed header holds **Radar | Analyst**, search, and Settings. The menu opens
+one short section at a time: **Radar** for site and product, **Overlays** for
+storm tracks and other maps, **Alerts** for warnings, and **Tools** for the
+catalog and saved workspaces. Click the gear to open Settings directly.
 
-**If you remember one thing, remember `Ctrl+K`.** It searches the panel, and
-Enter runs the top match. Every action in the app is in there, described in
-plain English — products, layers, windows, workspaces, and "Fly to" for any
-place name. You do not need to learn where anything lives.
+**If you remember one shortcut, use `Ctrl+S`.** It opens and focuses search
+from the current view. **Escape** closes search or the menu without changing
+modes. The [interface guide](INTERFACE.md) shows every section and how to move
+between Radar and Analyst.
 
 ## Watch a storm right now
 
-1. Sidebar → site → pick the radar nearest the storm (or `Ctrl+K`, type the ID).
+1. Open **Radar** → site to pick the nearest radar (or press `Ctrl+S` and type its ID).
 2. Product **Reflectivity (Z)** shows structure — where the rain and hail are.
 3. Product **Velocity (V)** shows motion. Dealiasing is on by default, so a
    couplet reads as red against green rather than folding into nonsense.
@@ -48,7 +40,7 @@ inside the storm's translation.
 
 **Is it hail?** Reflectivity over ~50 dBZ is a candidate; confirm with
 correlation coefficient (CC) — hail is non-uniform, so CC drops. The **storm
-attributes** table (`Ctrl+K` → "cells") lists every tracked cell with hail size,
+attributes** table (open **Overlays → Storm attributes**) lists tracked cells with hail size,
 tops and VIL, sorted; click a row to fly there.
 
 **Is it a tornado?** The tornado-debris signature is the three together at low
@@ -57,9 +49,12 @@ lofted. The app flags candidates, but the three panels are the reason.
 
 ## Look at four things at once
 
-Split into panes and give each its own product with cameras linked — Z, V, CC
-and ZDR on the same storm at the same second, or one product at four tilts. It's
-one action in `Ctrl+K` ("four products" / "four tilts").
+Click **Analyst** in the fixed header. Choose **Preset → Tornado** for four
+radar products, or choose 1, 2, or 4 panes yourself. The toolbar holds linked
+**Maps**, linked **Time**, and **Inspector**. Select a pane before changing its
+product. Click **Radar** to get your earlier single-map view back; click
+**Analyst** to resume the arrangement. Save a workspace to keep it after a
+restart.
 
 **Cross-section**: click two points on the map and get the storm in profile —
 core, overhang, and how high the echo goes. Any product.

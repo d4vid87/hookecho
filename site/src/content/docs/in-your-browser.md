@@ -1,7 +1,7 @@
 ---
 title: In your browser
 description: HookEcho runs as a web app at app.hookecho.io — live data, nothing to install.
-order: 6
+order: 7
 ---
 
 [**app.hookecho.io**](https://app.hookecho.io) is the whole application compiled
@@ -10,8 +10,8 @@ It's the fastest way to try it, and it's a perfectly good way to *use* it.
 
 ## What's the same
 
-Nearly everything. Radar products and tilts, velocity dealiasing, the panel and
-<kbd>Ctrl</kbd>+<kbd>K</kbd>, warnings and storm reports, the national mosaic,
+Nearly everything. Radar products and tilts, velocity dealiasing, Radar and
+Analyst modes, the task sections and <kbd>Ctrl</kbd>+<kbd>S</kbd> search, warnings and storm reports, the national mosaic,
 model layers, soundings, cross-sections, the 3D volume, and archive playback all
 the way back to 1991.
 
