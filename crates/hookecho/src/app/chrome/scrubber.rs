@@ -189,7 +189,7 @@ impl HookEchoApp {
                                     Some(tz) if narrow || ui.available_width() < 190.0 => {
                                         d.with_timezone(&tz).format("%-I:%M %p").to_string()
                                     }
-                                    _ => crate::timefmt::fmt_clock(d, tz, false),
+                                    _ => crate::timefmt::fmt_clock(d, tz, t.cut_playback),
                                 })
                                 .unwrap_or_default(),
                         };
