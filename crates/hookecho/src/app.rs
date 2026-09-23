@@ -11754,6 +11754,12 @@ impl HookEchoApp {
                     .is_none_or(|t| t.elapsed().as_secs() >= self.poll_interval_secs());
                 let current_name = if looping {
                     v.timeline.frames.last().map(|id| id.name().to_string())
+                } else if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly
+                    && v.volume.as_ref().is_some_and(|vol| vol.live_status.is_some())
+                {
+                    // Replace a partial streamed scan with the complete archive object even
+                    // when both have the same volume name.
+                    None
                 } else {
                     v.volume.as_ref().map(|vol| vol.name.clone())
                 };

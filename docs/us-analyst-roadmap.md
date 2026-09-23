@@ -388,7 +388,7 @@ The inspector lists cuts by their radar collection times, including repeated ang
 - [x] manual provider override in advanced settings
 - [x] no hidden mixing of timestamps—provider changes are recorded in provenance
 
-The saved Radar feed setting defaults to automatic live chunks with archive polling fallback. Archive polling only is a manual override; switching to it cancels the chunk stream, ignores queued chunk updates, and immediately resumes archive polling. The live chunk adapter remains the sole low-latency public provider, so multi-provider priority and independent health probes remain open.
+The saved Radar feed setting defaults to automatic live chunks with archive polling fallback. Archive polling only is a manual override; switching to it cancels the chunk stream, rejects queued and stale-generation chunk updates, and fetches the complete archive object even when it shares the partial stream's volume name. The live chunk adapter remains the sole low-latency public provider, so multi-provider priority and independent health probes remain open.
 
 ### Acceptance tests
 
