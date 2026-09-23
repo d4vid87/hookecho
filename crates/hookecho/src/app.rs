@@ -11242,6 +11242,9 @@ impl HookEchoApp {
                     status,
                     ..
                 } => {
+                    if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly {
+                        continue; // a queued chunk cannot replace the user's chosen archive feed
+                    }
                     let v = &mut self.views[view];
                     if v.timeline.playing {
                         continue; // looping pane owns its displayed frame (cf. Volume above)
@@ -11321,6 +11324,7 @@ impl HookEchoApp {
             // WSR-88D-shaped file that isn't there and decodes garbage.
             let want = v.timeline.following
                 && !v.timeline.playing
+                && self.settings.radar_feed == crate::settings::RadarFeed::Automatic
                 && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
                 && v.volume.is_some();
             (
@@ -11344,6 +11348,10 @@ impl HookEchoApp {
                 self.live_stream = None;
                 // A new site shouldn't inherit the old one's 60 s retry gate.
                 self.last_stream_attempt = None;
+                if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly {
+                    self.views[idx].last_poll = None;
+                    self.views[idx].live_stream_ended();
+                }
             }
         }
 

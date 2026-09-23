@@ -1110,6 +1110,18 @@ fn radar_defaults(ui: &mut egui::Ui, settings: &mut Settings) {
             ui.label("Poll interval (s)");
             ui.add(egui::DragValue::new(&mut settings.poll_interval_secs).range(10..=600));
             ui.end_row();
+
+            ui.label("Radar feed");
+            egui::ComboBox::from_id_salt("radar_feed")
+                .selected_text(match settings.radar_feed {
+                    crate::settings::RadarFeed::Automatic => "Automatic",
+                    crate::settings::RadarFeed::ArchiveOnly => "Archive polling",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::Automatic, "Automatic · live chunks, archive fallback");
+                    ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::ArchiveOnly, "Archive polling only");
+                });
+            ui.end_row();
         });
     let valid = wxdata::sites::site_by_id(&settings.default_site).is_some();
     if !valid && !settings.default_site.is_empty() {
