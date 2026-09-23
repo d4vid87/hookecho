@@ -89,6 +89,7 @@ impl HookEchoApp {
         // and rain arrival has its own chip lane.
         let (dvr, rain) = if narrow { (0, None) } else { (dvr, rain) };
         let live_window = self.views[self.active].timeline.live_window;
+        let was_cut_playback = self.views[self.active].timeline.cut_playback;
         egui::Area::new(egui::Id::new("scrubber"))
             .constrain_to(self.chrome_rect)
             .anchor(
@@ -143,7 +144,7 @@ impl HookEchoApp {
                         .clicked()
                     };
                     if btn(ui, ph::SKIP_BACK, false, "Previous frame") {
-                        t.step(-1);
+                        t.step_cut(-1);
                     }
                     let playing = t.playing;
                     if btn(
@@ -155,7 +156,7 @@ impl HookEchoApp {
                         t.toggle_play();
                     }
                     if btn(ui, ph::SKIP_FORWARD, false, "Next frame") {
-                        t.step(1);
+                        t.step_cut(1);
                     }
                     let clock_size = egui::vec2(if narrow { 100.0 } else { (ui.available_width() - 210.0).max(170.0) }, if narrow { 28.0 } else { 54.0 });
                     ui.allocate_ui_with_layout(
@@ -310,6 +311,13 @@ impl HookEchoApp {
                                 }
                                 ui.checkbox(&mut t.loop_enabled, "Loop");
                             });
+                            let mut cut_playback = t.cut_playback;
+                            if ui.checkbox(&mut cut_playback, "Play radar cuts")
+                                .on_hover_text("Step through completed sweeps in collection order, including repeated low-level cuts")
+                                .changed()
+                            {
+                                t.enable_cut_playback(cut_playback);
+                            }
                             ui.add(
                                 egui::Slider::new(&mut t.speed, 1.0..=15.0)
                                     .suffix(" fps")
@@ -414,6 +422,9 @@ impl HookEchoApp {
                 });
             });
         self.settings.live_loop_frames = loop_frames;
+        if was_cut_playback && !self.views[self.active].timeline.cut_playback {
+            self.views[self.active].cut_selection = None;
+        }
         #[cfg(target_arch = "wasm32")]
         {
             if save_pack {
@@ -461,6 +472,14 @@ fn track(
     };
     // Slot centres, so the first and last frames sit inside the track instead of half off it.
     let x_of = |i: usize| bar.left() + (i as f32 + 0.5) / slots as f32 * bar.width();
+    let x_playhead = if t.cut_playback && t.cut_count > 0 && t.playhead < t.frames.len() {
+        bar.left()
+            + (t.playhead as f32 + (t.cut_index as f32 + 0.5) / t.cut_count as f32)
+                / slots as f32
+                * bar.width()
+    } else {
+        x_of(t.playhead)
+    };
     p.rect_filled(bar, 3.0, egui::Color32::from_gray(60));
 
     let observed = t.frames.len();
@@ -498,7 +517,7 @@ fn track(
     // Played-so-far fill, then one tick per volume with an hour label wherever the hour turns
     // over — the axis a chaser reads to find "the 22Z scan" without scrubbing for it.
     p.rect_filled(
-        egui::Rect::from_min_max(bar.left_top(), egui::pos2(x_of(t.playhead), bar.bottom())),
+        egui::Rect::from_min_max(bar.left_top(), egui::pos2(x_playhead, bar.bottom())),
         3.0,
         accent.gamma_multiply(0.8),
     );
@@ -545,7 +564,7 @@ fn track(
             last_label_x = x;
         }
     }
-    let knob = egui::pos2(x_of(t.playhead), bar.center().y);
+    let knob = egui::pos2(x_playhead, bar.center().y);
     let knob_radius = if compact { 4.0 } else { 7.0 };
     p.circle_filled(knob, knob_radius, accent);
     p.circle_stroke(
@@ -558,11 +577,15 @@ fn track(
     if resp.dragged() || resp.clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
             let frac = ((pos.x - bar.left()) / bar.width()).clamp(0.0, 1.0);
-            let idx = ((frac * slots as f32) as usize).min(slots - 1);
-            if idx != t.playhead {
-                t.playhead = idx;
-                t.playing = false;
-                t.following = idx + 1 == observed;
+            let place = frac * slots as f32;
+            let idx = (place as usize).min(slots - 1);
+            let cut = if t.cut_playback && idx == t.playhead && t.cut_count > 0 {
+                ((place.fract() * t.cut_count as f32) as usize).min(t.cut_count - 1)
+            } else {
+                0
+            };
+            if idx != t.playhead || (t.cut_playback && cut != t.cut_index) {
+                t.scrub_to(idx, place.fract());
                 // One detent per frame: the track has no ticks under a thumb that covers it, so
                 // the frames are felt instead.
                 crate::platform::haptic(crate::platform::Haptic::Tick);
@@ -572,8 +595,13 @@ fn track(
     // The track is painted rather than built from widgets, so its accessibility node is empty
     // unless we fill it in. Where the playhead sits is the whole of what it says.
     let (at, of) = (t.playhead + 1, slots.max(1));
+    let label = if t.cut_playback && t.cut_count > 0 {
+        format!("Timeline, volume {at} of {of}, cut {} of {}", t.cut_index + 1, t.cut_count)
+    } else {
+        format!("Timeline, frame {at} of {of}")
+    };
     resp.widget_info(|| {
-        egui::WidgetInfo::slider(true, at as f64, format!("Timeline, frame {at} of {of}"))
+        egui::WidgetInfo::slider(true, at as f64, label.clone())
     });
     rect
 }

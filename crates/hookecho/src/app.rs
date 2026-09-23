@@ -11487,8 +11487,8 @@ impl HookEchoApp {
                 self.show_alert_panel = false;
                 self.sidebar_focus_search = true;
             }
-            A::StepBack => self.views[self.active].timeline.step(-1),
-            A::StepForward => self.views[self.active].timeline.step(1),
+            A::StepBack => self.views[self.active].timeline.step_cut(-1),
+            A::StepForward => self.views[self.active].timeline.step_cut(1),
             A::Fullscreen => {
                 // Desktop only; mobile is already fullscreen.
                 if !cfg!(target_os = "android") {
@@ -11673,6 +11673,7 @@ impl HookEchoApp {
                 }
             }
         }
+        self.views[idx].sync_cut_playback();
         // Hold the playhead while the next frame is still downloading. Advancing on the wall clock
         // regardless meant playback skipped frames it hadn't got yet and the loop read as juddery;
         // waiting reads as buffering, which is what it is. Only while there's a fetch to wait for,
@@ -11680,6 +11681,7 @@ impl HookEchoApp {
         let next_pending = {
             let tl = &self.views[idx].timeline;
             tl.playing
+                && (!tl.cut_playback || tl.cut_index + 1 >= tl.cut_count)
                 && tl
                     .frames
                     .get(tl.playhead + 1)
@@ -11695,17 +11697,18 @@ impl HookEchoApp {
         // A frame switch bins and uploads a full sweep. Holding animation while the map is under
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
         if should_advance_timeline(next_pending, self.gesture_live) {
-            self.views[idx].timeline.tick();
+            self.views[idx].timeline.tick_cut();
         }
         if self.views[idx].timeline.following {
             self.views[idx].cut_selection = None;
         }
-        // Playback paces itself rather than riding whatever the idle heartbeat happens to give
-        // it: ask for a repaint exactly when the next frame is due.
+        self.sync_timeline(idx, ctx, site_changed);
+        self.views[idx].sync_cut_playback();
+        // A cached volume can become ready during sync_timeline, so schedule after its cuts
+        // are known instead of waiting for the idle heartbeat to resume playback.
         if let Some(dt) = self.views[idx].timeline.time_to_next_frame() {
             ctx.request_repaint_after(dt);
         }
-        self.sync_timeline(idx, ctx, site_changed);
 
         // Live streaming is limited to the active pane; others poll their head.
         if idx == self.active {
@@ -17769,6 +17772,10 @@ impl HookEchoApp {
         let speed = v.timeline.speed;
         let (lon, lat) =
             crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
+        if v.timeline.cut_playback {
+            v.timeline.enable_cut_playback(false);
+            v.cut_selection = None;
+        }
         v.timeline.go_begin();
         self.loop_export = Some(LoopExport {
             dest: path,
