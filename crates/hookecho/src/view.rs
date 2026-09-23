@@ -396,6 +396,8 @@ impl MapView {
         }) {
             self.tilt = tilt;
             self.cut_selection = Some((cut.ended_at_ms, self.moment, tilt));
+        } else {
+            self.cut_selection = None;
         }
     }
 
