@@ -374,7 +374,9 @@ For a sampled gate expose:
 - [x] identify repeated low-level cuts
 - [x] show scan strategy in analyst panel
 - [ ] make timeline order reflect actual sweep chronology
-- [ ] allow “follow newest 0.5° cut” mode independent of full-volume completion
+- [x] allow “follow newest 0.5° cut” mode independent of full-volume completion
+
+The optional per-pane control is in the Analyst inspector. `view::tests::low_cut_follow_is_live_only_and_leaves_missing_tilts_alone` covers live pinning, archive browsing, and sites without a 0.5° cut; the live path applies it after each partial scan update.
 
 ## B6. Feed failover
 

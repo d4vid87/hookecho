@@ -24,6 +24,16 @@ impl HookEchoApp {
     pub(crate) fn workbench_inspector_body(&mut self, ui: &mut egui::Ui) {
         ui.heading("Inspector");
         ui.weak("Native values and actual source times");
+        let view = &mut self.views[self.active];
+        if ui.checkbox(&mut view.follow_low_cut, "Follow newest 0.5° cut")
+            .on_hover_text("Keep this pane on the newest low-level radar revisit while live")
+            .changed()
+        {
+            view.pin_low_cut();
+        }
+        if view.follow_low_cut && !view.timeline.following {
+            ui.weak("Paused while viewing archive radar");
+        }
         ui.checkbox(&mut self.show_scan_progress, "Scan progress")
             .on_hover_text("Show which azimuths of the selected radar cut belong to the current live volume");
         if self.show_scan_progress {

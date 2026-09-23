@@ -154,6 +154,7 @@ impl PaneSnap {
         v.moment = self.moment;
         v.custom_product = self.custom_product.clone();
         v.tilt = self.tilt;
+        v.follow_low_cut = false; // a saved tilt takes precedence over this session-only live mode
         v.srv = self.srv;
         v.basemap = crate::tiles::BasemapStyle::from_slug(&self.basemap);
         v.camera = crate::render::mercator::Camera::at_lonlat(self.lon, self.lat, self.zoom);

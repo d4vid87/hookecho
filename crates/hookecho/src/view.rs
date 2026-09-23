@@ -188,6 +188,8 @@ pub struct MapView {
     /// Name of a saved user-defined radar product, or `None` for a native moment.
     pub custom_product: Option<String>,
     pub tilt: usize,
+    /// Opt-in live mode: keep this pane on the newest available 0.5° revisit.
+    pub follow_low_cut: bool,
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
     pub thresholds: [Option<f32>; Moment::ALL.len()],
     pub threshold_enabled: [bool; Moment::ALL.len()],
@@ -244,6 +246,7 @@ impl MapView {
             moment: Moment::Reflectivity,
             custom_product: None,
             tilt: 0,
+            follow_low_cut: false,
             thresholds,
             threshold_enabled,
             volume: None,
@@ -308,6 +311,20 @@ impl MapView {
             if !old.live && old.name != self.volume.as_ref().expect("just set").name {
                 self.recent.put(old.name.clone(), old);
             }
+        }
+        self.pin_low_cut();
+    }
+
+    /// Follow the lowest standard NEXRAD cut while live. Repeated cuts share the same tilt
+    /// index; the decoder selects the newest sweep at that angle even before a volume completes.
+    pub fn pin_low_cut(&mut self) {
+        if !self.follow_low_cut || !self.timeline.following {
+            return;
+        }
+        if let Some(index) = self.volume.as_ref().and_then(|volume| {
+            volume.elevations.iter().position(|angle| (*angle - 0.5).abs() < 0.15)
+        }) {
+            self.tilt = index;
         }
     }
 
@@ -458,6 +475,27 @@ mod tests {
         );
         let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
         Arc::new(Scan::with_site(site, vcp, sweeps))
+    }
+
+    #[test]
+    fn low_cut_follow_is_live_only_and_leaves_missing_tilts_alone() {
+        let mut view = MapView::new(
+            Some("KTLX".into()),
+            Camera::at_lonlat(-97.28, 35.33, 7.0),
+        );
+        view.follow_low_cut = true;
+        view.tilt = 1;
+        view.show_volume(scan_at(&[0.5, 1.5]), "live".into(), Utc::now());
+        assert_eq!(view.tilt, 0);
+
+        view.timeline.following = false;
+        view.tilt = 1;
+        view.pin_low_cut();
+        assert_eq!(view.tilt, 1, "archive browsing keeps its selected tilt");
+
+        view.timeline.following = true;
+        view.show_volume(scan_at(&[1.5, 2.5]), "other".into(), Utc::now());
+        assert_eq!(view.tilt, 1, "a radar without a 0.5° cut keeps its tilt");
     }
 
     /// A lap of a loop must not re-bin what it binned last lap. This is the whole wave: before it,

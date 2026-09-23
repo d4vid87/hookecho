@@ -413,6 +413,7 @@ impl HookEchoApp {
         self.tour_anchors.timeline = scrub_rect;
         if go_head {
             self.views[self.active].timeline.go_head();
+            self.views[self.active].pin_low_cut();
         }
     }
 }
