@@ -150,7 +150,7 @@ impl HookEchoApp {
                         }
                     }
                 } else {
-                    chosen = self.mobile_more(ui);
+                    chosen = self.mobile_more(ui, &entries);
                 }
                 return;
             }
@@ -645,9 +645,13 @@ impl HookEchoApp {
             // The phone gets the chip row above the grid: the eight common styles are one tap
             // each, and the grid is for the other forty.
             let mut close = false;
+            let sheet_area = egui::Rect::from_min_max(
+                egui::pos2(if chrome.width() > chrome.height() { chrome.center().x } else { chrome.left() }, (phone_top(ctx) + 42.0).min(chrome.bottom() - 190.0)),
+                egui::pos2(chrome.right(), chrome.bottom() - 76.0),
+            );
             let rect = crate::app::mobile::sheet::modal_sheet(
                 ctx,
-                chrome,
+                sheet_area,
                 "m_basemap",
                 "Background map",
                 &mut close,

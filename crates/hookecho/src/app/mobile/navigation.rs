@@ -3,7 +3,7 @@
 use egui::{vec2, Align2, Color32, RichText};
 use egui_phosphor::regular as ph;
 
-use super::super::{AppWindow, HookEchoApp, PaletteAction, PanelSection, ViewMode};
+use super::super::{AppWindow, HookEchoApp, PaletteAction, PaletteEntry, PanelSection, ViewMode};
 use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
@@ -166,7 +166,7 @@ impl HookEchoApp {
         }
     }
 
-    pub(crate) fn mobile_more(&mut self, ui: &mut egui::Ui) -> Option<PaletteAction> {
+    pub(crate) fn mobile_more(&mut self, ui: &mut egui::Ui, entries: &[PaletteEntry]) -> Option<PaletteAction> {
         let mut action = None;
         ui.spacing_mut().interact_size.y = 48.0;
         if ui
@@ -234,9 +234,7 @@ impl HookEchoApp {
         }
         ui.separator();
         ui.label("Workspaces");
-        if let Some(picked) =
-            crate::ui::layers_panel::workspace_shortcuts(ui, &self.palette_entries())
-        {
+        if let Some(picked) = crate::ui::layers_panel::workspace_shortcuts(ui, entries) {
             action = Some(picked);
         }
         action
