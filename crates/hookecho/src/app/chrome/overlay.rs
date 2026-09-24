@@ -68,7 +68,7 @@ impl HookEchoApp {
         let accent = crate::theme::accent(self.settings.theme);
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
-        let (mut chosen, mut fly_to) = (None, None);
+        let (mut chosen, mut fly_to, mut picked_site) = (None, None, None);
         let mut opts = ui::layer_options::UiActions::default();
         let mut focus_search = std::mem::take(&mut self.sidebar_focus_search);
         let section = if self.show_alert_panel { PanelSection::Alerts } else { self.panel_section };
@@ -118,10 +118,26 @@ impl HookEchoApp {
             if sheets_layout && section == PanelSection::Tools && settings_page.is_none() {
                 if focus_search {
                     let response = ui.add_sized([ui.available_width(), 48.0], egui::TextEdit::singleline(&mut query).hint_text("Search places, sites, products, tools"));
-                    response.request_focus();
+                    if !response.has_focus() { response.request_focus(); }
                     if query.trim().is_empty() {
                         ui.weak("Type a place, radar site, product, or tool");
                     } else {
+                        let needle = query.trim().to_ascii_lowercase();
+                        let sites: Vec<_> = wxdata::sites::all()
+                            .filter(|site| {
+                                site.id.to_ascii_lowercase().contains(&needle)
+                                    || site.city.to_ascii_lowercase().contains(&needle)
+                            })
+                            .take(6)
+                            .collect();
+                        if !sites.is_empty() { ui.label("Radar sites"); }
+                        for site in sites {
+                            if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}, {}", site.id, site.city, site.state))).clicked() {
+                                picked_site = Some(site.id.to_string());
+                                focus_search = false;
+                                hide = true;
+                            }
+                        }
                         ui.label("Places");
                         if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("Find place: {}", query.trim()))).clicked() {
                             fly_to = Some(query.trim().to_string());
@@ -513,6 +529,10 @@ impl HookEchoApp {
                 self.layers_query.clear();
             }
             self.apply_palette(a, ctx);
+        }
+        if let Some(site) = picked_site {
+            self.views[self.active].site = Some(site);
+            self.layers_query.clear();
         }
         if let Some(place) = fly_to {
             if sheets_layout { self.layers_query.clear(); }
