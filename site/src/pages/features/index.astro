@@ -27,11 +27,11 @@ const sections = [
   {
     id: "analyst-mode",
     eyebrow: "Analyst Workstation",
-    title: "Compare four products without losing your place",
+    title: "See one storm through four products",
     body:
-      "Choose Analyst in the fixed header, then select a preset or a pane count. The toolbar " +
-      "keeps map and time links and Inspector in reach; each product edit targets the active pane. " +
-      "Choose Radar again and the previous single-map view returns. Analyst resumes where you left it.",
+      "Open Analyst from the radar map to compare reflectivity, velocity, correlation " +
+      "coefficient and differential reflectivity at the same place and time. Velocity can reveal " +
+      "a possible rotation signature; the other products add context. Return to Radar in one click.",
     shot: "/shots/analyst-mode-20260923.webp",
     alt: "Analyst Workstation with four radar products and an inspector",
     link: { href: "/docs/radar-and-analyst/", label: "Follow the Analyst guide" },
@@ -153,93 +153,20 @@ const sections = [
 
 <Base
   title="Features — HookEcho"
-  description="Level 2 radar at every tilt, velocity and dual-pol, the MRMS mosaic, warnings, storm interrogation, HRRR and NAM, tropical tracks and archive playback to 1991 — free and open source."
+  description="Start with a clear weather radar map, then compare four synchronized products in Analyst. Explore storm tracks, national radar, warnings, archives, and more."
 >
-  <section class="head">
-    <span class="sweep" aria-hidden="true"></span>
-    <div class="wrap">
-      <p class="eyebrow">Features</p>
-      <h1>Simple at first.<br />Powerful when you need it.</h1>
-      <p class="lede">
-        HookEcho talks straight to the public NOAA, NWS and MRMS feeds from your own machine. No
-        account, no subscription tier holding a product back, no telemetry. Here is what that gets
-        you — each section opens the real app on the thing it describes.
-      </p>
-      <nav class="jump" aria-label="Sections">
-        {sections.map((s) => <a href={`#${s.id}`}>{s.eyebrow}</a>)}
-      </nav>
+  <section class="feature-hero" id="analyst-mode">
+    <div class="wrap feature-hero-grid">
+      <div><p class="eyebrow">Features / Analyst</p><h1>See the storm.<br />Then read between the colors.</h1><p class="lede">A single map gives you the weather at a glance. Analyst adds synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity so you can investigate possible rotation without losing your place.</p><div class="actions"><a class="btn btn-primary" href="/go/web/features">Open live radar</a><a class="btn" href="/docs/radar-and-analyst/">Learn Analyst</a></div><p class="caption">Actual HookEcho capture · KEAX archive · Clinton, Missouri · April 26, 2024</p></div>
+      <img src="/showcase/clinton-four.webp" alt="Four synchronized radar products in HookEcho Analyst" width="1440" height="900" fetchpriority="high" />
     </div>
   </section>
-
-  {
-    sections.map((s) => (
-      <section class="feature-section" id={s.id}>
-        <div class:list={["wrap", "row", { "text-only": !s.shot }]} data-reveal>
-          <div class="copy">
-            <p class="eyebrow">{s.eyebrow}</p>
-            <h2>{s.title}</h2>
-            <p>{s.body}</p>
-            <a class="btn" href={s.link.href}>
-              {s.link.label}
-            </a>
-          </div>
-          {s.shot && <img src={s.shot.startsWith("/") ? s.shot : `${shots}/${s.shot}?v=20260916`} alt={s.alt} loading="lazy" />}
-        </div>
-      </section>
-    ))
-  }
-
-  <section>
-    <div class="wrap">
-      <h2>Try it before you download anything</h2>
-      <p>The browser version is the whole app, on live data, with nothing to install.</p>
-      <div class="ctas">
-        <a class="btn btn-primary" href={app}>Open it in your browser</a>
-        <a class="btn" href="/download/">Download the app</a>
-      </div>
-    </div>
-  </section>
+  <section class="feature-index"><div class="wrap"><div class="intro"><p class="eyebrow">Go deeper</p><h2>Every tool has a job.</h2><p>Choose what you need for the question in front of you. The live map stays one click away.</p></div><div class="feature-list">
+    {sections.filter((s) => s.id !== "analyst-mode").map((s, index) => <article id={s.id} class="feature-item"><span class="feature-number">{String(index + 1).padStart(2,"0")}</span><div><p class="eyebrow">{s.eyebrow}</p><h3>{s.title}</h3><p>{s.body}</p></div><a href={s.link.href}>{s.link.label} →</a></article>)}
+  </div></div></section>
+  <section class="feature-end"><div class="wrap"><h2>Try the real radar.</h2><p>No account or installation needed in your browser.</p><div class="actions"><a class="btn btn-primary" href="/go/web/features-final">Open live radar</a><a class="btn" href="/download/">Download HookEcho</a></div></div></section>
 </Base>
-
 <style>
-  .head { position: relative; overflow: hidden; padding:clamp(3rem,7vw,6rem) 0 2rem; background:radial-gradient(50rem 30rem at 70% 20%,#21bce520,transparent 70%); }
-  .head h1{font-size:clamp(3rem,7vw,6.5rem);line-height:.92;letter-spacing:-.055em;margin:.6rem 0 1.2rem;max-width:1000px}.eyebrow{color:var(--accent);font-weight:750;letter-spacing:.11em;text-transform:uppercase;font-size:.75rem}
-  .head .wrap { position: relative; }
-  .lede { font-size: 1.15rem; color: var(--text-dim); }
-
-  .jump { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.6rem; }
-  .jump a {
-    padding: 0.4rem 0.9rem;
-    border: 1px solid var(--stroke);
-    border-radius: 999px;
-    color: var(--text-dim);
-    text-decoration: none;
-    font-size: 0.85rem;
-    transition: border-color var(--dur-2) ease, color var(--dur-2) ease;
-  }
-  .jump a:hover { border-color: var(--accent); color: var(--text); }
-  /* Solid rather than gradient-clipped text: these rows fade in on reveal, and Chromium
-     leaves a clipped gradient unpainted in the composited layer that fade creates — the
-     eyebrow comes out as transparent glyphs. Same fix as the landing page's big number. */
-  .copy .eyebrow { color: var(--ramp-1); }
-
-  /* Anchored sections land under the sticky header without this. */
-  section[id] { scroll-margin-top: 4.5rem; }
-
-  .row {
-    display: grid;
-    gap: 2rem;
-    grid-template-columns: minmax(280px,.72fr) minmax(0,1.28fr);
-    align-items: center;
-    padding:clamp(1.4rem,3vw,2.5rem);border:1px solid var(--stroke);border-radius:22px;background:linear-gradient(135deg,rgb(14 34 48/.82),rgb(5 16 25/.7));box-shadow:inset 0 1px #c5f3ff0d,0 24px 65px #0004;
-  }
-  .row img {
-    border: 1px solid var(--stroke);
-    border-radius: var(--radius-lg);
-    display: block;
-    box-shadow: var(--shadow-2);
-  }
-  .feature-section{padding:clamp(1rem,2.5vw,2rem) 0}.feature-section:nth-of-type(3n) .row{background:linear-gradient(135deg,rgb(7 20 31/.76),rgb(17 44 59/.82))}.text-only .copy{max-width:760px}.text-only{grid-template-columns:1fr;min-height:0}.copy h2{font-size:clamp(1.7rem,3vw,2.8rem);line-height:1.03;letter-spacing:-.03em}.copy>p:not(.eyebrow){color:var(--text-dim)}
-  .ctas { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.4rem; }
-  @media(max-width:760px){.row{grid-template-columns:1fr}.head h1{font-size:clamp(2.8rem,13vw,4.8rem)}}
+  .feature-hero{padding-block:clamp(3rem,6vw,6rem);background:var(--bg-deep)}.feature-hero-grid{display:grid;grid-template-columns:minmax(300px,.7fr) minmax(0,1.3fr);align-items:center;gap:clamp(2rem,5vw,5rem)}.feature-hero h1{font-size:clamp(3rem,6vw,6rem);line-height:.95;letter-spacing:-.065em}.feature-hero img{display:block;width:100%;border:1px solid var(--stroke-strong)}.lede{font-size:1.1rem;color:var(--text-dim)}.actions{display:flex;flex-wrap:wrap;gap:.7rem;margin-top:1.5rem}.caption{font-size:.75rem;color:var(--text-dim);margin-top:1rem}.intro{max-width:760px;margin-bottom:2rem}.intro h2,.feature-end h2{font-size:clamp(2.5rem,4vw,4rem);line-height:1.02;letter-spacing:-.055em}.intro>p:last-child,.feature-end p{color:var(--text-dim)}.feature-list{border-top:1px solid var(--stroke)}.feature-item{display:grid;grid-template-columns:50px minmax(0,1fr) auto;align-items:start;gap:1.5rem;padding:1.7rem 0;border-bottom:1px solid var(--stroke);scroll-margin-top:5rem}.feature-number{font-size:.75rem;color:var(--accent);font-weight:750}.feature-item .eyebrow{color:var(--accent);margin:0}.feature-item h3{font-size:1.45rem;margin:.25rem 0 .5rem}.feature-item p:not(.eyebrow){color:var(--text-dim);margin:0;max-width:75ch}.feature-item>a{font-size:.86rem;white-space:nowrap;padding-top:1.5rem}.feature-end{background:var(--surface-1)}
+  @media(max-width:800px){.feature-hero-grid{grid-template-columns:1fr}.feature-item{grid-template-columns:30px minmax(0,1fr)}.feature-item>a{grid-column:2;padding:0}.feature-hero h1{font-size:clamp(2.7rem,10vw,4rem)}}
 </style>

@@ -10,7 +10,8 @@
     "test": "node --test",
     "shots": "mkdir -p public/shots && cp ../docs/shots/reflectivity.jpg ../docs/shots/alltilts.jpg ../docs/shots/layers.jpg ../docs/shots/velocity.jpg ../docs/shots/mrms.jpg ../docs/shots/cellconsole.jpg ../docs/shots/stormtable.jpg public/shots/ && cp ../docs/shots/hero.gif public/shots/hookecho-hero.gif",
     "linkcheck": "linkinator dist --recurse --skip \"radar.weather.gov|api.weather.gov|img.hookecho.io|https://hookecho.io/|/go/\"",
-    "postbuild": "pagefind --site dist"
+    "postbuild": "pagefind --site dist",
+    "test:demo": "node scripts/demo-smoke.mjs"
   },
   "dependencies": {
     "@astrojs/rss": "^4.0.19",
@@ -21,6 +22,7 @@
     "astro-og-canvas": "^0.13.0",
     "canvaskit-wasm": "^0.42.0",
     "linkinator": "^6.1.2",
-    "pagefind": "^1.5.2"
+    "pagefind": "^1.5.2",
+    "playwright": "^1.63.0"
   }
 }

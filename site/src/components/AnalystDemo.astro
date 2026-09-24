@@ -1,0 +1,160 @@
+---
+const products = [
+  { id: "reflectivity", name: "Reflectivity", detail: "Start with the precipitation pattern and locate the storm near Clinton." },
+  { id: "velocity", name: "Velocity", detail: "Compare motion toward and away from KEAX. Neighboring opposing values can suggest rotation; inspect the pattern and radar angle." },
+  { id: "correlation", name: "Correlation coefficient", detail: "Compare the similarity of radar returns. This adds context; low values alone do not identify debris." },
+  { id: "differential", name: "Differential reflectivity", detail: "Compare the shape and size of what the radar samples. Use it alongside the other products." },
+];
+---
+<div class="analyst-demo" id="analyst" data-analyst-demo>
+  <div class="demo-heading">
+    <div>
+      <p class="eyebrow">Recorded radar demonstration</p>
+      <h2>One storm. Four ways to read it.</h2>
+      <p>Start with an uncluttered map. Open Analyst to compare the same scan across four products and investigate possible rotation.</p>
+    </div>
+    <div class="mode-switch" aria-label="Radar demonstration view">
+      <button type="button" data-mode="radar" aria-pressed="true">Radar</button>
+      <button type="button" data-mode="analyst" aria-pressed="false">Four-product Analyst</button>
+    </div>
+  </div>
+
+  <div class="demo-surface">
+    <div class="stage stage-single" data-stage="single">
+      <img data-src="/showcase/clinton-single.webp" alt="HookEcho single reflectivity map of the April 26, 2024 storm near Clinton, Missouri" width="1440" height="900" loading="lazy" />
+      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/clinton-single.mp4" type="video/mp4" /></video>
+      <noscript><style>.stage-single > img { display: none; }</style><img src="/showcase/clinton-single.webp" alt="HookEcho reflectivity map of the Clinton-area storm" width="1440" height="900" loading="lazy" /></noscript>
+    </div>
+    <div class="stage stage-four" data-stage="four" hidden>
+      <img data-src="/showcase/clinton-four.webp" alt="HookEcho Analyst showing synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity from the same KEAX scan" width="1440" height="900" loading="lazy" />
+      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/clinton-four.mp4" type="video/mp4" /></video>
+      <span class="velocity-label">02 · Velocity: inspect possible rotation</span>
+      <span class="velocity-marker" aria-hidden="true"></span>
+    </div>
+    <div class="stage stage-mobile" data-stage="mobile" hidden>
+      {products.map((product, index) => <div class="product-frame" data-product-frame={index} hidden={index !== 0}>
+        <img data-src={`/showcase/clinton-${product.id}.webp`} alt={`${product.name} view of the Clinton-area storm from the KEAX radar`} width="720" height="300" loading="lazy" />
+        <video muted loop playsinline preload="none" aria-hidden="true"><source data-src={`/showcase/clinton-${product.id}.mp4`} type="video/mp4" /></video>
+        {index === 1 && <span class="mobile-velocity-marker" aria-hidden="true"></span>}
+      </div>)}
+    </div>
+  </div>
+
+  <div class="demo-bottom">
+    <div class="demo-controls">
+      <button type="button" data-action="play" aria-label="Pause demonstration">Pause</button>
+      <button type="button" data-action="replay">Replay</button>
+    </div>
+    <p class="capture">Actual HookEcho capture · KEAX archive · Clinton, Missouri · April 26, 2024 · starts 7:29 PM CDT (00:29 UTC April 27) · 0.44° scan</p>
+  </div>
+
+  <div class="product-nav" hidden>
+    <div class="product-buttons" role="group" aria-label="Radar products">
+      {products.map((product, index) => <button type="button" data-product={index} aria-pressed={index === 0 ? "true" : "false"}>{product.name}</button>)}
+    </div>
+    <p class="product-detail" aria-live="polite">{products[0].detail}</p>
+  </div>
+  <div class="desktop-explainer" hidden>
+    {products.map((product, index) => <div class:list={["explainer", { "is-velocity": index === 1 }]}><span>0{index + 1} · {product.name}</span><p>{product.detail}</p></div>)}
+  </div>
+  <p class="demo-caution">The callouts are part of this website walkthrough. Radar rotation alone does not confirm a tornado. <a href="https://www.weather.gov/mlb/Doppler_Dual_Pol_Weather_Radar">Learn how NWS interprets Doppler radar</a>.</p>
+  <noscript><p>The still images show the recorded radar view. <a href="/docs/radar-and-analyst/">Read the Analyst guide</a> or <a href="/go/web/analyst">open the app</a>.</p></noscript>
+</div>
+
+<script>
+  const productDetails = [
+    "Start with the precipitation pattern and locate the storm near Clinton.",
+    "Compare motion toward and away from KEAX. Neighboring opposing values can suggest rotation; inspect the pattern and radar angle.",
+    "Compare the similarity of radar returns. This adds context; low values alone do not identify debris.",
+    "Compare the shape and size of what the radar samples. Use it alongside the other products.",
+  ];
+  const root = document.querySelector<HTMLElement>("[data-analyst-demo]");
+  if (root) {
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+    const mobile = matchMedia("(max-width: 760px)");
+    const stages = [...root.querySelectorAll<HTMLElement>("[data-stage]")];
+    const frames = [...root.querySelectorAll<HTMLElement>("[data-product-frame]")];
+    const modeButtons = [...root.querySelectorAll<HTMLButtonElement>("[data-mode]")];
+    const productButtons = [...root.querySelectorAll<HTMLButtonElement>("[data-product]")];
+    const productNav = root.querySelector<HTMLElement>(".product-nav")!;
+    const desktopExplainer = root.querySelector<HTMLElement>(".desktop-explainer")!;
+    const detail = root.querySelector<HTMLElement>(".product-detail")!;
+    const playButton = root.querySelector<HTMLButtonElement>('[data-action="play"]')!;
+    const replayButton = root.querySelector<HTMLButtonElement>('[data-action="replay"]')!;
+    let mode = "radar";
+    let product = 0;
+    let playhead = 0;
+    let pausedByUser = false;
+    let inView = false;
+
+    const activeStage = () => stages.find((stage) => stage.dataset.stage === (mode === "radar" ? "single" : mobile.matches ? "mobile" : "four"))!;
+    const activeVideo = () => (mode === "analyst" && mobile.matches ? frames[product] : activeStage()).querySelector<HTMLVideoElement>("video")!;
+    const sync = (video: HTMLVideoElement) => {
+      const setTime = () => { if (Number.isFinite(video.duration)) video.currentTime = Math.min(playhead, Math.max(0, video.duration - 0.05)); };
+      if (video.readyState) setTime(); else video.addEventListener("loadedmetadata", setTime, { once: true });
+    };
+    const showImage = () => {
+      const image = (mode === "analyst" && mobile.matches ? frames[product] : activeStage()).querySelector<HTMLImageElement>("img")!;
+      if (!image.src && image.dataset.src) image.src = image.dataset.src;
+    };
+    const play = () => {
+      if (inView) showImage();
+      if (!inView || reduced.matches || pausedByUser) return;
+      const video = activeVideo();
+      const source = video.querySelector<HTMLSourceElement>("source")!;
+      if (!source.src) { source.src = source.dataset.src!; video.load(); sync(video); }
+      video.play().then(() => {
+        video.parentElement?.classList.add("playing");
+        playButton.textContent = "Pause";
+        playButton.setAttribute("aria-label", "Pause demonstration");
+      }).catch(() => {});
+    };
+    const stop = () => {
+      root.querySelectorAll<HTMLVideoElement>("video").forEach((video) => {
+        video.pause();
+        video.parentElement?.classList.remove("playing");
+      });
+    };
+    const render = () => {
+      stop();
+      stages.forEach((stage) => stage.hidden = stage !== activeStage());
+      frames.forEach((frame, index) => frame.hidden = index !== product);
+      modeButtons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.mode === mode)));
+      productButtons.forEach((button, index) => button.setAttribute("aria-pressed", String(index === product)));
+      productNav.hidden = mode !== "analyst" || !mobile.matches;
+      desktopExplainer.hidden = mode !== "analyst" || mobile.matches;
+      detail.textContent = productDetails[product];
+      sync(activeVideo());
+      play();
+    };
+    modeButtons.forEach((button) => button.addEventListener("click", () => { mode = button.dataset.mode!; render(); }));
+    productButtons.forEach((button, index) => button.addEventListener("click", () => { product = index; render(); }));
+    root.querySelectorAll<HTMLVideoElement>("video").forEach((video) => {
+      video.addEventListener("timeupdate", () => { if (video === activeVideo()) playhead = video.currentTime; });
+      video.addEventListener("error", () => { video.parentElement?.classList.remove("playing"); });
+    });
+    playButton.addEventListener("click", () => {
+      if (pausedByUser) { pausedByUser = false; play(); }
+      else { pausedByUser = true; stop(); playButton.textContent = "Play"; playButton.setAttribute("aria-label", "Play demonstration"); }
+    });
+    replayButton.addEventListener("click", () => { stop(); playhead = 0; activeVideo().currentTime = 0; pausedByUser = false; play(); });
+    document.querySelectorAll<HTMLAnchorElement>("[data-explore-analyst]").forEach((link) => link.addEventListener("click", () => { mode = "analyst"; render(); }));
+    let touchX = 0;
+    root.querySelector(".stage-mobile")?.addEventListener("touchstart", (event) => { touchX = (event as TouchEvent).changedTouches[0].clientX; }, { passive: true });
+    root.querySelector(".stage-mobile")?.addEventListener("touchend", (event) => {
+      const delta = (event as TouchEvent).changedTouches[0].clientX - touchX;
+      if (Math.abs(delta) > 45) { product = Math.max(0, Math.min(3, product + (delta < 0 ? 1 : -1))); render(); }
+    }, { passive: true });
+    mobile.addEventListener("change", render);
+    reduced.addEventListener("change", () => { if (reduced.matches) stop(); else play(); });
+    new IntersectionObserver(([entry]) => { inView = entry.isIntersecting; if (inView) play(); else stop(); }).observe(root);
+    render();
+  }
+</script>
+
+<style>
+  .analyst-demo{scroll-margin-top:5rem}.demo-heading{display:flex;align-items:end;justify-content:space-between;gap:2rem;margin-bottom:1.25rem}.demo-heading>div:first-child{max-width:660px}.demo-heading h2{font-size:clamp(2.2rem,4vw,4rem);line-height:1;letter-spacing:-.055em}.demo-heading p:not(.eyebrow){color:var(--text-dim);margin-bottom:0}.mode-switch,.demo-controls,.product-buttons{display:flex;gap:.35rem}.mode-switch{padding:.3rem;border:1px solid var(--stroke);background:var(--surface-1);border-radius:9px;flex-shrink:0}button{font:inherit;color:var(--text);border:1px solid var(--stroke-strong);border-radius:7px;background:var(--surface-1);padding:.5rem .8rem;min-height:44px;cursor:pointer}button:hover,button[aria-pressed=true]{border-color:var(--accent);color:var(--text);background:var(--surface-2)}.mode-switch button{border:0}.mode-switch button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink)}[hidden]{display:none!important}.demo-surface{border:1px solid var(--stroke-strong);background:#080c10;overflow:hidden;aspect-ratio:16/10}.stage,.product-frame{position:relative;width:100%;height:100%}.stage img,.stage video,.product-frame img,.product-frame video{display:block;width:100%;height:100%;object-fit:cover}.stage video,.product-frame video{position:absolute;inset:0;visibility:hidden}.stage.playing>video,.product-frame.playing>video{visibility:visible}.velocity-label{position:absolute;top:4%;right:2%;padding:.45rem .7rem;border:1px solid #b4eaf5;background:#081d25ec;color:#e4faff;font-size:.78rem;font-weight:750}.velocity-marker,.mobile-velocity-marker{position:absolute;border:2px dashed #c7f0f7;border-radius:50%;box-shadow:0 0 0 3px #06151ec4;pointer-events:none}.velocity-marker{left:73%;top:20%;width:6%;aspect-ratio:1}.mobile-velocity-marker{left:51%;top:49%;width:18%;aspect-ratio:1}.demo-bottom{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.6rem 0 1.2rem}.capture{font-size:.76rem;color:var(--text-dim);margin:0;text-align:right}.desktop-explainer{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--stroke);border:1px solid var(--stroke);margin-top:.5rem}.explainer{background:var(--surface-1);padding:1rem}.explainer span{display:block;color:var(--text);font-size:.8rem;font-weight:750}.explainer p{font-size:.85rem;line-height:1.4;color:var(--text-dim);margin:.5rem 0 0}.is-velocity{background:#10212a;box-shadow:inset 0 3px var(--accent)}.demo-caution{font-size:.78rem;color:var(--text-dim);margin:1rem 0 0;max-width:none}.demo-caution a{color:var(--text-dim)}.product-nav{margin-top:.75rem}.product-buttons{overflow-x:auto;padding-bottom:.5rem}.product-buttons button{white-space:nowrap}.product-detail{color:var(--text-dim);min-height:3.2em;margin:.4rem 0 0}.stage-mobile{display:none}
+  @media(max-width:900px){.demo-heading{align-items:start;flex-direction:column}.desktop-explainer{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:760px){.demo-surface{aspect-ratio:8/7}.stage-single img,.stage-single video{object-fit:cover;object-position:center}.stage-four{display:none!important}.stage-mobile:not([hidden]){display:block}.demo-bottom{align-items:start;flex-direction:column}.capture{text-align:left}.desktop-explainer{display:none!important}.mode-switch{width:100%}.mode-switch button{flex:1;padding-inline:.4rem;font-size:.88rem}.velocity-label{display:none}}
+  @media(prefers-reduced-motion:reduce){video{display:none!important}}
+</style>
