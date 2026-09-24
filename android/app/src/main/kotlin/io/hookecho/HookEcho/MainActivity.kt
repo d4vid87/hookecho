@@ -45,7 +45,7 @@ class MainActivity : GameActivity() {
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = nativeOnBack()
     }
-    private val overlayBackCallback = OnBackInvokedCallback { nativeOnBack() }
+    private var overlayBackCallback: Any? = null
     private var overlayBackRegistered = false
 
     /** What [openDocument] was asked for: `kind<TAB>tag`, echoed back in `import.txt`. */
@@ -98,11 +98,16 @@ class MainActivity : GameActivity() {
         runOnUiThread {
             if (Build.VERSION.SDK_INT >= 33) {
                 if (consumed && !overlayBackRegistered) {
+                    val callback = OnBackInvokedCallback { nativeOnBack() }
                     onBackInvokedDispatcher.registerOnBackInvokedCallback(
-                        OnBackInvokedDispatcher.PRIORITY_OVERLAY, overlayBackCallback)
+                        OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)
+                    overlayBackCallback = callback
                     overlayBackRegistered = true
                 } else if (!consumed && overlayBackRegistered) {
-                    onBackInvokedDispatcher.unregisterOnBackInvokedCallback(overlayBackCallback)
+                    (overlayBackCallback as? OnBackInvokedCallback)?.let {
+                        onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it)
+                    }
+                    overlayBackCallback = null
                     overlayBackRegistered = false
                 }
             } else {
