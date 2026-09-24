@@ -157,6 +157,7 @@ impl super::HookEchoApp {
             || self.cells_window.open
             || self.forecast_open
             || self.settings_window.open
+            || self.help_hub.open
             || self.basemap_open
             || self.panel_open
             || self.mobile_chrome_hidden
@@ -208,6 +209,7 @@ impl super::HookEchoApp {
             self.cells_window.open,
             self.forecast_open,
             self.settings_window.open,
+            self.help_hub.open,
             self.basemap_open,
             self.panel_open,
             self.mobile_chrome_hidden,
