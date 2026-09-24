@@ -281,8 +281,8 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
   --surface-2: #151915;
   --stroke: #29332b;
   --stroke-strong: #455448;
-  --text: #f0f5ef;
-  --text-dim: #aab9ab;
+  --text: #c8efc0;
+  --text-dim: #9fbd99;
   --accent: #54e273;
   --accent-ink: #031007;
   --page: 1360px;
@@ -306,3 +306,6 @@ a, button { -webkit-tap-highlight-color: transparent; }
 
 /* Radar color is reserved for labels and key display words; body copy stays readable. */
 .eyebrow { color: var(--accent); }
+
+/* Headings use the same reflectivity ramp as the hero; supporting type uses radar greens. */
+h1, h2, h3, h4, h5, h6 { background-image: var(--ramp); background-clip: text; -webkit-text-fill-color: transparent; }
