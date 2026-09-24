@@ -39,7 +39,7 @@ glue="web/dist/hookecho.js"
 # the input didn't already use, so this is "accept what rustc produced", not "target the bleeding
 # edge" — the smoke test is what proves the result still runs.
 if command -v wasm-opt >/dev/null; then
-  wasm-opt -Os --converge -all "$wasm" -o "$wasm.opt"
+  wasm-opt -Oz --converge -all "$wasm" -o "$wasm.opt"
   mv "$wasm.opt" "$wasm"
 else
   echo "warning: wasm-opt not found (install binaryen) — bundle is ~15% larger than a CI build" >&2

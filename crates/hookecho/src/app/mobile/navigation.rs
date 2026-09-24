@@ -20,6 +20,7 @@ impl HookEchoApp {
         });
         let mut action = None;
         let mut mode = None;
+        let mut product_anchor = None;
         let header = egui::Area::new("mobile_header".into())
             .order(egui::Order::Foreground)
             .anchor(
@@ -33,14 +34,14 @@ impl HookEchoApp {
                 ui.set_width((self.chrome_rect.width() - 20.0).max(200.0));
                 ui.horizontal(|ui| {
                     let site_label = format!("{site} · {product}");
-                    if ui
+                    let radar = ui
                         .add_sized(
                             [ui.available_width() - 112.0, 48.0],
                             egui::Button::new(site_label),
                         )
-                        .named("Open radar controls")
-                        .clicked()
-                    {
+                        .named("Open radar controls");
+                    product_anchor = Some(radar.rect);
+                    if radar.clicked() {
                         self.panel_section = PanelSection::Radar;
                         self.show_alert_panel = false;
                         self.panel_open = true;
@@ -102,6 +103,7 @@ impl HookEchoApp {
                 }
             });
         self.mobile_occlusion.push(header.response.rect);
+        self.tour_anchors.product = product_anchor;
 
         let bottom = self.chrome_rect.bottom() - 4.0;
         let destinations = egui::Area::new("mobile_destinations".into())
@@ -155,6 +157,7 @@ impl HookEchoApp {
                     });
             });
         self.mobile_occlusion.push(destinations.response.rect);
+        self.tour_anchors.menu = Some(destinations.response.rect);
         if let Some(action) = action {
             self.apply_palette(action, ctx);
         }
