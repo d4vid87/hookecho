@@ -90,7 +90,10 @@ class MainActivity : GameActivity() {
     /** Called from Rust when what back would do changes. */
     @Suppress("unused")
     fun setBackConsumed(consumed: Boolean) {
-        runOnUiThread { backCallback.isEnabled = consumed }
+        runOnUiThread {
+            backCallback.isEnabled = consumed
+            android.util.Log.d("HookEchoActivity", "back consumed=$consumed")
+        }
     }
 
     private external fun nativeOnBack()

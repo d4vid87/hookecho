@@ -706,7 +706,7 @@ mod android_back {
     /// # Safety
     /// Called by the JVM with a valid env/object pair; touches only an atomic.
     #[unsafe(no_mangle)]
-    pub extern "system" fn Java_zip_batman_hookecho_MainActivity_nativeOnBack(
+    pub extern "system" fn Java_io_hookecho_HookEcho_MainActivity_nativeOnBack(
         _env: jni::JNIEnv,
         _this: JObject,
     ) {
