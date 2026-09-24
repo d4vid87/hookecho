@@ -109,8 +109,11 @@ class MainActivity : GameActivity() {
      * [AlertService] is `START_STICKY`, so background alerting restarts if enabled.
      */
     override fun onDestroy() {
-        super.onDestroy()
+        android.util.Log.i("HookEchoActivity", "destroy changingConfig=$isChangingConfigurations finishing=$isFinishing")
+        // GameActivity's teardown can wait for a native loop that still calls its dead input
+        // buffers. End the process before entering that teardown on a real exit.
         if (!isChangingConfigurations) android.os.Process.killProcess(android.os.Process.myPid())
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
