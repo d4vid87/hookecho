@@ -584,6 +584,8 @@ pub struct PendingVectorTile {
 pub struct MapCallback {
     /// Which pane this callback draws (indexes into `RenderResources.panes`).
     pub pane: u32,
+    /// On a phone, free GPU allocations belonging to hidden analyst panes.
+    pub retain_only_pane: Option<u32>,
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
     pub world_per_pixel: f32,
@@ -1859,6 +1861,9 @@ impl RenderResources {
     }
 
     pub fn prepare_pane(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
+        if let Some(visible) = cb.retain_only_pane {
+            self.panes.retain(|id, _| *id == visible);
+        }
         self.upload_frame(device, queue, cb);
     }
 

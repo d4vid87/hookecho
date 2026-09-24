@@ -12,9 +12,24 @@ interface built for a phone. Install it from
 
 ## Getting around
 
-The **Radar | Analyst** switch remains at the top. The menu opens Radar,
-Overlays, Alerts, or Tools in a sheet with a fixed header; the timeline stays
-below the map. Search and Settings remain available from the header.
+The map opens with controls closed. Tap the radar name above the map to change
+its product, site, tilt, or threshold. The timeline stays above the bottom
+navigation so you can scrub without opening a menu.
+
+The bottom bar opens one focused sheet at a time. Tap its destination again,
+tap **×**, or swipe the handle down to return to the map:
+
+- **Radar** has the site, product, tilt, threshold, and advanced settings.
+- **Layers** has storm tracks, MRMS, storm attributes, and the SPC outlook.
+  Tap the selected outlook day again to remove it.
+- **Alerts** shows the warning count and list. New warnings never open the
+  sheet automatically; the map warning switch is inside Alerts.
+- **More** has Analyst, saved locations, workspaces, Settings, and the
+  walkthrough.
+
+Search and custom locations are one tap from the buttons above the map.
+On Android, the system Back gesture closes search or the open sheet before
+leaving HookEcho.
 
 ![The Radar section in a phone-sized browser](/showcase/phone-mode-20260923.webp)
 
@@ -22,7 +37,8 @@ below the map. Search and Settings remain available from the header.
 
 - **Long-press** the map to inspect what's under your finger.
 - **Double-tap and drag** up or down to zoom with one hand.
-- **Use the pane strip** to move between analyst panes without panning the map.
+- **Open Analyst from More** to use presets and linked panes. Pane tabs show
+  one map at a time on a phone. Tap **Back to Radar** to restore your radar view.
 - The app buzzes on scrubber ticks, sheet snaps, and new warnings.
 
 ## Notifications with the app closed

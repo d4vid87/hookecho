@@ -71,10 +71,9 @@ impl Tour {
         false
     }
 
-    fn body(&self, sig: Signals) -> String {
-        let android = cfg!(target_os = "android");
+    fn body(&self, sig: Signals, phone: bool) -> String {
         match self.step {
-            0 => if android {
+            0 => if phone {
                 "Drag the scrubber to walk back through the storm, or tap Live to snap to the \
                  newest scan. Every overlay — warnings, reports, lightning — follows you back in \
                  time."
@@ -86,7 +85,7 @@ impl Tour {
             .to_string(),
             1 => {
                 let p = crate::products::info(sig.moment);
-                let how = if android {
+                let how = if phone {
                     "Tap another product chip"
                 } else {
                     "Pick another product, or press its number key"
@@ -97,17 +96,21 @@ impl Tour {
                     p.name, p.blurb, how
                 )
             }
-            2 => if android {
-                "Open the menu for Radar, Overlays, Alerts, and Tools. Search finds products, tools, \
-                 and places. Settings is always in the top bar."
+            2 => if phone {
+                "The bottom bar opens Radar, Layers, Alerts, and More. Tap the search icon above \
+                 the map to find places, sites, products, and tools. Tap a section again to close it."
             } else {
                 "Open the menu for Radar, Overlays, Alerts, and Tools. Press Ctrl+S to search \
                  products, tools, and places. Settings is always in the top bar; Escape closes \
                  the menu."
             }.to_string(),
-            _ => "Radar keeps one clear map. Switch to Analyst in the top bar for linked panes, \
-                  presets, and the Inspector. Switch back to restore your radar view."
-                .to_string(),
+            _ => if phone {
+                "Open Analyst from More. Its pane tabs show one map at a time; More holds presets, \
+                 linking, and Inspector. Tap Back to Radar to restore your original view."
+            } else {
+                "Radar keeps one clear map. Switch to Analyst in the top bar for linked panes, \
+                 presets, and the Inspector. Switch back to restore your radar view."
+            }.to_string(),
         }
     }
 
@@ -144,7 +147,7 @@ impl Tour {
         }
 
         let card_w = 420.0_f32.min(screen.width() - 32.0);
-        let body = self.body(sig);
+        let body = self.body(sig, ctx.content_rect().size().min_elem() < 600.0);
         let mut act = 0_i8;
         let window = egui::Window::new("60-second guide")
             .id(egui::Id::new("tour_card"))

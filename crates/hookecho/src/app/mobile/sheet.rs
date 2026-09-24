@@ -134,7 +134,7 @@ pub(crate) fn modal_sheet<R>(
                     sw: 0,
                     se: 0,
                 },
-                sheet_fill(ui),
+                sheet_fill(ui).to_opaque(),
             );
             ui.scope_builder(
                 egui::UiBuilder::new().max_rect(rect.shrink2(vec2(m3::SP_4, 0.0))),

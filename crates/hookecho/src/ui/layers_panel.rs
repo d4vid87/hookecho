@@ -510,12 +510,13 @@ pub(crate) fn primary_controls(
             ("SPC Outlook", PaletteAction::OpenOutlooks),
         ];
     for pair in controls.chunks(2) {
+        let row_h = ui.spacing().interact_size.y.max(32.0);
         ui.columns(2, |columns| {
         for (column, (label, action)) in columns.iter_mut().zip(pair.iter()) {
             let on = if *action == PaletteAction::OpenOutlooks { spc_open } else {
                 entries.iter().any(|e| e.action == *action && e.on == Some(true))
             };
-            if column.add_sized([column.available_width(), 32.0], egui::Button::new(RichText::new(*label).size(12.0)).selected(on)).clicked() {
+            if column.add_sized([column.available_width(), row_h], egui::Button::new(RichText::new(*label).size(12.0)).selected(on)).clicked() {
                 if *action == PaletteAction::OpenOutlooks { spc_open = !spc_open; }
                 else { chosen = Some(*action); }
             }

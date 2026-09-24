@@ -2,7 +2,7 @@ name: Roadmap preview
 
 on:
   push:
-    branches: ["roadmap/**"]
+    branches: ["roadmap/**", "feature/mobile-*"]
   workflow_dispatch:
 
 permissions:

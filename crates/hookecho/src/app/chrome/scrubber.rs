@@ -25,19 +25,18 @@ impl HookEchoApp {
         let selected_cut = self.views[self.active]
             .selected_cut_ms()
             .and_then(chrono::DateTime::from_timestamp_millis);
-        let fresh = self.views[self.active]
-            .volume
-            .as_ref()
-            .is_some_and(|v| {
-                (chrono::Utc::now() - latest_cut.unwrap_or(v.time)).num_seconds() < 900
-            });
+        let fresh = self.views[self.active].volume.as_ref().is_some_and(|v| {
+            (chrono::Utc::now() - latest_cut.unwrap_or(v.time)).num_seconds() < 900
+        });
         // Site and data age used to live in the docked status bar; the clock belongs with the clock.
         let site = self.views[self.active]
             .site
             .clone()
             .unwrap_or_else(|| "no site".to_string());
         let age = self.views[self.active].volume.as_ref().map(|v| {
-            let secs = (Utc::now() - latest_cut.unwrap_or(v.time)).num_seconds().max(0);
+            let secs = (Utc::now() - latest_cut.unwrap_or(v.time))
+                .num_seconds()
+                .max(0);
             format!(
                 "{} {} ago",
                 if latest_cut.is_some() { "Cut" } else { "Scan" },
@@ -76,15 +75,16 @@ impl HookEchoApp {
         let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
-        let narrow = self.chrome_rect.width() < 600.0;
+        let narrow = super::overlay::compact(ctx);
+        let phone_landscape = narrow && self.chrome_rect.width() > self.chrome_rect.height();
         let compact_live = narrow;
         // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
         let mut scrub_rect = None;
         // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
         // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
-        let width = (self.chrome_rect.width() - 160.0)
+        let width = if phone_landscape { (self.chrome_rect.width() * 0.5 - 20.0).max(220.0) } else { (self.chrome_rect.width() - 160.0)
             .clamp(420.0, if narrow { 420.0 } else { 760.0 })
-            .min(self.chrome_rect.width() - 16.0);
+            .min(self.chrome_rect.width() - 16.0) };
         // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
         // and rain arrival has its own chip lane.
         let (dvr, rain) = if narrow { (0, None) } else { (dvr, rain) };
@@ -93,8 +93,8 @@ impl HookEchoApp {
         egui::Area::new(egui::Id::new("scrubber"))
             .constrain_to(self.chrome_rect)
             .anchor(
-                egui::Align2::CENTER_BOTTOM,
-                egui::vec2(0.0, if narrow { crate::ui::style::LANE_BOTTOM_CHIP } else { -24.0 }),
+                if phone_landscape { egui::Align2::LEFT_BOTTOM } else { egui::Align2::CENTER_BOTTOM },
+                egui::vec2(if phone_landscape { 10.0 } else { 0.0 }, if narrow { -84.0 } else { -24.0 }),
             )
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 252)
@@ -474,8 +474,7 @@ fn track(
     let x_of = |i: usize| bar.left() + (i as f32 + 0.5) / slots as f32 * bar.width();
     let x_playhead = if t.cut_playback && t.cut_count > 0 && t.playhead < t.frames.len() {
         bar.left()
-            + (t.playhead as f32 + (t.cut_index as f32 + 0.5) / t.cut_count as f32)
-                / slots as f32
+            + (t.playhead as f32 + (t.cut_index as f32 + 0.5) / t.cut_count as f32) / slots as f32
                 * bar.width()
     } else {
         x_of(t.playhead)
@@ -596,13 +595,15 @@ fn track(
     // unless we fill it in. Where the playhead sits is the whole of what it says.
     let (at, of) = (t.playhead + 1, slots.max(1));
     let label = if t.cut_playback && t.cut_count > 0 {
-        format!("Timeline, volume {at} of {of}, cut {} of {}", t.cut_index + 1, t.cut_count)
+        format!(
+            "Timeline, volume {at} of {of}, cut {} of {}",
+            t.cut_index + 1,
+            t.cut_count
+        )
     } else {
         format!("Timeline, frame {at} of {of}")
     };
-    resp.widget_info(|| {
-        egui::WidgetInfo::slider(true, at as f64, label.clone())
-    });
+    resp.widget_info(|| egui::WidgetInfo::slider(true, at as f64, label.clone()));
     rect
 }
 

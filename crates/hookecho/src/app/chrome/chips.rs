@@ -89,7 +89,14 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::RIGHT_BOTTOM,
-                egui::vec2(-14.0, crate::ui::style::LANE_BOTTOM_CHIP),
+                egui::vec2(
+                    -14.0,
+                    if super::overlay::compact(ctx) {
+                        -174.0
+                    } else {
+                        crate::ui::style::LANE_BOTTOM_CHIP
+                    },
+                ),
             )
             .interactable(false)
             .show(ctx, |ui| {
@@ -439,7 +446,14 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::CENTER_BOTTOM,
-                egui::vec2(0.0, crate::ui::style::LANE_BOTTOM_CHASE),
+                egui::vec2(
+                    0.0,
+                    if super::overlay::compact(ctx) {
+                        -174.0
+                    } else {
+                        crate::ui::style::LANE_BOTTOM_CHASE
+                    },
+                ),
             )
             // Interactable so the message can be read and copied: six seconds is not long enough
             // to transcribe a URL out of a failure. The chip is small and sits in the bottom lane,

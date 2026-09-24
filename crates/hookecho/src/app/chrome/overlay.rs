@@ -32,7 +32,7 @@ fn phone(ctx: &egui::Context) -> bool {
 /// the map like a desktop does rather than over it. M3 calls the line 600 dp; the same line moves
 /// a phone in landscape onto the tablet layout, which is the right answer there too.
 pub(crate) fn compact(ctx: &egui::Context) -> bool {
-    crate::ui::m3::width_class(ctx.content_rect().width()) == crate::ui::m3::WidthClass::Compact
+    ctx.content_rect().size().min_elem() < 600.0
 }
 
 /// Does this screen get bottom sheets instead of a docked panel?
@@ -111,12 +111,36 @@ impl HookEchoApp {
         let sheets_layout = sheets(ctx);
         let analyst_dock = self.analyst_open;
         let mut sheet_close = false;
+        let search_page = focus_search;
         let mut body = |ui: &mut egui::Ui| {
             if section == PanelSection::Radar && settings_page.is_none() {
                 self.product_section(ui, &mut opts);
                 return;
             }
-            crate::ui::style::glass(ui, 250).show(ui, |ui| {
+            if sheets_layout && section == PanelSection::Tools && settings_page.is_none() {
+                if focus_search {
+                    let response = ui.add_sized([ui.available_width(), 48.0], egui::TextEdit::singleline(&mut query).hint_text("Search places, sites, products, tools"));
+                    response.request_focus();
+                    for i in crate::ui::layers_panel::matches(&entries, &query).into_iter().take(20) {
+                        let entry = &entries[i];
+                        if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}", entry.category, entry.label))).clicked() {
+                            chosen = Some(entry.action);
+                            focus_search = false;
+                            hide = true;
+                        }
+                    }
+                    if !query.trim().is_empty() && ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("Find place: {}", query.trim()))).clicked() {
+                        fly_to = Some(query.trim().to_string());
+                        focus_search = false;
+                        hide = true;
+                    }
+                } else {
+                    chosen = self.mobile_more(ui);
+                }
+                return;
+            }
+            (if sheets_layout { egui::Frame::NONE } else { crate::ui::style::glass(ui, 250) }).show(ui, |ui| {
+                if sheets_layout { ui.spacing_mut().interact_size.y = 48.0; }
                 if let Some(page) = settings_page.filter(|_| !alerts_tab) {
                     let section_id = egui::Id::new("preferences_section");
                     let section = if page == "Preferences" {
@@ -382,13 +406,13 @@ impl HookEchoApp {
         if sheets(ctx) {
             let title = match section {
                 PanelSection::Radar => "Radar".to_string(),
-                PanelSection::Overlays => "Overlays".to_string(),
+                PanelSection::Overlays => "Layers".to_string(),
                 PanelSection::Alerts => format!("Alerts in view ({alert_count})"),
-                PanelSection::Tools => "Tools".to_string(),
+                PanelSection::Tools => if search_page { "Search" } else { "More" }.to_string(),
             };
             let sheet_area = egui::Rect::from_min_max(
-                egui::pos2(chrome.left(), (phone_top(ctx) + if analyst_dock { 190.0 } else { 100.0 }).min(chrome.bottom() - 160.0)),
-                chrome.max,
+                egui::pos2(if chrome.width() > chrome.height() { chrome.center().x } else { chrome.left() }, (phone_top(ctx) + 42.0).min(chrome.bottom() - 190.0)),
+                egui::pos2(chrome.right(), chrome.bottom() - 76.0),
             );
             let rect = crate::app::mobile::sheet::modal_sheet(
                 ctx,
@@ -441,6 +465,9 @@ impl HookEchoApp {
         ctx.data_mut(|d| d.insert_temp(settings_id, settings_page));
         self.panel_section = section;
         self.show_alert_panel = section == PanelSection::Alerts;
+        if sheets_layout && section == PanelSection::Tools && !hide && !sheet_close {
+            self.sidebar_focus_search = focus_search;
+        }
         self.settings.mute_alerts = muted;
         if hide || sheet_close {
             self.panel_open = false;

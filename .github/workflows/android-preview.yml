@@ -2,7 +2,7 @@ name: Android device preview
 
 on:
   push:
-    branches: ["fix/android-*"]
+    branches: ["fix/android-*", "feature/mobile-*"]
 
 permissions:
   contents: read
