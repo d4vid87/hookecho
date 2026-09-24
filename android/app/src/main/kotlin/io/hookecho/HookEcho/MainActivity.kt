@@ -8,6 +8,7 @@ import com.google.androidgamesdk.GameActivity
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
+import android.view.WindowInsets
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import java.io.File
@@ -43,10 +44,19 @@ class MainActivity : GameActivity() {
      * keeps working at all once the app targets it.
      */
     private val backCallback = object : OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() = nativeOnBack()
+        override fun handleOnBackPressed() = handleBack()
     }
     private var overlayBackCallback: Any? = null
     private var overlayBackRegistered = false
+
+    private fun handleBack() {
+        if (Build.VERSION.SDK_INT >= 30 &&
+            window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true) {
+            window.insetsController?.hide(WindowInsets.Type.ime())
+        } else {
+            nativeOnBack()
+        }
+    }
 
     /** What [openDocument] was asked for: `kind<TAB>tag`, echoed back in `import.txt`. */
     private var pendingImport: String = ""
@@ -98,7 +108,7 @@ class MainActivity : GameActivity() {
         runOnUiThread {
             if (Build.VERSION.SDK_INT >= 33) {
                 if (consumed && !overlayBackRegistered) {
-                    val callback = OnBackInvokedCallback { nativeOnBack() }
+                    val callback = OnBackInvokedCallback { handleBack() }
                     onBackInvokedDispatcher.registerOnBackInvokedCallback(
                         OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)
                     overlayBackCallback = callback
