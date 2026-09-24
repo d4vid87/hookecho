@@ -13554,7 +13554,7 @@ impl HookEchoApp {
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
         // clicking to activate it first. Single-pane keeps using the product pill.
-        if self.views.len() > 1 && !self.obs_mode {
+        if self.views.len() > 1 && !self.obs_mode && !chrome::compact(ctx) {
             let cur = self.views[idx].moment;
             // Same union as the sidebar uses, so this picker doesn't blink either.
             let have = self.views[idx].moments();
