@@ -72,7 +72,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
     <link rel="canonical" href={url} />
     <link rel="icon" href="/logo.png" type="image/png" />
     <link rel="alternate" type="application/rss+xml" title="HookEcho" href="/rss.xml" />
-    <meta name="theme-color" content="#0c1116" />
+    <meta name="theme-color" content="#000000" />
     <link
       rel="preload"
       href="/fonts/InterVariable-subset.woff2"
@@ -180,20 +180,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 </html>
 
 <style>
-  :global(html.site-glass) {
-    --bg: #0c1116;
-    --bg-deep: #080d11;
-    --surface-1: #141c22;
-    --surface-2: #1c2830;
-    --stroke: #2b3942;
-    --stroke-strong: #435761;
-    --text: #f0f4f5;
-    --text-dim: #afc0c8;
-    --accent: #92ddeb;
-    --accent-ink: #07181d;
-    --page: 1390px;
-    color-scheme: dark;
-  }
+  :global(html.site-glass) { --page: 1390px; color-scheme: dark; }
   :global(.site-glass body) { background: var(--bg); }
   :global(.site-glass .btn) { border-radius: 7px; background: var(--surface-1); border-color: var(--stroke-strong); }
   :global(.site-glass .btn-primary) { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); box-shadow: none; }
@@ -247,7 +234,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
   .site-menu nav a[aria-current="page"] { color: var(--accent); text-decoration: underline; text-underline-offset: 0.35rem; }
   .header-cta { flex: none; padding: 0.55rem 1rem; font-size: 0.9rem; }
 
-  .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; background: linear-gradient(180deg, rgb(5 17 27 / .2), var(--bg-deep)); }
+  .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; background: var(--bg-deep); }
   .foot-grid {
     display: grid;
     grid-template-columns: minmax(16rem, 2fr) repeat(3, minmax(8rem, 1fr));

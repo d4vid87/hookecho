@@ -124,20 +124,20 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
 
 <style>
   .guided-media { margin: 0; min-width: 0; }
-  .guided-frame { position: relative; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 18px; border: 1px solid var(--stroke-strong); background: #070b10; box-shadow: 0 24px 70px rgb(0 0 0 / 0.32); }
+  .guided-frame { position: relative; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 18px; border: 1px solid var(--stroke-strong); background: #000; box-shadow: 0 24px 70px rgb(0 0 0 / 0.32); }
   img, video { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
   img[hidden] { display: none; }
   video { position: absolute; inset: 0; }
   .phone .guided-frame { width: min(100%, 330px); aspect-ratio: 540 / 1170; margin-inline: auto; }
   .phone img, .phone video { aspect-ratio: 540 / 1170; }
-  .guided-callout { position: absolute; left: 16px; bottom: 16px; max-width: min(28rem, calc(100% - 150px)); margin: 0; padding: 0.65rem 0.85rem; border: 1px solid rgb(255 255 255 / 0.16); border-radius: 10px; background: rgb(7 13 20 / 0.82); backdrop-filter: blur(14px); color: #f4f7fa; font-size: 0.86rem; }
+  .guided-callout { position: absolute; left: 16px; bottom: 16px; max-width: min(28rem, calc(100% - 150px)); margin: 0; padding: 0.65rem 0.85rem; border: 1px solid rgb(255 255 255 / 0.16); border-radius: 10px; background: rgb(0 0 0 / 0.82); backdrop-filter: blur(14px); color: #f4f7fa; font-size: 0.86rem; }
   .guided-controls { display: flex; justify-content: flex-end; gap: 6px; margin-top: .65rem; }
-  button { min-height: 36px; padding: 0.45rem 0.65rem; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 8px; background: rgb(7 13 20 / 0.88); color: #f4f7fa; cursor: pointer; }
+  button { min-height: 36px; padding: 0.45rem 0.65rem; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 8px; background: rgb(0 0 0 / 0.88); color: #f4f7fa; cursor: pointer; }
   button:hover { border-color: var(--accent); }
   .guided-steps { display: flex; gap: 0.65rem; list-style: none; padding: 0.85rem 0 0; margin: 0; }
   .guided-steps li { flex: 1; padding-top: 0.65rem; border-top: 2px solid var(--stroke); color: var(--text-dim); font-size: 0.78rem; line-height: 1.35; }
   .guided-steps li[aria-current] { border-color: var(--accent); color: var(--text); }
-  dialog { width: min(94vw, 1400px); padding: 3rem 0 0; border: 1px solid var(--stroke-strong); border-radius: 18px; background: #040b12; color: var(--text); box-shadow: 0 30px 100px #000c; }
+  dialog { width: min(94vw, 1400px); padding: 3rem 0 0; border: 1px solid var(--stroke-strong); border-radius: 18px; background: #000; color: var(--text); box-shadow: 0 30px 100px #000c; }
   dialog::backdrop { background: rgb(1 5 10 / .86); backdrop-filter: blur(8px); }
   dialog video { position: static; width: 100%; height: auto; aspect-ratio: 16 / 10; }
   .phone dialog video { aspect-ratio: 540 / 1170; max-height: 82vh; object-fit: contain; }

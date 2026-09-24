@@ -273,22 +273,22 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
    that does not ignores the rule. No JavaScript either way. */
 @view-transition { navigation: auto; }
 
-/* Site-wide editorial system: let the radar imagery carry the saturated color. */
+/* OLED black surfaces with typography drawn from the reflectivity palette. */
 :root {
-  --bg-deep: #080d11;
-  --bg: #0c1116;
-  --surface-1: #141c22;
-  --surface-2: #1c2830;
-  --stroke: #2b3942;
-  --stroke-strong: #435761;
-  --text: #f0f4f5;
-  --text-dim: #afc0c8;
-  --accent: #92ddeb;
-  --accent-ink: #07181d;
+  --bg-deep: #000;
+  --bg: #000;
+  --surface-1: #0b0d0b;
+  --surface-2: #151915;
+  --stroke: #29332b;
+  --stroke-strong: #455448;
+  --text: #f0f5ef;
+  --text-dim: #aab9ab;
+  --accent: #54e273;
+  --accent-ink: #031007;
   --page: 1360px;
-  --ramp: linear-gradient(90deg, #92ddeb, #92ddeb);
-  --ramp-cool: var(--ramp);
-  --ramp-hot: var(--ramp);
+  --ramp: linear-gradient(95deg, #54e273 0%, #a3e635 38%, #fbbf24 68%, #f97316 100%);
+  --ramp-cool: linear-gradient(95deg, #54e273, #a3e635);
+  --ramp-hot: linear-gradient(95deg, #fbbf24, #f97316);
   --mesh: none;
   --glow: none;
   --glow-green: none;
@@ -299,7 +299,10 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
 .btn { border-radius: 7px; }
 .card:hover { transform: none; }
 a, button { -webkit-tap-highlight-color: transparent; }
-:focus-visible { outline: 3px solid #d6f4fa; outline-offset: 3px; }
+:focus-visible { outline: 3px solid #54e273; outline-offset: 3px; }
 @media (prefers-color-scheme: light) { :root { color-scheme: dark; } }
 /* Content must be visible before scripts run, including on reference pages. */
 [data-reveal], [data-reveal].is-in { opacity: 1; transform: none; }
+
+/* Radar color is reserved for labels and key display words; body copy stays readable. */
+.eyebrow { color: var(--accent); }
