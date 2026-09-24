@@ -7,6 +7,9 @@ import android.provider.OpenableColumns
 import com.google.androidgamesdk.GameActivity
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import java.io.File
 
 /**
@@ -42,6 +45,8 @@ class MainActivity : GameActivity() {
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = nativeOnBack()
     }
+    private val overlayBackCallback = OnBackInvokedCallback { nativeOnBack() }
+    private var overlayBackRegistered = false
 
     /** What [openDocument] was asked for: `kind<TAB>tag`, echoed back in `import.txt`. */
     private var pendingImport: String = ""
@@ -91,8 +96,18 @@ class MainActivity : GameActivity() {
     @Suppress("unused")
     fun setBackConsumed(consumed: Boolean) {
         runOnUiThread {
-            backCallback.isEnabled = consumed
-            android.util.Log.d("HookEchoActivity", "back consumed=$consumed")
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (consumed && !overlayBackRegistered) {
+                    onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                        OnBackInvokedDispatcher.PRIORITY_OVERLAY, overlayBackCallback)
+                    overlayBackRegistered = true
+                } else if (!consumed && overlayBackRegistered) {
+                    onBackInvokedDispatcher.unregisterOnBackInvokedCallback(overlayBackCallback)
+                    overlayBackRegistered = false
+                }
+            } else {
+                backCallback.isEnabled = consumed
+            }
         }
     }
 
