@@ -563,7 +563,7 @@ pub(crate) fn primary_controls(
 pub(crate) fn workspace_shortcuts(ui: &mut egui::Ui, entries: &[PaletteEntry]) -> Option<PaletteAction> {
     let mut chosen = None;
     for entry in entries.iter().filter(|e| matches!(e.action, PaletteAction::ApplyWorkspace(_))) {
-        if ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!("{}  {}", egui_phosphor::regular::MAP_TRIFOLD, entry.label))).clicked() {
+        if ui.add_sized([ui.available_width(), ui.spacing().interact_size.y.max(44.0)], egui::Button::new(format!("{}  {}", egui_phosphor::regular::MAP_TRIFOLD, entry.label))).clicked() {
             chosen = Some(entry.action);
         }
     }

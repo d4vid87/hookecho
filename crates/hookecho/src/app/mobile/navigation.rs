@@ -15,6 +15,9 @@ impl HookEchoApp {
         let product = self.views[self.active].moment.short_name();
         let (freshness, freshness_color) =
             crate::ui::layers_panel::health_look(self.radar_health().state());
+        let age = self.views[self.active].volume.as_ref().map(|scan| {
+            (chrono::Utc::now() - scan.time).num_minutes().max(0)
+        });
         let mut action = None;
         let mut mode = None;
         let header = egui::Area::new("mobile_header".into())
@@ -39,6 +42,7 @@ impl HookEchoApp {
                         .clicked()
                     {
                         self.panel_section = PanelSection::Radar;
+                        self.show_alert_panel = false;
                         self.panel_open = true;
                     }
                     if ui
@@ -47,6 +51,7 @@ impl HookEchoApp {
                         .clicked()
                     {
                         self.panel_section = PanelSection::Tools;
+                        self.show_alert_panel = false;
                         self.panel_open = true;
                         self.sidebar_focus_search = true;
                     }
@@ -58,7 +63,10 @@ impl HookEchoApp {
                         action = Some(PaletteAction::OpenWindow(AppWindow::Markers));
                     }
                 });
-                ui.colored_label(freshness_color, format!("● {freshness}"));
+                ui.colored_label(freshness_color, match age {
+                    Some(minutes) => format!("● {freshness} · scan {minutes} min ago"),
+                    None => format!("● {freshness} · waiting for scan"),
+                });
                 if self.analyst_open {
                     ui.horizontal(|ui| {
                         if ui
@@ -82,7 +90,7 @@ impl HookEchoApp {
                                             "Show analyst pane 2",
                                             "Show analyst pane 3",
                                             "Show analyst pane 4",
-                                        ][i],
+                                        ].get(i).copied().unwrap_or("Show analyst pane"),
                                     )
                                     .clicked()
                                 {
@@ -139,6 +147,7 @@ impl HookEchoApp {
                                         self.show_alert_panel = section == PanelSection::Alerts;
                                         self.panel_open = true;
                                         self.sidebar_focus_search = false;
+                                        ctx.data_mut(|data| data.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
                                     }
                                 }
                             }

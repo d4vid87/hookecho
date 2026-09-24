@@ -20319,7 +20319,6 @@ impl eframe::App for HookEchoApp {
                 // the remaining viewport rather than underneath either dock.
                 self.chrome_rect = root.available_rect_before_wrap();
                 self.scrubber(ctx);
-                if !phone_layout { self.pane_strip(ctx); }
                 self.basemap_panel(ctx);
                 if !phone_layout { self.info_chip(ctx); }
                 self.error_chip(ctx);

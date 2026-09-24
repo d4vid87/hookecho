@@ -31,10 +31,6 @@ Search and custom locations are one tap from the buttons above the map.
 On Android, the system Back gesture closes search or the open sheet before
 leaving HookEcho.
 
-![The Radar section in a phone-sized browser](/showcase/phone-mode-20260923.webp)
-
-*Browser capture of the current layout; Android's system controls may differ.*
-
 - **Long-press** the map to inspect what's under your finger.
 - **Double-tap and drag** up or down to zoom with one hand.
 - **Open Analyst from More** to use presets and linked panes. Pane tabs show

@@ -15,8 +15,6 @@ const PANEL_W: f32 = 372.0;
 const RIGHT_PANEL: egui::Vec2 = egui::vec2(-70.0, 44.0);
 /// What the scrubber pill needs along the bottom edge, plus a margin.
 const SCRUBBER_CLEARANCE: f32 = 144.0;
-/// How far above the bottom edge the phone's pane strip sits: over the scrubber pill, not on it.
-const PANE_STRIP_UP: f32 = 150.0;
 
 /// Is this the phone layout? Same surfaces, same registry, same state — a thumb-sized pill across
 /// the top, and panels that come up from the bottom edge as
@@ -121,18 +119,35 @@ impl HookEchoApp {
                 if focus_search {
                     let response = ui.add_sized([ui.available_width(), 48.0], egui::TextEdit::singleline(&mut query).hint_text("Search places, sites, products, tools"));
                     response.request_focus();
-                    for i in crate::ui::layers_panel::matches(&entries, &query).into_iter().take(20) {
-                        let entry = &entries[i];
-                        if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}", entry.category, entry.label))).clicked() {
-                            chosen = Some(entry.action);
+                    if query.trim().is_empty() {
+                        ui.weak("Type a place, radar site, product, or tool");
+                    } else {
+                        ui.label("Places");
+                        if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("Find place: {}", query.trim()))).clicked() {
+                            fly_to = Some(query.trim().to_string());
                             focus_search = false;
                             hide = true;
                         }
-                    }
-                    if !query.trim().is_empty() && ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("Find place: {}", query.trim()))).clicked() {
-                        fly_to = Some(query.trim().to_string());
-                        focus_search = false;
-                        hide = true;
+                        let hits = crate::ui::layers_panel::matches(&entries, &query);
+                        for (group, category) in [("Radar sites and products", "Radar"), ("Layers", "National"), ("Severe weather", "Severe"), ("Tools", "Tools")] {
+                            let group_hits: Vec<_> = hits.iter().copied().filter(|&i| entries[i].category == category).take(8).collect();
+                            if !group_hits.is_empty() { ui.label(group); }
+                            for i in group_hits {
+                                if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(&entries[i].label)).clicked() {
+                                    chosen = Some(entries[i].action);
+                                    focus_search = false;
+                                    hide = true;
+                                }
+                            }
+                        }
+                        // Remaining catalog families stay reachable without adding another menu.
+                        for i in hits.into_iter().filter(|&i| !["Radar", "National", "Severe", "Tools"].contains(&entries[i].category)).take(8) {
+                            if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}", entries[i].category, entries[i].label))).clicked() {
+                                chosen = Some(entries[i].action);
+                                focus_search = false;
+                                hide = true;
+                            }
+                        }
                     }
                 } else {
                     chosen = self.mobile_more(ui);
@@ -247,7 +262,7 @@ impl HookEchoApp {
                     return;
                 }
                 if section == PanelSection::Alerts {
-                    ui.heading("Severe weather alerts");
+                    if !sheets_layout { ui.heading("Severe weather alerts"); }
                     let mut show_alerts = self.filters.show_alerts;
                     if ui.checkbox(&mut show_alerts, "Show warnings on map").changed() {
                         chosen = Some(PaletteAction::ToggleOverlay(OverlayToggle::Alerts));
@@ -496,6 +511,7 @@ impl HookEchoApp {
             self.apply_palette(a, ctx);
         }
         if let Some(place) = fly_to {
+            if sheets_layout { self.layers_query.clear(); }
             self.geocode_nav = true;
             self.save_offer = None; // a new search retires the previous offer
             self.place_status = Some(("Searching…".to_string(), Instant::now()));
@@ -616,64 +632,6 @@ impl HookEchoApp {
         if let Some(mode) = switch_to { self.switch_mode(mode, ctx); }
         if open_settings { self.apply_palette(PaletteAction::OpenWindow(AppWindow::Settings), ctx); }
         self.tour_anchors.menu = anchor;
-    }
-
-    /// The pane strip: which of the split panes is on screen, and the way to the others.
-    ///
-    /// The phone draws one pane at a time, so the desktop's accent outline has nothing to say —
-    /// and a horizontal swipe on the map itself is already a pan, which leaves nowhere to put the
-    /// swipe the panes want. So the swipe gets a target of its own: drag across the dots to move
-    /// between panes, or tap one.
-    ///
-    /// ponytail: dots, not thumbnails — a thumbnail means rendering a pane that is not on screen,
-    /// which is exactly the cost showing one pane at a time was buying back.
-    pub(crate) fn pane_strip(&mut self, ctx: &egui::Context) {
-        let n = self.views.len();
-        if !sheets(ctx) || n < 2 {
-            return;
-        }
-        let accent = crate::theme::accent(self.settings.theme);
-        let mut pick = None;
-        egui::Area::new(egui::Id::new("pane_strip"))
-            .constrain_to(self.chrome_rect)
-            // Clear of the whole scrubber pill, not just the margin under it: the pill is two
-            // rows tall (transport and track) once there are frames to scrub.
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -PANE_STRIP_UP))
-            .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 238).show(ui, |ui| {
-                    let w = 28.0 * n as f32;
-                    let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(w, 24.0), egui::Sense::click_and_drag());
-                    for i in 0..n {
-                        let c = egui::pos2(rect.left() + 28.0 * (i as f32 + 0.5), rect.center().y);
-                        let on = i == self.active;
-                        ui.painter().circle_filled(
-                            c,
-                            if on { 6.0 } else { 4.0 },
-                            if on {
-                                accent
-                            } else {
-                                egui::Color32::from_gray(130)
-                            },
-                        );
-                    }
-                    // Tap and drag are the same hit test: whichever dot the finger is over wins,
-                    // so a swipe walks the panes as it passes them.
-                    if resp.clicked() || resp.dragged() {
-                        if let Some(p) = resp.interact_pointer_pos() {
-                            let i = ((p.x - rect.left()) / 28.0)
-                                .floor()
-                                .clamp(0.0, n as f32 - 1.0);
-                            pick = Some(i as usize);
-                        }
-                    }
-                });
-            });
-        if let Some(i) = pick.filter(|i| *i != self.active) {
-            self.active = i;
-            // A swipe walks several dots; each pane it lands on gets its own detent.
-            crate::platform::haptic(crate::platform::Haptic::Tick);
-        }
     }
 
     /// Background picker beside the map.
