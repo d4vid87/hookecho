@@ -34,11 +34,11 @@ strip = true
 
 # The browser build, used by `scripts/web/build.sh` (`cargo build --profile web`). Every byte here
 # is a byte the visitor downloads before anything is on screen, so it optimizes for size where
-# release optimizes for speed. Not `opt-level = "z"`: with fat LTO already on, "z" buys single
-# digit percent and costs measurably more time in the decode loop below.
+# release optimizes for speed. Size-optimize browser dependencies; the decode crates below
+# retain their faster profiles so first radar frames are not held back by this choice.
 [profile.web]
 inherits = "release"
-opt-level = "s"
+opt-level = "z"
 
 # Favor size for the browser UI; decoding crates below keep full optimization.
 [profile.web.package.hookecho]

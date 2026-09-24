@@ -10,6 +10,7 @@
 //! top edge (there is no room for the desktop legend box), the hide-all-chrome eye, and the
 //! system-back chain that decides what a back gesture dismisses.
 
+mod navigation;
 pub(crate) mod sheet;
 
 use egui::{pos2, vec2, Align2, Color32, Id, Mesh, Rect, Shape};
@@ -156,6 +157,7 @@ impl super::HookEchoApp {
             || self.cells_window.open
             || self.forecast_open
             || self.settings_window.open
+            || self.help_hub.open
             || self.basemap_open
             || self.panel_open
             || self.mobile_chrome_hidden
@@ -207,6 +209,7 @@ impl super::HookEchoApp {
             self.cells_window.open,
             self.forecast_open,
             self.settings_window.open,
+            self.help_hub.open,
             self.basemap_open,
             self.panel_open,
             self.mobile_chrome_hidden,
@@ -236,25 +239,27 @@ impl super::HookEchoApp {
 
         // Hide/show all chrome (view the whole radar). Always drawn; when hidden it is the only
         // floating control, so the map is fully visible.
-        egui::Area::new(Id::new("m_chrome_toggle"))
-            .anchor(
-                Align2::RIGHT_TOP,
-                vec2(-crate::ui::m3::SP_3, inset_top + 26.0),
-            )
-            // Plain Middle order, so any surface opened afterwards (a full-screen window, a
-            // modal sheet's scrim) covers it instead of leaving an eye floating over the content.
-            .show(ctx, |ui| {
-                let g = if self.mobile_chrome_hidden {
-                    ph::EYE
-                } else {
-                    ph::EYE_SLASH
-                };
-                if square_btn(ui, g, self.mobile_chrome_hidden, OMEGA_ORANGE).clicked() {
-                    self.mobile_chrome_hidden = !self.mobile_chrome_hidden;
-                    self.panel_open = false;
-                    self.basemap_open = false;
-                }
-            });
+        if self.mobile_chrome_hidden {
+            egui::Area::new(Id::new("m_chrome_toggle"))
+                .anchor(
+                    Align2::RIGHT_TOP,
+                    vec2(-crate::ui::m3::SP_3, inset_top + 26.0),
+                )
+                // Plain Middle order, so any surface opened afterwards (a full-screen window, a
+                // modal sheet's scrim) covers it instead of leaving an eye floating over the content.
+                .show(ctx, |ui| {
+                    let g = if self.mobile_chrome_hidden {
+                        ph::EYE
+                    } else {
+                        ph::EYE_SLASH
+                    };
+                    if square_btn(ui, g, self.mobile_chrome_hidden, OMEGA_ORANGE).clicked() {
+                        self.mobile_chrome_hidden = !self.mobile_chrome_hidden;
+                        self.panel_open = false;
+                        self.basemap_open = false;
+                    }
+                });
+        }
         if self.mobile_chrome_hidden {
             return false;
         }

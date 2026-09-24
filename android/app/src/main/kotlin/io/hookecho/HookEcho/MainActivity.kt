@@ -7,6 +7,10 @@ import android.provider.OpenableColumns
 import com.google.androidgamesdk.GameActivity
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
+import android.view.WindowInsets
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import java.io.File
 
 /**
@@ -40,7 +44,18 @@ class MainActivity : GameActivity() {
      * keeps working at all once the app targets it.
      */
     private val backCallback = object : OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() = nativeOnBack()
+        override fun handleOnBackPressed() = handleBack()
+    }
+    private var overlayBackCallback: Any? = null
+    private var overlayBackRegistered = false
+
+    private fun handleBack() {
+        if (Build.VERSION.SDK_INT >= 30 &&
+            window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true) {
+            window.insetsController?.hide(WindowInsets.Type.ime())
+        } else {
+            nativeOnBack()
+        }
     }
 
     /** What [openDocument] was asked for: `kind<TAB>tag`, echoed back in `import.txt`. */
@@ -90,13 +105,31 @@ class MainActivity : GameActivity() {
     /** Called from Rust when what back would do changes. */
     @Suppress("unused")
     fun setBackConsumed(consumed: Boolean) {
-        runOnUiThread { backCallback.isEnabled = consumed }
+        runOnUiThread {
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (consumed && !overlayBackRegistered) {
+                    val callback = OnBackInvokedCallback { handleBack() }
+                    onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                        OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)
+                    overlayBackCallback = callback
+                    overlayBackRegistered = true
+                } else if (!consumed && overlayBackRegistered) {
+                    (overlayBackCallback as? OnBackInvokedCallback)?.let {
+                        onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it)
+                    }
+                    overlayBackCallback = null
+                    overlayBackRegistered = false
+                }
+            } else {
+                backCallback.isEnabled = consumed
+            }
+        }
     }
 
     private external fun nativeOnBack()
 
     /**
-     * Back out of the app and the process has to go with it.
+     * When GameActivity is destroyed, its native event loop has to go with it.
      *
      * `android_main` is a one-shot: the Rust event loop starts when the native thread does, and it
      * does not stop when the Java activity is destroyed — it keeps ticking frames against a window
@@ -104,13 +137,16 @@ class MainActivity : GameActivity() {
      * finds a process that already ran its entry point, so it sits on the splash screen forever.
      * Ending the process is the only exit that leaves the next launch a clean one.
      *
-     * Only when the user is actually leaving: a destroy for a configuration change must not take
-     * the process with it. [AlertService] is `START_STICKY`, so background alerting comes back on
-     * its own for anyone who has it switched on.
+     * A configuration change is the exception: Android recreates the activity in the same
+     * process. `isFinishing` alone misses some Back exits, leaving the old native loop spinning.
+     * [AlertService] is `START_STICKY`, so background alerting restarts if enabled.
      */
     override fun onDestroy() {
+        android.util.Log.i("HookEchoActivity", "destroy changingConfig=$isChangingConfigurations finishing=$isFinishing")
+        // GameActivity's teardown can wait for a native loop that still calls its dead input
+        // buffers. End the process before entering that teardown on a real exit.
+        if (!isChangingConfigurations) android.os.Process.killProcess(android.os.Process.myPid())
         super.onDestroy()
-        if (isFinishing) android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -8702,16 +8702,20 @@ impl HookEchoApp {
         let (unit_factor, unit_label) = display_units(moment, &self.settings);
         let health = self.radar_health();
         let (status, status_color) = ui::layers_panel::health_look(health.state());
-        let product_rect = style::glass(ui, 250)
+        let mobile = chrome::compact(ui.ctx());
+        let product_rect = (if mobile { egui::Frame::NONE } else { style::glass(ui, 250) })
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Radar products").strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(egui_phosphor::regular::X).on_hover_text("Close radar controls").clicked() {
-                            self.panel_open = false;
-                        }
+                if mobile { ui.spacing_mut().interact_size.y = 48.0; }
+                if !mobile {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Radar products").strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(egui_phosphor::regular::X).on_hover_text("Close radar controls").clicked() {
+                                self.panel_open = false;
+                            }
+                        });
                     });
-                });
+                }
                 ui.horizontal(|ui| {
                     for (label, m) in [("Reflectivity", Moment::Reflectivity), ("Velocity", Moment::Velocity)] {
                         if ui.selectable_label(custom_product.is_none() && moment == m && !srv, label).clicked() {
@@ -8777,8 +8781,10 @@ impl HookEchoApp {
                     });
                 });
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
-                    .size(style::FONT_BASE).strong());
+                if !mobile {
+                    ui.label(egui::RichText::new(custom_product.as_deref().unwrap_or_else(|| crate::products::name(moment, srv)))
+                        .size(style::FONT_BASE).strong());
+                }
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("Tilt")
@@ -8868,7 +8874,7 @@ impl HookEchoApp {
                         }
                     });
                 ui.add_space(8.0);
-                if ui.add_sized([ui.available_width(), 40.0], egui::Button::new(format!("{}  Custom locations", egui_phosphor::regular::MAP_PIN))).clicked() {
+                if !mobile && ui.add_sized([ui.available_width(), 40.0], egui::Button::new(format!("{}  Custom locations", egui_phosphor::regular::MAP_PIN))).clicked() {
                     self.marker_window.open = true;
                 }
             })
@@ -13515,6 +13521,7 @@ impl HookEchoApp {
         let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
         let cb = MapCallback {
             pane: idx as u32,
+            retain_only_pane: (chrome::compact(ctx) && self.views.len() > 1).then_some(idx as u32),
             camera_center: center,
             camera_scale: scale,
             world_per_pixel: cam.world_per_pixel() as f32,
@@ -13547,7 +13554,7 @@ impl HookEchoApp {
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
         // clicking to activate it first. Single-pane keeps using the product pill.
-        if self.views.len() > 1 && !self.obs_mode {
+        if self.views.len() > 1 && !self.obs_mode && !chrome::compact(ctx) {
             let cur = self.views[idx].moment;
             // Same union as the sidebar uses, so this picker doesn't blink either.
             let have = self.views[idx].moments();
@@ -20295,7 +20302,8 @@ impl eframe::App for HookEchoApp {
             // to be skipped entirely (the hide-all-chrome eye). Desktop draws the window frame
             // first instead: its drag strip covers the top edge, and everything after it takes
             // back the clicks that land on an actual control.
-            let chrome = if cfg!(target_os = "android") {
+            let phone_layout = chrome::compact(ctx);
+            let chrome = if phone_layout {
                 self.mobile_chrome(ctx)
             } else {
                 self.window_frame(ctx);
@@ -20303,18 +20311,18 @@ impl eframe::App for HookEchoApp {
             };
             if chrome {
                 self.sync_permalink();
-                self.search_pill(ctx);
+                if phone_layout { self.mobile_navigation(ctx); }
+                else { self.search_pill(ctx); }
                 self.panel(ctx, root);
                 self.workbench_inspector(ctx, root);
                 // The analyst docks reserve map width. Center the transport and map chips in
                 // the remaining viewport rather than underneath either dock.
                 self.chrome_rect = root.available_rect_before_wrap();
                 self.scrubber(ctx);
-                self.pane_strip(ctx);
                 self.basemap_panel(ctx);
-                self.info_chip(ctx);
+                if !phone_layout { self.info_chip(ctx); }
                 self.error_chip(ctx);
-                self.update_chip(ctx);
+                if !phone_layout { self.update_chip(ctx); }
                 self.quality_chip(ctx);
             }
         }
@@ -21189,13 +21197,18 @@ impl eframe::App for HookEchoApp {
 
         // A compact Android screen paints one pane at a time. Fetch its siblings only when
         // selected; otherwise four-pane Analyst eagerly decodes three invisible radar volumes.
-        let phone_solo = cfg!(target_os = "android")
-            && self.views.len() > 1
-            && chrome::compact(ctx);
+        let phone_solo = self.views.len() > 1 && chrome::compact(ctx);
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
         for idx in 0..self.views.len() {
             if !phone_solo || idx == self.active {
                 self.sync_pane(idx, ctx);
+            } else {
+                // Inactive phone panes keep their choices and timeline, not decoded sweeps.
+                // The shared scan cache can refill them when selected again.
+                self.views[idx].volume = None;
+                self.views[idx].forget_recent();
+                self.views[idx].last_poll = None;
+                self.pane_shown.remove(&idx);
             }
         }
         self.sync_overlay();
@@ -21232,7 +21245,7 @@ impl eframe::App for HookEchoApp {
             // A phone shows one pane at a time. Two 400x400 pt panes stacked is two views of
             // nothing; the pane strip above the scrubber is how you get to the others.
             // Only where one pane is all that fits: a tablet shows the split.
-            let solo = cfg!(target_os = "android") && n > 1 && chrome::compact(ctx);
+            let solo = n > 1 && chrome::compact(ctx);
             let rects = if solo {
                 vec![full; n]
             } else {

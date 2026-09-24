@@ -75,7 +75,7 @@ pub struct PlaceLabel {
     pub name: String,
     /// OpenMapTiles `rank` (lower = more important); used for collision priority.
     pub rank: i64,
-    /// True for `city` class (always shown); other labels only appear when zoomed in.
+    /// True for city and town names; their own `min_zoom` still controls visibility.
     pub city: bool,
     /// Standard road-sign shape for a route reference; street names use `None`.
     pub shield: RoadShield,
@@ -536,7 +536,7 @@ fn extract_airport_labels(
 fn place_visibility(cls: &str) -> Option<(bool, f32)> {
     match cls {
         "city" => Some((true, 0.0)),
-        "town" => Some((false, 6.0)),
+        "town" => Some((true, 6.0)),
         "village" => Some((false, 8.5)),
         "suburb" | "neighbourhood" => Some((false, 11.5)),
         _ => None,
@@ -1522,6 +1522,12 @@ mod tests {
         label.shield = RoadShield::None;
         label.rank = 2;
         assert!(label.priority() < highway_priority);
+        let (place, min_zoom) = place_visibility("town").unwrap();
+        label.name = "Greenville".into();
+        label.city = place;
+        label.min_zoom = min_zoom;
+        assert!(label.visible_at(9.5));
+        assert!(label.priority() <= 2, "phone maps keep town names");
     }
 
     #[test]
@@ -1596,7 +1602,7 @@ mod tests {
 
     #[test]
     fn road_labels_prefer_highway_refs_and_keep_street_names() {
-        assert_eq!(place_visibility("town"), Some((false, 6.0)));
+        assert_eq!(place_visibility("town"), Some((true, 6.0)));
         assert_eq!(place_visibility("village"), Some((false, 8.5)));
         assert_eq!(
             road_label(
