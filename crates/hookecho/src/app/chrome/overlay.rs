@@ -425,10 +425,14 @@ impl HookEchoApp {
                 PanelSection::Alerts => format!("Alerts in view ({alert_count})"),
                 PanelSection::Tools => if search_page { "Search" } else { "More" }.to_string(),
             };
-            let sheet_area = egui::Rect::from_min_max(
-                egui::pos2(if chrome.width() > chrome.height() { chrome.center().x } else { chrome.left() }, (phone_top(ctx) + 42.0).min(chrome.bottom() - 190.0)),
-                egui::pos2(chrome.right(), chrome.bottom() - 76.0),
-            );
+            let sheet_area = if search_page {
+                egui::Rect::from_min_max(chrome.min + egui::vec2(0.0, 4.0), chrome.max - egui::vec2(0.0, 4.0))
+            } else {
+                egui::Rect::from_min_max(
+                    egui::pos2(if chrome.width() > chrome.height() { chrome.center().x } else { chrome.left() }, (phone_top(ctx) + 42.0).min(chrome.bottom() - 190.0)),
+                    egui::pos2(chrome.right(), chrome.bottom() - 76.0),
+                )
+            };
             let rect = crate::app::mobile::sheet::modal_sheet(
                 ctx,
                 sheet_area,
@@ -436,7 +440,7 @@ impl HookEchoApp {
                     PanelSection::Radar => "m_panel_radar",
                     PanelSection::Overlays => "m_panel_overlays",
                     PanelSection::Alerts => "m_panel_alerts",
-                    PanelSection::Tools => "m_panel_tools",
+                    PanelSection::Tools => if search_page { "m_search" } else { "m_panel_tools" },
                 },
                 &title,
                 &mut sheet_close,

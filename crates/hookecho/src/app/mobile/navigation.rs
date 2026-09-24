@@ -8,6 +8,10 @@ use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
     pub(crate) fn mobile_navigation(&mut self, ctx: &egui::Context) {
+        // The keyboard leaves little vertical room; search uses the whole remaining viewport.
+        if self.panel_open && self.sidebar_focus_search {
+            return;
+        }
         let site = self.views[self.active]
             .site
             .clone()

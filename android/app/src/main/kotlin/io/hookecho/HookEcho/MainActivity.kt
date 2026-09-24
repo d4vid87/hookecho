@@ -96,7 +96,7 @@ class MainActivity : GameActivity() {
     private external fun nativeOnBack()
 
     /**
-     * Back out of the app and the process has to go with it.
+     * When GameActivity is destroyed, its native event loop has to go with it.
      *
      * `android_main` is a one-shot: the Rust event loop starts when the native thread does, and it
      * does not stop when the Java activity is destroyed — it keeps ticking frames against a window
@@ -104,13 +104,13 @@ class MainActivity : GameActivity() {
      * finds a process that already ran its entry point, so it sits on the splash screen forever.
      * Ending the process is the only exit that leaves the next launch a clean one.
      *
-     * Only when the user is actually leaving: a destroy for a configuration change must not take
-     * the process with it. [AlertService] is `START_STICKY`, so background alerting comes back on
-     * its own for anyone who has it switched on.
+     * A configuration change is the exception: Android recreates the activity in the same
+     * process. `isFinishing` alone misses some Back exits, leaving the old native loop spinning.
+     * [AlertService] is `START_STICKY`, so background alerting restarts if enabled.
      */
     override fun onDestroy() {
         super.onDestroy()
-        if (isFinishing) android.os.Process.killProcess(android.os.Process.myPid())
+        if (!isChangingConfigurations) android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     override fun onNewIntent(intent: Intent) {

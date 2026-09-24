@@ -201,7 +201,9 @@ pub(crate) fn modal_sheet<R>(
 }
 
 fn default_size(id: &str) -> u8 {
-    if id.starts_with("m_panel_") {
+    if id == "m_search" {
+        2
+    } else if id.starts_with("m_panel_") {
         0
     } else {
         1
@@ -214,6 +216,7 @@ mod tests {
     fn navigation_sheets_start_short_and_other_sheets_keep_their_size() {
         assert_eq!(super::default_size("m_panel_radar"), 0);
         assert_eq!(super::default_size("m_panel_alerts"), 0);
+        assert_eq!(super::default_size("m_search"), 2);
         assert_eq!(super::default_size("settings"), 1);
     }
 }
