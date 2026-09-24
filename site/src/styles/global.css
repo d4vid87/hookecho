@@ -272,3 +272,40 @@ section { padding: clamp(3rem, 8vw, 5.5rem) 0; }
 /* Cross-document view transitions: a browser that has them cross-fades between pages, and one
    that does not ignores the rule. No JavaScript either way. */
 @view-transition { navigation: auto; }
+
+/* OLED black surfaces with typography drawn from the reflectivity palette. */
+:root {
+  --bg-deep: #000;
+  --bg: #000;
+  --surface-1: #0b0d0b;
+  --surface-2: #151915;
+  --stroke: #29332b;
+  --stroke-strong: #455448;
+  --text: #c8efc0;
+  --text-dim: #9fbd99;
+  --accent: #54e273;
+  --accent-ink: #031007;
+  --page: 1360px;
+  --ramp: linear-gradient(95deg, #54e273 0%, #a3e635 38%, #fbbf24 68%, #f97316 100%);
+  --ramp-cool: linear-gradient(95deg, #54e273, #a3e635);
+  --ramp-hot: linear-gradient(95deg, #fbbf24, #f97316);
+  --mesh: none;
+  --glow: none;
+  --glow-green: none;
+  --glow-hot: none;
+  color-scheme: dark;
+}
+.sweep { display: none; }
+.btn { border-radius: 7px; }
+.card:hover { transform: none; }
+a, button { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 3px solid #54e273; outline-offset: 3px; }
+@media (prefers-color-scheme: light) { :root { color-scheme: dark; } }
+/* Content must be visible before scripts run, including on reference pages. */
+[data-reveal], [data-reveal].is-in { opacity: 1; transform: none; }
+
+/* Radar color is reserved for labels and key display words; body copy stays readable. */
+.eyebrow { color: var(--accent); }
+
+/* Headings use the same reflectivity ramp as the hero; supporting type uses radar greens. */
+h1, h2, h3, h4, h5, h6 { background-image: var(--ramp); background-clip: text; -webkit-text-fill-color: transparent; }

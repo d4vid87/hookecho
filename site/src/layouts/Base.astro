@@ -18,10 +18,9 @@ const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
 const path = Astro.url.pathname;
 
 const nav = [
-  { href: "/#showcase", label: "Showcase" },
+  { href: "/features/", label: "Features" },
   { href: "/download/", label: "Download" },
   { href: "/docs/", label: "Learn" },
-  { href: "/go/hookecho-source/nav", label: "GitHub" },
 ];
 
 const footer = [
@@ -73,7 +72,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
     <link rel="canonical" href={url} />
     <link rel="icon" href="/logo.png" type="image/png" />
     <link rel="alternate" type="application/rss+xml" title="HookEcho" href="/rss.xml" />
-    <meta name="theme-color" content="#06111b" />
+    <meta name="theme-color" content="#000000" />
     <link
       rel="preload"
       href="/fonts/InterVariable-subset.woff2"
@@ -181,31 +180,18 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 </html>
 
 <style>
-  :global(html.site-glass) {
-    --bg: #06111b;
-    --bg-deep: #02070d;
-    --surface-1: #0b1824;
-    --surface-2: #102231;
-    --stroke: #183448;
-    --stroke-strong: #2a6078;
-    --text: #f2f5f8;
-    --text-dim: #a7b8c7;
-    --accent: #62ddff;
-    --accent-ink: #03141c;
-    --page: 1390px;
-    color-scheme: dark;
-  }
-  :global(.site-glass body) { background: radial-gradient(70rem 40rem at 78% -8%, rgb(35 151 205 / .18), transparent 65%), radial-gradient(55rem 34rem at -12% 40%, rgb(20 112 161 / .1), transparent 70%), var(--bg); }
-  :global(.site-glass .btn) { border-radius: 10px; background: rgb(9 24 36 / .7); border-color: var(--stroke-strong); backdrop-filter: blur(12px); }
-  :global(.site-glass .btn-primary) { color: var(--accent-ink); background: linear-gradient(135deg, #9aeaff, var(--accent)); border-color: #9aeaff; box-shadow: 0 8px 30px rgb(61 203 244 / .18); }
-  :global(.site-glass .btn:hover) { border-color: var(--accent); box-shadow: 0 8px 28px rgb(57 190 235 / .16); transform: translateY(-1px); }
+  :global(html.site-glass) { --page: 1390px; color-scheme: dark; }
+  :global(.site-glass body) { background: var(--bg); }
+  :global(.site-glass .btn) { border-radius: 7px; background: var(--surface-1); border-color: var(--stroke-strong); }
+  :global(.site-glass .btn-primary) { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); box-shadow: none; }
+  :global(.site-glass .btn:hover) { border-color: var(--accent); box-shadow: none; transform: none; }
 
   .site-head {
     position: sticky;
     top: 0;
     z-index: 20;
-    background: color-mix(in srgb, var(--bg-deep) 80%, transparent);
-    backdrop-filter: blur(18px) saturate(135%);
+    background: color-mix(in srgb, var(--bg-deep) 92%, transparent);
+    backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--stroke);
   }
   .head-inner {
@@ -248,7 +234,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
   .site-menu nav a[aria-current="page"] { color: var(--accent); text-decoration: underline; text-underline-offset: 0.35rem; }
   .header-cta { flex: none; padding: 0.55rem 1rem; font-size: 0.9rem; }
 
-  .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; background: linear-gradient(180deg, rgb(5 17 27 / .2), var(--bg-deep)); }
+  .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; background: var(--bg-deep); }
   .foot-grid {
     display: grid;
     grid-template-columns: minmax(16rem, 2fr) repeat(3, minmax(8rem, 1fr));

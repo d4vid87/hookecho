@@ -154,7 +154,7 @@ const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
   }
 
   .prose h1 { font-size: clamp(1.9rem, 4.5vw, 2.6rem); margin-bottom: 1rem; }
-  .prose.landing h1 { font-size:clamp(3rem,6vw,5.8rem);line-height:.94;letter-spacing:-.055em;margin:.2rem 0 1rem;background:linear-gradient(110deg,#fff 30%,#9beaff);background-clip:text;color:transparent; }
+  .prose.landing h1 { font-size:clamp(3rem,6vw,5.8rem);line-height:.94;letter-spacing:-.055em;margin:.2rem 0 1rem;background:var(--ramp);background-clip:text;color:transparent; }
   .prose :global(h2) { margin-top: 2.2rem; }
   .prose :global(h3) { margin-top: 1.6rem; }
   .prose :global(ul), .prose :global(ol) { max-width: var(--measure); padding-left: 1.2rem; }
