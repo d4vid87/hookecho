@@ -1,53 +1,24 @@
 ---
 import { getCollection } from "astro:content";
 import Docs from "../../layouts/Docs.astro";
-
-const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
+const pages = (await getCollection("docs")).sort((a,b) => a.data.order-b.data.order);
+const workflows = [
+  {number:"01",title:"Build an analysis workspace",text:"Compare four products with linked maps and time.",href:"/docs/radar-and-analyst/#compare-a-storm-in-analyst",tag:"RADAR → ANALYST"},
+  {number:"02",title:"Investigate rotation",text:"Put velocity in context with reflectivity and successive scans.",href:"/docs/storm-analysis/#investigate-rotation-and-debris",tag:"VELOCITY / CC"},
+  {number:"03",title:"Examine storm structure",text:"Compare tilts, dual-pol products, and storm attributes.",href:"/docs/storm-analysis/#examine-hail-and-vertical-structure",tag:"Z / ZDR / TILTS"},
+  {number:"04",title:"Add warning context",text:"Read official NWS warnings alongside the radar evidence.",href:"/docs/alerts-and-notifications/",tag:"OFFICIAL WARNINGS"},
+  {number:"05",title:"Replay a historical storm",text:"Choose an archive date and inspect the event scan by scan.",href:"/docs/getting-started/#replay-something-that-already-happened",tag:"ARCHIVE / TIMELINE"},
+  {number:"06",title:"Check a data problem",text:"Work through missing scans, freshness, and playback issues.",href:"/docs/troubleshooting/",tag:"SOURCE / FRESHNESS"},
+];
 ---
-
-<Docs
-  title="Documentation"
-  description="Find your radar, follow the weather, and learn the deeper tools at your own pace."
->
-  <div class="start">
-    <p class="eyebrow">New to HookEcho?</p>
-    <h2>Start with the weather near you.</h2>
-    <p>Open the radar, choose a place, and press Play. No account or installation needed.</p>
-    <a class="btn btn-primary" href="/docs/getting-started/">Follow the quick start →</a>
-    <a class="try" href="/go/web/hero">Open live radar</a>
+<Docs title="Documentation" description="Go beyond the first radar image. Build a linked workspace, inspect the evidence, and understand what each scan can tell you.">
+  <div class="analysis-feature">
+    <div class="feature-copy"><span class="doc-label">START HERE / GUIDED WORKFLOW</span><h2>One storm.<br/>Four views.</h2><p>Follow a storm from reflectivity to velocity and dual-polarization. Keep the source, tilt, and scan time in view.</p><a class="manual-button" href="/docs/storm-analysis/">Start storm analysis <span>↗</span></a><a class="beginner-link" href="/docs/getting-started/">New to radar? Take the quick start →</a></div>
+    <figure><img src="/shots/analyst-mode-20260923.webp" alt="Actual HookEcho Analyst workspace with four linked radar products and the Inspector" width="1600" height="1000" fetchpriority="high"/><figcaption>HOOKECHO ANALYST / ARCHIVED KTLX EXAMPLE · NOT CURRENT WEATHER</figcaption></figure>
   </div>
-  <h2>What would you like to do?</h2>
-  <div class="tasks">
-    <a href="/docs/radar-and-analyst/">Choose Radar or Analyst <span>One map, linked panes, short menus, and a reliable return →</span></a>
-    <a href="/docs/install/">Install on my device <span>Windows, Linux, macOS and Android →</span></a>
-    <a href="/docs/reading-the-radar/">Understand the radar <span>Colours, motion and storm structure →</span></a>
-    <a href="/docs/alerts-and-notifications/">Set up weather alerts <span>Saved places and notification options →</span></a>
-    <a href="/docs/troubleshooting/">Fix a problem <span>Loading, playback, speed and alerts →</span></a>
-  </div>
-  <h2>All guides</h2>
-  <ul class="toc">
-    {pages.map((p) => (
-      <li>
-        <a href={`/docs/${p.id}/`}>{p.data.title}</a>
-        <span>{p.data.description}</span>
-      </li>
-    ))}
-  </ul>
+  <div class="scan-check"><span class="doc-label">BEFORE YOU INTERPRET</span><a href="/docs/storm-analysis/#verify-the-scan"><span>01</span> Source</a><a href="/docs/storm-analysis/#verify-the-scan"><span>02</span> Scan time</a><a href="/docs/storm-analysis/#verify-the-scan"><span>03</span> Product & units</a><a href="/docs/storm-analysis/#verify-the-scan"><span>04</span> Tilt & range</a></div>
+  <section class="manual-section" aria-labelledby="workflows-title"><div class="manual-section-head"><h2 id="workflows-title">Choose your investigation.</h2><span class="doc-label">SIX WAYS INTO THE DATA</span></div><div class="workflow-grid">{workflows.map(w => <a class="workflow" href={w.href}><div><span class="workflow-number">{w.number}</span><span class="workflow-arrow">↗</span></div><h3>{w.title}</h3><p>{w.text}</p><span class="doc-label">{w.tag}</span></a>)}</div></section>
+  <aside class="manual-roadmap"><div><span class="doc-label">THE DIRECTION / U.S. ANALYST WORKSTATION</span><h2>More depth. Traceable data.</h2><p>The roadmap prioritizes source transparency, synchronized analysis, and broader radar, satellite, and model workflows. Use these guides for available workflows; follow the roadmap for planned work.</p></div><div><a href="https://github.com/d4vid87/hookecho/blob/main/docs/us-analyst-roadmap.md">Read the Analyst roadmap ↗</a><a href="/roadmap/">See the current issue roadmap ↗</a></div></aside>
+  <section class="manual-section" aria-labelledby="library-title"><div class="manual-section-head"><h2 id="library-title">The complete manual.</h2><span class="doc-label">{pages.length} GUIDES / ALWAYS WITHIN REACH</span></div><div class="manual-library">{pages.map(p => <a href={`/docs/${p.id}/`}><h3>{p.data.title}<span>↗</span></h3><p>{p.data.description}</p></a>)}</div></section>
+  <div class="manual-launch"><p>Put the workflow to work.</p><a class="manual-button" href="https://app.hookecho.io/" target="_blank" rel="noopener">Open HookEcho radar ↗</a></div>
 </Docs>
-
-<style>
-  .start { position:relative;overflow:hidden;background:linear-gradient(135deg,rgb(20 54 70/.88),rgb(6 19 29/.78)); border: 1px solid #51d8ff55; border-radius: 20px; padding: clamp(1.4rem,4vw,2.5rem); margin-block: 1.5rem 3rem;box-shadow:0 24px 70px #0005,inset 0 1px #c4f4ff17; }
-  .start::after{content:"";position:absolute;width:15rem;aspect-ratio:1;border-radius:50%;right:-7rem;top:-8rem;background:#3cd0f72e;filter:blur(30px);pointer-events:none}
-  .start h2 { margin-top: 0; font-size: 1.7rem; }
-  .try { display: inline-block; padding: 0.75rem; }
-  .tasks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-  .tasks > a { border: 1px solid var(--stroke); border-radius: 16px; padding: 1.3rem; text-decoration: none; font-weight: 650;background:linear-gradient(145deg,rgb(15 36 50/.8),rgb(7 19 28/.68));transition:border-color .2s ease,transform .2s ease; }
-  .tasks > a:hover { border-color: var(--accent);transform:translateY(-2px) }
-  .tasks span { display: block; color: var(--text-dim); font-size: 0.85rem; font-weight: 400; margin-top: 0.5rem; }
-  @media (max-width: 560px) { .tasks { grid-template-columns: 1fr; } }
-
-  .toc { list-style: none; margin: 2rem 0 0; padding: 0; display: grid; gap: 1.1rem; }
-  .toc li { max-width: var(--measure);padding:1rem 1.1rem;border-left:2px solid var(--stroke);background:linear-gradient(90deg,rgb(20 49 65/.38),transparent); }
-  .toc a { font-weight: 600; font-size: 1.05rem; }
-  .toc span { display: block; color: var(--text-dim); font-size: 0.95rem; }
-</style>

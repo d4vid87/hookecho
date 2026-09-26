@@ -14,13 +14,14 @@ const storms = (await getCollection("storms")).sort(
   <section>
     <div class="wrap">
       <p class="eyebrow">Storms on the radar</p>
-      <h1>The storms that taught us to read radar</h1>
+      <h1>Revisit the storm.<br />Read every scan.</h1>
       <p class="lede">
         HookEcho's archive goes back to 1991, which means every one of these is still there to
         replay volume by volume. Each page opens the app on the right radar, at the right minute,
         on the product that makes the storm legible.
       </p>
 
+      <p><a href="/docs/storm-analysis/">Set up your analysis workspace before replaying a case ↗</a></p>
       <ul class="list">
         {
           storms.map((storm) => (

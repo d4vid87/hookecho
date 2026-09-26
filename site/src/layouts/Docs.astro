@@ -1,196 +1,60 @@
 ---
 import { getCollection } from "astro:content";
 import Base from "./Base.astro";
-
+import "../styles/docs-signal.css";
 interface Props {
   title: string;
   description: string;
-  /** Collection id of the page being shown, or undefined on the docs index. */
   current?: string;
   jsonld?: object;
   headings?: { depth: number; slug: string; text: string }[];
 }
-
 const { title, description, current, jsonld, headings = [] } = Astro.props;
-
-const pages = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
-const at = pages.findIndex((p) => p.id === current);
-const prev = at > 0 ? pages[at - 1] : undefined;
-const next = at >= 0 && at < pages.length - 1 ? pages[at + 1] : undefined;
+const pages = (await getCollection("docs")).sort((a,b) => a.data.order - b.data.order);
+const groups = [
+  {title:"01 / STORM ANALYSIS",ids:["storm-analysis","radar-and-analyst","reading-the-radar","alerts-and-notifications"]},
+  {title:"02 / GET SET UP",ids:["getting-started","install","in-your-browser","on-your-phone"]},
+  {title:"03 / REFERENCE",ids:["troubleshooting","faq"]},
+];
+const at = pages.findIndex(p => p.id === current);
+const prev = at > 0 ? pages[at-1] : undefined;
+const next = at >= 0 && at < pages.length-1 ? pages[at+1] : undefined;
 ---
-
-<Base title={`${title} — HookEcho docs`} description={description} jsonld={jsonld}>
-  <div class="wrap docs">
-    <nav class="side" aria-label="Documentation">
-      <a class="docs-home" href="/docs/" aria-current={!current ? "page" : undefined}>Documentation home</a>
-      <div id="search"></div>
-      <details class="guide-menu" open>
-        <summary>Browse guides</summary>
-      <ul>
-        {pages.map((p) => (
-          <li>
-            <a href={`/docs/${p.id}/`} aria-current={p.id === current ? "page" : undefined}>
-              {p.data.title}
-            </a>
-          </li>
-        ))}
-      </ul>
-      </details>
-    </nav>
-
-    <article class:list={["prose", { landing: !current }]} data-pagefind-body>
-      <h1>{title}</h1>
-      <p class="lead">{description}</p>
-      {headings.some((h) => h.depth === 2) && (
-        <nav class="on-page" aria-label="On this page">
-          <strong>On this page</strong>
-          <ul>{headings.filter((h) => h.depth === 2).map((h) => <li><a href={`#${h.slug}`}>{h.text}</a></li>)}</ul>
-        </nav>
-      )}
-      <slot />
-
-      {(prev || next) && (
-        <nav class="seq" aria-label="More documentation">
-          {prev ? (
-            <a class="btn" href={`/docs/${prev.id}/`}>← {prev.data.title}</a>
-          ) : (
-            <span />
-          )}
-          {next && <a class="btn" href={`/docs/${next.id}/`}>{next.data.title} →</a>}
-        </nav>
-      )}
+<Base title={`${title} — HookEcho docs`} description={description} jsonld={jsonld} >
+  <div class="wrap docs-shell">
+    <aside class="docs-side">
+      <a class="manual-label" href="/docs/">FIELD MANUAL <span>↗</span></a>
+      <div id="search" aria-label="Search documentation"></div>
+      <nav aria-label="Documentation">
+        <a class="docs-home" href="/docs/" aria-current={!current ? "page" : undefined}>Documentation overview</a>
+        <details class="guide-menu" open><summary>Browse the manual</summary>
+          {groups.map(group => <div class="guide-group"><h2>{group.title}</h2><ul>{group.ids.map(id => {
+            const page = pages.find(p => p.id === id);
+            return page && <li><a href={`/docs/${page.id}/`} aria-current={page.id === current ? "page" : undefined}>{page.data.title}</a></li>;
+          })}</ul></div>)}
+        </details>
+      </nav>
+      <div class="sidebar-project"><a href="/roadmap/">Product roadmap ↗</a><a href="https://github.com/d4vid87/hookecho/issues">Report an issue ↗</a></div>
+      <p class="sidebar-note">PUBLIC DATA.<br/>DEEPER UNDERSTANDING.</p>
+    </aside>
+    <article class:list={["docs-article", {"docs-landing":!current}]} data-pagefind-body>
+      <div class="docs-breadcrumb"><a href="/docs/">DOCUMENTATION</a><span>/</span><span>{current ? title : "U.S. STORM ANALYSIS"}</span></div>
+      <header class="docs-title"><h1>{current ? title : "Read the storm."}</h1><p class="lead">{description}</p></header>
+      {headings.some(h => h.depth === 2) && <nav class="on-page" aria-label="On this page"><span class="doc-label">IN THIS GUIDE</span><ul>{headings.filter(h => h.depth === 2).map(h => <li><a href={`#${h.slug}`}>{h.text}</a></li>)}</ul></nav>}
+      <slot/>
+      {(prev || next) && <nav class="docs-sequence" aria-label="More documentation">
+        {prev ? <a href={`/docs/${prev.id}/`}><span>← PREVIOUS GUIDE</span>{prev.data.title}</a> : <span/>}
+        {next && <a href={`/docs/${next.id}/`}><span>NEXT GUIDE →</span>{next.data.title}</a>}
+      </nav>}
     </article>
   </div>
 </Base>
-
-<!-- Pagefind builds its bundle from dist after astro build (the postbuild script), so these two
-     files do not exist during dev and 404 there. is:inline keeps Vite from trying to resolve a
-     path that is not on disk yet. Failing quietly is right: the sidebar is the fallback. -->
-<!-- Loaded without blocking the render: the search box is one widget on a documentation page,
-     and its stylesheet was holding up the text people came for. `media="print"` makes it a
-     non-blocking fetch; onload flips it back to every medium. -->
-<link
-  rel="stylesheet"
-  href="/pagefind/pagefind-ui.css"
-  media="print"
-  onload="this.media='all'"
-/>
+<link rel="stylesheet" href="/pagefind/pagefind-ui.css" media="print" onload="this.media='all'"/>
 <script is:inline type="module">
-  import("/pagefind/pagefind-ui.js")
-    .then(() => {
-      new window.PagefindUI({ element: "#search", showSubResults: true, showImages: false });
-    })
-    .catch(() => {
-      document.querySelector("#search").textContent = "Search unavailable. Browse the guides below.";
-    });
-  if (window.matchMedia("(max-width: 800px)").matches) {
-    document.querySelector(".guide-menu").open = false;
-  }
+  import("/pagefind/pagefind-ui.js").then(() => {
+    new window.PagefindUI({element:"#search",showSubResults:true,showImages:false});
+  }).catch(() => {
+    document.querySelector("#search").textContent = "Search unavailable. Browse the manual below.";
+  });
+  if (window.matchMedia("(max-width: 800px)").matches) document.querySelector(".guide-menu").open = false;
 </script>
-
-<style>
-  .docs {
-    display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-    gap: clamp(2rem, 5vw, 4rem);
-    padding: 3rem 0 4.5rem;
-    align-items: start;
-  }
-
-  .side {
-    position: sticky;
-    top: 5rem;
-    background: var(--surface-1);
-    border: 1px solid var(--stroke);
-    border-radius: var(--radius-lg);
-    padding: var(--sp-4);
-  }
-  .docs-home { margin-bottom: 1rem; font-weight: 650; }
-  .guide-menu summary { cursor: pointer; font-weight: 600; padding-block: 0.5rem; }
-  .lead { color: var(--text-dim); font-size: 1.1rem; }
-  .on-page { padding: 1rem 1.25rem; border: 1px solid var(--stroke); border-radius: var(--radius); margin: 1.5rem 0 2rem; background: var(--surface-1); }
-  .on-page ul { margin: 0.5rem 0 0; }
-  .on-page a { font-size: 0.9rem; }
-  .prose { min-width: 0; }
-  .prose :global(h2), .prose :global(h3) { scroll-margin-top: 5rem; }
-  .prose :global(img) { border: 1px solid var(--stroke); border-radius: var(--radius); }
-  .prose :global(blockquote) { margin: 1.5rem 0; padding: 1rem 1.25rem; border-left: 3px solid var(--accent); background: var(--surface-1); }
-  .prose :global(blockquote p:last-child) { margin-bottom: 0; }
-  .prose :global(a), .prose :global(code) { overflow-wrap: anywhere; }
-  @media (max-width: 800px) {
-    .docs { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; padding-top: 1.5rem; }
-    .docs .side { position: static; }
-  }
-  .side ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
-  .side a {
-    color: var(--text-dim);
-    text-decoration: none;
-    font-size: 0.95rem;
-    display: block;
-    border-left: 2px solid transparent;
-    padding-left: 0.7rem;
-  }
-  .side a:hover { color: var(--text); }
-  .side a[aria-current="page"] {
-    color: var(--text);
-    /* The rail is the ramp, so the page you are on is the one warm thing in the column. */
-    border-left-color: transparent;
-    border-image: var(--ramp-cool) 1;
-    font-weight: 600;
-  }
-
-  /* Pagefind ships its own design; these are the variables it exposes, pointed at our tokens so
-     the search box is not the one un-themed widget on the site. */
-  .side :global(#search) {
-    --pagefind-ui-primary: var(--accent);
-    --pagefind-ui-text: var(--text);
-    --pagefind-ui-background: var(--surface-2);
-    --pagefind-ui-border: var(--stroke);
-    --pagefind-ui-tag: var(--surface-1);
-    --pagefind-ui-border-width: 1px;
-    --pagefind-ui-border-radius: var(--radius);
-    --pagefind-ui-font: inherit;
-    margin-bottom: var(--sp-4);
-  }
-
-  .prose h1 { font-size: clamp(1.9rem, 4.5vw, 2.6rem); margin-bottom: 1rem; }
-  .prose.landing h1 { font-size:clamp(3rem,6vw,5.8rem);line-height:.94;letter-spacing:-.055em;margin:.2rem 0 1rem;background:var(--ramp);background-clip:text;color:transparent; }
-  .prose :global(h2) { margin-top: 2.2rem; }
-  .prose :global(h3) { margin-top: 1.6rem; }
-  .prose :global(ul), .prose :global(ol) { max-width: var(--measure); padding-left: 1.2rem; }
-  .prose :global(li) { margin-bottom: 0.4rem; }
-  .prose :global(strong) { color: var(--text); font-weight: 600; }
-  .prose :global(kbd) {
-    font: inherit;
-    font-size: 0.85em;
-    background: var(--surface-2);
-    border: 1px solid var(--stroke);
-    border-radius: 5px;
-    padding: 0.1em 0.4em;
-  }
-  .prose :global(pre) {
-    background: var(--bg-deep);
-    border: 1px solid var(--stroke);
-    border-radius: var(--radius);
-    padding: 1rem 1.1rem;
-    overflow-x: auto;
-    max-width: var(--measure);
-  }
-  .prose :global(code) { font-size: 0.9em; }
-  .prose :global(:not(pre) > code) {
-    background: var(--surface-1);
-    border: 1px solid var(--stroke);
-    border-radius: 5px;
-    padding: 0.1em 0.35em;
-  }
-
-  .seq {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    flex-wrap: wrap;
-    margin-top: 3.5rem;
-    padding-top: 2rem;
-    border-top: 1px solid var(--stroke);
-  }
-</style>

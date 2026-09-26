@@ -58,7 +58,7 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
 >
   <section class="download">
     <div class="wrap">
-      <header class="download-head" data-reveal><div><p class="eyebrow">Use it your way</p><h1>Open the radar wherever you are.</h1><p class="lede">Start in your browser, or take the same radar and Analyst tools onto your own device. No account or paid tier.</p><div class="head-actions"><a class="btn btn-primary" href="/go/web/download">Open live radar</a><a class="btn" href={releases}>View releases</a></div></div><img src="/showcase/clinton-single.webp" alt="HookEcho Radar mode showing the April 26, 2024 storm near Clinton, Missouri" width="1440" height="900" /></header>
+      <header class="download-head" data-reveal><div><p class="eyebrow">Use it your way</p><h1>One radar.<br />Every screen.</h1><p class="lede">Start in your browser, or take the same radar and Analyst tools onto your own device. No account or paid tier.</p><div class="head-actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href={releases}>View releases</a></div></div><img src="/showcase/clinton-single.webp" alt="HookEcho Radar mode showing the April 26, 2024 storm near Clinton, Missouri" width="1440" height="900" /></header>
 
       <p id="pick" class="pick" hidden></p>
 
@@ -125,7 +125,7 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
 </script>
 
 <style>
-  .download{padding:clamp(2.5rem,6vw,5rem) 0 5rem}.eyebrow{color:var(--accent);font-weight:750;letter-spacing:.12em;text-transform:uppercase;font-size:.75rem}.download-head{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);gap:clamp(2rem,6vw,6rem);align-items:center;margin-bottom:3.5rem}.download-head h1{font-size:clamp(3rem,6vw,5.8rem);line-height:.94;letter-spacing:-.055em;margin:.5rem 0 1rem}.download-head img{width:100%;border:1px solid var(--stroke-strong);border-radius:0;box-shadow:none}.head-actions{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1.5rem}
+  .download{padding:clamp(2.5rem,6vw,5rem) 0 5rem}.eyebrow{color:var(--accent);font-weight:750;letter-spacing:.12em;text-transform:uppercase;font-size:.75rem}.download-head{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);gap:clamp(2rem,6vw,6rem);align-items:center;margin-bottom:3.5rem}.download-head h1{font-size:clamp(3rem,4.5vw,4.8rem);line-height:.94;letter-spacing:-.055em;margin:.5rem 0 1rem}.download-head img{width:100%;border:1px solid var(--stroke-strong);border-radius:0;box-shadow:none}.head-actions{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1.5rem}
   .lede { font-size: 1.15rem; color: var(--text-dim); }
   .pick { color: var(--text); font-weight: 600; }
   .grid {
@@ -134,7 +134,7 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     margin: 1.5rem 0 2rem;
   }
-  .platform { display: flex; flex-direction: column; min-height:280px;padding:1.5rem;border:1px solid var(--stroke);border-radius:8px;background:var(--surface-1);transition:border-color .2s ease; }
+  .platform { display: flex; flex-direction: column; min-height:280px;padding:1.5rem;border:1px solid var(--stroke);border-radius:0;background:var(--surface-1);transition:border-color .2s ease; }
   .platform:hover{border-color:var(--accent)}
   .platform h2 { font-size: var(--text-lg); display: flex; align-items: center; gap: 0.5rem; }
   .platform .note { color: var(--text-dim); font-size: 0.95rem; }

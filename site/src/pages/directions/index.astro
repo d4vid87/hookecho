@@ -1,0 +1,45 @@
+---
+import { directions } from '../../data/directions.js';
+---
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex"/><title>Five directions — HookEcho design studio</title><link rel="icon" href="/logo.png"/></head>
+<body>
+  <header><a class="brand" href="/">hookecho<span> / design studio</span></a><a href="/">Original redesign ↗</a></header>
+  <main>
+    <div class="intro"><p class="eyebrow">TASTE VAULT / EXPLORATION 02</p><h1>One forecast.<br/><span>Five different feelings.</span></h1><div class="intro-bottom"><p>Explore each direction, then tell us what feels right. Mix the typography from one, the layout from another, or take a whole new path.</p><a href="#atlas">Explore the collection ↓</a></div></div>
+    <nav aria-label="Design directions">{directions.map(d => <a href={`#${d.slug}`}><span style={`background:${d.color}`}></span>{d.number} {d.name}</a>)}</nav>
+    <div class="collection">{directions.map(d => <article id={d.slug} style={`--accent:${d.color}`}>
+      <a class="preview" href={`/directions/${d.slug}/`} aria-label={`Explore ${d.name}`}><img src={`/directions/${d.slug}.png`} alt={`${d.name} desktop website preview`} width="1280" height="720" loading="lazy"/><span class="open-label">Explore {d.name} ↗</span></a>
+      <div class="card-content"><div class="card-title"><h2><span>{d.number}</span>{d.name}</h2><a href={`/directions/${d.slug}/`}>Open direction ↗</a></div><p class="description">{d.description}</p><p class="references"><span>FROM THE VAULT</span>{d.references}</p><details class="notes"><summary>Your notes on {d.name}</summary><label for={`notes-${d.slug}`}>What would you keep, change, or leave behind?</label><textarea id={`notes-${d.slug}`} data-notes={d.slug} placeholder={`Consider: ${d.keep.toLowerCase()}.`} rows="4"></textarea><span class="save-status" role="status"></span></details></div>
+    </article>)}</div>
+    <div class="decision"><p class="eyebrow">THE NEXT ITERATION STARTS WITH YOUR TASTE</p><h2>Keep this. Change that.</h2><p>Tell me the direction numbers and the parts you like. For example: “02’s light palette, 03’s typography, and 01’s radar layout.” Your notes above stay in this browser.</p><button type="button" id="download-notes">Download my notes ↓</button><span id="download-status" role="status"></span></div>
+  </main>
+  <footer><span>HookEcho · Five independent design directions</span><span>Live NWS forecasts · Desktop & mobile · No deployment</span></footer>
+  <script>
+    import { directions } from '../../data/directions.js';
+    const fields = document.querySelectorAll<HTMLTextAreaElement>('[data-notes]');
+    fields.forEach(field => {
+      const key = `hookecho:design-notes:${field.dataset.notes}`;
+      try { field.value = localStorage.getItem(key) || ''; } catch {}
+      field.addEventListener('input',() => {
+        const status = field.parentElement!.querySelector('.save-status')!;
+        try { localStorage.setItem(key,field.value); status.textContent = 'Saved in this browser'; }
+        catch { status.textContent = 'Browser storage unavailable. Download your notes to keep them.'; }
+      });
+    });
+    document.querySelector('#download-notes')!.addEventListener('click',() => {
+      const notes = Array.from(fields).map(field => {
+        const d = directions.find(d => d.slug === field.dataset.notes)!;
+        return `## ${d.number} — ${d.name}\n\n${field.value.trim() || '(No notes yet)'}\n`;
+      }).join('\n');
+      const url = URL.createObjectURL(new Blob([`# HookEcho design feedback\n\n${notes}`],{type:'text/markdown'}));
+      const a = document.createElement('a'); a.href = url; a.download = 'hookecho-design-feedback.md'; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
+      document.querySelector('#download-status')!.textContent = 'Notes file prepared.';
+    });
+  </script>
+  <style is:global>
+    @font-face{font-family:Inter;src:url('/fonts/InterVariable-subset.woff2') format('woff2');font-weight:100 900;font-display:swap}*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:25px}body{margin:0;background:#eeeae3;color:#22231f;font:14px/1.5 Inter,Arial,sans-serif}a{color:inherit;text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:5px}:focus-visible{outline:3px solid #4663c1;outline-offset:4px}header,footer{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:28px 4vw;border-bottom:1px solid #cbc7bd;font-size:11px}.brand{font-size:23px;font-weight:750;letter-spacing:-1px}.brand span{font-size:12px;font-weight:450;letter-spacing:0;color:#76766c;margin-left:10px}main{max-width:1600px;margin:auto;padding:0 4vw}.intro{padding:65px 0 35px}.eyebrow{font-size:10px;letter-spacing:.16em;font-weight:600;margin:0 0 20px}h1{font-size:clamp(45px,6.4vw,92px);font-weight:480;line-height:1.04;letter-spacing:-.065em;margin:0}h1 span{color:#83857a}.intro-bottom{display:flex;align-items:end;justify-content:space-between;margin-top:28px;gap:25px}.intro-bottom p{max-width:500px;font-size:14px;line-height:1.7;margin:0;color:#686c61}.intro-bottom a{font-size:12px;border-bottom:1px solid #8e9384;padding:12px 0;white-space:nowrap}nav{display:flex;gap:30px;border-block:1px solid #cbc7bd;padding:18px 0;margin-bottom:35px;flex-wrap:wrap}nav a{display:flex;align-items:center;gap:9px;font-size:12px}nav a span{width:9px;height:9px;border-radius:50%}.collection{display:grid;grid-template-columns:1fr 1fr;gap:38px 28px}.collection article{background:#f7f5f0;border:1px solid #d6d1c6;min-width:0;scroll-margin-top:20px}.collection article:last-child{grid-column:1/-1;display:grid;grid-template-columns:1.4fr 1fr}.preview{display:block;position:relative;background:#24252c;overflow:hidden;aspect-ratio:16/9}.preview img{display:block;width:100%;height:100%;object-fit:cover;object-position:top}.open-label{position:absolute;bottom:18px;right:18px;background:#f6f5ef;color:#20231d;padding:10px 15px;font-size:11px;border-radius:30px;box-shadow:0 3px 25px #0003;opacity:0;transition:opacity .15s}.preview:hover .open-label,.preview:focus-visible .open-label{opacity:1}.card-content{padding:25px}.card-title{display:flex;align-items:center;justify-content:space-between;gap:15px}h2{font-weight:500;font-size:29px;letter-spacing:-1px;margin:0}.card-title h2 span{font-size:11px;vertical-align:middle;margin-right:14px;color:#83887b;letter-spacing:0}.card-title>a{font-size:10px;border-bottom:1px solid #a8ad9f;padding-bottom:5px;white-space:nowrap}.description{font-size:13px;color:#62695d;line-height:1.65;max-width:60ch;margin:17px 0}.references{font-size:11px;color:#68715e;line-height:1.6;border-left:3px solid var(--accent);padding-left:13px}.references span{display:block;font-size:8px;letter-spacing:.13em;margin-bottom:5px;color:#838b7c}.notes{margin-top:23px;border-top:1px solid #dddcd2;padding-top:14px}.notes summary{font-size:11px;cursor:pointer}.notes label{display:block;font-size:10px;color:#6a705f;margin:18px 0 8px}.notes textarea{font:12px/1.6 Inter,sans-serif;display:block;width:100%;resize:vertical;background:#fffefa;border:1px solid #bfc5b5;padding:13px;min-height:100px;color:#22231f}.notes textarea::placeholder{color:#8a8e83}.save-status{display:block;font-size:9px;color:#576644;min-height:20px;margin-top:5px}.decision{padding:95px 0 80px;text-align:center;max-width:620px;margin:auto}.decision h2{font-size:clamp(35px,5vw,60px);letter-spacing:-.06em}.decision p:not(.eyebrow){font-size:14px;line-height:1.8;color:#6a705f;margin:20px 0 27px}.decision button{font:12px Inter,sans-serif;border:0;background:#252d24;color:#fff;padding:15px 22px;border-radius:30px;cursor:pointer}.decision #download-status{display:block;font-size:11px;margin-top:10px}footer{border-top:1px solid #cbc7bd;border-bottom:0;color:#6c7363;font-size:10px}@media(max-width:760px){header{padding:20px}.brand span{display:none}main{padding-inline:20px}.intro{padding:40px 0 30px}.intro-bottom{display:block}.intro-bottom a{display:inline-block;margin-top:15px}nav{gap:15px}.collection{display:block}.collection article{margin-bottom:25px}.collection article:last-child{display:block}.card-content{padding:20px}.card-title h2{font-size:27px}.decision{padding:45px 0}footer{flex-direction:column;align-items:start;gap:7px}.open-label{display:none}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.open-label{transition:none}}
+  </style>
+</body>
+</html>

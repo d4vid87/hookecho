@@ -1,0 +1,58 @@
+---
+import { palettes, DEFAULT_PALETTE } from '../data/palettes.js';
+---
+<details class="palette-preview">
+  <summary><span aria-hidden="true">◐</span> <span data-palette-label>Color studio</span></summary>
+  <div class="palette-panel">
+    <div class="palette-panel-head"><strong>Try a color scheme</strong><a href="/colors/">See all ten ↗</a></div>
+    <label for="palette-choice">Preview across the site</label>
+    <select id="palette-choice">
+      <option value="">Original Signal</option>
+      {palettes.map((p,i) => <option value={p.id} selected={p.id === DEFAULT_PALETTE}>{String(i+1).padStart(2,'0')} / {p.name} · {p.id === DEFAULT_PALETTE ? 'selected' : p.mode}</option>)}
+    </select>
+    <div class="palette-controls"><button type="button" data-palette-prev>← Previous</button><button type="button" data-palette-next>Next →</button></div>
+    <p data-palette-status aria-live="polite">Choose a palette to preview it.</p>
+    <button type="button" data-palette-reset>Restore selected Carbon</button>
+  </div>
+</details>
+<script>
+  import { palettes, DEFAULT_PALETTE } from '../data/palettes.js';
+  const picker = document.querySelector<HTMLSelectElement>('#palette-choice')!;
+  const panel = document.querySelector<HTMLDetailsElement>('.palette-preview')!;
+  function reflect() {
+    const palette = palettes.find(p => p.id === document.documentElement.dataset.palette);
+    picker.value = palette?.id || '';
+    document.querySelector('[data-palette-label]')!.textContent = palette ? `${String(palettes.indexOf(palette)+1).padStart(2,'0')} / ${palette.name}` : 'Color studio';
+    document.querySelector('[data-palette-status]')!.textContent = palette?.description || 'Original Signal. Your layout stays the same.';
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content',palette?.colors.bg || '#e8e8e1');
+    document.querySelectorAll<HTMLAnchorElement>('[data-palette-preview]').forEach(link => {
+      link.dataset.selected = String(link.dataset.palettePreview === palette?.id);
+    });
+  }
+  function choose(id: string) {
+    if (palettes.some(p => p.id === id)) document.documentElement.dataset.palette = id;
+    else delete document.documentElement.dataset.palette;
+    try { if (id === DEFAULT_PALETTE) localStorage.removeItem('hookecho:palette-preview'); else localStorage.setItem('hookecho:palette-preview',id || 'original'); } catch {}
+    const url = new URL(location.href);
+    if (id === DEFAULT_PALETTE) url.searchParams.delete('palette');
+    else url.searchParams.set('palette',id || 'original');
+    history.replaceState(null,'',url);
+    reflect();
+  }
+  picker.addEventListener('change',()=>choose(picker.value));
+  function step(delta: number) {
+    const index = palettes.findIndex(p=>p.id === picker.value);
+    const next = index < 0 ? (delta > 0 ? 0 : palettes.length - 1) : (index + delta + palettes.length) % palettes.length;
+    choose(palettes[next].id);
+  }
+  document.querySelector('[data-palette-prev]')!.addEventListener('click',()=>step(-1));
+  document.querySelector('[data-palette-next]')!.addEventListener('click',()=>step(1));
+  document.querySelector('[data-palette-reset]')!.addEventListener('click',()=>choose(DEFAULT_PALETTE));
+  document.addEventListener('keydown',e=>{ if(e.key === 'Escape' && panel.open){panel.open=false;panel.querySelector('summary')?.focus();} });
+  reflect();
+</script>
+<style>
+  .palette-preview{position:fixed;right:20px;bottom:20px;z-index:60;font:12px/1.5 'Courier New',monospace;color:#1d2220;filter:drop-shadow(0 8px 18px #0003)}
+  summary{display:flex;gap:10px;align-items:center;cursor:pointer;list-style:none;background:#f9f9f4;border:1px solid #777d75;padding:12px 17px;min-height:44px;width:max-content;margin-left:auto;font-weight:700}summary::-webkit-details-marker{display:none}summary>span:first-child{font-size:20px;line-height:1}
+  .palette-panel{position:absolute;right:0;bottom:calc(100% + 8px);width:min(340px,calc(100vw - 32px));padding:20px;background:#f9f9f4;border:1px solid #777d75;color-scheme:light}.palette-panel-head{display:flex;justify-content:space-between;gap:15px;margin-bottom:18px}.palette-panel a{color:#334e3e;font-size:11px}.palette-panel label{display:block;margin-bottom:7px;color:#535e55;font-size:11px}select{width:100%;min-height:44px;background:white;color:#19251d;border:1px solid #879183;padding:8px;font:inherit}.palette-controls{display:flex;gap:8px;margin:10px 0}.palette-controls button{flex:1}button{font:inherit;background:#e9ece4;border:1px solid #879183;padding:10px 12px;min-height:44px;color:#20291e;cursor:pointer}button:hover{background:#dbe1d5}.palette-panel p{font-size:11px;color:#535e55;min-height:3em;margin:14px 0}.palette-panel>[data-palette-reset]{width:100%;background:transparent;font-size:11px}.palette-preview :focus-visible{outline:3px solid #3c6447;outline-offset:3px}@media(max-width:550px){.palette-preview{right:12px;bottom:12px}summary{font-size:11px;padding:10px 13px}}
+</style>

@@ -114,7 +114,7 @@ import { COLS as cols, ROWS as rows, COMPETITORS } from "../../data/compare";
   .one-by-one span { font-size: 0.95rem; }
 
   /* Nineteen rows by six columns does not fit a phone. Scroll it rather than pretend. */
-  .scroller { overflow-x: auto; }
+  .scroller { position: relative; overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; min-width: 960px; font-size: 0.92rem; }
   th, td {
     text-align: left;

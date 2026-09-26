@@ -52,11 +52,11 @@ const sections = [
   {
     id: "velocity",
     eyebrow: "Velocity and dual-pol",
-    title: "Rotation, debris and hail, called by name",
+    title: "Investigate rotation, debris, and hail",
     body:
       "Velocity with dealiasing and a storm-relative view for spotting couplets, plus the full " +
-      "dual-polarization set — ZDR, CC, KDP and differential phase — which is how a debris ball " +
-      "and a hail core stop looking like the same red blob.",
+      "dual-polarization set — ZDR, CC, KDP and differential phase. Compare products at the same " +
+      "location and time; a single color or signature does not confirm a hazard.",
     shot: "velocity.jpg",
     alt: "Storm-relative velocity showing a tight rotation couplet in a supercell",
     link: { href: ktlx(",VEL,srv"), label: "Open storm-relative velocity" },
@@ -157,16 +157,16 @@ const sections = [
 >
   <section class="feature-hero" id="analyst-mode">
     <div class="wrap feature-hero-grid">
-      <div><p class="eyebrow">Features / Analyst</p><h1>See the storm.<br />Then read between the colors.</h1><p class="lede">A single map gives you the weather at a glance. Analyst adds synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity so you can investigate possible rotation without losing your place.</p><div class="actions"><a class="btn btn-primary" href="/go/web/features">Open live radar</a><a class="btn" href="/docs/radar-and-analyst/">Learn Analyst</a></div><p class="caption">Actual HookEcho capture · KEAX archive · Clinton, Missouri · April 26, 2024</p></div>
+      <div><p class="eyebrow">Features / Analyst</p><h1>Read the storm.<br />Layer by layer.</h1><p class="lede">A single map gives you the weather at a glance. Analyst adds synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity so you can investigate possible rotation without losing your place.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/docs/storm-analysis/">Start storm analysis</a></div><p class="caption">Actual HookEcho capture · KEAX archive · Clinton, Missouri · April 26, 2024</p></div>
       <img src="/showcase/clinton-four.webp" alt="Four synchronized radar products in HookEcho Analyst" width="1440" height="900" fetchpriority="high" />
     </div>
   </section>
   <section class="feature-index"><div class="wrap"><div class="intro"><p class="eyebrow">Go deeper</p><h2>Every tool has a job.</h2><p>Choose what you need for the question in front of you. The live map stays one click away.</p></div><div class="feature-list">
     {sections.filter((s) => s.id !== "analyst-mode").map((s, index) => <article id={s.id} class="feature-item"><span class="feature-number">{String(index + 1).padStart(2,"0")}</span><div><p class="eyebrow">{s.eyebrow}</p><h3>{s.title}</h3><p>{s.body}</p></div><a href={s.link.href}>{s.link.label} →</a></article>)}
   </div></div></section>
-  <section class="feature-end"><div class="wrap"><h2>Try the real radar.</h2><p>No account or installation needed in your browser.</p><div class="actions"><a class="btn btn-primary" href="/go/web/features-final">Open live radar</a><a class="btn" href="/download/">Download HookEcho</a></div></div></section>
+  <section class="feature-end"><div class="wrap"><h2>Try the real radar.</h2><p>No account or installation needed in your browser.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/download/">Download HookEcho</a></div></div></section>
 </Base>
 <style>
-  .feature-hero{padding-block:clamp(3rem,6vw,6rem);background:var(--bg-deep)}.feature-hero-grid{display:grid;grid-template-columns:minmax(300px,.7fr) minmax(0,1.3fr);align-items:center;gap:clamp(2rem,5vw,5rem)}.feature-hero h1{font-size:clamp(3rem,6vw,6rem);line-height:.95;letter-spacing:-.065em}.feature-hero img{display:block;width:100%;border:1px solid var(--stroke-strong)}.lede{font-size:1.1rem;color:var(--text-dim)}.actions{display:flex;flex-wrap:wrap;gap:.7rem;margin-top:1.5rem}.caption{font-size:.75rem;color:var(--text-dim);margin-top:1rem}.intro{max-width:760px;margin-bottom:2rem}.intro h2,.feature-end h2{font-size:clamp(2.5rem,4vw,4rem);line-height:1.02;letter-spacing:-.055em}.intro>p:last-child,.feature-end p{color:var(--text-dim)}.feature-list{border-top:1px solid var(--stroke)}.feature-item{display:grid;grid-template-columns:50px minmax(0,1fr) auto;align-items:start;gap:1.5rem;padding:1.7rem 0;border-bottom:1px solid var(--stroke);scroll-margin-top:5rem}.feature-number{font-size:.75rem;color:var(--accent);font-weight:750}.feature-item .eyebrow{color:var(--accent);margin:0}.feature-item h3{font-size:1.45rem;margin:.25rem 0 .5rem}.feature-item p:not(.eyebrow){color:var(--text-dim);margin:0;max-width:75ch}.feature-item>a{font-size:.86rem;white-space:nowrap;padding-top:1.5rem}.feature-end{background:var(--surface-1)}
+  .feature-hero{padding-block:clamp(3rem,6vw,6rem);background:var(--bg-deep)}.feature-hero-grid{display:grid;grid-template-columns:minmax(300px,.7fr) minmax(0,1.3fr);align-items:center;gap:clamp(2rem,5vw,5rem)}.feature-hero h1{font-size:clamp(3rem,4.5vw,4.8rem);line-height:.95;letter-spacing:-.065em}.feature-hero img{display:block;width:100%;border:1px solid var(--stroke-strong)}.lede{font-size:1.1rem;color:var(--text-dim)}.actions{display:flex;flex-wrap:wrap;gap:.7rem;margin-top:1.5rem}.caption{font-size:.75rem;color:var(--text-dim);margin-top:1rem}.intro{max-width:760px;margin-bottom:2rem}.intro h2,.feature-end h2{font-size:clamp(2.5rem,4vw,4rem);line-height:1.02;letter-spacing:-.055em}.intro>p:last-child,.feature-end p{color:var(--text-dim)}.feature-list{border-top:1px solid var(--stroke)}.feature-item{display:grid;grid-template-columns:50px minmax(0,1fr) auto;align-items:start;gap:1.5rem;padding:1.7rem 0;border-bottom:1px solid var(--stroke);scroll-margin-top:5rem}.feature-number{font-size:.75rem;color:var(--accent);font-weight:750}.feature-item .eyebrow{color:var(--accent);margin:0}.feature-item h3{font-size:1.45rem;margin:.25rem 0 .5rem}.feature-item p:not(.eyebrow){color:var(--text-dim);margin:0;max-width:75ch}.feature-item>a{font-size:.86rem;white-space:nowrap;padding-top:1.5rem}.feature-end{background:var(--surface-1)}
   @media(max-width:800px){.feature-hero-grid{grid-template-columns:1fr}.feature-item{grid-template-columns:30px minmax(0,1fr)}.feature-item>a{grid-column:2;padding:0}.feature-hero h1{font-size:clamp(2.7rem,10vw,4rem)}}
 </style>

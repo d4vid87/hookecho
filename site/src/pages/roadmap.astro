@@ -11,16 +11,25 @@ const ttlMs = 60 * 60 * 1000;
 
 <Base
   title="Roadmap | HookEcho"
-  description="What is being worked on in HookEcho next, read live from the GitHub issue tracker — because the tracker is the roadmap."
+  description="HookEcho's direction: a U.S. severe-weather analysis workstation with linked products, traceable data, and repeatable storm investigations."
 >
   <section>
     <div class="wrap">
-      <p class="eyebrow">Roadmap</p>
-      <h1>What happens next</h1>
+      <p class="eyebrow">Roadmap / U.S. Analyst workstation</p>
+      <h1>Deeper analysis.<br />Clearer evidence.</h1>
       <p class="lede">
-        There is no private plan. Everything being worked on is an issue in the public repository,
-        and this page reads that repository live — so it cannot go stale, and it cannot flatter us.
+        Build from the radar into a U.S. severe-weather workstation. The priority is depth:
+        linked views, traceable measurements, and the context to understand a storm across products and time.
       </p>
+
+      <div class="roadmap-directions">
+        <article><span class="eyebrow">01 / Available workflow</span><h2>Radar → Analyst</h2><p>Start with one map. Compare reflectivity, velocity, CC, and ZDR in linked panes. Check the Inspector's source time and save your workspace.</p><a href="/docs/storm-analysis/">Follow the analysis guide ↗</a></article>
+        <article><span class="eyebrow">02 / Roadmap priority</span><h2>Know the source.</h2><p>Make provenance, issue and valid times, data age, units, resolution, and processing state explicit across the workstation.</p><a href="https://github.com/d4vid87/hookecho/blob/main/docs/us-analyst-roadmap.md">Read the data requirements ↗</a></article>
+        <article><span class="eyebrow">03 / Planned depth</span><h2>Connect the evidence.</h2><p>Expand radar and MRMS analysis alongside satellite, model guidance, observations, and repeatable historical verification.</p><a href="https://github.com/d4vid87/hookecho/blob/main/docs/us-analyst-roadmap.md">Explore the full direction ↗</a></article>
+      </div>
+      <p class="dim">These priorities describe the direction, not a promise that every capability has shipped. Check the <a href="/changelog/">changelog</a> for released work.</p>
+      <h2 class="issues-heading">The work in public.</h2>
+      <p class="dim">Open issues from GitHub appear below when available. <a href={`https://github.com/${repo}/issues`}>Open the issue tracker ↗</a></p>
 
       <div class="board" data-repo={repo} data-ttl={ttlMs} hidden></div>
 
@@ -138,6 +147,7 @@ const ttlMs = 60 * 60 * 1000;
 </script>
 
 <style>
+  .roadmap-directions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--stroke);border-left:1px solid var(--stroke);margin:40px 0 24px}.roadmap-directions article{padding:28px;background:var(--surface-1);border-right:1px solid var(--stroke);border-bottom:1px solid var(--stroke);display:flex;flex-direction:column}.roadmap-directions h2{font-size:30px;margin:25px 0 16px}.roadmap-directions p{font-size:15px;color:var(--text-dim)}.roadmap-directions a{font:12px/1.6 'Courier New',monospace;margin-top:auto}.issues-heading{margin-top:55px}.roadmap-directions .eyebrow{color:var(--accent)}@media(max-width:800px){.roadmap-directions{grid-template-columns:1fr}.roadmap-directions h2{margin-top:14px}}
   /* A wash of the brand ramp behind the opening block, so every page starts as the same
      product rather than a bare column of text. */
   :global(section:first-of-type) {

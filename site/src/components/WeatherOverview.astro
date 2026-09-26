@@ -1,0 +1,36 @@
+---
+import sites from '../data/nexrad-sites.json';
+import '../styles/weather-signal.css';
+const areas = sites.filter(s => s.network === 'nexrad' && s.country === 'US').sort((a,b) => a.city.localeCompare(b.city));
+---
+<div class="signal-weather"><section class="weather-home" id="weather" aria-labelledby="weather-heading">
+    <div class="concept-intro"><p class="kicker">Free. Open source.</p><h1 id="weather-heading">STORM INSIGHT<br />BELONGS TO EVERYONE.</h1><p class="intro-copy">Free, open-source radar and a complete storm analysis workspace. Built to explore, compare, and understand.</p></div>
+    <div class="location-tools">
+      <form data-location-form role="search" aria-label="Find a radar area"><label class="sr-only" for="weather-search">Search U.S. radar areas by city or station</label><span aria-hidden="true">⌕</span><input id="weather-search" list="weather-areas" placeholder="City or radar station" required autocomplete="off"/><datalist id="weather-areas">{areas.map(s => <option value={`${s.city}, ${s.state} · ${s.id}`}/>)}</datalist><button type="submit" aria-label="Search location">↗</button></form>
+      <div class="location-actions"><button data-locate type="button">Locate me</button><button data-save type="button" aria-pressed="false">Save location</button><div class="units" role="group" aria-label="Temperature units"><button data-unit="F" type="button" aria-pressed="true">°F</button><button data-unit="C" type="button" aria-pressed="false">°C</button></div></div>
+      <p data-search-status class="search-help" role="status">U.S. radar areas · forecast at the selected station.</p><div data-saved class="saved" aria-label="Saved locations"></div>
+    </div>
+    <aside class="alerts" data-alert-strip aria-label="Official alerts"><span class="alert-icon" aria-hidden="true">◇</span><div data-alerts aria-live="polite"><strong>Official NWS alerts</strong><span>Checking this location…</span></div><a href="https://www.weather.gov/alerts">NWS ↗</a></aside>
+    <article class="current" aria-labelledby="location-title">
+      <div class="current-top"><span class="kicker">01 / LOCAL OUTLOOK</span><span data-local-time>—</span></div>
+      <h2 data-place id="location-title">Oklahoma City, OK</h2><p data-location-detail class="station">KTLX · hourly forecast</p>
+      <div class="current-reading"><span class="temperature" data-temperature>—</span><span class="weather-icon" data-condition-icon aria-hidden="true">◌</span></div>
+      <p class="condition" data-condition>Loading forecast…</p>
+      <dl class="metrics"><div><dt>Rain chance</dt><dd data-rain>—</dd></div><div><dt>Wind</dt><dd data-wind>—</dd></div><div><dt>Humidity</dt><dd data-humidity>—</dd></div></dl>
+      <div class="forecast-stamp"><span data-updated role="status">Forecast data · NWS</span><button data-refresh type="button" aria-label="Refresh weather">Refresh ↻</button></div>
+    </article>
+    <article class="outlook"><span class="kicker">02 / LOCAL FORECAST</span><h2>A look ahead.</h2><p data-summary>Connecting to the National Weather Service.</p><a href="#week">Read the full outlook ↗</a></article>
+    <section class="radar" id="radar" aria-labelledby="radar-title">
+      <div class="radar-top"><span class="kicker" id="radar-title">03 / HOOKECHO LIVE RADAR</span><a data-radar-link href="https://app.hookecho.io/" target="_blank" rel="noopener">Full radar ↗</a></div>
+      <div class="radar-surface">
+        <iframe data-live-radar src="https://app.hookecho.io/?embed#goto=KTLX,-97.2778,35.3331,8" title="HookEcho interactive weather radar" allowfullscreen></iframe>
+      </div>
+      <p class="radar-caption">HookEcho live app · pan, zoom, change products, and play the loop. <a data-local-radar href="https://app.hookecho.io/" target="_blank" rel="noopener">Open in its own tab ↗</a></p>
+    </section>
+    <section class="hourly" id="forecast" aria-labelledby="hourly-title"><div class="section-heading"><h2 id="hourly-title">04 / NEXT 24 HOURS</h2><span>Temperature · rain · wind</span></div><div data-hourly class="hours" role="region" tabindex="0" aria-label="Scrollable hourly forecast"><p>Loading hourly forecast…</p></div></section>
+    <section class="daily" id="week" aria-labelledby="daily-title"><div class="section-heading"><h2 id="daily-title">05 / SEVEN-DAY OUTLOOK</h2><span>Open a period for details</span></div><div data-daily class="days"><p>Loading seven-day forecast…</p></div></section>
+
+    <div class="weather-sources"><span>Forecasts & alerts: NOAA / NWS · Radar: HookEcho / NOAA NEXRAD</span><a href="#analyst">Go deeper with Analyst ↓</a></div>
+    <noscript>Enable JavaScript for forecasts, or <a href="https://www.weather.gov/">visit NWS</a>.</noscript>
+</section></div>
+<script>import '../scripts/weather-home.js';</script>

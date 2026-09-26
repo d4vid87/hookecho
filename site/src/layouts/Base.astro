@@ -1,5 +1,9 @@
 ---
 import "../styles/global.css";
+import "../styles/signal.css";
+import "../styles/palette-preview.css";
+import PalettePreview from "../components/PalettePreview.astro";
+import { palettes, paletteStyles, DEFAULT_PALETTE } from "../data/palettes.js";
 import { DISCORD_INVITE } from "../data/community";
 
 interface Props {
@@ -18,8 +22,11 @@ const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
 const path = Astro.url.pathname;
 
 const nav = [
-  { href: "https://github.com/d4vid87/hookecho", label: "GitHub" },
+  { href: "/#weather", label: "Weather" },
+  { href: "/radar/", label: "Radar" },
+  { href: "/docs/storm-analysis/", label: "Analysis" },
   { href: "/features/", label: "Features" },
+  { href: "/roadmap/", label: "Roadmap" },
   { href: "/download/", label: "Download" },
   { href: "/docs/", label: "Learn" },
 ];
@@ -28,7 +35,8 @@ const footer = [
   {
     title: "Product",
     links: [
-      { href: "/#showcase", label: "Showcase" },
+      { href: "/features/", label: "Capabilities" },
+      { href: "/colors/", label: "Color studio" },
       { href: "/compare/", label: "Compare" },
       { href: "/download/", label: "Download" },
       { href: "https://app.hookecho.io/lite/", label: "HookEcho Lite" },
@@ -38,6 +46,7 @@ const footer = [
     title: "Learn",
     links: [
       { href: "/docs/", label: "Documentation" },
+      { href: "/docs/storm-analysis/", label: "Advanced storm analysis" },
       { href: "/blog/", label: "Blog" },
       { href: "/radar/", label: "Radar sites" },
       { href: "/storms/", label: "Historic storms" },
@@ -47,11 +56,11 @@ const footer = [
   {
     title: "Project",
     links: [
-      { href: "/go/hookecho-source/footer", label: "Star HookEcho on GitHub" },
+      { href: "https://github.com/d4vid87/hookecho", label: "Star HookEcho on GitHub" },
       { href: "/roadmap/", label: "Roadmap" },
       { href: "/changelog/", label: "Changelog" },
       { href: DISCORD_INVITE, label: "Discord" },
-      { href: "/go/hookecho-youtube/footer", label: "HookEcho on YouTube" },
+      { href: "https://www.youtube.com/channel/UCZRECVhcCwdr0Fm5Z0NUo7g", label: "HookEcho on YouTube" },
       { href: "https://github.com/d4vid87/hookecho/issues", label: "Report a problem" },
       { href: "/privacy/", label: "Privacy" },
       { href: "/terms/", label: "Terms" },
@@ -63,7 +72,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 ---
 
 <!doctype html>
-<html lang="en" class="site-glass">
+<html lang="en" class="site-signal" data-palette={DEFAULT_PALETTE}>
   <head>
     <link rel="preconnect" href="https://img.hookecho.io" crossorigin />
     <meta charset="utf-8" />
@@ -73,7 +82,22 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
     <link rel="canonical" href={url} />
     <link rel="icon" href="/logo.png" type="image/png" />
     <link rel="alternate" type="application/rss+xml" title="HookEcho" href="/rss.xml" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content={palettes.find(p => p.id === DEFAULT_PALETTE)!.colors.bg} />
+    <style is:inline set:html={paletteStyles} />
+    <script is:inline define:vars={{paletteIds: palettes.map(p => p.id)}}>
+      (() => {
+        const requested = new URLSearchParams(location.search).get('palette');
+        let selected = requested;
+        try {
+          if (requested === null) selected = localStorage.getItem('hookecho:palette-preview');
+          else if (paletteIds.includes(requested)) localStorage.setItem('hookecho:palette-preview',requested);
+          else if (requested === 'original') localStorage.setItem('hookecho:palette-preview','original');
+          else localStorage.removeItem('hookecho:palette-preview');
+        } catch {}
+        if (paletteIds.includes(selected)) document.documentElement.dataset.palette = selected;
+        else if (selected === 'original') delete document.documentElement.dataset.palette;
+      })();
+    </script>
     <link
       rel="preload"
       href="/fonts/InterVariable-subset.woff2"
@@ -105,11 +129,13 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
     }
   </head>
   <body>
+    <PalettePreview />
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <header class="site-head">
       <div class="wrap head-inner">
-        <a class="brand" href="/" aria-label="HookEcho home">
+        <a class="brand" href="/" aria-label="Hookecho home">
           <img src="/logo.png" alt="" width="28" height="28" />
-          <span>HookEcho</span>
+          <span>Hookecho</span>
         </a>
 
         <nav class="desktop-nav" aria-label="Main">
@@ -120,11 +146,15 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
               </a>
             ))
           }
+          <a class="github-star" href="https://github.com/d4vid87/hookecho" target="_blank" rel="noopener">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.23c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.33-1.76-1.33-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18a4.63 4.63 0 0 1 1.24 3.22c0 4.61-2.81 5.63-5.49 5.93.43.37.82 1.1.82 2.22v3.29c0 .32.22.69.83.57A12 12 0 0 0 12 .5Z"/></svg>
+            Star on GitHub
+          </a>
         </nav>
 
         <a
           class="btn btn-primary header-cta"
-          href="/go/web/nav"
+          href="https://app.hookecho.io/"
         >Open live radar</a>
 
         <details class="site-menu">
@@ -137,19 +167,23 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
                 </a>
               ))
             }
+            <a href="https://github.com/d4vid87/hookecho" target="_blank" rel="noopener">☆ Star on GitHub</a>
           </nav>
         </details>
       </div>
     </header>
 
-    <main><slot /></main>
+    <main id="main-content"><slot /></main>
 
+    <aside class="analysis-route" aria-label="Explore storm analysis">
+      <div class="wrap"><div><p class="eyebrow">Radar → Analyst</p><strong>Read the storm. Check the evidence.</strong><p>Linked products, source times, and a deeper view of severe weather.</p></div><nav aria-label="Analysis resources"><a href="/docs/storm-analysis/">Analysis field guide ↗</a><a href="/roadmap/">Workstation roadmap ↗</a></nav></div>
+    </aside>
     <footer class="site-foot">
       <div class="wrap foot-grid">
         <div class="foot-about">
           <a class="brand" href="/">
             <img src="/logo.png" alt="" width="28" height="28" />
-            <span>HookEcho</span>
+            <span>Hookecho</span>
           </a>
           <p>
             HookEcho is a free, open-source weather radar built on public data, with no account,
@@ -181,11 +215,8 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
 </html>
 
 <style>
-  :global(html.site-glass) { --page: 1390px; color-scheme: dark; }
-  :global(.site-glass body) { background: var(--bg); }
-  :global(.site-glass .btn) { border-radius: 7px; background: var(--surface-1); border-color: var(--stroke-strong); }
-  :global(.site-glass .btn-primary) { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); box-shadow: none; }
-  :global(.site-glass .btn:hover) { border-color: var(--accent); box-shadow: none; transform: none; }
+  .skip-link { position: fixed; top: -5rem; left: 1rem; z-index: 100; padding: .7rem 1rem; background: var(--accent); color: var(--accent-ink); }
+  .skip-link:focus { top: .5rem; }
 
   .site-head {
     position: sticky;
@@ -234,6 +265,8 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
   .desktop-nav a[aria-current="page"],
   .site-menu nav a[aria-current="page"] { color: var(--accent); text-decoration: underline; text-underline-offset: 0.35rem; }
   .header-cta { flex: none; padding: 0.55rem 1rem; font-size: 0.9rem; }
+  .github-star { display: inline-flex; align-items: center; gap: .5rem; padding: 12px; border: 1px solid var(--stroke); }
+  .github-star:hover { background: var(--surface-2); }
 
   .site-foot { border-top: 1px solid var(--stroke); padding: var(--sp-7) 0; background: var(--bg-deep); }
   .foot-grid {
@@ -254,7 +287,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
   .foot-group a { color: var(--text-dim); font-size: var(--text-sm); text-decoration: none; }
   .foot-group a:hover { color: var(--text); text-decoration: underline; }
 
-  @media (max-width: 900px) {
+  @media (max-width: 1150px) {
     .head-inner { gap: var(--sp-3); }
     .desktop-nav { display: none; }
     .site-menu { display: block; order: 3; position: relative; margin-left: 0; }
@@ -292,7 +325,7 @@ const current = (href: string) => href.startsWith("/") && (path === href || path
   }
   @media (max-width: 360px) {
     .head-inner { gap: var(--sp-2); }
-    .brand > span { display: none; }
+    .brand { gap: 0.35rem; }
     .header-cta { font-size: 0.82rem; }
   }
   @media (max-width: 430px) {

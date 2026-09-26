@@ -1,0 +1,53 @@
+---
+import { directions } from '../../data/directions.js';
+import sites from '../../data/nexrad-sites.json';
+import '../../styles/directions.css';
+export function getStaticPaths() { return directions.map((direction,index) => ({params:{slug:direction.slug},props:{direction,next:directions[(index+1)%directions.length]}})); }
+const {direction:d,next} = Astro.props;
+const areas = sites.filter(s => s.network === 'nexrad' && s.country === 'US').sort((a,b) => a.city.localeCompare(b.city));
+---
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex"/><title>{d.name} — HookEcho design direction</title><link rel="icon" href="/logo.png"/></head>
+<body class={d.slug}>
+  <a class="skip" href="#weather">Skip to forecast</a>
+  <div class="review-bar"><a href="/directions/">← All five directions</a><span>{d.number} / {d.name}</span><a href={`/directions/${next.slug}/`}>Next: {next.name} →</a></div>
+  <header class="concept-header"><a class="wordmark" href={`/directions/${d.slug}/`}><span class="brand-icon" aria-hidden="true">◉</span> hookecho<span class="brand-period">.</span></a><nav aria-label="Main"><a href="#forecast">Forecast</a><a href="#radar">Radar</a><a href="/docs/">Learn</a></nav><a class="header-action" href="https://app.hookecho.io/">Open radar ↗</a></header>
+  <main class="weather-home" id="weather">
+    <div class="concept-intro"><p class="kicker">{d.tag}</p><h1>{d.title}</h1><p class="intro-copy">{d.slug === 'atlas' ? 'Follow the system. Find your place in it.' : d.slug === 'fieldnotes' ? 'An independent outlook on the world outside your window.' : d.slug === 'signal' ? 'FORECAST / RADAR / OFFICIAL ALERTS' : d.slug === 'afterglow' ? 'A clearer view of what comes next. Free, open, and yours.' : 'Less searching. More living. Your next seven days, clearly.'}</p></div>
+    <div class="location-tools">
+      <form data-location-form role="search" aria-label="Find a radar area"><label class="sr-only" for="weather-search">Search U.S. radar areas by city or station</label><span aria-hidden="true">⌕</span><input id="weather-search" list="weather-areas" placeholder="City or radar station" required autocomplete="off"/><datalist id="weather-areas">{areas.map(s => <option value={`${s.city}, ${s.state} · ${s.id}`}/>)}</datalist><button type="submit" aria-label="Search location">↗</button></form>
+      <div class="location-actions"><button data-locate type="button">Locate me</button><button data-save type="button" aria-pressed="false">Save location</button><div class="units" role="group" aria-label="Temperature units"><button data-unit="F" type="button" aria-pressed="true">°F</button><button data-unit="C" type="button" aria-pressed="false">°C</button></div></div>
+      <p data-search-status class="search-help" role="status">U.S. radar areas · forecast at the selected station.</p><div data-saved class="saved" aria-label="Saved locations"></div>
+    </div>
+    <aside class="alerts" data-alert-strip aria-label="Official alerts"><span class="alert-icon" aria-hidden="true">◇</span><div data-alerts aria-live="polite"><strong>Official NWS alerts</strong><span>Checking this location…</span></div><a href="https://www.weather.gov/alerts">NWS ↗</a></aside>
+    <article class="current" aria-labelledby="location-title">
+      <div class="current-top"><span class="kicker">{d.slug === 'fieldnotes' ? 'The local report' : d.slug === 'signal' ? '01 / LOCAL OUTLOOK' : 'Your local outlook'}</span><span data-local-time>—</span></div>
+      <h2 data-place id="location-title">Oklahoma City, OK</h2><p data-location-detail class="station">KTLX · hourly forecast</p>
+      <div class="current-reading"><span class="temperature" data-temperature>—</span><span class="weather-icon" data-condition-icon aria-hidden="true">◌</span></div>
+      <p class="condition" data-condition>Loading forecast…</p>
+      <dl class="metrics"><div><dt>Rain chance</dt><dd data-rain>—</dd></div><div><dt>Wind</dt><dd data-wind>—</dd></div><div><dt>Humidity</dt><dd data-humidity>—</dd></div></dl>
+      <div class="forecast-stamp"><span data-updated role="status">Forecast data · NWS</span><button data-refresh type="button" aria-label="Refresh weather">Refresh ↻</button></div>
+    </article>
+    <article class="outlook"><span class="kicker">{d.slug === 'signal' ? '02 / FORECAST DISCUSSION' : 'The day, in a few words'}</span><h2>{d.slug === 'fieldnotes' ? 'Before you head out.' : d.slug === 'afterglow' ? 'What the sky has in store.' : 'A look ahead.'}</h2><p data-summary>Connecting to the National Weather Service.</p><a href="#week">Read the full outlook ↗</a></article>
+    <section class="radar" id="radar" aria-labelledby="radar-title">
+      <div class="radar-top"><div><span class="kicker">{d.slug === 'signal' ? '03 / HOOKECHO LIVE RADAR' : 'The bigger picture'}</span><h2 id="radar-title">{d.slug === 'fieldnotes' ? 'Across the country.' : 'Weather in motion.'}</h2></div><a data-radar-link href="https://app.hookecho.io/" target="_blank" rel="noopener">Full radar ↗</a></div>
+      <div class="radar-surface">
+        {d.slug === 'signal' ? <iframe data-live-radar src="https://app.hookecho.io/?embed#goto=KTLX,-97.2778,35.3331,8" title="HookEcho interactive weather radar" allowfullscreen></iframe> : <>
+          <img data-radar-image src="https://img.hookecho.io/national.png" alt="National MRMS radar composite; scan time printed along the bottom" width="1400" height="1400" fetchpriority="high"/>
+          <div data-radar-error hidden class="radar-error">Radar image unavailable. Open the radar app below.</div>
+          <span class="map-label">MRMS / NATIONAL COMPOSITE</span>
+          <a class="radar-cta" data-local-radar href="https://app.hookecho.io/lite/?site=KTLX">Explore local radar ↗</a>
+        </>}
+      </div>
+      <p class="radar-caption">{d.slug === 'signal' ? <>HookEcho live app · pan, zoom, change products, and play the loop. <a data-local-radar href="https://app.hookecho.io/" target="_blank" rel="noopener">Open in its own tab ↗</a></> : <>Latest available image · check the printed scan time. <a href="/docs/reading-the-radar/">Reading radar ↗</a></>}</p>
+    </section>
+    <section class="hourly" id="forecast" aria-labelledby="hourly-title"><div class="section-heading"><h2 id="hourly-title">{d.slug === 'signal' ? '04 / NEXT 24 HOURS' : 'The hours ahead'}</h2><span>Temperature · rain · wind</span></div><div data-hourly class="hours" role="region" tabindex="0" aria-label="Scrollable hourly forecast"><p>Loading hourly forecast…</p></div></section>
+    <section class="daily" id="week" aria-labelledby="daily-title"><div class="section-heading"><h2 id="daily-title">{d.slug === 'fieldnotes' ? 'Your week, at a glance.' : d.slug === 'signal' ? '05 / SEVEN-DAY OUTLOOK' : 'A little further ahead'}</h2><span>Open a period for details</span></div><div data-daily class="days"><p>Loading seven-day forecast…</p></div></section>
+    <div class="closing"><span class="kicker">Free weather. Open possibilities.</span><h2>{d.slug === 'signal' ? 'THE DATA IS PUBLIC.\nTHE RADAR IS YOURS.' : d.slug === 'fieldnotes' ? 'For a better sense of what’s coming.' : 'Know more. Step outside.'}</h2><div><a href="https://app.hookecho.io/">Explore HookEcho ↗</a><a href="/download/">Get the app ↗</a></div></div>
+    <noscript>Enable JavaScript for forecasts, or <a href="https://www.weather.gov/">visit NWS</a>.</noscript>
+  </main>
+  <footer><a class="wordmark" href="/directions/">hookecho.</a><p>Forecasts & alerts: NOAA / NWS · Radar: {d.slug === 'signal' ? 'HookEcho / NOAA NEXRAD' : 'HookEcho / MRMS'}<br/>Hourly forecast temperatures, not live observations.</p><a href={`/directions/#${d.slug}`}>Leave notes on {d.name} ↗</a></footer>
+  <script>import '../../scripts/weather-home.js';</script>
+</body>
+</html>
