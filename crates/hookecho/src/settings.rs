@@ -40,12 +40,20 @@ pub enum Theme {
     Aurora,
     HighContrast,
     Oled,
+    Midnight,
+    Pine,
+    Plum,
+    Ember,
 }
 
 impl Theme {
     /// All themes in menu order.
-    pub const ALL: [Theme; 7] = [
+    pub const ALL: [Theme; 11] = [
         Theme::Dark,
+        Theme::Midnight,
+        Theme::Pine,
+        Theme::Plum,
+        Theme::Ember,
         Theme::Light,
         Theme::System,
         Theme::Synthwave,
@@ -56,13 +64,17 @@ impl Theme {
 
     pub fn label(self) -> &'static str {
         match self {
-            Theme::Dark => "Dark",
+            Theme::Dark => "Graphite Silver",
             Theme::Light => "Light",
             Theme::System => "System",
             Theme::Synthwave => "Synthwave",
             Theme::Aurora => "Aurora",
             Theme::HighContrast => "High contrast",
             Theme::Oled => "OLED black",
+            Theme::Midnight => "Midnight Blue",
+            Theme::Pine => "Deep Pine",
+            Theme::Plum => "Smoked Plum",
+            Theme::Ember => "Warm Ember",
         }
     }
 }

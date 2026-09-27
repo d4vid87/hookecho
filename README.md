@@ -46,6 +46,11 @@ Analyst to resume its arrangement. Save a workspace to keep it across restarts.
 
 ## More weather views
 
+The Clearview desktop layout keeps search and settings in a compact floating toolbar,
+with Layers and Alerts above a smaller live playback bar. Graphite Silver is the default;
+choose Midnight Blue, Deep Pine, Smoked Plum, or Warm Ember in Settings → Appearance.
+Advanced radar tools remain in the Layers panel.
+
 | Reflectivity | Velocity |
 | --- | --- |
 | ![Archived supercell reflectivity](docs/shots/reflectivity.jpg) | ![Archived storm velocity](docs/shots/velocity.jpg) |

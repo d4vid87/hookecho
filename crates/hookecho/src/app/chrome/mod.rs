@@ -3,6 +3,7 @@
 //! control column and the panels that slide over the map.
 
 mod chips;
+mod clearview;
 mod overlay;
 mod permalink;
 pub(crate) use overlay::compact;

@@ -7,6 +7,13 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Clearview - 2026-09-26 (rolling release)
+
+- Compact floating logo/search/settings toolbar and a separate Layers / Alerts / Settings dock leave more radar visible on desktop and wide browser layouts.
+- A smaller live playback bar keeps frame stepping, the clock, source freshness, archive controls and cut playback.
+- Graphite Silver is the default dark appearance. Midnight Blue, Deep Pine, Smoked Plum and Warm Ember are available under Settings → Appearance. Existing theme preferences and radar data colors are preserved.
+- Advanced tools remain available from the Layers panel; the existing compact phone controls remain touch sized.
+
 ## Radar and Analyst navigation - 2026-09-23 (rolling release)
 
 - A fixed **Radar | Analyst** switch keeps both ways of working reachable with

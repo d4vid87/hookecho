@@ -551,6 +551,10 @@ impl HookEchoApp {
 
     /// Fixed mode, section, and search controls remain reachable above the scrolling panel.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
+        if !phone(ctx) && !self.panel_open && !self.drawer.is_open() && !self.analyst_open {
+            self.clearview_controls(ctx);
+            return;
+        }
         let mut switch_to = None;
         let mut open_settings = false;
         let mut anchor = None;

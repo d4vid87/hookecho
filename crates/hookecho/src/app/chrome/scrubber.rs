@@ -83,7 +83,7 @@ impl HookEchoApp {
         // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
         // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
         let width = if phone_landscape { (self.chrome_rect.width() * 0.5 - 20.0).max(220.0) } else { (self.chrome_rect.width() - 160.0)
-            .clamp(420.0, if narrow { 420.0 } else { 760.0 })
+            .clamp(420.0, if narrow { 420.0 } else { 520.0 })
             .min(self.chrome_rect.width() - 16.0) };
         // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
         // and rain arrival has its own chip lane.
@@ -100,7 +100,7 @@ impl HookEchoApp {
                 crate::ui::style::glass(ui, 252)
                     .inner_margin(egui::Margin::symmetric(
                         if compact_live { 10 } else { 12 },
-                        if compact_live { 4 } else { 9 },
+                        if compact_live { 4 } else { 6 },
                     ))
                     .show(ui, |ui| {
                 ui.set_width(width);
@@ -111,7 +111,7 @@ impl HookEchoApp {
                 if t.slot_count() > 0 {
                     scrub_rect = Some(track(ui, t, tz, accent, live_window, compact_live));
                 }
-                if !narrow { ui.add_space(4.0); ui.separator(); }
+                if !narrow { ui.add_space(2.0); }
                 let row = ui.horizontal(|ui| {
                     // The phone says the site in its search pill; a second copy here is 60 pt of
                     // a 400 pt row spent saying it twice, and the clock loses that argument.
@@ -131,10 +131,10 @@ impl HookEchoApp {
                             egui::Color32::from_gray(225)
                         };
                         ui.add(
-                            egui::Button::new(egui::RichText::new(glyph).size(if primary && !narrow { 26.0 } else { 16.0 }).color(fg))
+                            egui::Button::new(egui::RichText::new(glyph).size(if primary && !narrow { 20.0 } else { 16.0 }).color(fg))
                                 .min_size(egui::vec2(
-                                    if narrow { 28.0 } else if primary { 48.0 } else { 32.0 },
-                                    if narrow { 28.0 } else if primary { 48.0 } else { 32.0 },
+                                    if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
+                                    if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
                                 ))
                                 .fill(if primary && !narrow { accent.gamma_multiply(0.28) } else { egui::Color32::TRANSPARENT })
                                 .corner_radius(24.0)
@@ -158,12 +158,13 @@ impl HookEchoApp {
                     if btn(ui, ph::SKIP_FORWARD, false, "Next frame") {
                         t.step_cut(1);
                     }
-                    let clock_size = egui::vec2(if narrow { 100.0 } else { (ui.available_width() - 210.0).max(170.0) }, if narrow { 28.0 } else { 54.0 });
+                    let clock_size = egui::vec2(if narrow { 100.0 } else { (ui.available_width() - 175.0).max(125.0) }, if narrow { 28.0 } else { 38.0 });
                     ui.allocate_ui_with_layout(
                         clock_size,
                         egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center),
                         |ui| {
                     ui.set_min_size(clock_size);
+                    ui.set_max_width(clock_size.x);
                     // The clock and status readouts share the broadcast row beneath the track.
                     let observed = t.frames.len();
                     if observed == 0 {
@@ -458,7 +459,7 @@ fn track(
 ) -> egui::Rect {
     let slots = t.slot_count();
     let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), if compact { 10.0 } else { 34.0 }),
+        egui::vec2(ui.available_width(), if compact { 10.0 } else { 26.0 }),
         egui::Sense::click_and_drag(),
     );
     let p = ui.painter_at(rect);

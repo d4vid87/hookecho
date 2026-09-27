@@ -56,20 +56,9 @@ pub const LANE_BOTTOM_CHASE: f32 = -92.0;
 /// without plumbing a `Theme` through every call site — `theme::apply` has already put the
 /// palette there.
 pub fn glass(ui: &egui::Ui, alpha: u8) -> Frame {
-    let dark = ui.visuals().dark_mode;
-    let fill = if dark {
-        let (r, g, b) = CARD_FILL;
-        Color32::from_rgba_unmultiplied(r, g, b, alpha)
-    } else {
-        Color32::from_rgba_unmultiplied(248, 250, 252, alpha)
-    };
-    // Hairline: a white wash lifts a dark card off the map; on a light card it's invisible, so
-    // the edge goes dark instead.
-    let edge = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 22)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 38)
-    };
+    let base = ui.visuals().panel_fill;
+    let fill = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
+    let edge = ui.visuals().window_stroke.color;
     Frame::new()
         .fill(fill)
         .corner_radius(RADIUS_LG)

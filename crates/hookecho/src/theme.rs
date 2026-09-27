@@ -11,7 +11,7 @@ use egui::{Color32, CornerRadius, Margin, Stroke, Style, Visuals};
 
 /// Default accent (matches the built-in Dark theme). Used only as a fallback where the selected
 /// theme isn't in scope; live UI accent comes from [`accent`] / `ui.visuals().hyperlink_color`.
-pub const ACCENT: Color32 = Color32::from_rgb(77, 163, 255); // #4da3ff
+pub const ACCENT: Color32 = Color32::from_rgb(191, 206, 214); // Graphite Silver
 
 fn c(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -50,17 +50,31 @@ fn palette(theme: Theme, system_dark: bool) -> Palette {
                 palette(Theme::Light, false)
             }
         }
-        // Original Dark tuning, unchanged.
+        // The existing serialized Dark preference becomes the approved Graphite Silver.
         Theme::Dark => Palette {
-            is_dark: true,
-            bg: c(0x14161b),
-            extreme: c(0x0e1013),
-            faint: c(0x1a1d23),
-            stroke: c(0x2a2f38),
-            widget: c(0x1c1f26),
-            widget_hover: c(0x262b34),
-            text: c(0xc8d0da),
-            accent: ACCENT,
+            is_dark: true, bg: c(0x1b2024), extreme: c(0x101417), faint: c(0x242b30),
+            stroke: c(0x4d5b64), widget: c(0x2b3339), widget_hover: c(0x39454d),
+            text: c(0xedf1f3), accent: ACCENT,
+        },
+        Theme::Midnight => Palette {
+            is_dark: true, bg: c(0x111f31), extreme: c(0x0b1421), faint: c(0x182b40),
+            stroke: c(0x3f5b75), widget: c(0x22374e), widget_hover: c(0x30485f),
+            text: c(0xe5effa), accent: c(0x8dbce8),
+        },
+        Theme::Pine => Palette {
+            is_dark: true, bg: c(0x152824), extreme: c(0x0d1a17), faint: c(0x20342e),
+            stroke: c(0x46675b), widget: c(0x294039), widget_hover: c(0x38554a),
+            text: c(0xe7f2ed), accent: c(0x9ccfb6),
+        },
+        Theme::Plum => Palette {
+            is_dark: true, bg: c(0x27212f), extreme: c(0x19151f), faint: c(0x30283b),
+            stroke: c(0x625571), widget: c(0x3b3248), widget_hover: c(0x50445e),
+            text: c(0xf0eaf6), accent: c(0xc0a8df),
+        },
+        Theme::Ember => Palette {
+            is_dark: true, bg: c(0x29231f), extreme: c(0x1b1714), faint: c(0x342c25),
+            stroke: c(0x705d4e), widget: c(0x42362d), widget_hover: c(0x56473a),
+            text: c(0xf5ede5), accent: c(0xdfb68e),
         },
         // Original Light tuning, unchanged (fills come from Visuals::light()).
         Theme::Light => Palette {
@@ -434,4 +448,25 @@ pub fn section<R>(
             r
         })
         .body_returned
+}
+
+#[cfg(test)]
+mod clearview_tests {
+    use super::*;
+    #[test]
+    fn clearview_palettes_keep_dark_compatibility_and_readable_text() {
+        assert_eq!(serde_json::from_str::<Theme>("\"Dark\"").unwrap(), Theme::default());
+        assert_eq!(Theme::default().label(), "Graphite Silver");
+        let luminance = |color: Color32| {
+            let channel = |v: u8| { let x = f64::from(v) / 255.0;
+                if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) } };
+            channel(color.r()) * 0.2126 + channel(color.g()) * 0.7152 + channel(color.b()) * 0.0722
+        };
+        for theme in [Theme::Dark, Theme::Midnight, Theme::Pine, Theme::Plum, Theme::Ember] {
+            assert_eq!(serde_json::from_str::<Theme>(&serde_json::to_string(&theme).unwrap()).unwrap(), theme);
+            let p = palette(theme, true);
+            assert!(p.is_dark && luminance(p.bg) < 0.05);
+            assert!((luminance(p.text) + 0.05) / (luminance(p.widget) + 0.05) >= 4.5);
+        }
+    }
 }
