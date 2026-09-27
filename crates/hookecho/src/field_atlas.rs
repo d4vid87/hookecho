@@ -28,7 +28,13 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
                 text.contains("TORNADO EMERGENCY") || text.contains("FLASH FLOOD EMERGENCY")
             })
         });
+    let event = f.alert.as_ref().map_or(f.title.as_str(), |a| a.event.as_str());
     let (rgb, fill, dash) = match f.kind {
+        FeatureKind::Watch | FeatureKind::Advisory | FeatureKind::Statement
+            if matches!(event, "Air Quality Alert" | "Air Quality Watch") =>
+        {
+            ([255, 255, 255], 6, Some((1.5, 5.0)))
+        }
         FeatureKind::Warning if emergency => ([255, 118, 213], 18, None),
         FeatureKind::Warning
             if f.alert
@@ -928,6 +934,17 @@ mod tests {
             !style(&alert).unwrap().emergency,
             "watch text cannot promote a watch to emergency"
         );
+        for (kind, event) in [(FeatureKind::Statement, "Air Quality Alert"), (FeatureKind::Watch, "Air Quality Watch")] {
+            let mut air = feature(kind);
+            air.title = event.into();
+            assert_eq!(style(&air).unwrap().rgb, [255, 255, 255]);
+            air.alert = Some(serde_json::from_value(serde_json::json!({
+                "id":"air", "event":event, "headline":"Test",
+                "area":"Test only", "description":"", "instruction":""
+            })).unwrap());
+            air.title = "Custom label".into();
+            assert_eq!(style(&air).unwrap().rgb, [255, 255, 255]);
+        }
         let mut tropical = feature(FeatureKind::TropicalCone);
         for title in ["Storm 34 kt wind", "Surge: 3 ft"] {
             tropical.title = title.into();

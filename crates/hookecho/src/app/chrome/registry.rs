@@ -902,8 +902,8 @@ impl HookEchoApp {
             (
                 T::Tropical,
                 "Obs",
-                "Tropical (NHC)",
-                "Hurricane tracks and forecast cones",
+                "Tropical (NHC) · always on",
+                "Always on — hurricane tracks and forecast cones on web and desktop",
                 false,
             ),
             (

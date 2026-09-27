@@ -13,9 +13,11 @@ const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 pub const USER_AGENT: &str = "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)";
 
 /// Optional marine/coastal products. Other event types remain enabled.
-pub const OPTIONAL_EVENTS: [&str; 7] = [
+pub const OPTIONAL_EVENTS: [&str; 9] = [
     "Small Craft Advisory",
     "Gale Warning",
+    "Hazardous Seas Warning",
+    "Coastal Flood Warning",
     "Coastal Flood Advisory",
     "Rip Current Statement",
     "Beach Hazards Statement",
@@ -182,6 +184,7 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
         "Severe Thunderstorm Watch" => [219, 112, 147],
         "Special Weather Statement" => [255, 228, 181],
         "Flood Advisory" => [0, 180, 120],
+        "Air Quality Alert" | "Air Quality Watch" => [255, 255, 255],
         _ => match kind {
             FeatureKind::Warning => [230, 60, 60],
             FeatureKind::Watch => [200, 180, 60],
@@ -589,7 +592,7 @@ mod tests {
     fn optional_events_are_filtered_before_inline_and_zone_geometry() {
         use serde_json::json;
         let retained = ["Tornado Warning", "Severe Thunderstorm Warning", "Flood Warning",
-            "Flood Watch", "Coastal Flood Warning", "High Surf Warning", "Special Marine Warning",
+            "Flood Watch", "High Surf Warning", "Special Marine Warning",
             "Special Weather Statement", "Tornado Watch"];
         let polygon = json!({"type":"Polygon","coordinates":[[[-80.,40.],[-79.,40.],[-79.,41.],[-80.,40.]]]});
         let events: Vec<_> = OPTIONAL_EVENTS.into_iter().chain(retained).collect();
@@ -659,6 +662,12 @@ mod tests {
         }
         assert_eq!(parse_alerts(&active.to_string()).unwrap().len(), 1);
         assert!(parse_zone_map(r#"{"error":{"message":"unavailable"}}"#, &active).is_err());
+    }
+
+    #[test]
+    fn air_quality_products_are_white_without_changing_their_kind() {
+        assert_eq!(event_style("Air Quality Alert"), (FeatureKind::Statement, [255, 255, 255]));
+        assert_eq!(event_style("Air Quality Watch"), (FeatureKind::Watch, [255, 255, 255]));
     }
 
     #[test]

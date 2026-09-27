@@ -1874,6 +1874,11 @@ impl OverlayToggle {
         )
     }
 
+    /// Tropical tracks and cones stay enabled, including when older saved layouts omit them.
+    fn enabled(self, requested: bool) -> bool {
+        self == Self::Tropical || requested
+    }
+
     /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
     /// name written by a newer build has to be skippable, and a failed `Settings` parse takes the
     /// whole file down with it.
@@ -4425,7 +4430,7 @@ impl HookEchoApp {
         // Restore the overlays from last time, assigning rather than only ever switching on: the
         // additive version could never turn a default-on layer off, so unchecking one lasted until
         // the next restart and then came back. `None` is "no run has recorded this yet", where the
-        // built-in defaults still stand; a recorded list is the whole truth about every layer.
+        // built-in defaults still stand; a recorded list restores each optional layer. Tropical is always enabled.
         //
         // Unknown names (an older build reading a newer file) are skipped rather than treated as
         // an error.
@@ -4438,7 +4443,7 @@ impl HookEchoApp {
                 if t.session_only() {
                     continue;
                 }
-                *app.overlay_flag(t) = restore.contains(&t);
+                *app.overlay_flag(t) = t.enabled(restore.contains(&t));
             }
             // Whatever the outcome, the overlay set now differs from the one the constructor built,
             // so the derived features have to be rebuilt from it once.
@@ -9185,7 +9190,7 @@ impl HookEchoApp {
             }
             PaletteAction::ToggleOverlay(t) => {
                 let f = self.overlay_flag(t);
-                *f = !*f;
+                *f = t.enabled(!*f);
                 // These feed the assembled feature set rather than a painter flag.
                 use OverlayToggle as T;
                 if matches!(
@@ -16748,7 +16753,7 @@ impl HookEchoApp {
             if t.session_only() {
                 continue;
             }
-            *self.overlay_flag(t) = ws.overlays_on.iter().any(|s| *s == t.slug());
+            *self.overlay_flag(t) = t.enabled(ws.overlays_on.iter().any(|s| *s == t.slug()));
         }
         // A site-less layout needs the site picker visible or there is no way to attach radar.
         // This also repairs starter workspaces saved before RadarSites was part of their overlays.
@@ -21838,6 +21843,18 @@ mod warning_scope_tests {
 
 #[cfg(test)]
 mod tropical_click_tests {
+    #[test]
+    fn tropical_survives_saved_layouts_and_toggle_actions() {
+        use super::OverlayToggle as T;
+        for saved in [vec![], vec![T::Alerts], vec![T::Tropical]] {
+            assert!(T::Tropical.enabled(saved.contains(&T::Tropical)));
+            assert_eq!(T::Alerts.enabled(saved.contains(&T::Alerts)), saved.contains(&T::Alerts));
+        }
+        let on = T::Tropical.enabled(true);
+        assert!(T::Tropical.enabled(!on), "toggle actions must not disable tropical");
+        assert!(!T::Alerts.enabled(false), "other overlays remain toggleable");
+    }
+
     use super::nearest_tropical_id;
     use wxdata::tropical::TropicalStorm;
 
