@@ -1395,6 +1395,17 @@ fn alert_map_settings(ui: &mut egui::Ui, settings: &mut Settings, filters: &mut 
             }
         });
     });
+    ui.collapsing("Marine & coastal alerts · optional", |ui| {
+        ui.weak("Off by default. Turn on a type to load it on your radar.");
+        for event in wxdata::alerts::OPTIONAL_EVENTS {
+            let mut enabled = settings.optional_alert_events.iter().any(|value| value == event);
+            if super::style::toggle(ui, &mut enabled, event).changed() {
+                settings.optional_alert_events.retain(|value| value != event);
+                if enabled { settings.optional_alert_events.push(event.to_owned()); }
+                changed = true;
+            }
+        }
+    });
     ui.collapsing("Priority dock · category & distance", |ui| {
         super::priority::dock_controls(ui, &mut settings.priority_rules);
     });

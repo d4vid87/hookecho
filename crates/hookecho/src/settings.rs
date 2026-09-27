@@ -488,6 +488,9 @@ pub struct Settings {
     pub alert_min_escalation: u8,
     #[serde(default)]
     pub priority_rules: PriorityRules,
+    /// Marine/coastal products explicitly enabled by the user; absent in older installs = off.
+    #[serde(default)]
+    pub optional_alert_events: Vec<String>,
     /// Alerts inside `alert_rollup_window_min` before pushes collapse into one rolling summary.
     /// 0 turns the rollup off. Escalated alerts always push as themselves.
     #[serde(default = "default_alert_rollup_threshold")]
@@ -1322,6 +1325,7 @@ impl Default for Settings {
             quiet_end_hour: default_quiet_end(),
             alert_min_escalation: 0,
             priority_rules: PriorityRules::default(),
+            optional_alert_events: Vec::new(),
             alert_rollup_threshold: default_alert_rollup_threshold(),
             alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,
@@ -1699,6 +1703,23 @@ mod tests {
     }
 
     #[test]
+    fn optional_alert_events_default_off_and_preserve_individual_choices() {
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        for settings in [Settings::default(), old] {
+            assert!(settings.optional_alert_events.is_empty());
+            for event in wxdata::alerts::OPTIONAL_EVENTS {
+                assert!(!wxdata::alerts::event_enabled(event, &settings.optional_alert_events));
+            }
+        }
+        let mut settings = Settings::default();
+        settings.optional_alert_events.push("Gale Warning".into());
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.optional_alert_events, ["Gale Warning"]);
+        assert!(wxdata::alerts::event_enabled("Gale Warning", &restored.optional_alert_events));
+        assert!(!wxdata::alerts::event_enabled("Small Craft Advisory", &restored.optional_alert_events));
+    }
+
+    #[test]
     fn rules_are_absent_from_old_settings_and_start_disabled() {
         let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
         assert!(old.alert_rules.is_empty());
@@ -1948,6 +1969,7 @@ mod tests {
             quiet_end_hour: 7,
             alert_min_escalation: 0,
             priority_rules: PriorityRules::default(),
+            optional_alert_events: Vec::new(),
             alert_rollup_threshold: default_alert_rollup_threshold(),
             alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,

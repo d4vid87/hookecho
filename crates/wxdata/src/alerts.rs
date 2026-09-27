@@ -12,6 +12,29 @@ const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 /// weather.gov requires a User-Agent identifying the app + a contact.
 pub const USER_AGENT: &str = "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)";
 
+/// Optional marine/coastal products. Other event types remain enabled.
+pub const OPTIONAL_EVENTS: [&str; 7] = [
+    "Small Craft Advisory",
+    "Gale Warning",
+    "Coastal Flood Advisory",
+    "Rip Current Statement",
+    "Beach Hazards Statement",
+    "Coastal Flood Statement",
+    "High Surf Advisory",
+];
+
+pub fn event_enabled(event: &str, enabled_optional: &[String]) -> bool {
+    !OPTIONAL_EVENTS.contains(&event) || enabled_optional.iter().any(|enabled| enabled == event)
+}
+
+fn filter_events(body: &str, excluded: &[&str]) -> anyhow::Result<String> {
+    let mut feed: serde_json::Value = serde_json::from_str(body)?;
+    if let Some(features) = feed["features"].as_array_mut() {
+        features.retain(|f| !excluded.contains(&f["properties"]["event"].as_str().unwrap_or("")));
+    }
+    Ok(serde_json::to_string(&feed)?)
+}
+
 /// Broad phenomenon group, for the toolbox filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -437,7 +460,7 @@ pub async fn fetch_polygon_alerts(client: &reqwest::Client) -> anyhow::Result<Ve
 
 // NOAA's county/zone layer supplies geometry missing from the NWS CAP feed. Fetch every page:
 // selecting a radar or a saved place must not restrict which alerts can appear on the map.
-const ZONE_MAP_URL: &str = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer/1/query?where=1%3D1&outFields=cap_id&geometryPrecision=4&maxAllowableOffset=0.002&orderByFields=objectid&resultRecordCount=1000&f=geojson";
+const ZONE_MAP_URL: &str = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer/1/query?outFields=cap_id&geometryPrecision=4&maxAllowableOffset=0.002&orderByFields=objectid&resultRecordCount=1000&f=geojson";
 
 /// Attach each county/zone part to its current bulletin. Keep inline warning polygons intact;
 /// county geometry is only a fallback for alerts without geometry in the authoritative feed.
@@ -475,12 +498,26 @@ fn parse_zone_map(body: &str, active: &serde_json::Value) -> anyhow::Result<Vec<
     Ok(out)
 }
 
-async fn fetch_zone_map(client: &reqwest::Client, active: &str) -> anyhow::Result<Vec<GeoFeature>> {
+fn zone_map_url(excluded: &[&str]) -> anyhow::Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(ZONE_MAP_URL)?;
+    let clause = if excluded.is_empty() {
+        "1=1".to_owned()
+    } else {
+        let events = excluded.iter().map(|event| format!("'{}'", event.replace('\'', "''")))
+            .collect::<Vec<_>>().join(",");
+        format!("(prod_type IS NULL OR prod_type NOT IN ({events}))")
+    };
+    url.query_pairs_mut().append_pair("where", &clause);
+    Ok(url)
+}
+
+async fn fetch_zone_map(client: &reqwest::Client, active: &str, excluded: &[&str]) -> anyhow::Result<Vec<GeoFeature>> {
     let active = serde_json::from_str(active)?;
+    let url = zone_map_url(excluded)?;
     let mut out = Vec::new();
     let mut offset = 0;
     loop {
-        let body = get_alerts(client, &format!("{ZONE_MAP_URL}&resultOffset={offset}")).await?;
+        let body = get_alerts(client, &format!("{url}&resultOffset={offset}")).await?;
         let page: serde_json::Value = serde_json::from_str(&body)?;
         out.extend(parse_zone_map(&body, &active)?);
         if page["exceededTransferLimit"].as_bool() != Some(true)
@@ -501,9 +538,18 @@ pub async fn fetch_active(
     client: &reqwest::Client,
     points: &[(f64, f64)],
 ) -> anyhow::Result<Vec<GeoFeature>> {
-    let body = get_alerts(client, ALERTS_URL).await?;
+    fetch_active_excluding(client, points, &[]).await
+}
+
+/// Exclude optional products before allocating polygons or fetching their zone geometry.
+pub async fn fetch_active_excluding(
+    client: &reqwest::Client,
+    points: &[(f64, f64)],
+    excluded: &[&str],
+) -> anyhow::Result<Vec<GeoFeature>> {
+    let body = filter_events(&get_alerts(client, ALERTS_URL).await?, excluded)?;
     let mut feats = parse_alerts(&body)?;
-    match fetch_zone_map(client, &body).await {
+    match fetch_zone_map(client, &body, excluded).await {
         Ok(zones) => {
             feats.extend(zones);
             return Ok(feats);
@@ -521,6 +567,7 @@ pub async fn fetch_active(
         let url = format!("{ALERTS_URL}?point={lat:.4},{lon:.4}");
         match get_alerts(client, &url).await {
             Ok(point_body) => {
+                let point_body = filter_events(&point_body, excluded)?;
                 feats.extend(resolve_zone_alerts(client, &point_body, 400, &mut seen).await);
             }
             // A point query can 400 (e.g. a marine site just off the coast) — fall back so the
@@ -537,6 +584,45 @@ pub async fn fetch_active(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_events_are_filtered_before_inline_and_zone_geometry() {
+        use serde_json::json;
+        let retained = ["Tornado Warning", "Severe Thunderstorm Warning", "Flood Warning",
+            "Flood Watch", "Coastal Flood Warning", "High Surf Warning", "Special Marine Warning",
+            "Special Weather Statement", "Tornado Watch"];
+        let polygon = json!({"type":"Polygon","coordinates":[[[-80.,40.],[-79.,40.],[-79.,41.],[-80.,40.]]]});
+        let events: Vec<_> = OPTIONAL_EVENTS.into_iter().chain(retained).collect();
+        let mut features = Vec::new();
+        let mut zones = Vec::new();
+        for event in &events {
+            for geometry in [polygon.clone(), serde_json::Value::Null] {
+                features.push(json!({"type":"Feature", "geometry":geometry,
+                    "properties":{"id":format!("{event}-{geometry}"), "event":event}}));
+                zones.push(json!({"type":"Feature", "geometry":polygon,
+                    "properties":{"cap_id":format!("{event}-{geometry}")}}));
+            }
+        }
+        let feed = json!({"type":"FeatureCollection", "features":features}).to_string();
+        let zones = json!({"type":"FeatureCollection", "features":zones}).to_string();
+        for enabled in [vec![], vec!["Gale Warning".to_owned()]] {
+            let excluded: Vec<_> = OPTIONAL_EVENTS.into_iter().filter(|e| !event_enabled(e, &enabled)).collect();
+            let body = filter_events(&feed, &excluded).unwrap();
+            let inline = parse_alerts(&body).unwrap();
+            let resolved = parse_zone_map(&zones, &serde_json::from_str(&body).unwrap()).unwrap();
+            for parts in [&inline, &resolved] {
+                assert_eq!(parts.len(), retained.len() + enabled.len());
+                for event in &events {
+                    assert_eq!(parts.iter().any(|f| f.title == *event), event_enabled(event, &enabled), "{event}");
+                }
+            }
+            let url = zone_map_url(&excluded).unwrap();
+            let clause = url.query_pairs().find(|(key, _)| key == "where").unwrap().1.into_owned();
+            for event in OPTIONAL_EVENTS {
+                assert_eq!(clause.contains(&format!("'{event}'")), !event_enabled(event, &enabled));
+            }
+        }
+    }
 
     #[test]
     fn nationwide_zone_geometry_keeps_all_parts_and_bulletins_without_replacing_inline_polygons() {

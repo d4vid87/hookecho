@@ -33,7 +33,8 @@ impl HookEchoApp {
         }
     }
     pub(crate) fn map_alert_visible(&self, feature: &GeoFeature) -> bool {
-        self.filters.alert_cats[alerts::category(&feature.title).index()]
+        alerts::event_enabled(&feature.title, &self.settings.optional_alert_events)
+            && self.filters.alert_cats[alerts::category(&feature.title).index()]
             && priority::map_visible(feature, self.priority_time())
     }
     pub(crate) fn refresh_priority_overlays(&mut self, ctx: &egui::Context) {

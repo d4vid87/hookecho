@@ -348,7 +348,7 @@ enum OverlaySource {
     /// NWS alerts; the `(lat, lon)` list scopes zone-only alert resolution to the active radar and
     /// every saved marker. The bounds are the active pane's viewport, which is what decides
     /// whether European warnings are worth fetching alongside them.
-    Alerts(Vec<(f64, f64)>, (f64, f64, f64, f64)),
+    Alerts(Vec<(f64, f64)>, (f64, f64, f64, f64), Vec<String>),
     Mds,
     /// Tornado and severe thunderstorm watch polygons in effect.
     Watches,
@@ -690,8 +690,10 @@ impl OverlaySource {
 
     async fn fetch(self, http: &reqwest::Client) -> anyhow::Result<OverlayMsg> {
         Ok(match self {
-            OverlaySource::Alerts(points, bounds) => {
-                let mut feats = alerts::fetch_active(http, &points).await?;
+            OverlaySource::Alerts(points, bounds, enabled_optional) => {
+                let excluded: Vec<_> = alerts::OPTIONAL_EVENTS.into_iter()
+                    .filter(|event| !alerts::event_enabled(event, &enabled_optional)).collect();
+                let mut feats = alerts::fetch_active_excluding(http, &points, &excluded).await?;
                 // Europe's warnings come from a different publisher on a different continent, so
                 // they are only asked for when the view is actually over one of the countries
                 // that publishes them — otherwise this is a no-op with no request at all.
@@ -4968,16 +4970,7 @@ impl HookEchoApp {
 
     fn fetch_overlays(&mut self, ctx: &egui::Context) {
         self.overlay_last_fetch = Some(Instant::now());
-        // Alerts cover the whole map. Keep local points for the zone-service outage fallback.
-        let mut points: Vec<(f64, f64)> = self.views[self.active]
-            .site
-            .as_deref()
-            .and_then(wxdata::sites::site_by_id)
-            .map(|s| (s.latitude as f64, s.longitude as f64))
-            .into_iter()
-            .collect();
-        points.extend(self.settings.markers.iter().map(|m| (m.lat, m.lon)));
-        self.spawn_overlay(ctx, OverlaySource::Alerts(points, self.view_bounds()));
+        self.fetch_alerts(ctx);
         self.spawn_overlay(ctx, OverlaySource::Mds);
         self.spawn_overlay(ctx, OverlaySource::Watches);
         if (1..=3).contains(&self.filters.wssi_day) {
@@ -5002,6 +4995,19 @@ impl HookEchoApp {
         {
             self.spawn_overlay(ctx, OverlaySource::Cells(site));
         }
+    }
+
+    fn fetch_alerts(&mut self, ctx: &egui::Context) {
+        // Alerts cover the whole map. Keep local points for the zone-service outage fallback.
+        let mut points: Vec<(f64, f64)> = self.views[self.active]
+            .site
+            .as_deref()
+            .and_then(wxdata::sites::site_by_id)
+            .map(|s| (s.latitude as f64, s.longitude as f64))
+            .into_iter()
+            .collect();
+        points.extend(self.settings.markers.iter().map(|m| (m.lat, m.lon)));
+        self.spawn_overlay(ctx, OverlaySource::Alerts(points, self.view_bounds(), self.settings.optional_alert_events.clone()));
     }
 
     /// Reconcile loaded placefiles with `settings.placefiles`: fetch new/enabled URLs, drop
@@ -9466,7 +9472,8 @@ impl HookEchoApp {
                 }
             };
             match msg {
-                OverlayMsg::AlertSeed(f) => {
+                OverlayMsg::AlertSeed(mut f) => {
+                    f.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
                     for id in f
                         .iter()
                         .filter_map(|f| f.alert.as_ref().map(|a| a.dedupe_key()))
@@ -9477,7 +9484,8 @@ impl HookEchoApp {
                         self.alert_features = f;
                     }
                 }
-                OverlayMsg::Alerts(f) => {
+                OverlayMsg::Alerts(mut f) => {
+                    f.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
                     self.detect_new_warnings(&f);
                     crate::alert_snapshot::save(&f);
                     self.alert_features = f;
@@ -9752,7 +9760,8 @@ impl HookEchoApp {
                         self.hodo_site = Some(site);
                     }
                 }
-                OverlayMsg::ArchiveWarnings(bucket, feats) => {
+                OverlayMsg::ArchiveWarnings(bucket, mut feats) => {
+                    feats.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
                     self.arch_warns.put(bucket, feats);
                     if self.arch_warn_inflight == Some(bucket) {
                         self.arch_warn_inflight = None;
@@ -20434,6 +20443,7 @@ impl eframe::App for HookEchoApp {
             login_url: self.sync_login.as_ref().map(|p| p.url.as_str()),
             last_sync: self.sync_state.last_sync,
         };
+        let previous_optional_alerts = self.settings_window.open.then(|| self.settings.optional_alert_events.clone());
         let sync_action = self.settings_window.show(
             ctx,
             &mut self.settings,
@@ -20443,6 +20453,12 @@ impl eframe::App for HookEchoApp {
             &entries,
             &mut self.drawer,
         );
+        if previous_optional_alerts.is_some_and(|previous| previous != self.settings.optional_alert_events) {
+            self.alert_features.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
+            self.arch_warns.clear();
+            self.arch_warn_shown = None;
+            self.fetch_alerts(ctx);
+        }
         if std::mem::take(&mut self.settings_window.map_changed) {
             self.rebuild_overlays();
         }
