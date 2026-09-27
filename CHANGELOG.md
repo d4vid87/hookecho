@@ -9,6 +9,8 @@ updates shipped in that rolling build; versioned entries match GitHub tags.
 
 ## Field Atlas map overlays - 2026-09-27 (rolling release)
 
+- Match Flood Warning map outlines, labels and fills to the bulletin icon's green (`#00A05A`).
+
 - Apply Field Atlas to interactive radar overlays: fine bright outlines with dark casings, low-opacity fills, dashed watches and discussions, dotted advisories, and double-edge emergency polygons.
 - Add compact technical labels with corner ticks and overlap rejection. Retain source geometry, map filters, alert details, and warning-motion projections.
 - Space outage crosshatching at 15 pixels and add outlined county labels. Use a distinct ring-and-crosshair rotation marker, including mesocyclone detections attached to storm cells.

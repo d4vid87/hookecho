@@ -30,6 +30,11 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         });
     let (rgb, fill, dash) = match f.kind {
         FeatureKind::Warning if emergency => ([255, 118, 213], 18, None),
+        FeatureKind::Warning
+            if f.alert.as_ref().map_or(f.title.as_str(), |a| a.event.as_str()) == "Flood Warning" =>
+        {
+            ([0, 160, 90], 12, None)
+        }
         FeatureKind::Warning => ([255, 117, 93], 12, None),
         FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
         FeatureKind::Advisory | FeatureKind::Statement => ([114, 186, 255], 6, Some((1.5, 5.0))),
@@ -257,6 +262,11 @@ mod tests {
         assert_ne!(watch.dash, md.dash);
         assert!(watch.fill < warning.fill);
         assert!(style(&feature(FeatureKind::Outlook)).is_none());
+        let mut flood = feature(FeatureKind::Warning);
+        flood.title = "Flood Warning".into();
+        assert_eq!(style(&flood).unwrap().rgb, [0, 160, 90]);
+        flood.title = "Severe Thunderstorm Warning".into();
+        assert_eq!(style(&flood).unwrap().rgb, warning.rgb);
         let mut alert = feature(FeatureKind::Warning);
         alert.alert=Some(serde_json::from_value(serde_json::json!({
             "id":"test", "event":"Tornado Warning", "headline":"Particularly Dangerous Situation",
