@@ -10848,7 +10848,7 @@ impl HookEchoApp {
         }
         if self.filters.show_alerts {
             for f in self.active_alert_features() {
-                if self.filters.alert_cats[alerts::category(&f.title).index()] && self.priority_alert_visible(f) {
+                if self.map_alert_visible(f) {
                     v.push(f.clone());
                 }
             }
@@ -15103,7 +15103,7 @@ impl HookEchoApp {
             let features = self.active_alert_features();
             for (fi, f) in features.iter().enumerate() {
                 let Some(a) = &f.alert else { continue };
-                if !self.priority_alert_visible(f) { continue; }
+                if !self.map_alert_visible(f) { continue; }
                 // Pulsing outline for escalated warnings only — watches can carry PDS wording,
                 // but pulsing a state-sized watch polygon would drown the map (and `escalation`
                 // uppercases the whole bulletin, too heavy to run for every alert every frame).

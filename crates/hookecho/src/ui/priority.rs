@@ -1,4 +1,4 @@
-//! Display-only alert/track thresholds. Never used to gate notification delivery.
+//! Nearby dock thresholds and storm-track display rules. Never gate map alerts or notifications.
 use crate::settings::PriorityRules;
 use chrono::{DateTime, Utc};
 use wxdata::{
@@ -27,14 +27,18 @@ pub fn category(f: &GeoFeature) -> usize {
         _ => 0,
     }
 }
+/// Map alerts are independent of the dock's proximity and severity thresholds.
+pub fn map_visible(f: &GeoFeature, now: DateTime<Utc>) -> bool {
+    !f.alert.as_ref().and_then(|a| a.expires).is_some_and(|e| e <= now)
+}
 pub fn visible(
     f: &GeoFeature,
     rules: &PriorityRules,
     point: (f64, f64),
     now: DateTime<Utc>,
 ) -> bool {
-    let Some(a) = &f.alert else { return true };
-    if a.expires.is_some_and(|e| e <= now) {
+    if f.alert.is_none() { return true; }
+    if !map_visible(f, now) {
         return false;
     }
     let level = category(f);
@@ -86,9 +90,9 @@ pub fn track_visible(cell: &Cell, rules: &PriorityRules, now: DateTime<Utc>) -> 
         })
 }
 pub fn controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
-    ui.weak("Map display only. Sounds and notification rules are unchanged.");
-    ui.weak("Warnings covering the reference point stay visible; All alerts opens the full list in view.");
-    egui::ComboBox::from_label("Minimum category")
+    ui.weak("Alert thresholds apply only to the priority dock. All active map alerts remain visible.");
+    ui.weak("Local warnings stay in the dock. Sounds and notification rules are unchanged.");
+    egui::ComboBox::from_label("Minimum dock category")
         .selected_text(LABELS[usize::from(rules.minimum.min(3))])
         .show_ui(ui, |ui| {
             for (i, label) in LABELS.iter().enumerate() {
@@ -157,6 +161,24 @@ mod tests {
             serde_json::from_str::<PriorityRules>("{}").unwrap(),
             PriorityRules::default()
         );
+    }
+    #[test]
+    fn map_keeps_every_alert_category_outside_dock_thresholds() {
+        let now = Utc::now();
+        let rules = PriorityRules { minimum: 3, radii_mi: [0.; 4], ..Default::default() };
+        for (event, kind) in [
+            ("Tornado Warning", FeatureKind::Warning),
+            ("Tornado Watch", FeatureKind::Watch),
+            ("Flood Advisory", FeatureKind::Advisory),
+            ("Special Weather Statement", FeatureKind::Statement),
+        ] {
+            let mut alert = feature(event, kind);
+            alert.alert.as_mut().unwrap().expires = Some(now + chrono::Duration::hours(1));
+            assert!(!visible(&alert, &rules, (-80., 40.), now));
+            assert!(map_visible(&alert, now), "{event} must remain on the radar");
+            alert.alert.as_mut().unwrap().expires = Some(now);
+            assert!(!map_visible(&alert, now), "expired {event} must leave the radar");
+        }
     }
     #[test]
     fn projections_require_fresh_valid_motion_and_measured_error() {

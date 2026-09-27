@@ -32,13 +32,9 @@ impl HookEchoApp {
             Utc::now()
         }
     }
-    pub(crate) fn priority_alert_visible(&self, feature: &GeoFeature) -> bool {
-        priority::visible(
-            feature,
-            &self.settings.priority_rules,
-            self.priority_reference().0,
-            self.priority_time(),
-        )
+    pub(crate) fn map_alert_visible(&self, feature: &GeoFeature) -> bool {
+        self.filters.alert_cats[alerts::category(&feature.title).index()]
+            && priority::map_visible(feature, self.priority_time())
     }
     pub(crate) fn refresh_priority_overlays(&mut self, ctx: &egui::Context) {
         // Rebuild on reference/settings changes, and once a minute for expiry. All alert feeds,
@@ -161,7 +157,7 @@ impl HookEchoApp {
                             ui.add_space(7.);
                         } else {
                             ui.strong("No matching alert bulletins");
-                            ui.small(format!("Around {reference} · display thresholds applied"));
+                            ui.small(format!("Around {reference} · dock thresholds applied"));
                             ui.add_space(5.);
                         }
                         ui.horizontal_wrapped(|ui| {

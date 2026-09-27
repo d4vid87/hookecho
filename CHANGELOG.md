@@ -7,6 +7,11 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Radar alert visibility - 2026-09-26 rolling release
+
+- Keep active warnings, watches, advisories, and statements visible on radar regardless of priority dock distance or severity thresholds. Existing map layer/category switches and alert expiration still apply.
+- Clarify that nearby alert thresholds control the dock, while storm-track rules control estimated projections.
+
 ## Context bar - 2026-09-26 (rolling release)
 
 - Compact, content-sized Radar / Layers / Alerts / Tools navigation stays available while a menu is open. Search and Settings remain one click away; selecting the current section closes it.

@@ -25,7 +25,7 @@ pub enum RadarFeed {
     ArchiveOnly,
 }
 
-/// Priority dock/map display preferences. Notification rules remain independent.
+/// Priority dock proximity and storm-track display preferences. Map alerts and notifications remain independent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PriorityRules {
