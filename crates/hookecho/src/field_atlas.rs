@@ -40,6 +40,14 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         }
         FeatureKind::Warning => ([255, 117, 93], 12, None),
         FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
+        FeatureKind::Statement
+            if f.alert
+                .as_ref()
+                .map_or(f.title.as_str(), |a| a.event.as_str())
+                == "Special Weather Statement" =>
+        {
+            ([255, 228, 181], 6, Some((1.5, 5.0)))
+        }
         FeatureKind::Advisory | FeatureKind::Statement => ([114, 186, 255], 6, Some((1.5, 5.0))),
         FeatureKind::MesoDiscussion => ([180, 154, 255], 8, Some((3.0, 6.0))),
         // Wind radii and surge share this kind; keep their source intensity colors and fills.
@@ -884,6 +892,24 @@ mod tests {
         assert_eq!(style(&flood).unwrap().rgb, [0, 160, 90]);
         flood.title = "Severe Thunderstorm Warning".into();
         assert_eq!(style(&flood).unwrap().rgb, warning.rgb);
+        let mut statement = feature(FeatureKind::Statement);
+        statement.title = "Special Weather Statement".into();
+        assert_eq!(style(&statement).unwrap().rgb, [255, 228, 181]);
+        statement.alert = Some(
+            serde_json::from_value(serde_json::json!({
+                "id":"sws", "event":"Special Weather Statement", "headline":"Test",
+                "area":"Test only", "description":"", "instruction":""
+            }))
+            .unwrap(),
+        );
+        statement.title = "A different display title".into();
+        assert_eq!(style(&statement).unwrap().rgb, [255, 228, 181]);
+        statement.alert.as_mut().unwrap().event = "Marine Weather Statement".into();
+        assert_eq!(style(&statement).unwrap().rgb, [114, 186, 255]);
+        assert_eq!(
+            style(&feature(FeatureKind::Advisory)).unwrap().rgb,
+            [114, 186, 255]
+        );
         let mut alert = feature(FeatureKind::Warning);
         alert.alert=Some(serde_json::from_value(serde_json::json!({
             "id":"test", "event":"Tornado Warning", "headline":"Particularly Dangerous Situation",
