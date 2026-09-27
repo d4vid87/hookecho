@@ -74,7 +74,7 @@ try {
   await noScript.close();
 
   const failedMedia = await browser.newPage();
-  await failedMedia.route(/clinton-.*\.mp4/, (route) => route.abort());
+  await failedMedia.route(/moore-2013-.*\.mp4/, (route) => route.abort());
   await failedMedia.goto(url);
   await failedMedia.locator('[data-explore-analyst]').click();
   assert.ok(await failedMedia.locator('[data-stage="four"] img').isVisible());
