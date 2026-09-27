@@ -99,12 +99,12 @@ impl HookEchoApp {
         let mut hide = false;
         // Height budget: the search pill above, the scrubber pill below (which is centred and
         // grows with the window, so on a narrow one it would otherwise run under this panel).
-        let context_bar = !phone(ctx) && !self.analyst_open;
+        let context_bar = !phone(ctx);
         let all_id = egui::Id::new("context_all_controls");
         let mut all_controls = ctx.data_mut(|d| d.get_temp::<bool>(all_id).unwrap_or(false));
         // Global search always uses the complete registry, even after a focused menu or settings page.
         if context_bar && focus_search { all_controls = true; settings_page = None; }
-        let panel_top = if context_bar { 68.0 } else { PANEL_TOP + if self.analyst_open { 54.0 } else { 0.0 } };
+        let panel_top = if context_bar { 120.0 } else { PANEL_TOP + if self.analyst_open { 54.0 } else { 0.0 } };
         let max_h = (self.chrome_rect.height() - panel_top - if context_bar { 30.0 } else { SCRUBBER_CLEARANCE }).max(160.0);
         // Read before the body closure takes `&mut self`.
         let chrome = self.chrome_rect;
@@ -112,10 +112,49 @@ impl HookEchoApp {
         // bottom sheet on a phone. The content is identical — that is the point of the wave, and
         // why the phone's own menu sheet could be deleted rather than kept in sync.
         let sheets_layout = sheets(ctx);
-        let analyst_dock = self.analyst_open;
+        let analyst_dock = self.analyst_open && !context_bar;
         let mut sheet_close = false;
         let search_page = focus_search;
+        let home_id = egui::Id::new(super::clearview::HOME_KEY);
+        let mut home = context_bar && ctx.data_mut(|d| d.get_temp::<bool>(home_id).unwrap_or(false));
+        if focus_search || self.tour.wants_panel() || settings_page.is_some() || alerts_tab { home = false; }
+        let mut selected_card = None;
+        let mut compare_four = false;
         let mut body = |ui: &mut egui::Ui| {
+            if home {
+                crate::ui::style::glass(ui, 252).inner_margin(18).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Explore your radar");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("×").named("Close menu").clicked() { hide = true; }
+                        });
+                    });
+                    ui.weak("What would you like to explore?");
+                    ui.add_space(16.0);
+                    selected_card = super::clearview::launch_cards(ui);
+                    ui.add_space(3.0);
+                    compare_four = ui.add_sized([ui.available_width(), 42.0], egui::Button::new("Compare radar products  →"))
+                        .on_hover_text("Open four panels; Back to radar returns to one map").clicked();
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("All controls").clicked() {
+                            home = false;
+                            selected_card = Some(PanelSection::Tools);
+                            all_controls = true;
+                        }
+                        ui.menu_button("Workspaces", |ui| {
+                            if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) { chosen = Some(action); ui.close(); }
+                        });
+                    });
+                });
+                return;
+            }
+            if context_bar && ui.button("‹ Menu").named("Back to Quick Launch").clicked() {
+                home = true;
+                settings_page = None;
+                all_controls = false;
+                query.clear();
+            }
             if section == PanelSection::Radar && settings_page.is_none() {
                 self.product_section(ui, &mut opts);
                 return;
@@ -511,7 +550,7 @@ impl HookEchoApp {
         } else {
             let panel = egui::Area::new(egui::Id::new("panel"))
                 .constrain_to(chrome)
-                .anchor(egui::Align2::LEFT_TOP, egui::vec2(if context_bar { 132.0 } else { PANEL_X }, panel_top))
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(if context_bar { 16.0 } else { PANEL_X }, panel_top))
                 .show(ctx, |ui| {
                     ui.set_width(if phone(ctx) {
                         crate::ui::m3::RAIL_W
@@ -529,8 +568,15 @@ impl HookEchoApp {
             self.mobile_occlusion.push(panel.response.rect);
         }
         ctx.data_mut(|d| { d.insert_temp(settings_id, settings_page); d.insert_temp(all_id, all_controls); });
-        self.panel_section = section;
-        self.show_alert_panel = section == PanelSection::Alerts;
+        self.panel_section = selected_card.unwrap_or(if home { PanelSection::Radar } else { section });
+        self.show_alert_panel = self.panel_section == PanelSection::Alerts;
+        if selected_card.is_some() { home = false; }
+        ctx.data_mut(|d| d.insert_temp(home_id, home));
+        if compare_four {
+            self.switch_mode(ViewMode::Analyst, ctx);
+            self.set_pane_count(4);
+            self.panel_open = false;
+        }
         if sheets_layout && section == PanelSection::Tools && !hide && !sheet_close {
             self.sidebar_focus_search = focus_search;
         }
@@ -582,7 +628,7 @@ impl HookEchoApp {
 
     /// Fixed mode, section, and search controls remain reachable above the scrolling panel.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
-        if !phone(ctx) && !self.analyst_open {
+        if !phone(ctx) {
             self.clearview_controls(ctx);
             return;
         }
@@ -609,7 +655,7 @@ impl HookEchoApp {
                         if menu.clicked() {
                             self.panel_open = !self.panel_open;
                         }
-                        for (label, mode) in [("Radar", ViewMode::Radar), ("Analyst", ViewMode::Analyst)] {
+                        for (label, mode) in [(if self.analyst_open { "← Back to radar" } else { "Radar" }, ViewMode::Radar), ("Analyst", ViewMode::Analyst)] {
                             if ui.selectable_label(self.analyst_open == (mode == ViewMode::Analyst), label)
                                 .named(if mode == ViewMode::Radar { "Switch to Radar view" } else { "Switch to Analyst view" }).clicked() {
                                 switch_to = Some(mode);

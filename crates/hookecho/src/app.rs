@@ -2717,6 +2717,12 @@ const CONTROL_BUTTONS: usize = 6;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ViewMode { Radar, Analyst }
 
+impl ViewMode {
+    fn for_layout(analyst_open: bool, panes: usize) -> Self {
+        if analyst_open || panes > 1 { Self::Analyst } else { Self::Radar }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 enum PanelSection { #[default] Radar, Overlays, Alerts, Tools }
 
@@ -2771,6 +2777,16 @@ impl PaneSession {
 #[cfg(test)]
 mod mode_session_tests {
     use super::*;
+
+    #[test]
+    fn split_layout_cannot_be_mistaken_for_regular_radar() {
+        assert!(ViewMode::for_layout(false, 1) == ViewMode::Radar);
+        for panes in [2, 4] {
+            assert!(ViewMode::for_layout(false, panes) == ViewMode::Analyst);
+            assert!(ViewMode::for_layout(true, panes) == ViewMode::Analyst);
+        }
+        assert!(ViewMode::for_layout(true, 1) == ViewMode::Analyst);
+    }
 
     #[test]
     fn restores_disabled_threshold_and_archive_time_without_retaining_frames() {
@@ -9233,7 +9249,7 @@ impl HookEchoApp {
                 }
             }
             PaletteAction::ApplyAnalystPreset(preset) => self.apply_analyst_preset(preset, ctx),
-            PaletteAction::AllTilts => self.apply_all_tilts(),
+            PaletteAction::AllTilts => self.apply_all_tilts(ctx),
             PaletteAction::CycleBasemap => {
                 let (mb, mt) = (
                     !self.settings.mapbox_key.is_empty(),
@@ -16375,7 +16391,7 @@ impl HookEchoApp {
     /// SAILS/MRLE re-scan the lowest cut mid-volume, so the elevation list repeats angles; taking
     /// four *distinct* ones is what makes the quad show four heights instead of three plus a
     /// duplicate.
-    fn apply_all_tilts(&mut self) {
+    fn apply_all_tilts(&mut self, ctx: &egui::Context) {
         let src = &self.views[self.active];
         let moment = src.moment;
         let srv = src.srv;
@@ -16385,8 +16401,12 @@ impl HookEchoApp {
             .map(|v| v.elevations.clone())
             .unwrap_or_default();
         let picks = distinct_tilts(&elevations, 4);
+        let (site, camera) = (src.site.clone(), src.camera);
+        self.switch_mode(ViewMode::Analyst, ctx);
         self.set_pane_count(4);
         for (i, v) in self.views.iter_mut().enumerate() {
+            v.site = site.clone();
+            v.camera = camera;
             v.moment = moment;
             v.srv = srv;
             if let Some(&t) = picks.get(i) {
@@ -16674,7 +16694,7 @@ impl HookEchoApp {
     }
 
     fn switch_mode(&mut self, target: ViewMode, ctx: &egui::Context) {
-        let current = if self.analyst_open { ViewMode::Analyst } else { ViewMode::Radar };
+        let current = ViewMode::for_layout(self.analyst_open, self.views.len());
         if current == target { return; }
         let outgoing = self.capture_mode_session();
         match current {
@@ -16687,9 +16707,9 @@ impl HookEchoApp {
         };
         if let Some(session) = incoming {
             self.restore_mode_session(session, ctx);
-        } else if target == ViewMode::Radar {
-            self.set_pane_count(1);
         }
+        // Radar is always a single map, including sessions captured by older comparison paths.
+        if target == ViewMode::Radar { self.set_pane_count(1); }
         self.analyst_open = target == ViewMode::Analyst;
         self.panel_section = PanelSection::Radar;
         self.show_alert_panel = false;

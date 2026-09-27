@@ -7,6 +7,12 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Quick Launch - 2026-09-27 (rolling release)
+
+- Replace the desktop's stacked navigation with Quick Launch: four Radar, Layers, Alerts and Tools cards, compact search and settings, and focused menus with a return to the menu home. Keep advanced controls and workspaces available.
+- Use the same compact launcher in single-radar and comparison views. Put panel count, linked maps/times, inspector and comparison presets under Options.
+- Fix return from four-panel comparisons, including the four-tilt shortcut and legacy saved layouts. Back to radar always restores one map.
+
 ## Cobalt playback - 2026-09-26 (rolling release)
 
 - Give the radar playback bar a solid cobalt surface, pale blue border, white timeline and white play/pause button for better visibility over the map. Keep the compact layout and matching priority dock width.
