@@ -51,7 +51,7 @@ pub fn draw(
             hatch(&painter, &rings, area, dir, stroke);
         }
         let style = crate::field_atlas::Style {
-            rgb: [f.stroke[0], f.stroke[1], f.stroke[2]], fill: 0, dash: None, emergency: false,
+            rgb: [f.stroke[0], f.stroke[1], f.stroke[2]], fill: 0, dash: None, emergency: false, warning: false,
         };
         for ring in &rings {
             let mut edge = ring.clone();

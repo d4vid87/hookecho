@@ -12,6 +12,7 @@ pub struct Style {
     pub fill: u8,
     pub dash: Option<(f32, f32)>,
     pub emergency: bool,
+    pub warning: bool,
 }
 impl Style {
     pub fn color(self) -> Color32 {
@@ -44,6 +45,8 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         {
             ([0, 160, 90], 12, None)
         }
+        FeatureKind::Warning if event == "Severe Thunderstorm Warning" =>
+            ([255, 225, 40], 12, None),
         FeatureKind::Warning => ([255, 117, 93], 12, None),
         FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
         FeatureKind::Statement
@@ -67,6 +70,7 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         fill,
         dash,
         emergency,
+        warning: f.kind == FeatureKind::Warning,
     })
 }
 
@@ -99,7 +103,7 @@ fn clip_segment(a: Pos2, b: Pos2, clip: Rect) -> Option<[Pos2; 2]> {
     Some([a + d * lo, a + d * hi])
 }
 
-/// Screen-space outline with a dark casing; emergencies receive two separated color strokes.
+/// Warnings use a white halo and bold colored core; other overlays keep their dark casing.
 pub fn boundary(painter: &Painter, points: &[Pos2], clip: Rect, style: Style, scale: f32) {
     let mut shapes = Vec::new();
     boundary_shapes(&mut shapes, points, clip, style, scale);
@@ -124,12 +128,20 @@ fn boundary_shapes(shapes: &mut Vec<Shape>, points: &[Pos2], clip: Rect, style: 
                 shapes.push(Shape::line_segment(segment, stroke));
             }
         };
-        draw(6.0, INK);
-        if style.emergency {
-            draw(5.0, style.color());
-            draw(3.0, INK);
+        if style.warning {
+            draw(9.0, INK);
+            draw(7.0, Color32::WHITE);
+            if style.emergency {
+                draw(5.0, style.color());
+                draw(2.5, Color32::WHITE);
+                draw(1.2, style.color());
+            } else {
+                draw(3.2, style.color());
+            }
+        } else {
+            draw(6.0, INK);
+            draw(1.8, style.color());
         }
-        draw(1.8, style.color());
     }
 }
 
@@ -463,7 +475,9 @@ impl Cache {
                         let a = project(ring.points[i]);
                         let b = project(ring.points[(i + 1) % ring.points.len()]);
                         if let Some(edge) = clip_segment(a, b, key.clip.expand(8.0)) {
-                            if let Some((dash, gap)) = p.style.dash {
+                            if p.style.warning {
+                                boundary_shapes(&mut shapes, &edge, key.clip, p.style, key.scale * 0.5);
+                            } else if let Some((dash, gap)) = p.style.dash {
                                 shapes.extend(Shape::dashed_line(&edge, stroke, dash, gap));
                             } else {
                                 shapes.push(Shape::line_segment(edge, stroke));
@@ -897,7 +911,7 @@ mod tests {
         flood.title = "Flood Warning".into();
         assert_eq!(style(&flood).unwrap().rgb, [0, 160, 90]);
         flood.title = "Severe Thunderstorm Warning".into();
-        assert_eq!(style(&flood).unwrap().rgb, warning.rgb);
+        assert_eq!(style(&flood).unwrap().rgb, [255, 225, 40]);
         let mut statement = feature(FeatureKind::Statement);
         statement.title = "Special Weather Statement".into();
         assert_eq!(style(&statement).unwrap().rgb, [255, 228, 181]);
@@ -953,6 +967,31 @@ mod tests {
         tropical.title = "Storm cone".into();
         assert!(style(&tropical).is_some());
     }
+    #[test]
+    fn warning_edges_have_a_white_halo_and_hazard_colored_core() {
+        let clip = Rect::from_min_max(Pos2::ZERO, egui::pos2(100.0, 100.0));
+        let points = [egui::pos2(10.0, 10.0), egui::pos2(90.0, 10.0)];
+        let mut warning = feature(FeatureKind::Warning);
+        for event in ["Severe Thunderstorm Warning", "Tornado Warning", "Flood Warning"] {
+            warning.title = event.into();
+            for scale in [0.5, 1.0, 2.0] {
+                let mut shapes = Vec::new();
+                let style = style(&warning).unwrap();
+                boundary_shapes(&mut shapes, &points, clip, style, scale);
+                let strokes: Vec<_> = shapes.iter().filter_map(|shape| match shape {
+                    Shape::LineSegment { stroke, .. } => Some(*stroke),
+                    _ => None,
+                }).collect();
+                assert_eq!(strokes.len(), 3);
+                assert_eq!(strokes[1], Stroke::new(7.0 * scale, Color32::WHITE));
+                assert_eq!(strokes[2], Stroke::new(3.2 * scale, style.color()));
+                assert!(strokes[0].width > strokes[1].width);
+            }
+        }
+        assert!(!style(&feature(FeatureKind::Watch)).unwrap().warning);
+        assert!(!style(&feature(FeatureKind::Statement)).unwrap().warning);
+    }
+
     #[test]
     fn clipping_bounds_work_at_high_zoom_and_preserve_crossing_edges() {
         let r = Rect::from_min_max(Pos2::ZERO, egui::pos2(100.0, 100.0));

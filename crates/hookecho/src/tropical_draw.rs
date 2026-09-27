@@ -32,7 +32,7 @@ pub fn draw(
     for feature in data.wind_radii.iter().chain(data.surge.iter()) {
         let style = crate::field_atlas::Style {
             rgb: [feature.stroke[0], feature.stroke[1], feature.stroke[2]],
-            fill: 0, dash: None, emergency: false,
+            fill: 0, dash: None, emergency: false, warning: false,
         };
         for ring in &feature.rings {
             if ring.len() < 3 { continue; }
@@ -67,7 +67,7 @@ fn draw_storm(
 
     // Solid center track; the forecast cone remains dashed.
     crate::field_atlas::boundary(painter, &pts, clip, crate::field_atlas::Style {
-        rgb: [119, 221, 255], fill: 0, dash: None, emergency: false,
+        rgb: [119, 221, 255], fill: 0, dash: None, emergency: false, warning: false,
     }, 1.0);
 
     // Current position: the cyclone symbol, not another dot. Drawn (and its callout reserved)
