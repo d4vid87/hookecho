@@ -11136,7 +11136,7 @@ impl HookEchoApp {
             bucket != self.built_zoom_bucket || theme_changed,
         ) {
             let mut geom =
-                overlay_build::build_with_theme(&self.overlays, zoom, self.settings.theme);
+                overlay_build::build_map_with_theme(&self.overlays, zoom, self.settings.theme);
             let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> = self
                 .visible_placefile_iter()
                 .map(|(it, op, _)| (it, op))
@@ -14177,6 +14177,13 @@ impl HookEchoApp {
             }
         }
 
+        crate::field_atlas::draw(&painter, &self.overlays, prect, cam.zoom,
+            crate::theme::overlay_stroke_scale(self.settings.theme), |lon, lat| {
+                let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                egui::pos2(prect.left() + sx, prect.top() + sy)
+            });
+
         // Storm-cell dots + SCIT forecast tracks.
         if self.filters.show_cells && self.cells_site.as_deref() == view.site.as_deref() {
             let to_screen = |lon: f64, lat: f64| {
@@ -14583,9 +14590,13 @@ impl HookEchoApp {
                 } else {
                     color
                 };
-                painter.circle_filled(p, 7.0, egui::Color32::BLACK);
-                painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, marker_color));
-                painter.circle_filled(p, 2.0, marker_color);
+                if c.kind == CellKind::Meso || c.meso.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+                    crate::field_atlas::rotation_marker(&painter, p);
+                } else {
+                    painter.circle_filled(p, 7.0, egui::Color32::BLACK);
+                    painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, marker_color));
+                    painter.circle_filled(p, 2.0, marker_color);
+                }
                 if let Some(label) = cell_labels_shown.get(&c.id) {
                     painter.text(
                         p + egui::vec2(8.0, -8.0),
@@ -15097,50 +15108,21 @@ impl HookEchoApp {
             }
         }
 
-        // Warning intelligence: warned-storm motion vector + projected path + ETA to markers, and
-        // a pulsing outline on escalated (Tornado Emergency / PDS / destructive) warnings.
+        // Warning intelligence: warned-storm motion vector + projected path + ETA to markers.
+        // Field Atlas already draws the static, double-edge emergency boundary above.
         if self.filters.show_alerts {
             let to_screen = |lon: f64, lat: f64| {
                 let w = crate::render::mercator::lonlat_to_world(lon, lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
                 egui::pos2(prect.left() + sx, prect.top() + sy)
             };
-            let mut any_escalated = false;
             // Indices, not strings: the `take(6)` below drew six of them however many marker ×
             // warning pairs were formatted.
             let mut etas: Vec<(f64, usize, usize)> = Vec::new();
-            let time = ctx.input(|i| i.time);
-            // Viewport-center lon/lat: a polygon with every vertex off-screen can still fill the
-            // whole pane (zoomed inside it) — the primary chase case for an escalated warning.
-            let (center_lon, center_lat) = {
-                let w = cam.screen_to_world((vp.0 * 0.5, vp.1 * 0.5), vp);
-                crate::render::mercator::world_to_lonlat(w.0, w.1)
-            };
             let features = self.active_alert_features();
             for (fi, f) in features.iter().enumerate() {
                 let Some(a) = &f.alert else { continue };
                 if !self.map_alert_visible(f) { continue; }
-                // Pulsing outline for escalated warnings only — watches can carry PDS wording,
-                // but pulsing a state-sized watch polygon would drown the map (and `escalation`
-                // uppercases the whole bulletin, too heavy to run for every alert every frame).
-                if f.kind == overlay::FeatureKind::Warning && wxdata::alerts::escalation(a) >= 2 {
-                    let visible =
-                        f.rings.first().is_some_and(|r| {
-                            r.iter().any(|p| prect.contains(to_screen(p[0], p[1])))
-                        }) || f.contains(center_lon, center_lat);
-                    if visible {
-                        any_escalated = true;
-                        let w = 2.0 + 2.0 * (time * 4.0).sin().abs() as f32;
-                        let col = egui::Color32::from_rgb(255, 40, 40);
-                        for ring in &f.rings {
-                            let pts: Vec<egui::Pos2> =
-                                ring.iter().map(|p| to_screen(p[0], p[1])).collect();
-                            if pts.len() >= 2 {
-                                painter.add(egui::Shape::line(pts, egui::Stroke::new(w, col)));
-                            }
-                        }
-                    }
-                }
                 // Motion vector + projected path (heading = FROM + 180).
                 let Some(m) = &a.motion else { continue };
                 let Some(&origin) = m.points.first() else {
@@ -15212,9 +15194,6 @@ impl HookEchoApp {
                     painter.galley(anchor + egui::vec2(5.0, 2.0), galley, egui::Color32::WHITE);
                     y += size.y + 6.0;
                 }
-            }
-            if any_escalated {
-                ctx.request_repaint_after(std::time::Duration::from_millis(60));
             }
         }
 
@@ -19000,7 +18979,7 @@ fn cell_color(kind: CellKind) -> [u8; 4] {
     match kind {
         CellKind::Storm => [255, 235, 60, 255], // yellow
         CellKind::Hail => [80, 220, 120, 255],  // green
-        CellKind::Meso => [255, 70, 70, 255],   // red
+        CellKind::Meso => [141, 242, 214, 255], // Field Atlas rotation
     }
 }
 

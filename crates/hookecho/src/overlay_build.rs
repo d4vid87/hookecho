@@ -54,6 +54,16 @@ pub fn build_with_theme(
     zoom: f64,
     theme: crate::settings::Theme,
 ) -> OverlayGeom {
+    build_polygons(features, zoom, theme, false)
+}
+
+/// Interactive map boundaries are painted in screen space by Field Atlas.
+/// Headless exports retain their existing complete GPU outlines.
+pub fn build_map_with_theme(features: &[GeoFeature], zoom: f64, theme: crate::settings::Theme) -> OverlayGeom {
+    build_polygons(features, zoom, theme, true)
+}
+
+fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Theme, atlas: bool) -> OverlayGeom {
     let mut geom = OverlayGeom::default();
     let mut fill_tess = FillTessellator::new();
     let mut stroke_tess = StrokeTessellator::new();
@@ -67,7 +77,9 @@ pub fn build_with_theme(
 
     for f in features {
         let path = feature_path(f);
-        let (fill_rgba, stroke_rgba) = high_contrast_feature_colors(f.fill, f.stroke, theme);
+        let atlas_style = atlas.then(|| crate::field_atlas::style(f)).flatten();
+        let base_fill = atlas_style.map_or(f.fill, |s| [s.rgb[0], s.rgb[1], s.rgb[2], s.fill]);
+        let (fill_rgba, stroke_rgba) = high_contrast_feature_colors(base_fill, f.stroke, theme);
         let fill = color(fill_rgba);
         let stroke = color(stroke_rgba);
 
@@ -81,15 +93,17 @@ pub fn build_with_theme(
                 color: fill,
             }),
         );
-        let _ = stroke_tess.tessellate_path(
-            &path,
-            &stroke_opts,
-            &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
-                offset: [0.0; 3],
-                world: [v.position().x, v.position().y],
-                color: stroke,
-            }),
-        );
+        if atlas_style.is_none() {
+            let _ = stroke_tess.tessellate_path(
+                &path,
+                &stroke_opts,
+                &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
+                    offset: [0.0; 3],
+                    world: [v.position().x, v.position().y],
+                    color: stroke,
+                }),
+            );
+        }
         append(&mut geom, buf);
     }
     geom

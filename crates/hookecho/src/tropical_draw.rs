@@ -1,11 +1,9 @@
 //! Drawing the NHC tropical picture: forecast cone outline, track, and per-point callouts.
 //!
 //! The cone arrives as a server polygon and is filled by the GPU overlay pipeline like any
-//! other `GeoFeature`. Its *outline* is drawn here instead, because a dashed edge is what says
-//! "this boundary is a probability, not a place" — and the overlay tessellator only does solid
-//! strokes.
+//! other `GeoFeature`. Field Atlas paints its dashed screen-space outline.
 //!
-//! Everything else is the storm itself: a dashed centerline through the forecast positions, a
+//! Everything else is the storm itself: a solid centerline through the forecast positions, a
 //! ringed dot per position in its Saffir–Simpson color, a cyclone glyph at the current
 //! position, and a small callout box per point carrying the valid time, the wind, and (at the
 //! current position) the central pressure.
@@ -19,7 +17,7 @@ const CALLOUT_ZOOM: f32 = 3.5;
 
 /// Callout background. Dark and near-opaque so it reads over radar, ocean, and light basemaps
 /// alike — the same weight as the cell-ETA boxes.
-const BOX_BG: Color32 = Color32::from_rgba_premultiplied(16, 19, 26, 190);
+const BOX_BG: Color32 = crate::field_atlas::INK;
 
 /// Draw the tropical suite. `to_screen` projects `(lon, lat)`; `clip` is the pane rect.
 pub fn draw(
@@ -29,8 +27,19 @@ pub fn draw(
     zoom: f32,
     to_screen: impl Fn(f64, f64) -> Pos2,
 ) {
-    for cone in &data.cones {
-        draw_cone(painter, &cone.rings, clip, &to_screen);
+    // Field Atlas draws cone edges in the shared overlay pass. Preserve the wind/surge
+    // intensity colors while giving those boundaries the same dark casing.
+    for feature in data.wind_radii.iter().chain(data.surge.iter()) {
+        let style = crate::field_atlas::Style {
+            rgb: [feature.stroke[0], feature.stroke[1], feature.stroke[2]],
+            fill: 0, dash: None, emergency: false,
+        };
+        for ring in &feature.rings {
+            if ring.len() < 3 { continue; }
+            let mut pts: Vec<_> = ring.iter().map(|p| to_screen(p[0], p[1])).collect();
+            pts.push(pts[0]);
+            crate::field_atlas::boundary(painter, &pts, clip, style, 1.0);
+        }
     }
     // ponytail: one occupancy list for this layer only. Not `labelplace::Placer` — that
     // asserts a global non-decreasing priority order across layers, and tropical paints after
@@ -40,49 +49,6 @@ pub fn draw(
     for storm in &data.storms {
         draw_storm(painter, storm, clip, zoom, &to_screen, &mut taken);
     }
-}
-
-/// The cone edge: dashed, white, soft. Holes are drawn too — a ring is a ring.
-fn draw_cone(
-    painter: &Painter,
-    rings: &[Vec<[f64; 2]>],
-    clip: Rect,
-    to_screen: &impl Fn(f64, f64) -> Pos2,
-) {
-    for ring in rings {
-        if ring.len() < 3 {
-            continue;
-        }
-        let mut pts: Vec<Pos2> = ring.iter().map(|p| to_screen(p[0], p[1])).collect();
-        // A cone larger than the pane has no vertex on screen and still covers everything, so
-        // the containment test is what keeps it visible when zoomed in.
-        if !pts.iter().any(|p| clip.contains(*p)) && !contains(&pts, clip.center()) {
-            continue;
-        }
-        pts.push(pts[0]);
-        painter.add(Shape::dashed_line(
-            &pts,
-            Stroke::new(1.6, Color32::from_white_alpha(205)),
-            7.0,
-            5.0,
-        ));
-    }
-}
-
-/// Even-odd point-in-polygon on the projected ring.
-fn contains(pts: &[Pos2], p: Pos2) -> bool {
-    let mut inside = false;
-    let mut j = pts.len() - 1;
-    for i in 0..pts.len() {
-        let (a, b) = (pts[i], pts[j]);
-        if (a.y > p.y) != (b.y > p.y)
-            && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y + f32::EPSILON) + a.x
-        {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }
 
 fn draw_storm(
@@ -99,28 +65,10 @@ fn draw_storm(
         .map(|p| to_screen(p.lon, p.lat))
         .collect();
 
-    // Centerline: a shadow copy under a dashed white line. There is no drop-shadow primitive
-    // for map painting here; an offset dark copy is the codebase's idiom.
-    if pts.len() >= 2 {
-        let bb = pts.iter().fold(Rect::NOTHING, |r, p| {
-            r.union(Rect::from_center_size(*p, Vec2::splat(1.0)))
-        });
-        if bb.expand(24.0).intersects(clip) {
-            let shadow: Vec<Pos2> = pts.iter().map(|p| *p + Vec2::splat(1.5)).collect();
-            painter.add(Shape::dashed_line(
-                &shadow,
-                Stroke::new(3.0, Color32::from_black_alpha(90)),
-                9.0,
-                6.0,
-            ));
-            painter.add(Shape::dashed_line(
-                &pts,
-                Stroke::new(2.5, Color32::WHITE),
-                9.0,
-                6.0,
-            ));
-        }
-    }
+    // Solid center track; the forecast cone remains dashed.
+    crate::field_atlas::boundary(painter, &pts, clip, crate::field_atlas::Style {
+        rgb: [119, 221, 255], fill: 0, dash: None, emergency: false,
+    }, 1.0);
 
     // Current position: the cyclone symbol, not another dot. Drawn (and its callout reserved)
     // before the forecast points, because point 0 sits on top of it and the box that says how
@@ -225,7 +173,7 @@ fn callout(
     accent: Color32,
     taken: &mut Vec<Rect>,
 ) -> bool {
-    let font = FontId::proportional(11.0);
+    let font = FontId::monospace(11.0);
     let galleys: Vec<_> = lines
         .iter()
         .map(|t| painter.layout_no_wrap((*t).to_string(), font.clone(), Color32::WHITE))
@@ -248,7 +196,8 @@ fn callout(
         [anchor, Pos2::new(tie, center.y)],
         Stroke::new(1.0, Color32::from_white_alpha(120)),
     );
-    painter.rect_filled(rect, 4.0, BOX_BG);
+    painter.rect_filled(rect, 2.0, BOX_BG);
+    painter.rect_stroke(rect, 2.0, Stroke::new(0.8, accent), egui::StrokeKind::Inside);
     // One accent edge, on the side the anchor is, ties the box to its point's category color.
     let edge = if left {
         Rect::from_min_size(
@@ -266,22 +215,4 @@ fn callout(
         y += gh;
     }
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn contains_is_even_odd_on_a_square() {
-        let sq = [
-            Pos2::new(0.0, 0.0),
-            Pos2::new(10.0, 0.0),
-            Pos2::new(10.0, 10.0),
-            Pos2::new(0.0, 10.0),
-        ];
-        assert!(contains(&sq, Pos2::new(5.0, 5.0)));
-        assert!(!contains(&sq, Pos2::new(15.0, 5.0)));
-        assert!(!contains(&sq, Pos2::new(5.0, -1.0)));
-    }
 }

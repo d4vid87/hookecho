@@ -14,7 +14,7 @@ use wxdata::overlay::GeoFeature;
 
 /// Screen-space gap between hatch lines. Wide enough that a small county is not a solid block,
 /// tight enough to read as a texture rather than as three stray lines.
-const SPACING: f32 = 11.0;
+const SPACING: f32 = 15.0;
 
 /// Draw the cross-hatch for every feature. `to_screen` projects `(lon, lat)`; `clip` is the pane.
 pub fn draw(
@@ -24,6 +24,7 @@ pub fn draw(
     to_screen: impl Fn(f64, f64) -> Pos2,
 ) {
     let painter = painter.with_clip_rect(clip);
+    let mut taken = Vec::new();
     for f in features {
         let rings: Vec<Vec<Pos2>> = f
             .rings
@@ -44,10 +45,23 @@ pub fn draw(
         // Hatch only what is on screen: a county the size of the pane would otherwise generate
         // scanlines across its whole extent, nearly all of them off-view.
         let area = bb.intersect(clip);
-        let color = Color32::from_rgba_unmultiplied(f.stroke[0], f.stroke[1], f.stroke[2], 150);
+        let color = Color32::from_rgba_unmultiplied(f.stroke[0], f.stroke[1], f.stroke[2], 205);
         let stroke = Stroke::new(1.2, color);
         for dir in [1.0_f32, -1.0] {
             hatch(&painter, &rings, area, dir, stroke);
+        }
+        let style = crate::field_atlas::Style {
+            rgb: [f.stroke[0], f.stroke[1], f.stroke[2]], fill: 0, dash: None, emergency: false,
+        };
+        for ring in &rings {
+            let mut edge = ring.clone();
+            edge.push(edge[0]);
+            crate::field_atlas::boundary(&painter, &edge, clip, style, 1.0);
+        }
+        if area.width() > 65.0 && area.height() > 50.0 {
+            if let Some(anchor) = rings[0].iter().copied().find(|p| clip.shrink(12.0).contains(*p)) {
+                crate::field_atlas::label(&painter, clip, anchor, &format!("OUT · {}", f.title), style.color(), &mut taken);
+            }
         }
     }
 }
