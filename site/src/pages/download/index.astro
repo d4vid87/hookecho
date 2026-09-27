@@ -27,8 +27,7 @@ const platforms = [
     note: "AppImage runs anywhere; the .deb adds a menu entry on Debian and Ubuntu.",
     links: [
       { label: "AppImage", href: asset("HookEcho-x86_64.AppImage"), primary: true },
-      // The .deb filename carries the version, so it can't be a /latest/download/ link.
-      { label: "Debian package (.deb)", href: releases },
+      { label: "Debian package (.deb)", href: asset("HookEcho-amd64.deb") },
     ],
   },
   {
@@ -58,7 +57,7 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
 >
   <section class="download">
     <div class="wrap">
-      <header class="download-head" data-reveal><div><p class="eyebrow">Use it your way</p><h1>One radar.<br />Every screen.</h1><p class="lede">Start in your browser, or take the same radar and Analyst tools onto your own device. No account or paid tier.</p><div class="head-actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href={releases}>View releases</a></div></div><img src="/showcase/clinton-single.webp" alt="HookEcho Radar mode showing the April 26, 2024 storm near Clinton, Missouri" width="1440" height="900" /></header>
+      <header class="download-head" data-reveal><div><p class="eyebrow">Use it your way</p><h1>One radar.<br />Every screen.</h1><p class="lede">Start in your browser, or take the same radar and Analyst tools onto your own device. No account or paid tier.</p><div class="head-actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href={releases}>View releases</a></div></div><img src="/shots/hookecho-hero.gif" alt="Current HookEcho Radar and four-panel Analyst views over a South Dakota storm; captured September 27, 2026" width="1200" height="750" /></header>
 
       <p id="pick" class="pick" hidden></p>
 
@@ -78,8 +77,7 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
 
       <p class="dim">
         Every build comes from the same
-        <a href={releases}>Releases page</a>. Versioned <code>v*</code> releases are the stable
-        channel; a rolling <code>latest</code> prerelease carries the newest work. Trouble
+        <a href={releases}>Releases page</a>. The <code>latest</code> release provides the newest desktop and Android builds. Trouble
         installing? <a href="/docs/install/">The install guide</a> walks through each platform.
       </p>
 

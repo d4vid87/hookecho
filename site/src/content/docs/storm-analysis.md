@@ -9,14 +9,14 @@ Start with one storm and a question. Use **Analyst** to compare products, check 
 ## Build the workspace
 
 1. In **Radar**, select the radar site nearest the storm and let the scan load. Choose a live or archive time deliberately.
-2. Select **Analyst**, then **Preset → Tornado** for a four-product arrangement. You can also choose four panes and set each product yourself.
+2. Select **Compare 4** below Quick Launch, then choose each pane’s product.
 3. Compare **reflectivity**, **velocity**, **correlation coefficient (CC)**, and **differential reflectivity (ZDR)**. Select a pane before changing its product or tilt.
-4. Enable **Maps** and **Time** in the Analyst toolbar to link the views. Open **Inspector** for values and the actual source time.
-5. Keep the same geographic feature in view as you inspect each pane. Return to **Radar** when you want a single-map overview.
+4. Use **Options** to link maps and time. Open **Inspector** for values and the actual source time.
+5. Keep the same geographic feature in view as you inspect each pane. Select **Back to radar** for a single-map overview.
 
-![Actual HookEcho four-pane Analyst workspace with the Inspector](/shots/analyst-mode-20260923.webp)
+![Actual HookEcho four-pane Analyst workspace](/shots/analyst-mode-20260927.webp)
 
-*Archived KTLX example, not current weather. Reflectivity, velocity, CC, and ZDR provide different measurements of the same storm.*
+*KABR capture from September 27, 2026; not current weather. Reflectivity, velocity, spectrum width, and ZDR provide different measurements.*
 
 For pane selection, workspace persistence, and phone behavior, see [Radar and Analyst modes](/docs/radar-and-analyst/).
 

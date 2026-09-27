@@ -4,15 +4,15 @@ description: Start with one radar map, build a linked analysis view, and switch 
 order: 2
 ---
 
-HookEcho opens in **Radar** mode: one map and a timeline. **Analyst** is an optional workbench for comparing products and inspecting their data. The **Radar | Analyst** switch stays at the top left even when you close the menu or scroll a section.
+HookEcho opens in **Radar** mode: one map and a timeline. **Analyst** is an optional workbench for comparing products and inspecting their data. **Single radar** and **Compare 4** sit below Quick Launch. **Back to radar** remains visible in the four-panel view.
 
-![Radar mode with the Radar section open over an archived Oklahoma storm](/shots/radar-mode-20260923.webp)
+![Radar mode near a South Dakota severe thunderstorm](/shots/radar-mode-20260927.webp)
 
-*Archive example from KTLX on May 20, 2013; it is not current weather.*
+*KABR screenshot captured September 27, 2026; it is not current weather.*
 
 ## Use the short menu
 
-Select the menu button to open one task section at a time:
+Select Menu to open one task section at a time:
 
 | Section | What you will find |
 | --- | --- |
@@ -21,19 +21,19 @@ Select the menu button to open one task section at a time:
 | **Alerts** | The alert count, warning visibility, and alerts in the map area. New alerts do not open the list for you. |
 | **Tools** | Searchable layers, tools, and saved workspaces. |
 
-Settings opens directly from the gear in the fixed header. Press **Ctrl+S** to open and focus search from anywhere. **Escape** closes search or the menu; it does not change modes.
+Settings opens from the control beside search in Quick Launch. Press **Ctrl+S** to open and focus search from anywhere. **Escape** closes search or the menu; it does not change modes.
 
 ## Compare a storm in Analyst
 
-1. Select **Analyst** in the header. Your current Radar view becomes the first pane the first time you enter.
-2. Select **Preset → Tornado** for a four-product arrangement, or choose **1**, **2**, or **4** panes yourself.
+1. Select **Compare 4** below Quick Launch. Your current Radar view becomes the first pane the first time you enter.
+2. The four panels open with different radar products. Use **Options** to adjust the arrangement.
 3. Select a pane before changing its radar product or overlays. The toolbar names the active pane.
-4. Use **Maps** and **Time** in the fixed analyst toolbar to link positions and timeline selection. Open **Inspector** for product values and the actual source time.
-5. Select **Radar** to return to the single map you left. Select **Analyst** again to resume the multi-pane arrangement.
+4. Use **Options** for linked maps and time. Open **Inspector** for product values and the actual source time.
+5. Select **Back to radar** to return to one map. Select **Compare 4** again to resume the multi-pane arrangement.
 
-![Analyst mode with four linked radar panes and the inspector](/shots/analyst-mode-20260923.webp)
+![Analyst mode with four radar products](/shots/analyst-mode-20260927.webp)
 
-*The four panes show archived reflectivity, velocity, correlation coefficient, and differential reflectivity from KTLX.*
+*Captured near KABR on September 27, 2026. The panes show reflectivity, velocity, spectrum width, and differential reflectivity.*
 
 Your site, map position, product, overlays, threshold settings, and selected live or archive time remain with each mode while the app is open. A disabled threshold remains disabled. Save a **Workspace** in Tools if you want to keep an arrangement across restarts. Multi-pane and explicitly analyst workspaces open in Analyst; ordinary single-pane workspaces open in Radar.
 
