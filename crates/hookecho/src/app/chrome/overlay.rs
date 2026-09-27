@@ -23,14 +23,15 @@ fn phone(ctx: &egui::Context) -> bool {
     cfg!(target_os = "android") || compact(ctx)
 }
 
-/// Is this a compact screen — a phone held in portrait?
+/// Is this a compact-width screen?
 ///
 /// The touch layout and the sheet layout are two different questions, and a tablet answers them
 /// differently: it wants the big targets and the top pill, and it has room to put the panel beside
 /// the map like a desktop does rather than over it. M3 calls the line 600 dp; the same line moves
 /// a phone in landscape onto the tablet layout, which is the right answer there too.
+/// Height must not select phone controls: desktop embeds can be wide but short.
 pub(crate) fn compact(ctx: &egui::Context) -> bool {
-    ctx.content_rect().size().min_elem() < 600.0
+    ctx.content_rect().width() < 600.0
 }
 
 /// Does this screen get bottom sheets instead of a docked panel?
@@ -792,6 +793,33 @@ impl HookEchoApp {
         if let Some(s) = picked {
             self.set_basemap(s);
             self.basemap_open = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    #[test]
+    fn compact_layout_depends_on_width_not_height() {
+        for (width, height, expected) in [
+            (900.0, 450.0, false), // Wide, short website embed.
+            (600.0, 400.0, false), // Desktop breakpoint.
+            (599.0, 800.0, true),
+            (390.0, 844.0, true), // Portrait phone.
+            (390.0, 300.0, true), // Narrow embed.
+            (1280.0, 720.0, false),
+        ] {
+            let ctx = egui::Context::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, height),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                assert_eq!(super::compact(ui.ctx()), expected, "{width}x{height}");
+            });
         }
     }
 }

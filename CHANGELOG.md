@@ -7,6 +7,10 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Embedded radar layout fix - 2026-09-27 (rolling release)
+
+- Choose mobile radar controls by available width, not height. Wide, short website embeds retain the compact desktop menu and playback controls; narrow phone views keep the mobile layout.
+
 ## Settings Home & Three Tabs - 2026-09-27 (rolling release)
 
 - Replace the settings sidebar with Settings Home: six task cards, focused pages, a home link, and a persistent Done button. Keep radar products, shortcuts, sync, advanced settings and help available.
