@@ -7,6 +7,13 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Priority dock - 2026-09-26 (rolling release)
+
+- The Clearview map now leads with one relevant advisory, watch, warning, or high-impact bulletin above the compact timeline. Open its official text, the full alert list in view, storm tracks, or display rules from the dock.
+- Each alert category has its own nearby-distance limit. Warnings containing the reference point remain visible through display thresholds; expired bulletins are excluded. Use a saved home or, otherwise, the selected radar site as the reference.
+- SCIT track projections have independent maximum-age, forecast-error, and horizon controls. Missing or stale projection inputs stay out of the projection without removing the underlying detection or official warning. Real forecast error replaces the design study's illustrative confidence percentage.
+- Display preferences persist and are also available under Settings → Alerts → Priority dock & map display. Notification and sound rules remain separate.
+
 ## Clearview - 2026-09-26 (rolling release)
 
 - Compact floating logo/search/settings toolbar and a separate Layers / Alerts / Settings dock leave more radar visible on desktop and wide browser layouts.

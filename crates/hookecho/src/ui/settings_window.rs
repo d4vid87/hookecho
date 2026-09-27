@@ -1282,6 +1282,9 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
 
 /// Everything that fires when weather happens: sounds, push, proximity alarms.
 fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    egui::CollapsingHeader::new("Priority dock & map display").show(ui, |ui| {
+        super::priority::controls(ui, &mut settings.priority_rules);
+    });
     ui.collapsing("Sounds & volume", |ui| sound_picker(ui, settings));
     egui::CollapsingHeader::new("When to interrupt").default_open(true).show(ui, |ui| {
 

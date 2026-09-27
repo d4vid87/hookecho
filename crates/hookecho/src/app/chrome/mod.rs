@@ -4,6 +4,7 @@
 
 mod chips;
 mod clearview;
+mod priority;
 mod overlay;
 mod permalink;
 pub(crate) use overlay::compact;

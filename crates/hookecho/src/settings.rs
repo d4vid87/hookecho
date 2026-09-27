@@ -25,6 +25,23 @@ pub enum RadarFeed {
     ArchiveOnly,
 }
 
+/// Priority dock/map display preferences. Notification rules remain independent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PriorityRules {
+    pub minimum: u8,
+    pub radii_mi: [f64; 4],
+    pub track_age_min: u16,
+    pub track_error_nm: f32,
+    pub track_horizon_min: u16,
+}
+impl Default for PriorityRules {
+    fn default() -> Self {
+        Self { minimum: 0, radii_mi: [25.0, 75.0, 100.0, 150.0], track_age_min: 5,
+            track_error_nm: 5.0, track_horizon_min: 30 }
+    }
+}
+
 /// egui theme preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Theme {
@@ -469,6 +486,8 @@ pub struct Settings {
     /// 0 lets everything through, which is the default.
     #[serde(default)]
     pub alert_min_escalation: u8,
+    #[serde(default)]
+    pub priority_rules: PriorityRules,
     /// Alerts inside `alert_rollup_window_min` before pushes collapse into one rolling summary.
     /// 0 turns the rollup off. Escalated alerts always push as themselves.
     #[serde(default = "default_alert_rollup_threshold")]
@@ -1302,6 +1321,7 @@ impl Default for Settings {
             quiet_start_hour: default_quiet_start(),
             quiet_end_hour: default_quiet_end(),
             alert_min_escalation: 0,
+            priority_rules: PriorityRules::default(),
             alert_rollup_threshold: default_alert_rollup_threshold(),
             alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,
@@ -1927,6 +1947,7 @@ mod tests {
             quiet_start_hour: 22,
             quiet_end_hour: 7,
             alert_min_escalation: 0,
+            priority_rules: PriorityRules::default(),
             alert_rollup_threshold: default_alert_rollup_threshold(),
             alert_rollup_window_min: default_alert_rollup_window_min(),
             scan_chime: false,

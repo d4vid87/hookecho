@@ -8,8 +8,6 @@ impl HookEchoApp {
         let logo = crate::icon::texture(ctx, 64);
         let mut search = false;
         let mut settings = false;
-        let mut layers = false;
-        let mut alerts = false;
         let toolbar = egui::Area::new("clearview_toolbar".into())
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 16.0))
@@ -32,35 +30,8 @@ impl HookEchoApp {
             });
         self.mobile_occlusion.push(toolbar.response.rect);
         self.tour_anchors.menu = Some(toolbar.response.rect);
-        let dock = egui::Area::new("clearview_tools".into())
-            .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -140.0))
-            .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 252)
-                    .inner_margin(egui::Margin::symmetric(8, 5))
-                    .corner_radius(24.0)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            layers = ui.add_sized(egui::vec2(84.0, 34.0), egui::Button::new(format!("{}  Layers", ph::STACK)))
-                                .named_toggle("Layers", self.panel_open && !self.show_alert_panel).clicked();
-                            let (count, _) = self.alert_badge();
-                            let label = if count > 0 { format!("{}  Alerts ({count})", ph::WARNING) } else { format!("{}  Alerts", ph::WARNING) };
-                            alerts = ui.add_sized(egui::vec2(84.0, 34.0), egui::Button::new(label))
-                                .named_toggle("Nearby alerts", self.panel_open && self.show_alert_panel).clicked();
-                            settings |= ui.add_sized(egui::vec2(90.0, 34.0), egui::Button::new(format!("{}  Settings", ph::SLIDERS_HORIZONTAL)))
-                                .named("Open settings").clicked();
-                        });
-                    });
-            });
-        self.mobile_occlusion.push(dock.response.rect);
+        self.priority_dock(ctx);
         if search { self.apply_action(BindableAction::CommandSearch, ctx); }
-        if layers {
-            self.panel_open = !(self.panel_open && !self.show_alert_panel);
-            self.show_alert_panel = false;
-            self.panel_section = PanelSection::Overlays;
-            ctx.data_mut(|d| d.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
-        }
-        if alerts { self.apply_action(BindableAction::ToggleAlertPanel, ctx); }
         if settings { self.apply_palette(PaletteAction::OpenWindow(AppWindow::Settings), ctx); }
     }
 }

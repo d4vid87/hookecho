@@ -47,9 +47,17 @@ Analyst to resume its arrangement. Save a workspace to keep it across restarts.
 ## More weather views
 
 The Clearview desktop layout keeps search and settings in a compact floating toolbar,
-with Layers and Alerts above a smaller live playback bar. Graphite Silver is the default;
+with a Priority dock above the smaller live playback bar. It shows the most relevant
+nearby bulletin, with the full alert list, storm tracks, and display rules one click away.
+Graphite Silver is the default;
 choose Midnight Blue, Deep Pine, Smoked Plum, or Warm Ember in Settings → Appearance.
 Advanced radar tools remain in the Layers panel.
+
+Priority display rules use separate advisory, watch, warning, and high-impact distance
+limits around your saved home (or selected radar site). Warnings containing that point
+remain visible through these thresholds. Track filters use actual SCIT forecast error
+and scan age, with a configurable 15–60 minute projection; they do not infer official
+warnings or change notification delivery. Settings → Alerts exposes the same controls.
 
 | Reflectivity | Velocity |
 | --- | --- |

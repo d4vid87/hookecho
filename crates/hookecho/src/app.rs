@@ -10848,7 +10848,7 @@ impl HookEchoApp {
         }
         if self.filters.show_alerts {
             for f in self.active_alert_features() {
-                if self.filters.alert_cats[alerts::category(&f.title).index()] {
+                if self.filters.alert_cats[alerts::category(&f.title).index()] && self.priority_alert_visible(f) {
                     v.push(f.clone());
                 }
             }
@@ -14171,13 +14171,13 @@ impl HookEchoApp {
             // Arrival-time cones: project each moving cell forward, shade the swept path, and
             // list ETAs to any watched marker the cone covers.
             if self.filters.show_arrival_cones {
-                const LEAD_MIN: f64 = 30.0;
+                let lead_min = f64::from(self.settings.priority_rules.track_horizon_min.clamp(15,60));
                 // Indices, not strings: every marker inside every cone used to be formatted and
                 // then thrown away by the `take(6)` below.
                 let mut etas: Vec<(f64, usize, usize)> = Vec::new();
                 let cells = self.active_storm_cells();
                 for (ci, c) in cells.iter().enumerate() {
-                    if !ui::cell_window::projection_valid(c, chrono::Utc::now()) { continue; }
+                    if !self.filters.show_tracks || !ui::priority::track_visible(c, &self.settings.priority_rules, chrono::Utc::now()) { continue; }
                     let Some(error_km) = ui::cell_window::error_km(c) else { continue };
                     let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else {
                         continue;
@@ -14185,7 +14185,7 @@ impl HookEchoApp {
                     if kt <= 1.0 {
                         continue;
                     }
-                    let lead_km = kt as f64 * 1.852 * (LEAD_MIN / 60.0);
+                    let lead_km = kt as f64 * 1.852 * (lead_min / 60.0);
                     let half_angle = error_km.atan2(lead_km).to_degrees();
                     let left = crate::geo::destination_point(
                         [c.lon, c.lat],
@@ -14224,7 +14224,7 @@ impl HookEchoApp {
                             kt,
                             [m.lon, m.lat],
                             half_angle,
-                            LEAD_MIN,
+                            lead_min,
                         ) {
                             etas.push((min, mi, ci));
                         }
@@ -14503,10 +14503,10 @@ impl HookEchoApp {
                 }
                 // SCIT positions retain their geometry; cross-ticks mark each forecast time.
                 if self.filters.show_tracks && !c.track.is_empty()
-                    && ui::cell_window::projection_valid(c, chrono::Utc::now()) {
+                    && ui::priority::track_visible(c, &self.settings.priority_rules, chrono::Utc::now()) {
                     let white = egui::Color32::WHITE;
                     let mut prev = p;
-                    for tp in c.track.iter().filter(|point| point.minutes <= 30
+                    for tp in c.track.iter().filter(|point| point.minutes <= self.settings.priority_rules.track_horizon_min.clamp(15,60)
                         && point.lon.is_finite() && point.lat.is_finite()
                         && point.lon.abs() <= 180.0 && point.lat.abs() <= 90.0) {
                         let tpp = to_screen(tp.lon, tp.lat);
@@ -15103,6 +15103,7 @@ impl HookEchoApp {
             let features = self.active_alert_features();
             for (fi, f) in features.iter().enumerate() {
                 let Some(a) = &f.alert else { continue };
+                if !self.priority_alert_visible(f) { continue; }
                 // Pulsing outline for escalated warnings only — watches can carry PDS wording,
                 // but pulsing a state-sized watch polygon would drown the map (and `escalation`
                 // uppercases the whole bulletin, too heavy to run for every alert every frame).
@@ -20292,6 +20293,7 @@ impl eframe::App for HookEchoApp {
         // keep swallowing gestures over a sheet that closed.
         self.mobile_occlusion.clear();
         if !self.panel_open { self.drawer.resume(); }
+        self.refresh_priority_overlays(ctx);
         self.drawer.begin_frame(ctx);
         if self.panel_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.panel_open = false;

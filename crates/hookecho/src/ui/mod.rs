@@ -88,6 +88,7 @@ pub mod a11y;
 pub mod about_window;
 pub mod afd_window;
 pub mod alert_panel;
+pub mod priority;
 pub mod basemap_picker;
 pub mod cappi_window;
 pub mod cell_window;
