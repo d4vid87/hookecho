@@ -4966,9 +4966,7 @@ impl HookEchoApp {
 
     fn fetch_overlays(&mut self, ctx: &egui::Context) {
         self.overlay_last_fetch = Some(Instant::now());
-        // Scope zone-only alert resolution (heat, advisories) to the active radar and to every
-        // saved marker, so an advisory at the far edge of a wide zone resolves for the places
-        // people actually care about, not just the radar — see `alerts::fetch_active`.
+        // Alerts cover the whole map. Keep local points for the zone-service outage fallback.
         let mut points: Vec<(f64, f64)> = self.views[self.active]
             .site
             .as_deref()

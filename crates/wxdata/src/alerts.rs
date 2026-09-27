@@ -2,7 +2,7 @@
 //!
 //! Each alert with a polygon becomes a [`GeoFeature`] colored by event. Zone-only alerts (no inline
 //! polygon, just UGC zones — heat warnings, advisories, marine) are resolved to their zone geometry;
-//! see [`fetch_active`], which scopes that resolution to the active radar so local ones always land.
+//! see [`fetch_active`], which joins nationwide NOAA map geometry to the active NWS bulletins.
 
 use crate::overlay::{
     for_each_feature, polygons_of, AlertInfo, FeatureKind, GeoFeature, StormMotion,
@@ -430,31 +430,86 @@ async fn get_alerts(client: &reqwest::Client, url: &str) -> anyhow::Result<Strin
 /// resolutions, and past a handful of saved locations the nationwide pass is the cheaper answer.
 const MAX_POINTS: usize = 8;
 
-/// Fetch active NWS alerts as overlay features. Inline-polygon alerts (tornado, severe, flash
-/// flood) come from the nationwide feed so they render anywhere the map is panned. Zone-only alerts
-/// (heat, advisories, marine — no inline polygon, just UGC zones) are resolved to their zone
-/// geometry; each `(lat, lon)` in `points` — the active radar, plus the user's saved markers — gets
-/// a `?point=` query so its own heat warning / advisory always resolves. The nationwide feed
-/// carries ~1800 zone URLs, far past any sane per-refresh cap, so an empty `points` (headless)
-/// falls back to a capped nationwide zone pass.
-///
-/// `// ponytail: capped at MAX_POINTS queries; a state or bbox query if someone saves more
-/// locations than that and misses advisories at the ones past the cap.`
-/// The active alerts that carry their own polygon, and nothing else.
-///
-/// [`fetch_active`] follows every zone-only alert to the zone geometry service, which is dozens of
-/// extra requests for shapes a rendered picture does not use — the warnings worth drawing over
-/// radar all ship a polygon in the feed itself.
+/// Fetch only active NWS alerts carrying their own polygon.
 pub async fn fetch_polygon_alerts(client: &reqwest::Client) -> anyhow::Result<Vec<GeoFeature>> {
     parse_alerts(&get_alerts(client, ALERTS_URL).await?)
 }
 
+// NOAA's county/zone layer supplies geometry missing from the NWS CAP feed. Fetch every page:
+// selecting a radar or a saved place must not restrict which alerts can appear on the map.
+const ZONE_MAP_URL: &str = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer/1/query?where=1%3D1&outFields=cap_id&geometryPrecision=4&maxAllowableOffset=0.002&orderByFields=objectid&resultRecordCount=1000&f=geojson";
+
+/// Attach each county/zone part to its current bulletin. Keep inline warning polygons intact;
+/// county geometry is only a fallback for alerts without geometry in the authoritative feed.
+fn parse_zone_map(body: &str, active: &serde_json::Value) -> anyhow::Result<Vec<GeoFeature>> {
+    let bulletins: std::collections::HashMap<_, _> = active["features"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|f| f.get("geometry").is_none_or(serde_json::Value::is_null))
+        .filter_map(|f| {
+            let props = f["properties"].as_object()?;
+            let alert = build_alert(props)?;
+            Some((alert.3.id.clone(), alert))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for_each_feature(body, |geom, props| {
+        let Some((kind, rgb, detail, alert)) = props
+            .get("cap_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| bulletins.get(id))
+        else { return; };
+        for poly in polygons_of(geom) {
+            out.push(GeoFeature {
+                rings: poly,
+                fill: [rgb[0], rgb[1], rgb[2], 45],
+                stroke: [rgb[0], rgb[1], rgb[2], 235],
+                kind: *kind,
+                title: alert.event.clone(),
+                detail: detail.clone(),
+                alert: Some(alert.clone()),
+            });
+        }
+    })?;
+    Ok(out)
+}
+
+async fn fetch_zone_map(client: &reqwest::Client, active: &str) -> anyhow::Result<Vec<GeoFeature>> {
+    let active = serde_json::from_str(active)?;
+    let mut out = Vec::new();
+    let mut offset = 0;
+    loop {
+        let body = get_alerts(client, &format!("{ZONE_MAP_URL}&resultOffset={offset}")).await?;
+        let page: serde_json::Value = serde_json::from_str(&body)?;
+        out.extend(parse_zone_map(&body, &active)?);
+        if page["exceededTransferLimit"].as_bool() != Some(true)
+            && page["properties"]["exceededTransferLimit"].as_bool() != Some(true)
+        {
+            break;
+        }
+        let count = page["features"].as_array().map_or(0, Vec::len);
+        anyhow::ensure!(count > 0, "nationwide alert geometry pagination made no progress");
+        offset += count;
+    }
+    Ok(out)
+}
+
+/// Fetch all active NWS polygons nationwide, including zone-only watches, advisories and
+/// statements. Local zone lookups remain a fallback when NOAA's bulk geometry feed is unavailable.
 pub async fn fetch_active(
     client: &reqwest::Client,
     points: &[(f64, f64)],
 ) -> anyhow::Result<Vec<GeoFeature>> {
     let body = get_alerts(client, ALERTS_URL).await?;
     let mut feats = parse_alerts(&body)?;
+    match fetch_zone_map(client, &body).await {
+        Ok(zones) => {
+            feats.extend(zones);
+            return Ok(feats);
+        }
+        Err(e) => log::warn!("nationwide alert geometry failed ({e}); resolving local zones"),
+    }
     let mut seen: std::collections::HashSet<String> = feats
         .iter()
         .filter_map(|f| f.alert.as_ref().map(|a| a.id.clone()))
@@ -482,6 +537,43 @@ pub async fn fetch_active(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nationwide_zone_geometry_keeps_all_parts_and_bulletins_without_replacing_inline_polygons() {
+        use serde_json::json;
+        let polygon = json!({"type":"Polygon","coordinates":[[[-80.,40.],[-79.,40.],[-79.,41.],[-80.,40.]]]});
+        let events = ["Flood Watch", "Flood Warning", "Wind Advisory", "Special Weather Statement"];
+        let mut active = Vec::new();
+        let mut zones = Vec::new();
+        for event in events {
+            active.push(json!({"type":"Feature","geometry":null,"properties":{
+                "id":event,"event":event,"headline":"Official headline","description":"Official details",
+                "areaDesc":"Far from the selected radar","expires":"2026-09-28T00:00:00Z"
+            }}));
+            // Two county parts of the same bulletin must both survive the join.
+            for _ in 0..2 {
+                zones.push(json!({"type":"Feature","geometry":polygon,"properties":{"cap_id":event}}));
+            }
+        }
+        active.push(json!({"type":"Feature","geometry":polygon,"properties":{"id":"inline","event":"Tornado Warning"}}));
+        for id in ["inline", "expired-or-unknown"] {
+            zones.push(json!({"type":"Feature","geometry":polygon,"properties":{"cap_id":id}}));
+        }
+        let active = json!({"type":"FeatureCollection","features":active});
+        let zones = json!({"type":"FeatureCollection","features":zones}).to_string();
+        let features = parse_zone_map(&zones, &active).unwrap();
+        assert_eq!(features.len(), 8);
+        for event in events {
+            let parts: Vec<_> = features.iter().filter(|f| f.title == event).collect();
+            assert_eq!(parts.len(), 2);
+            let alert = parts[0].alert.as_ref().unwrap();
+            assert_eq!(alert.headline, "Official headline");
+            assert_eq!(alert.description, "Official details");
+            assert!(alert.expires.is_some());
+        }
+        assert_eq!(parse_alerts(&active.to_string()).unwrap().len(), 1);
+        assert!(parse_zone_map(r#"{"error":{"message":"unavailable"}}"#, &active).is_err());
+    }
 
     #[test]
     fn parses_one_watch_bulletin_without_geometry() {

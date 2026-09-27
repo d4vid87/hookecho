@@ -235,6 +235,10 @@ pub fn parse_md(json: &str) -> anyhow::Result<Vec<(GeoFeature, Option<String>)>>
     for_each_feature(json, |geom, props| {
         let str_of = |k: &str| props.get(k).and_then(|v| v.as_str()).unwrap_or("");
         let name = str_of("name");
+        // SPC publishes a tiny placeholder polygon when no discussions are active.
+        if name.eq_ignore_ascii_case("NoArea") {
+            return;
+        }
         let title = if name.is_empty() {
             "Mesoscale Discussion".to_string()
         } else {
@@ -526,6 +530,12 @@ pub struct StormReport {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn no_active_discussions_placeholder_is_not_a_discussion() {
+        let empty = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"NoArea"},"geometry":{"type":"Polygon","coordinates":[[[-97.71,39.92],[-97.711,39.92],[-97.711,39.921],[-97.71,39.92]]]}}]}"#;
+        assert!(super::parse_md(empty).unwrap().is_empty());
+    }
+
     use super::*;
 
     #[test]
