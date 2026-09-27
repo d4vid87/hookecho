@@ -17,6 +17,14 @@ HookEcho opens in **Radar**: one map, one timeline, and a short menu. **Analyst*
 
 Click the gear for Settings in one step. **Ctrl+S** opens and focuses global search. **Escape** dismisses search or the open menu without changing modes.
 
+## Regional Clusters
+
+At national and regional zooms (below zoom 7), blue regional chips replace repeated polygon labels. Each chip counts unique visible bulletins, rather than county polygon pieces. Click it to browse the region's warnings, watches, advisories, special weather statements and mesoscale discussions, then open the full bulletin. Shared county edges inside the same bulletin are suppressed at wide zoom. All enabled hazard footprints remain on the map; priority-dock thresholds do not filter them. Emergency labels stay prominent.
+
+Zoom in for individual labels and tropical forecast timestamps. Radar sites remain selectable as small dots at wide zooms; the selected site's name stays visible. The existing layer controls, polygon inspection, tropical storm reader and single/compare views remain available.
+
+Outline meshes are cached per pane and viewport. New feeds, camera changes, scale changes and display-density changes invalidate the cache. Offscreen rings are rejected before projecting their vertices; source polygons and hit testing retain their original detail.
+
 ## Build an analysis view
 
 1. Click **Analyst**. On the first entry, the current radar map becomes pane 1.

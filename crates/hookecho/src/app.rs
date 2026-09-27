@@ -2979,6 +2979,7 @@ pub struct HookEchoApp {
     /// The currently-displayed, filtered feature set (hit-tested + tessellated).
     overlays: Vec<GeoFeature>,
     overlay_gen: u64,
+    field_atlas: crate::field_atlas::Cache,
     built_gen: u64,
     built_zoom_bucket: i32,
     built_theme: crate::settings::Theme,
@@ -4045,6 +4046,7 @@ impl HookEchoApp {
             probsevere_last_fetch: None,
             overlays: Vec::new(),
             overlay_gen: 0,
+            field_atlas: Default::default(),
             built_gen: u64::MAX,
             built_zoom_bucket: i32::MIN,
             built_theme: crate::settings::Theme::Dark,
@@ -6270,7 +6272,7 @@ impl HookEchoApp {
                 let is_current = self.views[idx].site.as_deref() == Some(s.id);
                 to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(16.0)
                     || ((is_current
-                        || (cam.zoom >= 5.0
+                        || (cam.zoom >= 7.0
                             && self.labels.was_shown(crate::labelplace::key(s.id))))
                         && radar_site_pill(p, prect, is_current).contains(pos))
             })
@@ -14175,12 +14177,8 @@ impl HookEchoApp {
             }
         }
 
-        crate::field_atlas::draw(&painter, &self.overlays, prect, cam.zoom,
-            crate::theme::overlay_stroke_scale(self.settings.theme), |lon, lat| {
-                let w = crate::render::mercator::lonlat_to_world(lon, lat);
-                let (sx, sy) = cam.world_to_screen(w, vp);
-                egui::pos2(prect.left() + sx, prect.top() + sy)
-            });
+        self.field_atlas.draw(ui, idx, self.overlay_gen, &self.overlays, prect, cam,
+            crate::theme::overlay_stroke_scale(self.settings.theme));
 
         // Storm-cell dots + SCIT forecast tracks.
         if self.filters.show_cells && self.cells_site.as_deref() == view.site.as_deref() {
@@ -15618,7 +15616,7 @@ impl HookEchoApp {
             // Sticky, for the same reason as the gauges above: a site id that wins and loses the
             // same collision on alternate frames is the flicker, not the collision.
             for returning in [true, false] {
-                let show_labels = cam.zoom >= 5.0;
+                let show_labels = cam.zoom >= 7.0;
                 for (s, w) in sites_in_world() {
                     if self.labels.was_shown(crate::labelplace::key(s.id)) != returning {
                         continue;
@@ -15634,6 +15632,10 @@ impl HookEchoApp {
                     } else {
                         egui::Color32::from_rgb(120, 190, 255)
                     };
+                    if cam.zoom < 7.0 && !is_current {
+                        painter.circle_filled(p, 2.2, egui::Color32::from_rgb(112, 154, 176));
+                        continue;
+                    }
                     painter.circle_filled(p, 8.0, egui::Color32::from_rgb(13, 28, 40));
                     painter.circle_stroke(p, 8.0, egui::Stroke::new(2.0, col));
                     painter.circle_filled(p, 2.5, col);
@@ -21091,6 +21093,21 @@ impl eframe::App for HookEchoApp {
         self.follow_badge(ctx);
         if !self.obs_mode {
             self.chase_hud(ctx);
+        }
+        if let Some(i) = self.field_atlas.show_list(ctx, self.overlay_gen, &self.overlays) {
+            if let Some(f) = self.overlays.get(i) {
+                if let Some(info) = &f.alert {
+                    self.detail = None;
+                    self.warning_popup = Some(ui::warning_window::WarningPopup {
+                        cards: vec![ui::warning_window::WarnCard { info: info.clone(), color: f.stroke }],
+                        selected: Some(0),
+                    });
+                } else {
+                    self.warning_popup = None;
+                    self.detail = Some(Detail { title:f.title.clone(), body:f.detail.clone(),
+                        color:f.stroke, image:None, link:None });
+                }
+            }
         }
         if let Some(popup) = &mut self.warning_popup {
             if !ui::warning_window::show(ctx, popup, &mut self.popovers) {

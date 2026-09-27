@@ -349,6 +349,8 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                     "path" | "footway" | "cycleway" | "pedestrian" => 15.0,
                     "minor" | "street" => 12.0,
                     "tertiary" => 10.0,
+                    "secondary" => 8.0,
+                    "primary" => 7.0,
                     _ => 0.0,
                 };
                 if tess_zoom < min_zoom {

@@ -13,7 +13,7 @@ use wxdata::tropical::{saffir_simpson, TropicalData, TropicalStorm};
 
 /// Below this zoom the map is a whole-basin view: dots and glyphs only, or the boxes cover the
 /// ocean they are describing.
-const CALLOUT_ZOOM: f32 = 3.5;
+const CALLOUT_ZOOM: f32 = 7.0;
 
 /// Callout background. Dark and near-opaque so it reads over radar, ocean, and light basemaps
 /// alike — the same weight as the cell-ETA boxes.
