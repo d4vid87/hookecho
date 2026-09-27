@@ -59,7 +59,13 @@ Priority display rules use separate advisory, watch, warning, and high-impact di
 limits around your saved home (or selected radar site). Warnings containing that point
 remain visible through these thresholds. Track filters use actual SCIT forecast error
 and scan age, with a configurable 15–60 minute projection; they do not infer official
-warnings or change notification delivery. Settings → Alerts exposes the same controls.
+warnings or change notification delivery. Settings → Alerts → On the radar exposes the
+same dock and track controls.
+
+Settings opens with six home cards. Alerts uses three tabs: **On the radar** for map
+visibility and display rules, **Notify me** for sound, severity and quiet hours, and
+**Delivery** for phone, chat, radio and background options. Close and Done remain
+accessible above and below the scrolling page.
 
 | Reflectivity | Velocity |
 | --- | --- |

@@ -7,6 +7,12 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Settings Home & Three Tabs - 2026-09-27 (rolling release)
+
+- Replace the settings sidebar with Settings Home: six task cards, focused pages, a home link, and a persistent Done button. Keep radar products, shortcuts, sync, advanced settings and help available.
+- Organize Alerts settings into On the radar, Notify me, and Delivery. Keep map visibility separate from nearby dock thresholds, sound/push severity, and integrations; retain all existing controls.
+- Keep drawer headers below both Quick Launch rows so Close remains accessible, including expanded desktop drawers.
+
 ## Quick Launch - 2026-09-27 (rolling release)
 
 - Replace the desktop's stacked navigation with Quick Launch: four Radar, Layers, Alerts and Tools cards, compact search and settings, and focused menus with a return to the menu home. Keep advanced controls and workspaces available.

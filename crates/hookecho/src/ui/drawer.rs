@@ -19,7 +19,8 @@ use egui::{pos2, vec2, Rect};
 /// The drawer's geometry on a desktop-sized screen. On a phone it takes the whole content rect,
 /// which is Material 3's answer for the compact width class and what the old `phone_surface` did.
 const X: f32 = 10.0;
-const TOP: f32 = 58.0;
+// Clear both Quick Launch rows; the drawer close button must never sit under them.
+const TOP: f32 = 120.0;
 const WIDTH: f32 = 380.0;
 /// Room along the bottom edge for the floating scrubber.
 const BOTTOM_CLEARANCE: f32 = 96.0;
@@ -254,7 +255,7 @@ impl Drawer {
 fn rects(ctx: &egui::Context, width: f32, expanded: bool) -> (Rect, Rect) {
     let full = ctx.content_rect();
     let (x, w, top, bottom) = if cfg!(target_os = "android") || expanded {
-        (full.left(), full.width(), full.top(), full.bottom())
+        (full.left(), full.width(), full.top() + if cfg!(target_os = "android") { 0.0 } else { TOP }, full.bottom())
     } else {
         (
             full.left() + X,
@@ -271,6 +272,26 @@ fn rects(ctx: &egui::Context, width: f32, expanded: bool) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_os = "android"))]
+    fn drawer_header_clears_navigation_in_both_sizes() {
+        let ctx = egui::Context::default();
+        for size in [vec2(1280.0, 720.0), vec2(1927.0, 1286.0), vec2(800.0, 600.0)] {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                for expanded in [false, true] {
+                    let (header, body) = rects(ui.ctx(), 760.0, expanded);
+                    assert!(header.top() >= 120.0, "keep the close button below both navigation rows");
+                    assert!(body.top() > header.bottom());
+                    assert!(body.bottom() <= size.y);
+                }
+            });
+        }
+    }
 
     #[test]
     fn closing_last_page_releases_panel() {

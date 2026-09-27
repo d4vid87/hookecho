@@ -90,6 +90,15 @@ pub fn track_visible(cell: &Cell, rules: &PriorityRules, now: DateTime<Utc>) -> 
         })
 }
 pub fn controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
+    dock_controls(ui, rules);
+    ui.separator();
+    track_controls(ui, rules);
+    if ui.button("Reset display defaults").clicked() {
+        *rules = PriorityRules::default();
+    }
+}
+
+pub fn dock_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
     ui.weak("Alert thresholds apply only to the priority dock. All active map alerts remain visible.");
     ui.weak("Local warnings stay in the dock. Sounds and notification rules are unchanged.");
     egui::ComboBox::from_label("Minimum dock category")
@@ -105,7 +114,9 @@ pub fn controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
             ui.add(egui::Slider::new(&mut rules.radii_mi[i], 0.0..=250.0).suffix(" mi"));
         });
     }
-    ui.separator();
+}
+
+pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
     ui.strong("Estimated storm tracks");
     ui.add(egui::Slider::new(&mut rules.track_age_min, 1..=15).text("Maximum age (min)"));
     ui.add(
@@ -120,9 +131,6 @@ pub fn controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
             }
         });
     ui.weak("Tracks with missing age, motion, or error stay out of the projection. Their detections remain available.");
-    if ui.button("Reset display defaults").clicked() {
-        *rules = PriorityRules::default();
-    }
 }
 
 #[cfg(test)]

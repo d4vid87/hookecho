@@ -1,4 +1,4 @@
-//! Focused settings pages with desktop navigation and a compact category picker.
+//! Settings Home cards lead to the existing focused settings pages.
 
 use crate::app::PaletteEntry;
 use crate::colormap::Palettes;
@@ -9,6 +9,8 @@ use wxdata::level2::Moment;
 #[derive(Default, PartialEq, Clone, Copy)]
 enum Tab {
     #[default]
+    Home,
+    More,
     Appearance,
     Radar,
     Products,
@@ -35,8 +37,88 @@ impl Tab {
         (Self::Help, "Help & setup", "More"),
     ];
     fn label(self) -> &'static str {
-        Self::ALL.iter().find(|(tab, _, _)| *tab == self).unwrap().1
+        match self {
+            Self::Home => "Settings home",
+            Self::More => "More settings",
+            _ => Self::ALL.iter().find(|(tab, _, _)| *tab == self).unwrap().1,
+        }
     }
+}
+
+/// A small set of task destinations; all existing controls remain on their focused pages.
+fn settings_home(ui: &mut egui::Ui, theme: Theme) -> Option<Tab> {
+    use crate::ui::a11y::Named as _;
+    use egui_phosphor::regular as ph;
+    let mut selected = None;
+    ui.heading("A radar that feels familiar.");
+    ui.weak("Choose what you’d like to change.");
+    ui.add_space(10.0);
+    let cards = [
+        (Tab::Appearance, "Theme, size & motion", ph::PALETTE, [44, 78, 133]),
+        (Tab::Radar, "Source, products & map", ph::BROADCAST, [35, 80, 82]),
+        (Tab::Alerts, "Map alerts & notices", ph::WARNING, [91, 65, 48]),
+        (Tab::Units, "Distance, wind & clock", ph::CLOCK, [68, 55, 96]),
+        (Tab::Workspaces, "Save a familiar setup", ph::SQUARES_FOUR, [44, 78, 133]),
+        (Tab::More, "Shortcuts, sync & help", ph::DOTS_THREE, [48, 63, 76]),
+    ];
+    let columns = if ui.available_width() >= 650.0 { 3 } else if ui.available_width() >= 420.0 { 2 } else { 1 };
+    let width = (ui.available_width() - 10.0 * (columns - 1) as f32) / columns as f32;
+    for row in cards.chunks(columns) {
+        ui.horizontal(|ui| {
+            for &(tab, subtitle, icon, fill) in row {
+                let mut text = egui::text::LayoutJob::default();
+                for (line, size, color) in [
+                    (format!("{icon}  {}\n", tab.label()), 16.0, egui::Color32::WHITE),
+                    (subtitle.to_owned(), 11.0, egui::Color32::from_rgb(218, 229, 239)),
+                ] {
+                    text.append(&line, 0.0, egui::TextFormat {
+                        font_id: egui::FontId::proportional(size), color, ..Default::default()
+                    });
+                }
+                if ui.add_sized([width, 80.0], egui::Button::new(text)
+                    .fill(egui::Color32::from_rgb(fill[0], fill[1], fill[2]))
+                    .corner_radius(10.0)).named(tab.label()).clicked() {
+                    selected = Some(tab);
+                }
+            }
+        });
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.weak(format!("Current theme · {}", theme.label()));
+        if ui.small_button("Change").clicked() { selected = Some(Tab::Appearance); }
+    });
+    selected
+}
+
+#[derive(Default, PartialEq, Clone, Copy)]
+enum AlertTab {
+    #[default]
+    Map,
+    Notify,
+    Delivery,
+}
+
+impl AlertTab {
+    const ALL: [(Self, &'static str); 3] = [
+        (Self::Map, "On the radar"),
+        (Self::Notify, "Notify me"),
+        (Self::Delivery, "Delivery"),
+    ];
+}
+
+fn alert_navigation(ui: &mut egui::Ui, tab: &mut AlertTab) {
+    let width = (ui.available_width() - 20.0) / 3.0;
+    ui.horizontal(|ui| {
+        for (value, label) in AlertTab::ALL {
+            let selected = *tab == value;
+            let mut button = egui::Button::new(label).selected(selected).corner_radius(8.0);
+            if selected {
+                button = button.fill(egui::Color32::from_rgb(79, 66, 110));
+            }
+            if ui.add_sized([width, 38.0], button).clicked() { *tab = value; }
+        }
+    });
 }
 
 /// What the app knows about the sync session, handed in so this window stays state-free.
@@ -61,6 +143,8 @@ pub enum SyncAction {
 pub struct SettingsWindow {
     pub open: bool,
     tab: Tab,
+    alert_tab: AlertTab,
+    pub map_changed: bool,
     prev_open: bool,
     /// Cached `.pal` file stems in the color-tables folder; rescanned on window/tab open.
     pal_stems: Vec<String>,
@@ -87,17 +171,23 @@ pub struct SettingsWindow {
 impl SettingsWindow {
     /// `palettes` is read-only here (for parse-error badges); edits go through `settings` and
     /// the app reloads tables via the settings dirty-diff.
+    #[allow(clippy::too_many_arguments)] // Settings and live map filters have separate owners.
     pub(crate) fn show(
         &mut self,
         ctx: &egui::Context,
         settings: &mut Settings,
+        filters: &mut crate::app::OverlayFilters,
         palettes: &Palettes,
         sync: SyncView,
         entries: &[PaletteEntry],
         drawer: &mut crate::ui::drawer::Drawer,
     ) -> Option<SyncAction> {
         let mut action = None;
+        self.map_changed = false;
         if self.open && !self.prev_open {
+            self.tab = Tab::Home;
+            self.alert_tab = AlertTab::Map;
+            self.rebinding = None;
             self.scanned = false; // rescan the folder each time the window opens
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -127,68 +217,59 @@ impl SettingsWindow {
             ui.spacing_mut().interact_size.y = 32.0;
             ui.spacing_mut().text_edit_width = 180.0;
             let previous = self.tab;
-            let wide = ui.available_width() >= 600.0 && ui.available_height() >= 560.0;
-            if !wide {
-                egui::ComboBox::from_id_salt("settings_category")
-                    .selected_text(self.tab.label())
-                    .width(ui.available_width())
-                    .show_ui(ui, |ui| {
-                        for (tab, label, _) in Tab::ALL {
-                            ui.selectable_value(&mut self.tab, tab, label);
-                        }
-                    });
-                ui.separator();
+            if self.tab == Tab::Alerts {
+                if ui.button("← Settings home").clicked() { self.tab = Tab::Home; }
+                alert_navigation(ui, &mut self.alert_tab);
+                ui.add_space(4.0);
             }
-            ui.horizontal_top(|ui| {
-                if wide {
-                    ui.vertical(|ui| {
-                        ui.set_width(168.0);
-                        let mut group = "";
-                        for (tab, label, section) in Tab::ALL {
-                            if section != group {
-                                if !group.is_empty() {
-                                    ui.add_space(12.0);
-                                }
-                                ui.weak(section);
-                                group = section;
-                            }
-                            if ui
-                                .add_sized(
-                                    [168.0, 36.0],
-                                    egui::Button::new(label).selected(self.tab == tab),
-                                )
-                                .clicked()
-                            {
-                                self.tab = tab;
-                            }
-                        }
-                    });
-                    ui.separator();
-                }
-                if self.tab != previous {
-                    self.rebinding = None;
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt(("settings_content", self.tab.label()))
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.vertical(|ui| {
+            let content_height = (ui.available_height() - 54.0).max(80.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), content_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("settings_content", self.tab.label(), self.alert_tab as u8))
+                        .auto_shrink([false, false])
+                        .max_height(content_height)
+                        .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.heading(self.tab.label());
-                            ui.add_space(8.0);
+                            if self.tab != Tab::Home && self.tab != Tab::Alerts {
+                                if ui.button("← Settings home").clicked() {
+                                    self.tab = Tab::Home;
+                                }
+                                ui.add_space(6.0);
+                                ui.heading(self.tab.label());
+                                ui.add_space(8.0);
+                            }
                             match self.tab {
+                                Tab::Home => {
+                                    if let Some(tab) = settings_home(ui, settings.theme) {
+                                        self.tab = tab;
+                                    }
+                                }
+                                Tab::More => {
+                                    for tab in [Tab::Hotkeys, Tab::Sync, Tab::Advanced, Tab::Help] {
+                                        if ui.add_sized([ui.available_width(), 44.0],
+                                            egui::Button::new(format!("{}  →", tab.label()))).clicked() {
+                                            self.tab = tab;
+                                        }
+                                    }
+                                }
                                 Tab::Appearance => appearance_tab(ui, settings),
                                 Tab::Radar => {
                                     settings_group(ui, "Radar defaults", |ui| {
                                         radar_defaults(ui, settings)
                                     });
                                     settings_group(ui, "Map", |ui| basemaps_tab(ui, settings));
+                                    if ui.button("Radar products & controls →").clicked() {
+                                        self.tab = Tab::Products;
+                                    }
                                     ui.collapsing("Radar palettes", |ui| {
                                         self.palettes_tab(ui, settings, palettes)
                                     });
                                 }
                                 Tab::Products => radar_products_tab(ui, settings),
-                                Tab::Alerts => alerts_tab(ui, settings),
+                                Tab::Alerts => self.map_changed |= alerts_tab(ui, settings, filters, self.alert_tab),
                                 Tab::Units => settings_group(ui, "Measurement & clock", |ui| {
                                     units_tab(ui, settings)
                                 }),
@@ -213,8 +294,20 @@ impl SettingsWindow {
                                 Tab::Help => help_tab(ui, &mut self.run_setup, &mut self.run_tour),
                             }
                         });
-                    });
+                },
+            );
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.weak("Changes save automatically");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add_sized([92.0, 34.0], egui::Button::new("Done")).clicked() {
+                        open = false;
+                    }
+                });
             });
+            if self.tab != previous {
+                self.rebinding = None;
+            }
         });
         self.capturing = self.rebinding.is_some() && open;
         if !open {
@@ -1280,17 +1373,60 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
         });
 }
 
-/// Everything that fires when weather happens: sounds, push, proximity alarms.
-fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
-    egui::CollapsingHeader::new("Priority dock & map display").show(ui, |ui| {
-        super::priority::controls(ui, &mut settings.priority_rules);
-    });
-    ui.collapsing("Sounds & volume", |ui| sound_picker(ui, settings));
-    egui::CollapsingHeader::new("When to interrupt").default_open(true).show(ui, |ui| {
+/// Presentation only: map visibility, interruption rules and delivery remain independent.
+fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings, filters: &mut crate::app::OverlayFilters, tab: AlertTab) -> bool {
+    match tab {
+        AlertTab::Map => alert_map_settings(ui, settings, filters),
+        AlertTab::Notify => { alert_notification_settings(ui, settings); false }
+        AlertTab::Delivery => { alert_delivery_settings(ui, settings); false }
+    }
+}
 
+fn alert_map_settings(ui: &mut egui::Ui, settings: &mut Settings, filters: &mut crate::app::OverlayFilters) -> bool {
+    let mut changed = false;
+    settings_group(ui, "On your radar", |ui| {
+        ui.weak("Map visibility is separate from dock distance and notification rules.");
+        changed |= super::style::toggle(ui, &mut filters.show_alerts, "Official alert areas").changed();
+        ui.small("Warnings, watches, advisories and statements");
+        changed |= super::style::toggle(ui, &mut filters.show_watches, "SPC watch boxes").changed();
+        ui.collapsing("Filter alert areas by hazard", |ui| {
+            for category in wxdata::alerts::Category::ALL {
+                changed |= super::style::toggle(ui, &mut filters.alert_cats[category.index()], category.label()).changed();
+            }
+        });
+    });
+    ui.collapsing("Priority dock · category & distance", |ui| {
+        super::priority::dock_controls(ui, &mut settings.priority_rules);
+    });
+    ui.collapsing("Storm tracks · estimated projections", |ui| {
+        super::style::toggle(ui, &mut filters.show_tracks, "Show storm tracks");
+        super::priority::track_controls(ui, &mut settings.priority_rules);
+        if ui.button("Reset dock & track defaults").clicked() {
+            settings.priority_rules = Default::default();
+        }
+    });
+    changed
+}
+
+fn alert_notification_settings(ui: &mut egui::Ui, settings: &mut Settings) {
+    ui.weak("Choose what interrupts you. Map alerts remain independent.");
+    egui::ComboBox::from_label("Notify me for")
+        .selected_text(["Every warning", "Considerable and up", "Escalated only"][usize::from(settings.alert_min_escalation.min(2))])
+        .show_ui(ui, |ui| {
+            for (tier, label) in [(0, "Every warning"), (1, "Considerable and up"), (2, "Escalated only")] {
+                ui.selectable_value(&mut settings.alert_min_escalation, tier, label);
+            }
+        });
+    ui.weak("Quieter warnings still banner and still show in the alert list.");
+    super::style::toggle(ui, &mut settings.alert_sound, "Alert sounds");
+    if settings.mute_alerts {
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("All alert audio is currently muted.");
+            if ui.button("Unmute audio").clicked() { settings.mute_alerts = false; }
+        });
+    }
     ui.add_enabled_ui(!cfg!(target_os = "android"), |ui| {
-        let r = ui
-            .checkbox(&mut settings.desktop_notify, "Post alerts to the desktop")
+        let r = super::style::toggle(ui, &mut settings.desktop_notify, "Desktop notifications")
             .on_hover_text(
                 "Use the system notification centre, so an alert arrives with the window \
                  behind something else",
@@ -1301,35 +1437,19 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             crate::notify::ask_permission();
         }
     });
-    ui.checkbox(&mut settings.alert_follow_gps, "Alert where I am, too")
-        .on_hover_text(
-            "While a GPS fix is coming in, your own position joins the saved locations the \
-             lightning and rotation alerts watch. Nothing is saved or shared.",
-        );
     ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut settings.quiet_hours, "Quiet hours");
-        ui.add_enabled_ui(settings.quiet_hours, |ui| {
+        if settings.quiet_hours {
             ui.add(egui::DragValue::new(&mut settings.quiet_start_hour).range(0..=23));
             ui.label("to");
             ui.add(egui::DragValue::new(&mut settings.quiet_end_hour).range(0..=23));
             ui.weak("local");
-        });
-    });
-    ui.weak(
-        "Holds sounds and pushes between those hours. Tornado Emergency, PDS and destructive \
-         warnings still come through — that tier is what quiet hours is for.",
-    );
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Push and sound only for:");
-        for (tier, label) in [
-            (0u8, "Every warning"),
-            (1, "Considerable and up"),
-            (2, "Escalated only"),
-        ] {
-            ui.selectable_value(&mut settings.alert_min_escalation, tier, label);
         }
     });
-    ui.weak("Quieter warnings still banner and still show in the alert list.");
+    ui.weak(
+        "Quiet hours pause ordinary sounds and pushes. Tornado Emergency, PDS and destructive warnings still come through.",
+    );
+    ui.collapsing("Group repeated notifications", |ui| {
     ui.horizontal_wrapped(|ui| {
         ui.label("Roll up after");
         ui.add(
@@ -1345,10 +1465,66 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         );
     });
     ui.weak(
-        "On an outbreak day, pushes past that rate collapse into one rolling summary instead of          one buzz per warning. 0 turns it off; escalated warnings always push as themselves.",
+        "Group ordinary pushes into a summary after this limit. Set 0 to disable grouping; escalated warnings are always sent individually.",
     );
 
     });
+    ui.collapsing("Sounds & volume", |ui| sound_picker(ui, settings));
+    ui.collapsing("Spoken warnings", |ui| {
+    if ui.button("Stop speech").clicked() {
+        crate::speech::stop();
+    }
+    ui.small("Reads warnings within 30 miles of Home. Muting alerts also mutes speech.");
+    #[cfg(target_arch = "wasm32")]
+    {
+        ui.small("Browser voices require activation each session. Speech is not available when this page is closed.");
+        if ui.button("Enable spoken alerts").clicked() {
+            settings.speak_warnings = true;
+            crate::speech::enable();
+            speak_test(settings);
+        }
+    }
+    ui.checkbox(&mut settings.speak_warnings, "Read new warnings aloud")
+        .on_hover_text(
+            "The tone first, then the words: which counties, the towns in the path, where it sits \
+             from your saved place, and what to do \u{2014} for when your eyes are on the road",
+        );
+    let speech_status = crate::speech::status();
+    if !speech_status.is_empty() {
+        ui.colored_label(egui::Color32::from_rgb(240, 190, 90), &speech_status);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if speech_status.starts_with("Amy unavailable") && ui.button("Retry Amy").clicked() {
+        crate::speech::retry();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.weak("Bundled Piper Amy is the default. A custom Piper path below overrides it.");
+    #[cfg(target_arch = "wasm32")]
+    ui.weak("Piper Amy prepares locally after the map starts; speech stays off if it cannot load.");
+    // Hearing it once beats reading three settings and waiting for weather to find out that the
+    // engine was never installed.
+    if ui
+        .button("\u{1f50a} Speak a test warning")
+        .on_hover_text("Plays the emergency tone and reads a made-up tornado warning")
+        .clicked()
+    {
+        speak_test(settings);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if !cfg!(target_os = "android") {
+        piper_row(ui, settings);
+    }
+
+    });
+}
+
+fn alert_delivery_settings(ui: &mut egui::Ui, settings: &mut Settings) {
+    ui.weak("Connect only the destinations you use.");
+    ui.checkbox(&mut settings.alert_follow_gps, "Alert where I am, too")
+        .on_hover_text(
+            "While a GPS fix is coming in, your own position joins the saved locations the \
+             lightning and rotation alerts watch. Nothing is saved or shared.",
+        );
     ui.collapsing("Push notifications (ntfy.sh)", |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.label("Topic:");
@@ -1541,52 +1717,6 @@ fn alerts_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 url: String::new(),
             });
         }
-    });
-    ui.collapsing("Spoken warnings", |ui| {
-    if ui.button("Stop speech").clicked() {
-        crate::speech::stop();
-    }
-    ui.small("Reads warnings within 30 miles of Home. Muting alerts also mutes speech.");
-    #[cfg(target_arch = "wasm32")]
-    {
-        ui.small("Browser voices require activation each session. Speech is not available when this page is closed.");
-        if ui.button("Enable spoken alerts").clicked() {
-            settings.speak_warnings = true;
-            crate::speech::enable();
-            speak_test(settings);
-        }
-    }
-    ui.checkbox(&mut settings.speak_warnings, "Read new warnings aloud")
-        .on_hover_text(
-            "The tone first, then the words: which counties, the towns in the path, where it sits \
-             from your saved place, and what to do \u{2014} for when your eyes are on the road",
-        );
-    let speech_status = crate::speech::status();
-    if !speech_status.is_empty() {
-        ui.colored_label(egui::Color32::from_rgb(240, 190, 90), &speech_status);
-    }
-    #[cfg(target_arch = "wasm32")]
-    if speech_status.starts_with("Amy unavailable") && ui.button("Retry Amy").clicked() {
-        crate::speech::retry();
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.weak("Bundled Piper Amy is the default. A custom Piper path below overrides it.");
-    #[cfg(target_arch = "wasm32")]
-    ui.weak("Piper Amy prepares locally after the map starts; speech stays off if it cannot load.");
-    // Hearing it once beats reading three settings and waiting for weather to find out that the
-    // engine was never installed.
-    if ui
-        .button("\u{1f50a} Speak a test warning")
-        .on_hover_text("Plays the emergency tone and reads a made-up tornado warning")
-        .clicked()
-    {
-        speak_test(settings);
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    if !cfg!(target_os = "android") {
-        piper_row(ui, settings);
-    }
-
     });
     ui.collapsing("Proximity alarms", |ui| {
     ui.checkbox(
@@ -1787,6 +1917,46 @@ fn alert_health(ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alert_tabs_preserve_preferences_and_map_visibility() {
+        for width in [320.0, 720.0] {
+            for (tab, _) in AlertTab::ALL {
+                let ctx = egui::Context::default();
+                let mut settings = Settings { alert_min_escalation: 2, ..Default::default() };
+                let before = serde_json::to_value(&settings).unwrap();
+                let mut filters = crate::app::OverlayFilters::default();
+                for _ in 0..3 {
+                    let _ = ctx.run_ui(Default::default(), |ui| {
+                        ui.set_width(width);
+                        let mut selected = tab;
+                        alert_navigation(ui, &mut selected);
+                        assert!(selected == tab);
+                        assert!(!alerts_tab(ui, &mut settings, &mut filters, tab));
+                        assert!(ui.min_rect().width() <= width + 1.0, "alert page overflow: {:?}", ui.min_rect());
+                    });
+                }
+                assert_eq!(serde_json::to_value(&settings).unwrap(), before);
+                assert!(filters.show_alerts && filters.show_watches && filters.show_tracks);
+                assert_eq!(filters.alert_cats, [true; 6]);
+            }
+        }
+    }
+
+    #[test]
+    fn home_cards_fit_compact_and_desktop_widths() {
+        assert!(SettingsWindow::default().tab == Tab::Home);
+        for width in [300.0, 480.0, 720.0] {
+            let ctx = egui::Context::default();
+            for _ in 0..3 {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    ui.set_width(width);
+                    assert!(settings_home(ui, Theme::Dark).is_none());
+                    assert!(ui.min_rect().width() <= width + 1.0);
+                });
+            }
+        }
+    }
 
     #[test]
     fn focused_pages_fit_a_phone_without_changing_preferences() {

@@ -20458,11 +20458,15 @@ impl eframe::App for HookEchoApp {
         let sync_action = self.settings_window.show(
             ctx,
             &mut self.settings,
+            &mut self.filters,
             &self.palettes,
             sync_view,
             &entries,
             &mut self.drawer,
         );
+        if std::mem::take(&mut self.settings_window.map_changed) {
+            self.rebuild_overlays();
+        }
         self.capture_key = self.settings_window.capturing;
         if std::mem::take(&mut self.settings_window.run_setup) {
             self.firstrun.start();
