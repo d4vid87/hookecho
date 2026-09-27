@@ -488,7 +488,7 @@ pub struct Settings {
     pub alert_min_escalation: u8,
     #[serde(default)]
     pub priority_rules: PriorityRules,
-    /// Marine/coastal products explicitly enabled by the user; absent in older installs = off.
+    /// Optional alert products explicitly enabled by the user; absent in older installs = off.
     #[serde(default)]
     pub optional_alert_events: Vec<String>,
     /// Alerts inside `alert_rollup_window_min` before pushes collapse into one rolling summary.

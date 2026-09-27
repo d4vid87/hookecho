@@ -1395,7 +1395,7 @@ fn alert_map_settings(ui: &mut egui::Ui, settings: &mut Settings, filters: &mut 
             }
         });
     });
-    ui.collapsing("Marine & coastal alerts · optional", |ui| {
+    ui.collapsing("Optional alert types", |ui| {
         ui.weak("Off by default. Turn on a type to load it on your radar.");
         for event in wxdata::alerts::OPTIONAL_EVENTS {
             let mut enabled = settings.optional_alert_events.iter().any(|value| value == event);

@@ -12,8 +12,8 @@ const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 /// weather.gov requires a User-Agent identifying the app + a contact.
 pub const USER_AGENT: &str = "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)";
 
-/// Optional marine/coastal products. Other event types remain enabled.
-pub const OPTIONAL_EVENTS: [&str; 9] = [
+/// Opt-in alert products. Other event types remain enabled.
+pub const OPTIONAL_EVENTS: [&str; 10] = [
     "Small Craft Advisory",
     "Gale Warning",
     "Hazardous Seas Warning",
@@ -23,6 +23,7 @@ pub const OPTIONAL_EVENTS: [&str; 9] = [
     "Beach Hazards Statement",
     "Coastal Flood Statement",
     "High Surf Advisory",
+    "Flood Watch",
 ];
 
 pub fn event_enabled(event: &str, enabled_optional: &[String]) -> bool {
@@ -592,7 +593,7 @@ mod tests {
     fn optional_events_are_filtered_before_inline_and_zone_geometry() {
         use serde_json::json;
         let retained = ["Tornado Warning", "Severe Thunderstorm Warning", "Flood Warning",
-            "Flood Watch", "High Surf Warning", "Special Marine Warning",
+            "Flash Flood Warning", "High Surf Warning", "Special Marine Warning",
             "Special Weather Statement", "Tornado Watch"];
         let polygon = json!({"type":"Polygon","coordinates":[[[-80.,40.],[-79.,40.],[-79.,41.],[-80.,40.]]]});
         let events: Vec<_> = OPTIONAL_EVENTS.into_iter().chain(retained).collect();
@@ -608,7 +609,7 @@ mod tests {
         }
         let feed = json!({"type":"FeatureCollection", "features":features}).to_string();
         let zones = json!({"type":"FeatureCollection", "features":zones}).to_string();
-        for enabled in [vec![], vec!["Gale Warning".to_owned()]] {
+        for enabled in [vec![], vec!["Gale Warning".to_owned()], vec!["Flood Watch".to_owned()]] {
             let excluded: Vec<_> = OPTIONAL_EVENTS.into_iter().filter(|e| !event_enabled(e, &enabled)).collect();
             let body = filter_events(&feed, &excluded).unwrap();
             let inline = parse_alerts(&body).unwrap();
