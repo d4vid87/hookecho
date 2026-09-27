@@ -253,9 +253,8 @@ fn health_popup(ui: &mut egui::Ui, health: &SourceHealth) {
     }
 }
 
-fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool) -> Hit {
+fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool, glass: bool) -> Hit {
     let on = e.on.unwrap_or(false);
-    let glass = true;
     let (fg, bg) = if on {
         (
             accent,
@@ -479,6 +478,35 @@ fn active_row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> Option<Pa
             }
         });
     });
+    chosen
+}
+
+/// Focused Context-bar catalog; shares actions, source health and glossary with the full browser.
+pub(crate) fn context_catalog(ui: &mut egui::Ui, entries: &[PaletteEntry], tools: bool, accent: Color32) -> Option<PaletteAction> {
+    let mut chosen = None;
+    let categories: &[&str] = if tools { &["Tools"] } else { &["National", "Severe", "Obs", "Models", "Reference", "MRMS"] };
+    for &cat in categories {
+        let mut rows: Vec<_> = entries.iter().filter(|e| e.category == cat).collect();
+        rows.sort_by_key(|e| (!e.favorite, !e.common));
+        if rows.is_empty() { continue; }
+        let everyday = |e: &PaletteEntry| matches!(e.action, PaletteAction::AllTilts) || (e.common && matches!(e.action, PaletteAction::Tool(_)));
+        let mut show_rows = |ui: &mut egui::Ui, advanced: bool| {
+            for entry in rows.iter().filter(|e| !tools || everyday(e) != advanced) {
+                let hit = row(ui, entry, accent, false, false);
+                if hit.clicked { chosen = Some(entry.action); }
+                if let Some(term) = hit.explain { chosen = Some(PaletteAction::Explain(term)); }
+                if let Some(layer) = hit.favorite { chosen = Some(PaletteAction::ToggleFavorite(layer)); }
+                ui.add_space(4.0);
+            }
+        };
+        if tools {
+            show_rows(ui, false);
+            egui::CollapsingHeader::new("More tools & commands").id_salt("context_more_tools").show(ui, |ui| show_rows(ui, true));
+        } else {
+            egui::CollapsingHeader::new(category_name(cat)).id_salt(("context_category",cat)).default_open(false).show(ui, |ui| show_rows(ui, false));
+            ui.add_space(8.0);
+        }
+    }
     chosen
 }
 
@@ -751,7 +779,7 @@ pub(crate) fn body(
                 for i in &order {
                     // No dragging in search results: the order you're looking at is the ranking,
                     // not the list you'd be reordering.
-                    let hit = row(ui, &entries[*i], accent, false);
+                    let hit = row(ui, &entries[*i], accent, false, true);
                     if hit.clicked {
                         chosen = Some(entries[*i].action);
                     }
@@ -868,7 +896,7 @@ pub(crate) fn body(
                         favorite,
                         explain,
                         resp,
-                    } = row(ui, &entries[i], accent, true);
+                    } = row(ui, &entries[i], accent, true, true);
                     if clicked {
                         chosen = Some(entries[i].action);
                     }

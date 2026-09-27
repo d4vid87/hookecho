@@ -99,8 +99,13 @@ impl HookEchoApp {
         let mut hide = false;
         // Height budget: the search pill above, the scrubber pill below (which is centred and
         // grows with the window, so on a narrow one it would otherwise run under this panel).
-        let panel_top = PANEL_TOP + if self.analyst_open { 54.0 } else { 0.0 };
-        let max_h = (self.chrome_rect.height() - panel_top - SCRUBBER_CLEARANCE).max(160.0);
+        let context_bar = !phone(ctx) && !self.analyst_open;
+        let all_id = egui::Id::new("context_all_controls");
+        let mut all_controls = ctx.data_mut(|d| d.get_temp::<bool>(all_id).unwrap_or(false));
+        // Global search always uses the complete registry, even after a focused menu or settings page.
+        if context_bar && focus_search { all_controls = true; settings_page = None; }
+        let panel_top = if context_bar { 68.0 } else { PANEL_TOP + if self.analyst_open { 54.0 } else { 0.0 } };
+        let max_h = (self.chrome_rect.height() - panel_top - if context_bar { 30.0 } else { SCRUBBER_CLEARANCE }).max(160.0);
         // Read before the body closure takes `&mut self`.
         let chrome = self.chrome_rect;
         // One body, two presentations: a floating card beside the map on a desktop, a modal
@@ -172,6 +177,32 @@ impl HookEchoApp {
             }
             (if sheets_layout { egui::Frame::NONE } else { crate::ui::style::glass(ui, 250) }).show(ui, |ui| {
                 if sheets_layout { ui.spacing_mut().interact_size.y = 48.0; }
+                if context_bar && settings_page.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.heading(if all_controls { if query.is_empty() { "All controls" } else { "Search" } } else { match section { PanelSection::Overlays => "Weather layers", PanelSection::Alerts => "Alerts", PanelSection::Tools => "Analysis tools", PanelSection::Radar => "Radar" } });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("×").named("Close menu").clicked() { hide = true; }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    if all_controls && ui.button("‹ Back to focused menu").clicked() { all_controls = false; }
+                    if !all_controls && matches!(section, PanelSection::Overlays | PanelSection::Tools) {
+                        chosen = ui::layers_panel::context_catalog(ui, &entries, section == PanelSection::Tools, accent);
+                        ui.separator();
+                        ui.horizontal_wrapped(|ui| {
+                            ui.menu_button("Workspaces", |ui| {
+                                if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) { chosen = Some(action); ui.close(); }
+                            });
+                            if ui.button("Map settings").clicked() { settings_page = Some("Map settings"); }
+                            if ui.button("Share").clicked() {
+                                settings_page = Some("Preferences");
+                                ctx.data_mut(|d| d.insert_temp(egui::Id::new("preferences_section"), "Share"));
+                            }
+                            if ui.button("All controls").clicked() { all_controls = true; }
+                        });
+                        return;
+                    }
+                }
                 if let Some(page) = settings_page.filter(|_| !alerts_tab) {
                     let section_id = egui::Id::new("preferences_section");
                     let section = if page == "Preferences" {
@@ -271,7 +302,7 @@ impl HookEchoApp {
                     }
                     return;
                 }
-                if section == PanelSection::Overlays {
+                if section == PanelSection::Overlays && !context_bar {
                     if let Some(action) = ui::layers_panel::primary_controls(
                         ui, &entries, self.filters.outlook_day, self.filters.outlook_kind, self.analyst_open,
                     ) { chosen = Some(action); }
@@ -480,7 +511,7 @@ impl HookEchoApp {
         } else {
             let panel = egui::Area::new(egui::Id::new("panel"))
                 .constrain_to(chrome)
-                .anchor(egui::Align2::LEFT_TOP, egui::vec2(PANEL_X, panel_top))
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(if context_bar { 132.0 } else { PANEL_X }, panel_top))
                 .show(ctx, |ui| {
                     ui.set_width(if phone(ctx) {
                         crate::ui::m3::RAIL_W
@@ -497,7 +528,7 @@ impl HookEchoApp {
                 });
             self.mobile_occlusion.push(panel.response.rect);
         }
-        ctx.data_mut(|d| d.insert_temp(settings_id, settings_page));
+        ctx.data_mut(|d| { d.insert_temp(settings_id, settings_page); d.insert_temp(all_id, all_controls); });
         self.panel_section = section;
         self.show_alert_panel = section == PanelSection::Alerts;
         if sheets_layout && section == PanelSection::Tools && !hide && !sheet_close {
@@ -551,7 +582,7 @@ impl HookEchoApp {
 
     /// Fixed mode, section, and search controls remain reachable above the scrolling panel.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
-        if !phone(ctx) && !self.panel_open && !self.drawer.is_open() && !self.analyst_open {
+        if !phone(ctx) && !self.analyst_open {
             self.clearview_controls(ctx);
             return;
         }

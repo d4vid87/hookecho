@@ -77,12 +77,13 @@ impl HookEchoApp {
         let mut loop_frames = self.settings.live_loop_frames;
         let narrow = super::overlay::compact(ctx);
         let phone_landscape = narrow && self.chrome_rect.width() > self.chrome_rect.height();
-        let compact_live = narrow;
+        let corner = !narrow && !self.analyst_open;
+        let compact_live = narrow || corner;
         // Where the scrubber lands, for the tour's spotlight (same reason: no `self` in there).
         let mut scrub_rect = None;
         // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
         // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
-        let width = if phone_landscape { (self.chrome_rect.width() * 0.5 - 20.0).max(220.0) } else { (self.chrome_rect.width() - 160.0)
+        let width = if corner { super::clearview::CORNER_WIDTH - 22.0 } else if phone_landscape { (self.chrome_rect.width() * 0.5 - 20.0).max(220.0) } else { (self.chrome_rect.width() - 160.0)
             .clamp(420.0, if narrow { 420.0 } else { 520.0 })
             .min(self.chrome_rect.width() - 16.0) };
         // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
@@ -90,11 +91,11 @@ impl HookEchoApp {
         let (dvr, rain) = if narrow { (0, None) } else { (dvr, rain) };
         let live_window = self.views[self.active].timeline.live_window;
         let was_cut_playback = self.views[self.active].timeline.cut_playback;
-        egui::Area::new(egui::Id::new("scrubber"))
+        let area = egui::Area::new(egui::Id::new("scrubber"))
             .constrain_to(self.chrome_rect)
             .anchor(
-                if phone_landscape { egui::Align2::LEFT_BOTTOM } else { egui::Align2::CENTER_BOTTOM },
-                egui::vec2(if phone_landscape { 10.0 } else { 0.0 }, if narrow { -84.0 } else { -24.0 }),
+                if corner { egui::Align2::RIGHT_BOTTOM } else if phone_landscape { egui::Align2::LEFT_BOTTOM } else { egui::Align2::CENTER_BOTTOM },
+                egui::vec2(if corner { -super::clearview::CORNER_RIGHT } else if phone_landscape { 10.0 } else { 0.0 }, if narrow { -84.0 } else { -super::clearview::CORNER_BOTTOM }),
             )
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 252)
@@ -105,7 +106,7 @@ impl HookEchoApp {
                     .show(ui, |ui| {
                 ui.set_width(width);
                 if compact_live {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(if corner { 3.0 } else { 4.0 }, 0.0);
                 }
                 let t = &mut self.views[self.active].timeline;
                 if t.slot_count() > 0 {
@@ -118,7 +119,7 @@ impl HookEchoApp {
                     if !narrow {
                         ui.label(
                             egui::RichText::new(&site)
-                                .size(crate::ui::style::FONT_BASE)
+                                .size(if corner { 11.0 } else { crate::ui::style::FONT_BASE })
                                 .strong()
                                 .color(egui::Color32::from_gray(238)),
                         );
@@ -131,14 +132,14 @@ impl HookEchoApp {
                             egui::Color32::from_gray(225)
                         };
                         ui.add(
-                            egui::Button::new(egui::RichText::new(glyph).size(if primary && !narrow { 20.0 } else { 16.0 }).color(fg))
+                            egui::Button::new(egui::RichText::new(glyph).size(if primary && !compact_live { 20.0 } else { 16.0 }).color(fg))
                                 .min_size(egui::vec2(
-                                    if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
-                                    if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
+                                    if corner { if primary { 28.0 } else { 24.0 } } else if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
+                                    if corner { if primary { 28.0 } else { 24.0 } } else if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
                                 ))
-                                .fill(if primary && !narrow { accent.gamma_multiply(0.28) } else { egui::Color32::TRANSPARENT })
+                                .fill(if primary && !compact_live { accent.gamma_multiply(0.28) } else { egui::Color32::TRANSPARENT })
                                 .corner_radius(24.0)
-                                .stroke(if primary && !narrow { egui::Stroke::new(1.0, accent) } else { egui::Stroke::NONE }),
+                                .stroke(if primary && !compact_live { egui::Stroke::new(1.0, accent) } else { egui::Stroke::NONE }),
                         )
                         .named_toggle(name, on)
                         .clicked()
@@ -158,7 +159,7 @@ impl HookEchoApp {
                     if btn(ui, ph::SKIP_FORWARD, false, "Next frame") {
                         t.step_cut(1);
                     }
-                    let clock_size = egui::vec2(if narrow { 100.0 } else { (ui.available_width() - 175.0).max(125.0) }, if narrow { 28.0 } else { 38.0 });
+                    let clock_size = egui::vec2(if corner { 90.0 } else if narrow { 100.0 } else { (ui.available_width() - 175.0).max(125.0) }, if compact_live { 28.0 } else { 38.0 });
                     ui.allocate_ui_with_layout(
                         clock_size,
                         egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center),
@@ -187,7 +188,7 @@ impl HookEchoApp {
                                 .or_else(|| latest_cut.filter(|_| t.following && !t.playing))
                                 .or_else(|| t.current().and_then(|id| id.date_time()))
                                 .map(|d| match tz {
-                                    Some(tz) if narrow || ui.available_width() < 190.0 => {
+                                    Some(tz) if compact_live || ui.available_width() < 190.0 => {
                                         d.with_timezone(&tz).format("%-I:%M %p").to_string()
                                     }
                                     _ => crate::timefmt::fmt_clock(d, tz, t.cut_playback),
@@ -196,7 +197,7 @@ impl HookEchoApp {
                         };
                         ui.add_sized(clock_size, egui::Label::new(
                             egui::RichText::new(readout)
-                                .size(if narrow { 15.0 } else { 22.0 })
+                                .size(if corner { 18.0 } else if narrow { 15.0 } else { 22.0 })
                                 .strong()
                                 .color(egui::Color32::from_gray(238)),
                         ));
@@ -229,14 +230,14 @@ impl HookEchoApp {
                     } else {
                         (
                             egui::Color32::from_gray(150),
-                            if narrow { "Archive".to_string() } else { format!("Archive {}", t.date.format("%m/%d")) },
+                            if compact_live { "Archive".to_string() } else { format!("Archive {}", t.date.format("%m/%d")) },
                             "Scrubbed to an archive day. Click to jump back to live.",
                         )
                     };
                     let badge = ui.add(
                         egui::Button::new(
                             egui::RichText::new(format!("● {text}"))
-                                .size(12.0)
+                                .size(if corner { 10.0 } else { 12.0 })
                                 .strong()
                                 .color(col),
                         )
@@ -387,7 +388,7 @@ impl HookEchoApp {
                         // top of each other. Scrubbed to the archive, the badge already carries
                         // the date; the age only earns its place while the timeline is live.
                         let age = match (&age, t.following) {
-                            _ if narrow => &None,
+                            _ if compact_live => &None,
                             (Some(_), false) if ui.available_width() < 150.0 => &None,
                             _ => &age,
                         };
@@ -397,7 +398,7 @@ impl HookEchoApp {
                                     .size(crate::ui::style::FONT_SM)
                                     .color(egui::Color32::from_gray(150)),
                             );
-                        } else if loading && !narrow {
+                        } else if loading && !compact_live {
                             ui.label(
                                 egui::RichText::new("loading\u{2026}")
                                     .size(crate::ui::style::FONT_SM)
@@ -409,7 +410,7 @@ impl HookEchoApp {
                 if let Some(rect) = &mut scrub_rect {
                     *rect = rect.union(row.response.rect);
                 }
-                if narrow {
+                if compact_live {
                     let status = if !t.following {
                         t.date.format("%Y-%m-%d").to_string()
                     } else {
@@ -422,6 +423,9 @@ impl HookEchoApp {
                 }
                 });
             });
+        if corner {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("corner_scrubber_rect"), area.response.rect));
+        }
         self.settings.live_loop_frames = loop_frames;
         if was_cut_playback && !self.views[self.active].timeline.cut_playback {
             self.views[self.active].cut_selection = None;

@@ -7,6 +7,12 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Context bar - 2026-09-26 (rolling release)
+
+- Compact, content-sized Radar / Layers / Alerts / Tools navigation stays available while a menu is open. Search and Settings remain one click away; selecting the current section closes it.
+- Focused layer and analysis menus reuse the existing action registry, with source health, favorites, glossary links, workspaces, map settings and sharing preserved. All controls opens the full catalog and advanced options.
+- Priority dock and radar playback form a matching-width bottom-right stack, leaving the radar center clear. The existing play/pause, frame steps, scrubber, live/archive state and playback settings remain functional. Analyst and phone layouts keep their existing arrangements.
+
 ## Priority dock - 2026-09-26 (rolling release)
 
 - The Clearview map now leads with one relevant advisory, watch, warning, or high-impact bulletin above the compact timeline. Open its official text, the full alert list in view, storm tracks, or display rules from the dock.

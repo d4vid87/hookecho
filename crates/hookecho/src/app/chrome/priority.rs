@@ -66,7 +66,7 @@ impl HookEchoApp {
             self.rebuild_overlays();
         }
     }
-    pub(super) fn priority_dock(&mut self, ctx: &egui::Context) {
+    pub(crate) fn priority_dock(&mut self, ctx: &egui::Context) {
         let (point, reference) = self.priority_reference();
         let rows = priority::rows(
             self.active_alert_features(),
@@ -97,15 +97,15 @@ impl HookEchoApp {
         let mut bulletin = None;
         let mut alerts = false;
         let mut tracks = false;
-        let mut layers = false;
         let rules_id = egui::Id::new("priority_rules_open");
         let tracks_id = egui::Id::new("priority_tracks_open");
         let mut rules_open = ctx.data_mut(|d| d.get_temp::<bool>(rules_id).unwrap_or(false));
         let mut tracks_open = ctx.data_mut(|d| d.get_temp::<bool>(tracks_id).unwrap_or(false));
-        let width = (self.chrome_rect.width() - 32.).clamp(280., 560.);
+        let width = super::clearview::CORNER_WIDTH - 30.0;
+        let playback_height = ctx.data_mut(|d| d.get_temp::<egui::Rect>(egui::Id::new("corner_scrubber_rect"))).map_or(74.0, |r| r.height());
         let area = egui::Area::new("priority_dock".into())
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0., -112.))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-super::clearview::CORNER_RIGHT, -(super::clearview::CORNER_BOTTOM + playback_height + 8.0)))
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 252)
                     .inner_margin(14)
@@ -134,7 +134,7 @@ impl HookEchoApp {
                                         color,
                                         format!("{} · {place}", priority::LABELS[*level]),
                                     );
-                                    ui.label(egui::RichText::new(&a.event).size(21.).strong());
+                                    ui.label(egui::RichText::new(&a.event).size(18.).strong());
                                     let expiry = a
                                         .expires
                                         .map(|t| {
@@ -165,13 +165,12 @@ impl HookEchoApp {
                             ui.add_space(5.);
                         }
                         ui.horizontal_wrapped(|ui| {
-                            layers = ui.button("Layers").clicked();
                             alerts = ui
-                                .button(format!("All alerts · {count} nearby"))
+                                .button(format!("Alerts · {count}"))
                                 .named("Open full alerts list")
                                 .clicked();
-                            tracks = ui.button(format!("Storm tracks · {track_count}")).clicked();
-                            if ui.button("Display rules").clicked() {
+                            tracks = ui.button(format!("Tracks · {track_count}")).clicked();
+                            if ui.button("Rules").named("Display rules").clicked() {
                                 rules_open = true;
                             }
                             if self.archive_bucket().is_some() {
@@ -186,11 +185,6 @@ impl HookEchoApp {
         }
         if alerts {
             self.apply_action(BindableAction::ToggleAlertPanel, ctx);
-        }
-        if layers {
-            self.panel_open = true;
-            self.panel_section = PanelSection::Overlays;
-            self.show_alert_panel = false;
         }
         if tracks {
             tracks_open = true;

@@ -46,8 +46,10 @@ Analyst to resume its arrangement. Save a workspace to keep it across restarts.
 
 ## More weather views
 
-The Clearview desktop layout keeps search and settings in a compact floating toolbar,
-with a Priority dock above the smaller live playback bar. It shows the most relevant
+The Clearview desktop layout uses a compact Context bar for Radar, Layers, Alerts,
+Tools, Search and Settings. Focused menus open below it; All controls retains the full
+catalog and advanced options. Priority dock and playback share a 330-point width
+in the bottom-right corner, keeping the radar center clear. It shows the most relevant
 nearby bulletin, with the full alert list, storm tracks, and display rules one click away.
 Graphite Silver is the default;
 choose Midnight Blue, Deep Pine, Smoked Plum, or Warm Ember in Settings → Appearance.
