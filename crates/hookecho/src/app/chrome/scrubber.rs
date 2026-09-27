@@ -12,7 +12,7 @@ impl HookEchoApp {
     pub(crate) fn scrubber(&mut self, ctx: &egui::Context) {
         crate::prof_scope!("scrubber");
         use egui_phosphor::regular as ph;
-        let accent = crate::theme::accent(self.settings.theme);
+        let accent = egui::Color32::WHITE;
         let tz = self.active_tz();
         let latest_cut = self.views[self.active].volume.as_ref().and_then(|volume| {
             volume
@@ -98,7 +98,9 @@ impl HookEchoApp {
                 egui::vec2(if corner { -super::clearview::CORNER_RIGHT } else if phone_landscape { 10.0 } else { 0.0 }, if narrow { -84.0 } else { -super::clearview::CORNER_BOTTOM }),
             )
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 252)
+                crate::ui::style::glass(ui, 255)
+                    .fill(egui::Color32::from_rgb(32, 78, 153))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(154, 191, 255)))
                     .inner_margin(egui::Margin::symmetric(
                         if compact_live { 10 } else { 12 },
                         if compact_live { 4 } else { 6 },
@@ -121,15 +123,15 @@ impl HookEchoApp {
                             egui::RichText::new(&site)
                                 .size(if corner { 11.0 } else { crate::ui::style::FONT_BASE })
                                 .strong()
-                                .color(egui::Color32::from_gray(238)),
+                                .color(egui::Color32::WHITE),
                         );
                     }
                     let btn = |ui: &mut egui::Ui, glyph: &str, on: bool, name: &str| {
                         let primary = name == "Play" || name == "Pause";
-                        let fg = if on {
-                            accent
+                        let fg = if primary {
+                            egui::Color32::from_rgb(23, 62, 123)
                         } else {
-                            egui::Color32::from_gray(225)
+                            accent
                         };
                         ui.add(
                             egui::Button::new(egui::RichText::new(glyph).size(if primary && !compact_live { 20.0 } else { 16.0 }).color(fg))
@@ -137,9 +139,9 @@ impl HookEchoApp {
                                     if corner { if primary { 28.0 } else { 24.0 } } else if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
                                     if corner { if primary { 28.0 } else { 24.0 } } else if narrow { 28.0 } else if primary { 36.0 } else { 32.0 },
                                 ))
-                                .fill(if primary && !compact_live { accent.gamma_multiply(0.28) } else { egui::Color32::TRANSPARENT })
+                                .fill(if primary { accent } else { egui::Color32::TRANSPARENT })
                                 .corner_radius(24.0)
-                                .stroke(if primary && !compact_live { egui::Stroke::new(1.0, accent) } else { egui::Stroke::NONE }),
+                                .stroke(if primary { egui::Stroke::new(1.0, accent) } else { egui::Stroke::NONE }),
                         )
                         .named_toggle(name, on)
                         .clicked()
@@ -169,13 +171,13 @@ impl HookEchoApp {
                     // The clock and status readouts share the broadcast row beneath the track.
                     let observed = t.frames.len();
                     if observed == 0 {
-                        ui.weak(if t.listing {
+                        ui.label(egui::RichText::new(if t.listing {
                             "listing volumes\u{2026}"
                         } else if archived {
                             "(no volumes)"
                         } else {
                             "live only"
-                        });
+                        }).color(egui::Color32::from_rgb(217, 231, 255)));
                     } else {
                         let readout = match t.forecast_hour() {
                             Some(h) => format!("F+{h}h"),
@@ -199,7 +201,7 @@ impl HookEchoApp {
                             egui::RichText::new(readout)
                                 .size(if corner { 18.0 } else if narrow { 15.0 } else { 22.0 })
                                 .strong()
-                                .color(egui::Color32::from_gray(238)),
+                                .color(egui::Color32::WHITE),
                         ));
                     }
                     });
@@ -221,7 +223,7 @@ impl HookEchoApp {
                         )
                     } else if t.following {
                         (
-                            egui::Color32::from_rgb(220, 180, 0),
+                            egui::Color32::from_rgb(255, 222, 112),
                             "Stale".to_string(),
                             "Following the newest volume, but this site has not produced one \
                              recently — its feed has stopped. The age next to the clock is how \
@@ -229,7 +231,7 @@ impl HookEchoApp {
                         )
                     } else {
                         (
-                            egui::Color32::from_gray(150),
+                            egui::Color32::from_rgb(217, 231, 255),
                             if compact_live { "Archive".to_string() } else { format!("Archive {}", t.date.format("%m/%d")) },
                             "Scrubbed to an archive day. Click to jump back to live.",
                         )
@@ -241,7 +243,7 @@ impl HookEchoApp {
                                 .strong()
                                 .color(col),
                         )
-                        .fill(egui::Color32::TRANSPARENT)
+                        .fill(egui::Color32::from_rgb(24, 60, 112))
                         .corner_radius(9.0),
                     )
                     .named(hint);
@@ -396,13 +398,13 @@ impl HookEchoApp {
                             ui.label(
                                 egui::RichText::new(age)
                                     .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
+                                    .color(egui::Color32::from_rgb(217, 231, 255)),
                             );
                         } else if loading && !compact_live {
                             ui.label(
                                 egui::RichText::new("loading\u{2026}")
                                     .size(crate::ui::style::FONT_SM)
-                                    .color(egui::Color32::from_gray(150)),
+                                    .color(egui::Color32::from_rgb(217, 231, 255)),
                             );
                         }
                     });
@@ -416,7 +418,7 @@ impl HookEchoApp {
                     } else {
                         age.clone().unwrap_or_else(|| if loading { "Loading radar…".into() } else { String::new() })
                     };
-                    let response = ui.small(status);
+                    let response = ui.label(egui::RichText::new(status).small().color(egui::Color32::from_rgb(217, 231, 255)));
                     if let Some(rect) = &mut scrub_rect {
                         *rect = rect.union(response.rect);
                     }
@@ -484,7 +486,7 @@ fn track(
     } else {
         x_of(t.playhead)
     };
-    p.rect_filled(bar, 3.0, egui::Color32::from_gray(60));
+    p.rect_filled(bar, 3.0, egui::Color32::from_rgb(120, 155, 207));
 
     let observed = t.frames.len();
     // The model tail is a different kind of time and says so, exactly as the old slider did.
@@ -523,7 +525,7 @@ fn track(
     p.rect_filled(
         egui::Rect::from_min_max(bar.left_top(), egui::pos2(x_playhead, bar.bottom())),
         3.0,
-        accent.gamma_multiply(0.8),
+        accent,
     );
     if !compact {
         let mut last_hour = None;
@@ -556,7 +558,7 @@ fn track(
                 egui::Align2::CENTER_TOP,
                 hour_label(dt, tz),
                 egui::FontId::proportional(crate::ui::style::FONT_SM),
-                egui::Color32::from_gray(170),
+                egui::Color32::from_rgb(217, 231, 255),
             );
             p.line_segment(
                 [

@@ -7,6 +7,11 @@ so **write the section before pushing the tag**, or the release job fails.
 The rolling `latest` release tracks `main`. Named entries below record major
 updates shipped in that rolling build; versioned entries match GitHub tags.
 
+## Cobalt playback - 2026-09-26 (rolling release)
+
+- Give the radar playback bar a solid cobalt surface, pale blue border, white timeline and white play/pause button for better visibility over the map. Keep the compact layout and matching priority dock width.
+- Improve clock, data-age and playback-status contrast without changing radar or alert colors.
+
 ## Radar alert visibility - 2026-09-26 rolling release
 
 - Keep active warnings, watches, advisories, and statements visible on radar regardless of priority dock distance or severity thresholds. Existing map layer/category switches and alert expiration still apply.
