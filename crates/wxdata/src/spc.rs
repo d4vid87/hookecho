@@ -251,8 +251,8 @@ pub fn parse_md(json: &str) -> anyhow::Result<Vec<(GeoFeature, Option<String>)>>
             out.push((
                 GeoFeature {
                     rings: poly,
-                    fill: [255, 120, 0, 30],
-                    stroke: [255, 140, 0, 235],
+                    fill: [58, 96, 245, 30],
+                    stroke: [58, 96, 245, 235],
                     kind: FeatureKind::MesoDiscussion,
                     title: title.clone(),
                     detail: detail.clone(),
@@ -580,6 +580,7 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0.title, "Mesoscale Discussion MD 2032");
         assert_eq!(out[0].0.kind, FeatureKind::MesoDiscussion);
+        assert_eq!(out[0].0.stroke, [58, 96, 245, 235]);
         assert_eq!(
             out[0].1.as_deref(),
             Some("https://www.spc.noaa.gov/products/md/md2032.txt")

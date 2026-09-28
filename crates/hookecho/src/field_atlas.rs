@@ -61,7 +61,7 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
             ([255, 228, 181], 6, Some((1.5, 5.0)))
         }
         FeatureKind::Advisory | FeatureKind::Statement => ([114, 186, 255], 6, Some((1.5, 5.0))),
-        FeatureKind::MesoDiscussion => ([180, 154, 255], 8, Some((3.0, 6.0))),
+        FeatureKind::MesoDiscussion => ([58, 96, 245], 8, None),
         // Wind radii and surge share this kind; keep their source intensity colors and fills.
         FeatureKind::TropicalCone if f.title.ends_with(" cone") => {
             ([119, 221, 255], 10, Some((5.0, 7.0)))
@@ -914,7 +914,8 @@ mod tests {
             tornado.title = "Severe Thunderstorm Watch 0639".into();
             assert_eq!(style(&tornado).unwrap().rgb, [255, 226, 108]);
         }
-        assert_ne!(watch.dash, md.dash);
+        assert_eq!(md.rgb, [58, 96, 245]);
+        assert!(md.dash.is_none());
         assert!(watch.fill < warning.fill);
         assert!(style(&feature(FeatureKind::Outlook)).is_none());
         let mut flood = feature(FeatureKind::Warning);
