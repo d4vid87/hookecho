@@ -2142,6 +2142,14 @@ fn field_time_tolerance(layer: crate::render::FieldLayer) -> chrono::Duration {
     }
 }
 
+fn mrms_reference_time(
+    following: bool,
+    selected: Option<chrono::DateTime<Utc>>,
+    now: chrono::DateTime<Utc>,
+) -> Option<chrono::DateTime<Utc>> {
+    if following { Some(now) } else { selected }
+}
+
 /// The ZDR-column cache: the volume it was computed for, its columns, and the bright band the
 /// same pass found.
 /// A place the proximity alerts watch: a saved marker, or wherever the GPS says you are.
@@ -16326,10 +16334,18 @@ impl HookEchoApp {
             .get(&layer)
             .and_then(|state| state.metadata.as_ref())
             .map(|(_, stamp)| stamp)?;
-        let analysis_time = self.views[pane]
+        let selected_time = self.views[pane]
             .timeline
             .selected_time()
-            .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time))?;
+            .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time));
+        // A live MRMS mosaic is independent of the site's last completed scan. That scan can
+        // lag by ten minutes even while the national field is fresh; archive scrubs still use
+        // their selected instant.
+        let analysis_time = if layer == crate::render::FieldLayer::Mrms {
+            mrms_reference_time(self.views[pane].timeline.following, selected_time, Utc::now())?
+        } else {
+            selected_time?
+        };
         let tolerance = self
             .settings
             .alignment_tolerance_minutes
@@ -22040,6 +22056,20 @@ mod tests {
             super::field_time_tolerance(crate::render::FieldLayer::SnowAnalysis),
             chrono::Duration::hours(7)
         );
+    }
+
+    #[test]
+    fn live_mrms_uses_current_time_when_the_radar_scan_lags() {
+        use wxdata::timecoord::{align, TimePolicy, TimedFrame};
+        let now = chrono::Utc::now();
+        let old_scan = now - chrono::Duration::minutes(10);
+        let mosaic = TimedFrame { valid: now - chrono::Duration::minutes(2), value: () };
+        let tolerance = super::field_time_tolerance(crate::render::FieldLayer::Mrms);
+        let live = super::mrms_reference_time(true, Some(old_scan), now).unwrap();
+        assert!(align(&[mosaic], live, TimePolicy::NearestPast, tolerance).is_some());
+        let archive = super::mrms_reference_time(false, Some(old_scan), now).unwrap();
+        assert!(align(&[mosaic], archive, TimePolicy::NearestPast, tolerance).is_none());
+        assert_eq!(super::mrms_reference_time(true, None, now), Some(now));
     }
 
     #[test]
