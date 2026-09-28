@@ -5443,6 +5443,7 @@ impl HookEchoApp {
     fn detect_new_warnings(&mut self, feats: &[GeoFeature]) {
         let metric = self.metric();
         let mut alerted = false;
+        let mut storm_warning = false;
         let mut max_esc = 0u8; // highest escalation among newly-seen warnings this pass
         // Only banner warnings within the selected radar's coverage — a warning covering a saved
         // location still banners + pushes regardless (that's a watched place, not the viewed site).
@@ -5618,6 +5619,8 @@ impl HookEchoApp {
                     self.snapshot_push = Some(format!("{label} — {area}"));
                 }
                 self.banner(label, area);
+                storm_warning |= notify_ok
+                    && matches!(a.event.as_str(), "Tornado Warning" | "Severe Thunderstorm Warning");
                 alerted |= notify_ok;
             }
         }
@@ -5634,11 +5637,7 @@ impl HookEchoApp {
             if !self.settings.mute_alerts && (urgent || !self.in_quiet_hours()) {
                 let tone = self.settings.alert_sound.then(|| {
                     (
-                        if urgent {
-                            self.settings.emergency_sound.clone()
-                        } else {
-                            self.settings.warn_sound.clone()
-                        },
+                        new_warning_sound(&self.settings, urgent, storm_warning),
                         self.settings.alert_volume,
                     )
                 });
@@ -17914,6 +17913,7 @@ impl HookEchoApp {
                 match import.tag.as_str() {
                     "New scan" => self.settings.scan_sound = sound,
                     "Warning" => self.settings.warn_sound = sound,
+                    "Tornado / severe" => self.settings.storm_warn_sound = sound,
                     "Emergency" => self.settings.emergency_sound = sound,
                     "TDS" => self.settings.tds_sound = sound,
                     "Rotation" => self.settings.rotation_sound = sound,
@@ -19275,6 +19275,20 @@ fn sampled_height_warning(
 
 fn warning_is_near_home(f: &GeoFeature, lon: f64, lat: f64) -> bool {
     f.distance_km(lon, lat) <= 30.0 * crate::geo::KM_PER_MILE
+}
+
+fn new_warning_sound(
+    settings: &Settings,
+    urgent: bool,
+    storm_warning: bool,
+) -> crate::settings::AlertSound {
+    if urgent {
+        settings.emergency_sound.clone()
+    } else if storm_warning {
+        settings.storm_warn_sound.clone()
+    } else {
+        settings.warn_sound.clone()
+    }
 }
 
 fn nearest_alternate_nexrad(site: &str) -> Option<String> {
@@ -21998,6 +22012,17 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn severe_chime_preserves_other_and_emergency_sound_choices() {
+        use crate::settings::{AlertSound, Settings};
+        let mut settings = Settings::default();
+        settings.warn_sound = AlertSound::Siren;
+        settings.emergency_sound = AlertSound::Alarm;
+        assert_eq!(super::new_warning_sound(&settings, false, true), AlertSound::StormChime);
+        assert_eq!(super::new_warning_sound(&settings, false, false), AlertSound::Siren);
+        assert_eq!(super::new_warning_sound(&settings, true, true), AlertSound::Alarm);
+    }
+
     #[test]
     fn replaced_chunk_stream_cannot_update_a_pane() {
         let current = (1, "KTLX".to_string(), 8);

@@ -96,12 +96,13 @@ impl Theme {
     }
 }
 
-/// Alert sound choice. Built-ins are synthesized in `audio.rs` (no asset files); `Custom` plays a
-/// user file (wav/mp3/ogg/flac). Serializes as `"Chime"` or `{"Custom":"/path/f.wav"}`.
+/// Alert sound choice. Most built-ins are synthesized; the deep chime is bundled audio.
+/// `Custom` plays a user file (wav/mp3/ogg/flac).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum AlertSound {
     #[default]
     Chime,
+    StormChime,
     Ding,
     Siren,
     Alarm,
@@ -114,9 +115,10 @@ pub enum AlertSound {
 }
 
 impl AlertSound {
-    /// The synthesized built-ins, for sound-picker combos.
-    pub const BUILTINS: [AlertSound; 6] = [
+    /// Bundled and synthesized choices for sound-picker combos.
+    pub const BUILTINS: [AlertSound; 7] = [
         AlertSound::Chime,
+        AlertSound::StormChime,
         AlertSound::Ding,
         AlertSound::Siren,
         AlertSound::Alarm,
@@ -127,6 +129,7 @@ impl AlertSound {
     pub fn label(&self) -> &'static str {
         match self {
             AlertSound::Chime => "Chime",
+            AlertSound::StormChime => "Deep chime",
             AlertSound::Ding => "Ding",
             AlertSound::Siren => "Siren",
             AlertSound::Alarm => "Alarm",
@@ -508,6 +511,9 @@ pub struct Settings {
     /// Sound played when a new NWS warning appears (gated by `alert_sound`).
     #[serde(default)]
     pub warn_sound: AlertSound,
+    /// Sound for new tornado and severe thunderstorm warnings below the emergency tier.
+    #[serde(default = "default_storm_warning_sound")]
+    pub storm_warn_sound: AlertSound,
     /// Sound played on tornado-debris-signature detection.
     #[serde(default)]
     pub tds_sound: AlertSound,
@@ -718,6 +724,10 @@ fn default_quiet_end() -> u32 {
 
 fn default_scan_sound() -> AlertSound {
     AlertSound::Ding
+}
+
+fn default_storm_warning_sound() -> AlertSound {
+    AlertSound::StormChime
 }
 
 fn default_true() -> bool {
@@ -1331,6 +1341,7 @@ impl Default for Settings {
             scan_chime: false,
             scan_sound: default_scan_sound(),
             warn_sound: AlertSound::default(),
+            storm_warn_sound: default_storm_warning_sound(),
             tds_sound: AlertSound::default(),
             rotation_sound: default_rotation_sound(),
             lightning_sound: AlertSound::default(),
@@ -1975,6 +1986,7 @@ mod tests {
             scan_chime: false,
             scan_sound: AlertSound::Ding,
             warn_sound: AlertSound::Siren,
+            storm_warn_sound: AlertSound::StormChime,
             tds_sound: AlertSound::Custom("/tmp/tds.wav".to_string()),
             rotation_sound: AlertSound::Siren,
             lightning_sound: AlertSound::Alarm,
@@ -2005,6 +2017,10 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+        let mut old = serde_json::to_value(&s).unwrap();
+        old.as_object_mut().unwrap().remove("storm_warn_sound");
+        let restored: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.storm_warn_sound, AlertSound::StormChime);
     }
 
     #[test]

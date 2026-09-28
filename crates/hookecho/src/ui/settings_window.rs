@@ -1323,9 +1323,10 @@ pub fn sound_picker(ui: &mut egui::Ui, settings: &mut Settings) {
 
     // One row per alert kind: sound combo (+ Custom… file picker) and a ▶ preview.
     type SoundRow = (&'static str, fn(&mut Settings) -> &mut AlertSound);
-    let rows: [SoundRow; 6] = [
+    let rows: [SoundRow; 7] = [
         ("New scan", |s| &mut s.scan_sound),
         ("Warning", |s| &mut s.warn_sound),
+        ("Tornado / severe", |s| &mut s.storm_warn_sound),
         ("Emergency", |s| &mut s.emergency_sound),
         ("TDS", |s| &mut s.tds_sound),
         ("Rotation", |s| &mut s.rotation_sound),

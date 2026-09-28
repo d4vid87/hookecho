@@ -1,4 +1,4 @@
-//! Alert audio cues: five short synthesized tones (no bundled assets) plus optional user files.
+//! Alert audio cues: synthesized tones, a bundled severe-warning chime, and optional user files.
 //!
 //! Playback runs on a detached thread that owns the output stream for its lifetime, so the
 //! call returns immediately. A missing/busy audio device or an undecodable file is logged,
@@ -9,6 +9,9 @@
 //! bottom of this file.
 
 use crate::settings::AlertSound;
+const STORM_CHIME_MP3: &[u8] = include_bytes!("../assets/severe-warning-chime.mp3");
+#[cfg(target_arch = "wasm32")]
+const STORM_CHIME_MS: u32 = 2136;
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::source::{SineWave, Source};
 #[cfg(not(target_arch = "wasm32"))]
@@ -47,6 +50,13 @@ pub fn play_blocking(sound: &AlertSound, volume: f32) {
     };
     sink.set_volume(volume.clamp(0.0, 1.0));
     match sound {
+        AlertSound::StormChime => {
+            if let Ok(src) = rodio::Decoder::new(std::io::Cursor::new(STORM_CHIME_MP3)) {
+                sink.append(src);
+            } else {
+                append_builtin(&sink, &AlertSound::Chime);
+            }
+        }
         AlertSound::Custom(path) => {
             if !append_file(&sink, path) {
                 // Fall back to the default chime so the alert is never silent.
@@ -120,13 +130,13 @@ fn append_file(sink: &Sink, path: &str) -> bool {
     }
 }
 
-/// Queue a synthesized built-in tone. `Custom` is treated as `Chime` (callers route files above).
+/// Queue a synthesized tone. File-backed choices fall back to `Chime` here.
 #[cfg(not(target_arch = "wasm32"))]
 fn append_builtin(sink: &Sink, sound: &AlertSound) {
     let tone = |freq: f32, ms: u64| SineWave::new(freq).take_duration(Duration::from_millis(ms));
     match sound {
         // Two-tone alert: high then lower, gentle fade so it isn't harsh.
-        AlertSound::Chime | AlertSound::Custom(_) => {
+        AlertSound::Chime | AlertSound::Custom(_) | AlertSound::StormChime => {
             sink.append(tone(880.0, 280).fade_in(Duration::from_millis(20)));
             sink.append(tone(660.0, 320));
         }
@@ -181,8 +191,8 @@ const WEB_RATE: u32 = 16_000;
 
 /// Play an alert sound once at `volume` (0.0..=1.0) through a throwaway `<audio>` element.
 ///
-/// The tone is synthesized to an 8-bit WAV and handed over as a `data:` URL, so nothing is
-/// bundled and nothing has to be served. `Custom` has no meaning here — there is no filesystem
+/// Built-in tones are synthesized to 8-bit WAV; the severe chime uses the bundled MP3. Both
+/// are handed over as `data:` URLs. `Custom` has no meaning here — there is no filesystem
 /// to read a user's file from — so it falls back to the chime, exactly as a failed open does
 /// natively.
 ///
@@ -192,9 +202,14 @@ const WEB_RATE: u32 = 16_000;
 #[cfg(target_arch = "wasm32")]
 pub fn play(sound: &AlertSound, volume: f32) {
     use base64::Engine as _;
+    let (mime, bytes) = if matches!(sound, AlertSound::StormChime) {
+        ("audio/mpeg", STORM_CHIME_MP3.to_vec())
+    } else {
+        ("audio/wav", wav(segments(sound)))
+    };
     let src = format!(
-        "data:audio/wav;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(wav(segments(sound)))
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     );
     match web_sys::HtmlAudioElement::new_with_src(&src) {
         Ok(el) => {
@@ -212,7 +227,11 @@ pub fn play(sound: &AlertSound, volume: f32) {
 /// web build waits out the tone by the clock before it starts speaking.
 #[cfg(target_arch = "wasm32")]
 pub fn duration_ms(sound: &AlertSound) -> u32 {
-    segments(sound).iter().map(|(_, ms)| *ms as u32).sum()
+    if matches!(sound, AlertSound::StormChime) {
+        STORM_CHIME_MS
+    } else {
+        segments(sound).iter().map(|(_, ms)| *ms as u32).sum()
+    }
 }
 
 /// The built-in cues as `(hz, ms)` runs, `0.0` meaning silence. Mirrors `append_builtin`'s
@@ -221,6 +240,7 @@ pub fn duration_ms(sound: &AlertSound) -> u32 {
 fn segments(sound: &AlertSound) -> Vec<(f32, u64)> {
     match sound {
         AlertSound::Chime | AlertSound::Custom(_) => vec![(880.0, 280), (660.0, 320)],
+        AlertSound::StormChime => vec![], // Played from the bundled MP3, never synthesized.
         AlertSound::Ding => vec![(1047.0, 220)],
         AlertSound::Siren => [(600.0, 200), (900.0, 200)].repeat(2),
         AlertSound::Alarm => [(950.0, 160), (0.0, 90)].repeat(3),
@@ -269,6 +289,11 @@ fn wav(segs: Vec<(f32, u64)>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_storm_chime_decodes() {
+        assert!(rodio::Decoder::new(std::io::Cursor::new(STORM_CHIME_MP3)).is_ok());
+    }
 
     #[test]
     fn wav_header_and_length_match_the_tone() {
