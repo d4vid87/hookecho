@@ -56,6 +56,7 @@ impl HookEchoApp {
         if !self.panel_open { ctx.data_mut(|d| d.remove::<bool>(home_id)); }
         let home = ctx.data_mut(|d| d.get_temp::<bool>(home_id).unwrap_or(false));
         let (mut menu, mut search, mut settings, mut single, mut compare) = (false, false, false, false, false);
+        let (mut mrms, mut spc, mut outlook_day) = (false, false, None);
         let toolbar = egui::Area::new("clearview_toolbar".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
@@ -89,12 +90,35 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 76.0))
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 252).inner_margin(5).corner_radius(9.0).show(ui, |ui| {
+                crate::ui::style::glass(ui, 252).inner_margin(egui::Margin::same(3)).corner_radius(5.0).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
                     ui.horizontal(|ui| {
-                        single = ui.selectable_label(!self.analyst_open, if self.analyst_open { "← Back to radar" } else { "Single radar" })
-                            .named("Return to a single radar map").clicked();
-                        compare = ui.selectable_label(self.analyst_open, format!("{} Compare 4", ph::SQUARES_FOUR))
-                            .named("Compare four radar panels").clicked();
+                        single = ui.selectable_label(!self.analyst_open, "◉ Radar")
+                            .named_toggle("Single radar map", !self.analyst_open).clicked();
+                        compare = ui.selectable_label(self.analyst_open, format!("{} Four panes", ph::SQUARES_FOUR))
+                            .named_toggle("Compare four radar panels", self.analyst_open).clicked();
+                        ui.separator();
+                        let mrms_on = self.views[self.active].fields_on.contains(&crate::render::FieldLayer::Mrms);
+                        mrms = ui.selectable_label(mrms_on, egui::RichText::new("● MRMS").color(if mrms_on {
+                            egui::Color32::from_rgb(125, 242, 213)
+                        } else { egui::Color32::from_rgb(190, 206, 215) }))
+                            .named_toggle("MRMS national mosaic", mrms_on).clicked();
+                        let spc_on = self.filters.outlook_day != 0;
+                        spc = ui.selectable_label(spc_on, egui::RichText::new("● SPC Outlook").color(if spc_on {
+                            egui::Color32::from_rgb(249, 203, 115)
+                        } else { egui::Color32::from_rgb(190, 206, 215) }))
+                            .named_toggle("SPC Outlook", spc_on).clicked();
+                        if spc_on {
+                            ui.menu_button(format!("Day {} ▾", self.filters.outlook_day), |ui| {
+                                for day in 1..=3 {
+                                    if ui.selectable_label(self.filters.outlook_day == day, format!("Day {day}")).clicked() {
+                                        outlook_day = Some(day);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        }
                         if self.analyst_open {
                             ui.menu_button(format!("{} Options", ph::SLIDERS_HORIZONTAL), |ui| {
                                 ui.label(format!("Active pane {}", self.active + 1));
@@ -139,6 +163,9 @@ impl HookEchoApp {
             if compare { self.set_pane_count(4); }
             self.panel_open = false;
         }
+        if mrms { self.apply_palette(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms), ctx); }
+        if spc { self.apply_palette(PaletteAction::ToggleOutlook, ctx); }
+        if let Some(day) = outlook_day { self.apply_palette(PaletteAction::SetOutlookDay(day), ctx); }
         if search || settings {
             ctx.data_mut(|d| d.remove::<bool>(home_id));
         }
