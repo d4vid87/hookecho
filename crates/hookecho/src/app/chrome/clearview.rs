@@ -10,6 +10,15 @@ fn launch_home_open(panel_open: bool, drawer_open: bool, home: bool) -> bool {
     !panel_open || drawer_open || !home
 }
 
+fn cobalt_choice(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let button = egui::Button::new(label);
+    let button = if selected {
+        button.fill(egui::Color32::from_rgb(32, 78, 153))
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(154, 191, 255)))
+    } else { button };
+    ui.add(button)
+}
+
 pub(super) fn launch_cards(ui: &mut egui::Ui) -> Option<PanelSection> {
     use egui_phosphor::regular as ph;
     let mut selected = None;
@@ -55,8 +64,9 @@ impl HookEchoApp {
         let home_id = egui::Id::new(HOME_KEY);
         if !self.panel_open { ctx.data_mut(|d| d.remove::<bool>(home_id)); }
         let home = ctx.data_mut(|d| d.get_temp::<bool>(home_id).unwrap_or(false));
-        let (mut menu, mut search, mut settings, mut single, mut compare) = (false, false, false, false, false);
+        let (mut menu, mut search, mut settings, mut single) = (false, false, false, false);
         let (mut mrms, mut spc, mut outlook_day) = (false, false, None);
+        let mut workspace_choice = None;
         let toolbar = egui::Area::new("clearview_toolbar".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
@@ -94,20 +104,23 @@ impl HookEchoApp {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
                     ui.horizontal(|ui| {
-                        single = ui.selectable_label(!self.analyst_open, "◉ Radar")
-                            .named_toggle("Single radar map", !self.analyst_open).clicked();
-                        compare = ui.selectable_label(self.analyst_open, format!("{} Four panes", ph::SQUARES_FOUR))
-                            .named_toggle("Compare four radar panels", self.analyst_open).clicked();
+                        let regular_radar = !self.analyst_open && self.workspace_return_session.is_none();
+                        single = cobalt_choice(ui, "◉ Radar", regular_radar)
+                            .named_toggle("Single radar map", regular_radar).clicked();
+                        for name in ["Chase", "National overview", "Analysis"] {
+                            if let Some(index) = self.settings.workspaces.iter().position(|ws| ws.name == name) {
+                                if cobalt_choice(ui, name, self.active_workspace.as_deref() == Some(name))
+                                    .named_toggle(name, self.active_workspace.as_deref() == Some(name)).clicked() {
+                                    workspace_choice = Some(index);
+                                }
+                            }
+                        }
                         ui.separator();
                         let mrms_on = self.views[self.active].fields_on.contains(&crate::render::FieldLayer::Mrms);
-                        mrms = ui.selectable_label(mrms_on, egui::RichText::new("● MRMS").color(if mrms_on {
-                            egui::Color32::from_rgb(125, 242, 213)
-                        } else { egui::Color32::from_rgb(190, 206, 215) }))
+                        mrms = cobalt_choice(ui, "● MRMS", mrms_on)
                             .named_toggle("MRMS national mosaic", mrms_on).clicked();
                         let spc_on = self.filters.outlook_day != 0;
-                        spc = ui.selectable_label(spc_on, egui::RichText::new("● SPC Outlook").color(if spc_on {
-                            egui::Color32::from_rgb(249, 203, 115)
-                        } else { egui::Color32::from_rgb(190, 206, 215) }))
+                        spc = cobalt_choice(ui, "● SPC Outlook", spc_on)
                             .named_toggle("SPC Outlook", spc_on).clicked();
                         if spc_on {
                             ui.menu_button(format!("Day {} ▾", self.filters.outlook_day), |ui| {
@@ -158,11 +171,11 @@ impl HookEchoApp {
                 d.remove::<bool>(egui::Id::new("context_all_controls"));
             });
         }
-        if single || compare {
-            self.switch_mode(if single { ViewMode::Radar } else { ViewMode::Analyst }, ctx);
-            if compare { self.set_pane_count(4); }
+        if single {
+            self.return_to_radar(ctx);
             self.panel_open = false;
         }
+        if let Some(index) = workspace_choice { self.apply_palette(PaletteAction::ApplyWorkspace(index), ctx); }
         if mrms { self.apply_palette(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms), ctx); }
         if spc { self.apply_palette(PaletteAction::ToggleOutlook, ctx); }
         if let Some(day) = outlook_day { self.apply_palette(PaletteAction::SetOutlookDay(day), ctx); }

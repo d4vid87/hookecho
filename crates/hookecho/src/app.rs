@@ -3378,6 +3378,8 @@ pub struct HookEchoApp {
     analyst_inspector_open: bool,
     radar_session: Option<ModeSession>,
     analyst_session: Option<ModeSession>,
+    workspace_return_session: Option<ModeSession>,
+    active_workspace: Option<String>,
     panel_section: PanelSection,
     /// Is the background picker slid out beside the control column?
     basemap_open: bool,
@@ -4290,6 +4292,8 @@ impl HookEchoApp {
             analyst_inspector_open: true,
             radar_session: None,
             analyst_session: None,
+            workspace_return_session: None,
+            active_workspace: None,
             panel_section: PanelSection::Radar,
             basemap_open: false,
             sidebar_focus_search: false,
@@ -16725,13 +16729,28 @@ impl HookEchoApp {
         ctx.data_mut(|data| data.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
     }
 
+    fn return_to_radar(&mut self, ctx: &egui::Context) {
+        self.switch_mode(ViewMode::Radar, ctx);
+        if let Some(session) = self.workspace_return_session.take() {
+            self.restore_mode_session(session, ctx);
+            self.set_pane_count(1);
+            self.analyst_open = false;
+        }
+        self.active_workspace = None;
+        self.panel_open = false;
+    }
+
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
+        if self.workspace_return_session.is_none() {
+            self.workspace_return_session = Some(self.capture_mode_session());
+        }
         let mode = if ws.panes.len() > 1 || ws.chrome.as_ref().is_some_and(|c| c.analyst_open) {
             ViewMode::Analyst
         } else { ViewMode::Radar };
         self.switch_mode(mode, ctx);
         self.apply_workspace_raw(ws, ctx);
         self.analyst_open = mode == ViewMode::Analyst;
+        self.active_workspace = Some(ws.name.clone());
     }
 
     fn apply_workspace_raw(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
