@@ -1,0 +1,68 @@
+---
+import Base from '../../layouts/Base.astro';
+
+const alerts = [
+  { id: 'emergency', name: 'Tornado emergency', kind: 'Warning', color: '#ff76d5', line: 'White halo · pink core', meaning: 'An explicit tornado emergency designation in an official warning. The heaviest boundary on this map.' },
+  { id: 'tornado', name: 'Tornado warning', kind: 'Warning', color: '#ff755d', line: 'White halo · coral core', meaning: 'A tornado warning polygon. Open its bulletin for the official threat and timing.' },
+  { id: 'severe', name: 'Severe thunderstorm warning', kind: 'Warning', color: '#ffe128', line: 'White halo · yellow core', meaning: 'A severe thunderstorm warning polygon. The bulletin gives the hazards and affected area.' },
+  { id: 'flood', name: 'Flood warning', kind: 'Warning', color: '#00a05a', line: 'White halo · green core', meaning: 'A flood warning polygon. The official bulletin provides the type of flooding and location.' },
+  { id: 'tw', name: 'Tornado watch', kind: 'Watch', color: '#e62828', line: 'Thin dashed red', meaning: 'Conditions favor tornadoes across a broader area. A watch is not a warning for every point inside it.' },
+  { id: 'stw', name: 'Severe thunderstorm watch', kind: 'Watch', color: '#ffe26c', line: 'Thin dashed yellow', meaning: 'Conditions favor severe thunderstorms across a broader area. Local warnings can appear inside it.' },
+  { id: 'sws', name: 'Special weather statement', kind: 'Statement', color: '#ffe4b5', line: 'Fine dotted cream', meaning: 'Additional weather information that does not use a warning boundary. Read the statement for specifics.' },
+];
+---
+<Base title="What watch and warning boundaries mean | HookEcho" description="A visual guide to HookEcho's tornado, severe thunderstorm, flood and special weather statement boundaries on radar.">
+  <section class="guide-head wrap">
+    <div class="guide-copy">
+      <p class="eyebrow">Field guide / Weather alerts</p>
+      <h1>Read the boundary.<br />Know the urgency.</h1>
+      <p class="lede">Warnings draw a bold white edge. Watches use a lighter dashed line. Select an alert below to see its shape and read what it means.</p>
+      <div class="guide-actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/docs/alerts-and-notifications/">Alert settings guide</a></div>
+    </div>
+    <p class="guide-note">This illustration uses synthetic alert shapes over a recorded radar image. It does not show active alerts or forecast conditions.</p>
+  </section>
+  <section class="guide-body wrap" aria-label="Interactive alert boundary guide">
+    <div class="map-panel">
+      <div class="map" role="img" aria-label="Illustrative radar with colored warning, watch, and statement boundaries">
+        <svg viewBox="0 0 1000 650" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+          <g class="area watch" data-id="tw" style="--area:#e62828"><polygon points="463,105 720,95 836,188 795,339 665,370 497,330 442,223"/><text x="690" y="120">TORNADO WATCH</text></g>
+          <g class="area watch" data-id="stw" style="--area:#ffe26c"><polygon points="54,293 330,289 383,403 326,574 117,573 46,455"/><text x="70" y="282">SEVERE T-STORM WATCH</text></g>
+          <g class="area warning emergency" data-id="emergency" style="--area:#ff76d5"><polygon points="310,235 466,205 527,294 475,395 334,379 275,303"/><polyline class="core" points="310,235 466,205 527,294 475,395 334,379 275,303 310,235"/><text x="298" y="223">TORNADO EMERGENCY</text></g>
+          <g class="area warning" data-id="tornado" style="--area:#ff755d"><polygon points="500,173 620,151 700,249 635,331 535,301"/><polyline class="core" points="500,173 620,151 700,249 635,331 535,301 500,173"/><text x="505" y="145">TORNADO WARNING</text></g>
+          <g class="area warning" data-id="severe" style="--area:#ffe128"><polygon points="124,360 272,338 319,416 281,521 141,528 100,435"/><polyline class="core" points="124,360 272,338 319,416 281,521 141,528 100,435 124,360"/><text x="120" y="329">SEVERE T-STORM WARNING</text></g>
+          <g class="area warning" data-id="flood" style="--area:#00a05a"><polygon points="666,378 806,340 861,397 824,497 698,499 637,444"/><polyline class="core" points="666,378 806,340 861,397 824,497 698,499 637,444 666,378"/><text x="672" y="331">FLOOD WARNING</text></g>
+          <g class="area statement" data-id="sws" style="--area:#ffe4b5"><polygon points="674,514 844,485 930,536 910,601 733,610 660,565"/><text x="700" y="627">SPECIAL WEATHER STATEMENT</text></g>
+        </svg>
+        <span class="map-stamp">ILLUSTRATIVE SHAPES · RECORDED RADAR</span>
+      </div>
+      <p class="map-caption">Boundaries and colors reflect HookEcho’s current Field Atlas map style. Positions are invented for this guide; always open the official bulletin for the alert’s actual area, timing, and instructions.</p>
+    </div>
+    <div class="key-panel">
+      <div class="key-head"><p class="eyebrow">Map key / 07 types</p><h2>Select a boundary</h2></div>
+      <div class="alert-list">
+        {alerts.map((alert) => <button class={`alert-row ${alert.kind.toLowerCase()}`} type="button" data-id={alert.id} style={`--area:${alert.color}`} aria-pressed="false"><span class="swatch" aria-hidden="true"></span><span class="alert-copy"><strong>{alert.name}</strong><small>{alert.line}</small><span class="meaning">{alert.meaning}</span></span></button>)}
+      </div>
+      <p class="key-foot">Choose the same type again to show every boundary.</p>
+    </div>
+  </section>
+  <section class="reading-note wrap"><div><p class="eyebrow">The useful distinction</p><h2>Watch the area. Read the warning.</h2></div><p>A watch covers a broad area where a hazard is possible. A warning marks a more specific threat area. The map helps you find the boundary; the official bulletin tells you what to do.</p></section>
+</Base>
+<script>
+  const rows = [...document.querySelectorAll<HTMLButtonElement>('.alert-row')];
+  const areas = [...document.querySelectorAll<SVGGElement>('.area')];
+  let selected = '';
+  rows.forEach(row => row.addEventListener('click', () => {
+    selected = selected === row.dataset.id ? '' : row.dataset.id || '';
+    rows.forEach(item => item.setAttribute('aria-pressed', String(item.dataset.id === selected)));
+    areas.forEach(area => {
+      area.classList.toggle('muted', Boolean(selected) && area.dataset.id !== selected);
+      area.classList.toggle('selected', area.dataset.id === selected);
+    });
+  }));
+</script>
+<style>
+  .guide-head{display:flex;justify-content:space-between;align-items:end;gap:2rem;padding-block:var(--sp-7) var(--sp-6)}.guide-copy{max-width:760px}.guide-copy h1{font-size:clamp(2.7rem,5.8vw,5.6rem);line-height:.98;letter-spacing:-.065em}.guide-copy .lede{max-width:58ch;color:var(--text-dim);font-size:1.1rem}.guide-actions{display:flex;gap:.75rem;flex-wrap:wrap;margin-top:1.5rem}.guide-note{max-width:245px;border-left:2px solid var(--accent);padding-left:1rem;margin:0;color:var(--text-dim);font:11px/1.65 'Courier New',monospace}
+  .guide-body{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:1rem;padding-bottom:var(--sp-8)}.map-panel,.key-panel{min-width:0;border:1px solid var(--stroke-strong);background:var(--surface-1)}.map{height:600px;min-height:380px;position:relative;overflow:hidden;background:#0b1720}.map:before{content:'';position:absolute;inset:0;background:url('/shots/radar-mode-20260927.webp') center/cover;opacity:.7}.map svg{position:absolute;inset:0;width:100%;height:100%}.area{color:var(--area);transition:opacity .2s}.area.muted{opacity:.055}.area.selected{filter:drop-shadow(0 0 6px var(--area))}.area polygon{fill:var(--area);fill-opacity:.13;stroke:currentColor;stroke-width:3;paint-order:stroke}.area.warning polygon{stroke:#fff;stroke-width:5;filter:drop-shadow(0 0 3px var(--area))}.area.warning polygon{paint-order:stroke fill}.area.warning .core{fill:none;stroke:var(--area);stroke-width:3.2}.area.emergency .core{stroke-width:4}.area.emergency polygon{stroke-width:7}.area.watch polygon{fill-opacity:.045;stroke-width:2;stroke-dasharray:8 7}.area.statement polygon{fill-opacity:.045;stroke-width:2;stroke-dasharray:2 6}.area text{font:700 11px 'Courier New',monospace;fill:#fff;stroke:#071019;stroke-width:4;paint-order:stroke}.map-stamp{position:absolute;bottom:.6rem;left:.6rem;padding:.4rem .55rem;background:#09131de8;border:1px solid #52606a;color:white;font:700 10px 'Courier New',monospace;letter-spacing:.03em}.map-caption{margin:0;padding:.7rem .9rem;color:var(--text-dim);font-size:.78rem;line-height:1.5}
+  .key-panel{padding:1rem}.key-head h2{font-size:1.35rem;margin-bottom:1rem}.alert-list{display:grid;gap:.4rem}.alert-row{font:inherit;text-align:left;display:flex;gap:.75rem;align-items:start;width:100%;padding:.65rem;border:1px solid var(--stroke-strong);background:var(--bg);color:var(--text);cursor:pointer}.alert-row:hover,.alert-row[aria-pressed=true]{background:var(--surface-2);border-color:var(--accent)}.alert-row:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.swatch{width:19px;height:19px;flex:none;margin-top:.1rem;border:2px solid var(--area);box-shadow:0 0 0 2px #ffffff80;background:color-mix(in srgb,var(--area) 14%,transparent)}.watch .swatch,.statement .swatch{box-shadow:none;border-style:dashed}.alert-copy{min-width:0}.alert-copy strong{display:block;font-size:.84rem;line-height:1.2}.alert-copy small{display:block;color:var(--text-dim);font:11px/1.4 'Courier New',monospace;margin-top:.2rem}.meaning{display:none;color:var(--text-dim);font-size:.76rem;line-height:1.4;margin-top:.4rem}.alert-row[aria-pressed=true] .meaning{display:block}.key-foot{color:var(--text-dim);font-size:.75rem;margin:1rem 0 0}.reading-note{display:grid;grid-template-columns:1fr 1fr;gap:3rem;border-top:1px solid var(--stroke);padding-block:var(--sp-7) var(--sp-8)}.reading-note p:last-child{color:var(--text-dim);margin:0;max-width:55ch}
+  @media(max-width:900px){.guide-body{grid-template-columns:1fr}.map{height:55vw}.alert-list{grid-template-columns:repeat(2,minmax(0,1fr))}.guide-note{display:none}}@media(max-width:560px){.guide-head{padding-block:var(--sp-7)}.map{height:460px}.alert-list{grid-template-columns:1fr}.reading-note{grid-template-columns:1fr;gap:.5rem}.map-caption{font-size:.72rem}}
+</style>

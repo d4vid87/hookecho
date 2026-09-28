@@ -8,6 +8,9 @@ Alerting is built around **markers** — the places you've saved. Search a place
 the panel, and take **Save marker** when the map flies there. Mark one of them as
 **home** and it gets a watch ring on the map.
 
+New to the map boundaries? See the [visual watch and warning guide](/alerts/)
+for the colors and line patterns used on radar.
+
 ## Choosing how you're told
 
 **Settings → Alerts** picks the channels. You can use as many as you like:
