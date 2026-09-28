@@ -181,7 +181,7 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
         // warning and used to draw in the same generic red as everything else with "warning" in
         // its name, which is the one thing it must not look like on a winter map.
         "Snow Squall Warning" => [199, 21, 133],
-        "Tornado Watch" => [255, 255, 0],
+        "Tornado Watch" => [230, 40, 40],
         "Severe Thunderstorm Watch" => [219, 112, 147],
         "Special Weather Statement" => [255, 228, 181],
         "Flood Advisory" => [0, 180, 120],

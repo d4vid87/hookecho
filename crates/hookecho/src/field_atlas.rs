@@ -48,6 +48,9 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         FeatureKind::Warning if event == "Severe Thunderstorm Warning" =>
             ([255, 225, 40], 12, None),
         FeatureKind::Warning => ([255, 117, 93], 12, None),
+        FeatureKind::Watch | FeatureKind::WatchBox if event.starts_with("Tornado Watch") => {
+            ([230, 40, 40], 8, Some((5.0, 5.0)))
+        }
         FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
         FeatureKind::Statement
             if f.alert
@@ -904,6 +907,13 @@ mod tests {
         let md = style(&feature(FeatureKind::MesoDiscussion)).unwrap();
         assert!(warning.dash.is_none() && !warning.emergency);
         assert!(watch.dash.is_some());
+        for kind in [FeatureKind::Watch, FeatureKind::WatchBox] {
+            let mut tornado = feature(kind);
+            tornado.title = "Tornado Watch 0638".into();
+            assert_eq!(style(&tornado).unwrap().rgb, [230, 40, 40]);
+            tornado.title = "Severe Thunderstorm Watch 0639".into();
+            assert_eq!(style(&tornado).unwrap().rgb, [255, 226, 108]);
+        }
         assert_ne!(watch.dash, md.dash);
         assert!(watch.fill < warning.fill);
         assert!(style(&feature(FeatureKind::Outlook)).is_none());
