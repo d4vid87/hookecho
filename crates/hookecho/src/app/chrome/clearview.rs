@@ -175,7 +175,14 @@ impl HookEchoApp {
             self.return_to_radar(ctx);
             self.panel_open = false;
         }
-        if let Some(index) = workspace_choice { self.apply_palette(PaletteAction::ApplyWorkspace(index), ctx); }
+        if let Some(index) = workspace_choice {
+            self.apply_palette(PaletteAction::ApplyWorkspace(index), ctx);
+            if self.active_workspace.as_deref() == Some("Analysis") {
+                self.apply_palette(PaletteAction::ApplyAnalystPreset(0), ctx);
+                for view in &mut self.views { view.tilt = 0; }
+                self.panel_open = false;
+            }
+        }
         if mrms { self.apply_palette(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms), ctx); }
         if spc { self.apply_palette(PaletteAction::ToggleOutlook, ctx); }
         if let Some(day) = outlook_day { self.apply_palette(PaletteAction::SetOutlookDay(day), ctx); }
