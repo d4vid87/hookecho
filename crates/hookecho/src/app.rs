@@ -11742,6 +11742,10 @@ impl HookEchoApp {
         // Site change: clear the old volume, recenter, and (if a real site) refetch.
         let site_changed = self.views[idx].site != self.views[idx].loaded_site;
         if site_changed {
+            if idx == self.active && self.analyst_open && self.link_cameras && self.views.len() == 4 {
+                let site = self.views[idx].site.clone();
+                for view in &mut self.views { view.site = site.clone(); }
+            }
             let v = &mut self.views[idx];
             v.loaded_site = v.site.clone();
             v.volume = None;
