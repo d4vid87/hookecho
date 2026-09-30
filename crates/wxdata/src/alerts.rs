@@ -175,7 +175,7 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
     let rgb = match event {
         "Tornado Warning" => [255, 0, 0],
         "Severe Thunderstorm Warning" => [255, 165, 0],
-        "Flash Flood Warning" => [0, 200, 0],
+        "Flash Flood Warning" => [57, 255, 20],
         "Flood Warning" => [0, 160, 90],
         // NWS's own color for the product. A snow squall is a short-fuse life-threatening
         // warning and used to draw in the same generic red as everything else with "warning" in
@@ -669,6 +669,11 @@ mod tests {
     fn air_quality_products_are_white_without_changing_their_kind() {
         assert_eq!(event_style("Air Quality Alert"), (FeatureKind::Statement, [255, 255, 255]));
         assert_eq!(event_style("Air Quality Watch"), (FeatureKind::Watch, [255, 255, 255]));
+    }
+
+    #[test]
+    fn flash_flood_warning_is_neon_green() {
+        assert_eq!(event_style("Flash Flood Warning"), (FeatureKind::Warning, [57, 255, 20]));
     }
 
     #[test]

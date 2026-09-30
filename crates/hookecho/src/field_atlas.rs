@@ -37,6 +37,7 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
             ([255, 255, 255], 6, Some((1.5, 5.0)))
         }
         FeatureKind::Warning if emergency => ([255, 118, 213], 18, None),
+        FeatureKind::Warning if event == "Flash Flood Warning" => ([57, 255, 20], 12, None),
         FeatureKind::Warning
             if f.alert
                 .as_ref()
@@ -921,6 +922,8 @@ mod tests {
         let mut flood = feature(FeatureKind::Warning);
         flood.title = "Flood Warning".into();
         assert_eq!(style(&flood).unwrap().rgb, [0, 160, 90]);
+        flood.title = "Flash Flood Warning".into();
+        assert_eq!(style(&flood).unwrap().rgb, [57, 255, 20]);
         flood.title = "Severe Thunderstorm Warning".into();
         assert_eq!(style(&flood).unwrap().rgb, [255, 225, 40]);
         let mut statement = feature(FeatureKind::Statement);

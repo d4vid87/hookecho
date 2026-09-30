@@ -1660,7 +1660,12 @@ async fn fetch_capped(
     http: &reqwest::Client,
     url: &str,
 ) -> anyhow::Result<(&'static str, Vec<u8>)> {
-    let mut resp = http.get(url).send().await?.error_for_status()?;
+    let mut resp = http
+        .get(url)
+        .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT)
+        .send()
+        .await?
+        .error_for_status()?;
     let ctype = proxy_content_type(
         resp.headers()
             .get(reqwest::header::CONTENT_TYPE)
