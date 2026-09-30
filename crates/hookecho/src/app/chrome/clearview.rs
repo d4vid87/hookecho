@@ -176,10 +176,18 @@ impl HookEchoApp {
             self.panel_open = false;
         }
         if let Some(index) = workspace_choice {
+            let camera = self.views[self.active].camera;
+            let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+            let local_site = crate::geo::nearest_site_id(lon, lat);
             self.apply_palette(PaletteAction::ApplyWorkspace(index), ctx);
             if self.active_workspace.as_deref() == Some("Analysis") {
                 self.apply_palette(PaletteAction::ApplyAnalystPreset(0), ctx);
-                for view in &mut self.views { view.tilt = 0; }
+                for view in &mut self.views {
+                    view.tilt = 0;
+                    view.camera = camera;
+                    view.camera_placed = true;
+                    if let Some(site) = &local_site { view.site = Some(site.clone()); }
+                }
                 self.panel_open = false;
             }
         }
