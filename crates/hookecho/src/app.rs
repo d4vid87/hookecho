@@ -16712,8 +16712,6 @@ impl HookEchoApp {
     fn switch_mode(&mut self, target: ViewMode, ctx: &egui::Context) {
         let current = ViewMode::for_layout(self.analyst_open, self.views.len());
         if current == target { return; }
-        #[cfg(target_arch = "wasm32")]
-        Self::post_workspace_to_parent(None);
         let outgoing = self.capture_mode_session();
         match current {
             ViewMode::Radar => self.radar_session = Some(outgoing),
@@ -16744,8 +16742,6 @@ impl HookEchoApp {
         }
         self.active_workspace = None;
         self.panel_open = false;
-        #[cfg(target_arch = "wasm32")]
-        Self::post_workspace_to_parent(None);
     }
 
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
@@ -16759,17 +16755,6 @@ impl HookEchoApp {
         self.apply_workspace_raw(ws, ctx);
         self.analyst_open = mode == ViewMode::Analyst;
         self.active_workspace = Some(ws.name.clone());
-        #[cfg(target_arch = "wasm32")]
-        Self::post_workspace_to_parent(Some(&ws.name));
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn post_workspace_to_parent(name: Option<&str>) {
-        let Some(win) = web_sys::window() else { return };
-        let Ok(Some(parent)) = win.parent() else { return };
-        if parent == win { return }
-        let value = serde_json::json!({"hookecho_workspace": name}).to_string();
-        let _ = parent.post_message(&wasm_bindgen::JsValue::from_str(&value), "*");
     }
 
     fn apply_workspace_raw(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
@@ -20403,7 +20388,12 @@ impl eframe::App for HookEchoApp {
                 // the remaining viewport rather than underneath either dock.
                 self.chrome_rect = root.available_rect_before_wrap();
                 self.scrubber(ctx);
-                if !phone_layout && !self.analyst_open && !self.drawer.is_open() { self.priority_dock(ctx); }
+                if !phone_layout && !self.analyst_open && !self.drawer.is_open() {
+                    self.priority_dock(ctx);
+                    if self.active_workspace.as_deref() == Some("National overview") {
+                        self.national_signal_strip(ctx);
+                    }
+                }
                 self.basemap_panel(ctx);
                 if !phone_layout { self.info_chip(ctx); }
                 self.error_chip(ctx);

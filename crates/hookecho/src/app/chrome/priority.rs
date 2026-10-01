@@ -1,7 +1,99 @@
 //! Priority dock: one relevant bulletin, with full alerts and real SCIT tracks on demand.
 use super::*;
 use crate::ui::{a11y::Named as _, priority};
+
+fn national_signal_counts(features: &[GeoFeature]) -> [usize; 5] {
+    let mut seen: [std::collections::HashSet<String>; 5] = std::array::from_fn(|_| Default::default());
+    for feature in features {
+        let text = feature.title.to_ascii_uppercase();
+        let group = match feature.kind {
+            wxdata::overlay::FeatureKind::Warning if text.contains("EMERGENCY")
+                || feature.alert.as_ref().is_some_and(|a| {
+                    a.headline.to_ascii_uppercase().contains("EMERGENCY")
+                        || a.description.to_ascii_uppercase().contains("EMERGENCY")
+                }) => 0,
+            wxdata::overlay::FeatureKind::Warning if text.contains("FLOOD") => 3,
+            wxdata::overlay::FeatureKind::Warning => 1,
+            wxdata::overlay::FeatureKind::Watch | wxdata::overlay::FeatureKind::WatchBox => 2,
+            wxdata::overlay::FeatureKind::MesoDiscussion => 4,
+            _ => continue,
+        };
+        let key = feature.alert.as_ref().map_or(feature.title.as_str(), |a| a.id.as_str());
+        seen[group].insert(key.to_owned());
+    }
+    seen.map(|group| group.len())
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    #[test]
+    fn counts_unique_signals_by_type() {
+        let feature = |kind, title: &str| GeoFeature {
+            rings: Vec::new(), fill: [0; 4], stroke: [0; 4], kind,
+            title: title.into(), detail: String::new(), alert: None,
+        };
+        let watch = feature(wxdata::overlay::FeatureKind::WatchBox, "Tornado Watch 123");
+        let features = [
+            watch.clone(), watch,
+            feature(wxdata::overlay::FeatureKind::Warning, "Tornado Emergency"),
+            feature(wxdata::overlay::FeatureKind::Warning, "Flood Warning"),
+            feature(wxdata::overlay::FeatureKind::MesoDiscussion, "Mesoscale Discussion 234"),
+        ];
+        assert_eq!(national_signal_counts(&features), [1, 0, 1, 1, 1]);
+    }
+}
+
 impl HookEchoApp {
+    pub(crate) fn national_signal_strip(&mut self, ctx: &egui::Context) {
+        let counts = national_signal_counts(&self.overlays);
+        let width = (self.chrome_rect.width() - super::clearview::CORNER_WIDTH - 36.0)
+            .clamp(440.0, 1100.0);
+        let mut open_alerts = false;
+        let area = egui::Area::new("national_signal_strip".into())
+            .constrain_to(self.chrome_rect)
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -74.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_premultiplied(20, 37, 46, 244))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(85, 124, 147)))
+                    .corner_radius(9.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        ui.set_width(width);
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.set_width(140.0);
+                                ui.small("NATIONAL SIGNALS");
+                                ui.strong("Weather at a glance");
+                            });
+                            ui.separator();
+                            let item_width = (width - 270.0) / 5.0;
+                            for (label, count, color) in [
+                                ("Emergency", counts[0], egui::Color32::from_rgb(255, 112, 120)),
+                                ("Warnings", counts[1], egui::Color32::from_rgb(238, 202, 100)),
+                                ("Watches", counts[2], egui::Color32::from_rgb(233, 191, 106)),
+                                ("Flood", counts[3], egui::Color32::from_rgb(0, 188, 118)),
+                                ("Discussions", counts[4], egui::Color32::from_rgb(143, 172, 255)),
+                            ] {
+                                ui.vertical(|ui| {
+                                    ui.set_width(item_width);
+                                    ui.colored_label(color, egui::RichText::new(count.to_string()).size(19.0).strong());
+                                    ui.small(label);
+                                });
+                                ui.separator();
+                            }
+                            open_alerts = ui.button("All alerts ↗").clicked();
+                        });
+                    });
+            });
+        self.mobile_occlusion.push(area.response.rect);
+        if open_alerts {
+            self.apply_action(BindableAction::ToggleAlertPanel, ctx);
+        }
+    }
+
     pub(crate) fn priority_reference(&self) -> ((f64, f64), String) {
         if let Some(home) = self
             .settings
