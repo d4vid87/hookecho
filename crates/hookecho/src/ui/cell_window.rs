@@ -35,11 +35,12 @@ pub fn show(
     popovers: &mut crate::ui::popover::Popovers,
 ) -> (bool, bool, bool) {
     let (mut open, mut follow, mut view3d) = (true, false, false);
+    let mut close = false;
     popovers
         .card(
             ctx,
             "cell",
-            egui::Window::new(format!("Cell {}", cell.id))
+            egui::Window::new("Cell details")
                 .id(egui::Id::new(("cell_focus_rail", &cell.id))),
         )
         .open(&mut open)
@@ -48,36 +49,65 @@ pub fn show(
         .vscroll(true)
         .resizable(false)
         .collapsible(false)
-        .frame(crate::ui::style::window(ctx).inner_margin(18))
+        .title_bar(false)
+        .frame(
+            crate::ui::style::window(ctx)
+                .fill(egui::Color32::from_rgba_unmultiplied(24, 39, 57, 244))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(95, 129, 156)))
+                .corner_radius(14)
+                .inner_margin(20),
+        )
         .show(ctx, |ui| {
-            ui.weak(format!("RADAR SCIT · {}", track_time(cell.time, 0, tz)));
-            ui.label("Storm motion and hail at a glance");
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("RADAR SCIT · {}", track_time(cell.time, 0, tz)))
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(141, 167, 188)),
+                    );
+                    ui.label(egui::RichText::new(format!("Cell {}", cell.id)).size(28.0).strong());
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close = ui.add(egui::Button::new("×").fill(egui::Color32::from_rgb(35, 55, 72)).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 105, 125)))).clicked();
+                });
+            });
             ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("An edge dock leaves more radar visible.")
+                    .size(12.0)
+                    .color(egui::Color32::from_rgb(170, 188, 204)),
+            );
+            ui.add_space(16.0);
             let movement = match (cell.mvt_deg, cell.mvt_kt) {
                 (Some(d), Some(k)) => format!("{} · {:.0} mph", crate::geo::compass(d), k * KT_TO_MPH),
                 _ => "—".into(),
             };
-            value(ui, "MOTION", movement);
-            ui.separator();
-            value(ui, "HAIL SIZE", opt(cell.hail_in, " in", 2));
-            ui.separator();
-            value(ui, "REFLECTIVITY", opt(cell.max_dbz, " dBZ", 0));
-            ui.separator();
+            metric(ui, "Motion", movement, match (cell.mvt_deg, cell.mvt_kt) {
+                (Some(d), Some(k)) => format!("{d:.0}° · {k:.0} kt"),
+                _ => String::new(),
+            }, egui::Color32::from_rgb(118, 189, 255));
+            metric(ui, "Hail size", opt(cell.hail_in, " in", 2), cell.poh.map(|v| format!("{v}% chance")).unwrap_or_default(), egui::Color32::from_rgb(255, 219, 109));
+            metric(ui, "Reflectivity", opt(cell.max_dbz, " dBZ", 0), opt(cell.max_dbz_hgt_kft, " kft peak", 1), egui::Color32::from_rgb(122, 229, 165));
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
-                ui.weak("Severe hail chance");
-                ui.label(cell.posh.map(|v| format!("{v}%")).unwrap_or_else(|| "—".into()));
+                ui.label(egui::RichText::new("Severe hail chance").color(egui::Color32::from_rgb(170, 188, 204)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.strong(cell.posh.map(|v| format!("{v}%")).unwrap_or_else(|| "—".into()));
+                });
             });
-            if !projection_valid(cell, chrono::Utc::now()) {
-                ui.weak("Stale or insufficient motion data — forward projection unavailable.");
-            }
-            if error_km(cell).is_none() {
-                ui.weak("Unable to estimate arrival reliably: source error information unavailable.");
-            }
-            ui.collapsing("All radar details", |ui| {
+            ui.separator();
+            egui::CollapsingHeader::new(egui::RichText::new("Show all radar details").color(egui::Color32::from_rgb(169, 207, 255)))
+                .show(ui, |ui| {
+                if !projection_valid(cell, chrono::Utc::now()) {
+                    ui.weak("Stale or insufficient motion data — forward projection unavailable.");
+                }
+                if error_km(cell).is_none() {
+                    ui.weak("Unable to estimate arrival reliably: source error information unavailable.");
+                }
                 attributes(ui, cell, trend);
                 ui.small("Source: radar SCIT · Motion estimates are not official warnings or forecasts.");
-            });
-            ui.add_space(8.0);
+                });
+            ui.add_space(16.0);
             ui.horizontal(|ui| {
                 follow = ui
                     .add_sized(
@@ -87,15 +117,34 @@ pub fn show(
                         } else {
                             "Follow cell"
                         })
-                        .selected(true),
+                        .fill(egui::Color32::from_rgb(36, 82, 155))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(85, 146, 213))),
                     )
                     .clicked();
                 view3d = ui
-                    .add_sized([120.0, 38.0], egui::Button::new("View in 3D"))
+                    .add_sized([120.0, 38.0], egui::Button::new("View in 3D").fill(egui::Color32::from_rgb(37, 59, 76)))
                     .clicked();
             });
         });
-    (open, follow, view3d)
+    (open && !close, follow, view3d)
+}
+fn metric(ui: &mut egui::Ui, label: &str, value: String, hint: String, color: egui::Color32) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(34, 53, 69))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 85, 109)))
+        .corner_radius(10)
+        .inner_margin(10)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.add_sized([75.0, 23.0], egui::Label::new(egui::RichText::new(label).color(egui::Color32::from_rgb(156, 180, 200))));
+                ui.label(egui::RichText::new(value).size(18.0).strong().color(color));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.small(egui::RichText::new(hint).color(egui::Color32::from_rgb(143, 174, 197)));
+                });
+            });
+        });
+    ui.add_space(7.0);
 }
 fn opt(v: Option<f32>, unit: &str, decimals: usize) -> String {
     v.map(|x| format!("{x:.*}{unit}", decimals))
@@ -283,7 +332,7 @@ mod tests {
         }
         assert!(labels.iter().any(|s| s == "0.50 in"), "{labels:?}");
         assert!(labels.iter().any(|s| s == "ENE · 22 mph"), "{labels:?}");
-        assert!(labels.iter().any(|s| s == "All radar details"), "{labels:?}");
+        assert!(labels.iter().any(|s| s == "Show all radar details"), "{labels:?}");
         assert!(labels.iter().any(|s| s == "View in 3D"), "actions must fit without scrolling: {labels:?}");
     }
 
