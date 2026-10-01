@@ -2349,9 +2349,9 @@ fn prefetch_offsets(playing: bool) -> &'static [isize] {
     }
 }
 
-fn loop_ready(frames: &[Identifier], window: usize, cached: impl Fn(&str) -> bool) -> bool {
+fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) -> bool) -> usize {
     let tail = &frames[frames.len().saturating_sub(window.max(1))..];
-    tail.len() >= 2 && tail.iter().all(|id| cached(id.name()))
+    tail.iter().rev().take_while(|id| cached(id.name())).count()
 }
 
 /// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
@@ -11804,32 +11804,50 @@ impl HookEchoApp {
         }
 
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
-        self.views[idx].timeline.live_window = if cfg!(target_os = "android") {
+        let wanted_window = if cfg!(target_os = "android") {
             self.settings.live_loop_frames.clamp(1, ANDROID_LOOP_WINDOW)
         } else if cfg!(target_arch = "wasm32") {
             self.settings.live_loop_frames.clamp(1, WEB_LOOP_WINDOW)
         } else {
             self.settings.live_loop_frames.max(1)
         };
+        // A browser can only replay the consecutive frames it has decoded. Grow the rolling
+        // window as backfill lands; a missing middle frame must never make the playhead skip.
+        let ready = if cfg!(target_arch = "wasm32") && self.views[idx].timeline.playing {
+            cached_loop_tail(&self.views[idx].timeline.frames, wanted_window, |name| {
+                self.scan_cache.contains(&name.to_string())
+            }).max(1)
+        } else {
+            wanted_window
+        };
+        self.views[idx].timeline.live_window = ready;
 
         // The browser demo opens playing. A single frozen frame is indistinguishable from a broken
         // map to someone who has never seen this app, and the last fifteen minutes is what makes
         // radar readable — you cannot tell which way a storm is moving from a still.
         //
-        // Start only after the complete short loop is decoded. Starting with any two cached
-        // frames could jump over the missing middle frames or park on an uncached first frame.
-        // `backfill_loop_frames` fills the tail; once playing, ordinary prefetch takes over.
+        // Start after two consecutive recent frames are decoded. Any two cached frames could
+        // jump over a missing middle scan; the short loop grows as backfill finishes.
         if self.autoplay_pending {
             let tl = &self.views[idx].timeline;
             if tl.following && !tl.playing {
-                if loop_ready(&tl.frames, tl.live_window, |name| self.scan_cache.contains(&name.to_string())) {
-                    log::info!("loop: playing {} frames", tl.live_window.min(tl.frames.len()));
+                let ready = cached_loop_tail(&tl.frames, wanted_window, |name| {
+                    self.scan_cache.contains(&name.to_string())
+                });
+                if ready >= 2 {
+                    log::info!("loop: playing {ready}/{wanted_window} frames");
+                    self.views[idx].timeline.live_window = ready;
                     self.views[idx].timeline.toggle_play();
                     self.autoplay_pending = false;
                 } else {
                     self.backfill_loop_frames(idx, ctx);
                 }
             }
+        }
+        if cfg!(target_arch = "wasm32") && self.views[idx].timeline.playing
+            && self.views[idx].timeline.live_window < wanted_window
+        {
+            self.backfill_loop_frames(idx, ctx);
         }
         self.views[idx].sync_cut_playback();
         // Hold the playhead while the next frame is still downloading. Advancing on the wall clock
@@ -12073,7 +12091,7 @@ impl HookEchoApp {
         });
     }
 
-    /// Fill the loop window *backwards* from the head, for the browser's opening auto-play.
+    /// Fill the loop window *backwards* from the head, for browser auto-play and its growing tail.
     ///
     /// Ordinary prefetch only looks ahead of the playhead, which is the right thing once a loop is
     /// running and useless before one starts: at the live head there is nothing ahead. This walks
@@ -12092,7 +12110,11 @@ impl HookEchoApp {
             return;
         };
         let tl = &self.views[idx].timeline;
-        let window = tl.live_window.max(1);
+        let window = if cfg!(target_arch = "wasm32") {
+            self.settings.live_loop_frames.clamp(1, WEB_LOOP_WINDOW)
+        } else {
+            tl.live_window.max(1)
+        };
         let start = tl.frames.len().saturating_sub(window);
         let tail: Vec<Identifier> = tl.frames[start..].iter().rev().cloned().collect();
         for id in tail {
@@ -22227,13 +22249,13 @@ mod tests {
     }
 
     #[test]
-    fn web_autoplay_waits_for_every_frame_it_will_show() {
+    fn web_autoplay_uses_only_a_consecutive_cached_tail() {
         let frames: Vec<_> = (0..4)
             .map(|i| wxdata::level2::Identifier::new(format!("KTLX20261001_170{i}00")))
             .collect();
-        assert!(!super::loop_ready(&frames, 4, |name| name.ends_with("170000") || name.ends_with("170300")));
-        assert!(super::loop_ready(&frames, 4, |_| true));
-        assert!(!super::loop_ready(&frames[..1], 4, |_| true));
+        assert_eq!(super::cached_loop_tail(&frames, 4, |name| name.ends_with("170000") || name.ends_with("170300")), 1);
+        assert_eq!(super::cached_loop_tail(&frames, 4, |name| name.ends_with("170200") || name.ends_with("170300")), 2);
+        assert_eq!(super::cached_loop_tail(&frames, 4, |_| true), 4);
     }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,
