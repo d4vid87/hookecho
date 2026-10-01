@@ -1,4 +1,4 @@
-//! Storm console with every available attribute visible on selection.
+//! Compact storm detail rail with the complete SCIT reading one click away.
 use crate::theme;
 use wxdata::level3::Cell;
 const KT_TO_MPH: f32 = 1.150_78;
@@ -40,32 +40,48 @@ pub fn show(
             ctx,
             "cell",
             egui::Window::new(format!("Cell {}", cell.id))
-                .id(egui::Id::new(("cell_console", &cell.id))),
+                .id(egui::Id::new(("cell_focus_rail", &cell.id))),
         )
         .open(&mut open)
-        .default_width((ctx.content_rect().width() - 48.0).clamp(280.0, 720.0))
-        .default_height(560.0)
+        .default_width((ctx.content_rect().width() - 48.0).clamp(280.0, 340.0))
         .max_height((ctx.content_rect().height() - 160.0).max(260.0))
         .vscroll(true)
         .resizable(false)
         .collapsible(false)
         .frame(crate::ui::style::window(ctx).inner_margin(18))
         .show(ctx, |ui| {
-            ui.weak(track_time(cell.time, 0, tz));
-            ui.small("Source: radar SCIT · Motion estimates are not official warnings or forecasts.");
+            ui.weak(format!("RADAR SCIT · {}", track_time(cell.time, 0, tz)));
+            ui.label("Storm motion and hail at a glance");
+            ui.add_space(8.0);
+            let movement = match (cell.mvt_deg, cell.mvt_kt) {
+                (Some(d), Some(k)) => format!("{} · {:.0} mph", crate::geo::compass(d), k * KT_TO_MPH),
+                _ => "—".into(),
+            };
+            value(ui, "MOTION", movement);
+            ui.separator();
+            value(ui, "HAIL SIZE", opt(cell.hail_in, " in", 2));
+            ui.separator();
+            value(ui, "REFLECTIVITY", opt(cell.max_dbz, " dBZ", 0));
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.weak("Severe hail chance");
+                ui.label(cell.posh.map(|v| format!("{v}%")).unwrap_or_else(|| "—".into()));
+            });
             if !projection_valid(cell, chrono::Utc::now()) {
                 ui.weak("Stale or insufficient motion data — forward projection unavailable.");
             }
             if error_km(cell).is_none() {
                 ui.weak("Unable to estimate arrival reliably: source error information unavailable.");
             }
-            ui.add_space(10.0);
-            attributes(ui, cell, trend);
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
+            ui.collapsing("All radar details", |ui| {
+                attributes(ui, cell, trend);
+                ui.small("Source: radar SCIT · Motion estimates are not official warnings or forecasts.");
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
                 follow = ui
                     .add_sized(
-                        [150.0, 38.0],
+                        [140.0, 38.0],
                         egui::Button::new(if following {
                             "Stop following"
                         } else {
@@ -75,7 +91,7 @@ pub fn show(
                     )
                     .clicked();
                 view3d = ui
-                    .add_sized([140.0, 38.0], egui::Button::new("View in 3D"))
+                    .add_sized([120.0, 38.0], egui::Button::new("View in 3D"))
                     .clicked();
             });
         });
@@ -90,7 +106,7 @@ fn value(ui: &mut egui::Ui, label: &str, value: String) {
     ui.label(egui::RichText::new(value).size(15.0).strong());
     ui.add_space(5.0);
 }
-/// Shared with the selected detail pane; no disclosure hides missing or populated fields.
+/// Shared with the selected detail pane; includes missing and populated fields.
 pub(crate) fn attributes(ui: &mut egui::Ui, c: &Cell, trend: &[CellSample]) {
     let movement = match (c.mvt_deg, c.mvt_kt) {
         (Some(d), Some(k)) => format!("{} · {k:.0} kt", crate::geo::compass(d)),
@@ -234,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_renders_without_expanding_full_attributes() {
+    fn focus_rail_renders_key_values_and_actions() {
         let ctx = egui::Context::default();
         let cell = Cell {
             id: "I4".into(),
@@ -266,9 +282,8 @@ mod tests {
                 .collect();
         }
         assert!(labels.iter().any(|s| s == "0.50 in"), "{labels:?}");
-        assert!(labels.iter().any(|s| s == "ENE · 19 kt"), "{labels:?}");
-        assert!(labels.iter().any(|s| s == "Latitude"));
-        assert!(labels.iter().any(|s| s == "Forecast error"));
+        assert!(labels.iter().any(|s| s == "ENE · 22 mph"), "{labels:?}");
+        assert!(labels.iter().any(|s| s == "All radar details"), "{labels:?}");
         assert!(labels.iter().any(|s| s == "View in 3D"), "actions must fit without scrolling: {labels:?}");
     }
 
