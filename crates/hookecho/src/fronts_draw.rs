@@ -10,8 +10,8 @@ use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Shape, Stroke, Vec2};
 use wxdata::fronts::{Front, FrontKind, SurfaceAnalysis};
 
 /// Screen-space spacing between pips.
-const PIP_EVERY_PX: f32 = 34.0;
-const PIP_SIZE: f32 = 6.0;
+const PIP_EVERY_PX: f32 = 48.0;
+const PIP_SIZE: f32 = 5.0;
 
 /// Draw the analysis. `to_screen` projects `(lon, lat)`; `clip` culls off-screen work.
 pub fn draw(
@@ -37,17 +37,11 @@ pub fn draw(
         match f.kind {
             // Troughs are dashed and pipless, which is how they're distinguished from fronts.
             FrontKind::Trough => {
-                for w in pts.windows(2) {
-                    painter.add(Shape::dashed_line(
-                        &[w[0], w[1]],
-                        Stroke::new(1.6, col),
-                        6.0,
-                        4.0,
-                    ));
-                }
+                painter.add(Shape::dashed_line(&pts, Stroke::new(1.25, col.gamma_multiply(0.7)), 7.0, 7.0));
             }
             _ => {
-                painter.add(Shape::line(pts.clone(), Stroke::new(2.0, col)));
+                painter.add(Shape::line(pts.clone(), Stroke::new(4.0, Color32::from_black_alpha(170))));
+                painter.add(Shape::line(pts.clone(), Stroke::new(1.7, col)));
                 pips(painter, &pts, f, col);
             }
         }

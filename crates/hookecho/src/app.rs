@@ -14104,7 +14104,7 @@ impl HookEchoApp {
         }
 
         // Surface analysis: fronts with their pips, plus H/L centers.
-        if self.show_fronts {
+        if self.show_fronts && self.active_workspace.as_deref() == Some("National overview") {
             if let Some(a) = &self.fronts {
                 let to_screen = |lon: f64, lat: f64| {
                     let w = crate::render::mercator::lonlat_to_world(lon, lat);
@@ -16712,6 +16712,8 @@ impl HookEchoApp {
     fn switch_mode(&mut self, target: ViewMode, ctx: &egui::Context) {
         let current = ViewMode::for_layout(self.analyst_open, self.views.len());
         if current == target { return; }
+        #[cfg(target_arch = "wasm32")]
+        Self::post_workspace_to_parent(None);
         let outgoing = self.capture_mode_session();
         match current {
             ViewMode::Radar => self.radar_session = Some(outgoing),
@@ -16742,6 +16744,8 @@ impl HookEchoApp {
         }
         self.active_workspace = None;
         self.panel_open = false;
+        #[cfg(target_arch = "wasm32")]
+        Self::post_workspace_to_parent(None);
     }
 
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
@@ -16755,6 +16759,17 @@ impl HookEchoApp {
         self.apply_workspace_raw(ws, ctx);
         self.analyst_open = mode == ViewMode::Analyst;
         self.active_workspace = Some(ws.name.clone());
+        #[cfg(target_arch = "wasm32")]
+        Self::post_workspace_to_parent(Some(&ws.name));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn post_workspace_to_parent(name: Option<&str>) {
+        let Some(win) = web_sys::window() else { return };
+        let Ok(Some(parent)) = win.parent() else { return };
+        if parent == win { return }
+        let value = serde_json::json!({"hookecho_workspace": name}).to_string();
+        let _ = parent.post_message(&wasm_bindgen::JsValue::from_str(&value), "*");
     }
 
     fn apply_workspace_raw(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
@@ -20121,6 +20136,7 @@ impl eframe::App for HookEchoApp {
         }
         // Surface analysis: WPC reissues it a few times an hour.
         if self.show_fronts
+            && self.active_workspace.as_deref() == Some("National overview")
             && self
                 .fronts_last_fetch
                 .is_none_or(|t| t.elapsed().as_secs() >= 1800)

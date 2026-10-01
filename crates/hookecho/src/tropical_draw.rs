@@ -59,16 +59,19 @@ fn draw_storm(
     to_screen: &impl Fn(f64, f64) -> Pos2,
     taken: &mut Vec<Rect>,
 ) {
-    let pts: Vec<Pos2> = storm
-        .points
-        .iter()
-        .map(|p| to_screen(p.lon, p.lat))
-        .collect();
+    let pts: Vec<Pos2> = storm.points.iter().map(|p| to_screen(p.lon, p.lat)).collect();
 
     // Solid center track; the forecast cone remains dashed.
-    crate::field_atlas::boundary(painter, &pts, clip, crate::field_atlas::Style {
+    let track_style = crate::field_atlas::Style {
         rgb: [119, 221, 255], fill: 0, dash: None, emergency: false, warning: false,
-    }, 1.0);
+    };
+    // A forecast crossing the date line has a discontinuity in map coordinates. Never
+    // connect the two sides with a line spanning the whole map.
+    for (pair, geo) in pts.windows(2).zip(storm.points.windows(2)) {
+        if (geo[0].lon - geo[1].lon).abs() <= 180.0 {
+            crate::field_atlas::boundary(painter, pair, clip, track_style, 1.0);
+        }
+    }
 
     // Current position: the cyclone symbol, not another dot. Drawn (and its callout reserved)
     // before the forecast points, because point 0 sits on top of it and the box that says how
