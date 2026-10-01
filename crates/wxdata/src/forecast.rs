@@ -70,6 +70,16 @@ pub struct PointForecast {
     pub office: String,
     pub daily: Vec<Period>,
     pub hourly: Vec<Period>,
+    /// Point rainfall guidance for the next 24 hours. Models are independent of the NWS forecast.
+    pub models: Vec<ModelRain>,
+    /// SPC Day-1 category at the point; `None` means the outlook could not be loaded.
+    pub spc_risk: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelRain {
+    pub name: &'static str,
+    pub inches: Option<f32>,
 }
 
 fn parse_periods(body: &str) -> anyhow::Result<Vec<Period>> {
@@ -132,6 +142,54 @@ fn parse_periods(body: &str) -> anyhow::Result<Vec<Period>> {
 /// Fetch the forecast for `(lat, lon)`: `/points` resolves the grid cell, then the two forecast
 /// URLs it hands back. Two round trips, same shape as [`crate::obs::fetch_nearest`].
 pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<PointForecast> {
+    let (official, models, risk) = futures_util::join!(
+        fetch_official(http, lat, lon),
+        fetch_models(http, lat, lon),
+        fetch_spc_risk(http, lat, lon),
+    );
+    let mut forecast = official?;
+    forecast.models = models;
+    forecast.spc_risk = risk;
+    Ok(forecast)
+}
+
+async fn fetch_models(http: &reqwest::Client, lat: f64, lon: f64) -> Vec<ModelRain> {
+    let models = [("Euro", "ecmwf_ifs025"), ("GFS", "gfs_seamless"), ("HRRR", "ncep_hrrr_conus")];
+    futures_util::future::join_all(models.into_iter().map(|(name, model)| async move {
+        let result = async {
+            let body = http
+                .get(crate::net::fetch_url("https://api.open-meteo.com/v1/forecast"))
+                .query(&[("latitude", lat.to_string()), ("longitude", lon.to_string()),
+                    ("hourly", "precipitation".into()), ("models", model.into()),
+                    ("forecast_days", "2".into()), ("timeformat", "unixtime".into())])
+                .timeout(crate::net::FEED_TIMEOUT).send().await?.error_for_status()?.text().await?;
+            let body: serde_json::Value = serde_json::from_str(&body)?;
+            anyhow::Ok(rain_24h(&body, Utc::now().timestamp()))
+        }.await;
+        ModelRain { name, inches: result.unwrap_or(None) }
+    })).await
+}
+
+fn rain_24h(body: &serde_json::Value, now: i64) -> Option<f32> {
+    let hourly = body.get("hourly")?;
+    let times = hourly.get("time")?.as_array()?;
+    let rain = hourly.get("precipitation")?.as_array()?;
+    let values: Vec<f32> = times.iter().zip(rain).filter_map(|(time, value)| {
+        let time = time.as_i64()?;
+        (time >= now && time < now + 86_400).then(|| value.as_f64().map(|mm| mm as f32))?
+    }).collect();
+    (!values.is_empty()).then(|| values.iter().sum::<f32>() / 25.4)
+}
+
+async fn fetch_spc_risk(http: &reqwest::Client, lat: f64, lon: f64) -> Option<String> {
+    let features = crate::spc::fetch_outlook_kind(http, 1, crate::spc::OutlookKind::Categorical).await.ok()?;
+    let rank = |label: &str| match label { "HIGH" => 6, "MDT" => 5, "ENH" => 4, "SLGT" => 3, "MRGL" => 2, "TSTM" => 1, _ => 0 };
+    Some(features.iter().filter(|f| f.contains(lon, lat))
+        .filter_map(|f| f.title.split_once(": ").map(|(_, label)| label))
+        .max_by_key(|label| rank(label)).unwrap_or("NONE").to_string())
+}
+
+async fn fetch_official(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<PointForecast> {
     let get = |url: String| {
         let http = http.clone();
         async move {
@@ -186,12 +244,24 @@ pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result
         office,
         daily,
         hourly,
+        models: Vec::new(),
+        spc_risk: None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_rain_uses_only_the_next_24_hours() {
+        let response = serde_json::json!({"hourly": {
+            "time": [0, 3600, 7200, 90000],
+            "precipitation": [25.4, 12.7, null, 50.8]
+        }});
+        assert_eq!(rain_24h(&response, 1), Some(0.5));
+        assert_eq!(rain_24h(&response, 100000), None);
+    }
 
     const SAMPLE: &str = r#"{
       "properties": {

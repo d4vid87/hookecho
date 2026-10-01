@@ -27,97 +27,156 @@ pub fn show(
     popovers: &mut crate::ui::popover::Popovers,
 ) -> bool {
     let (now, history) = comparison;
-    let mut open = true;
+    let mut close = false;
     popovers
-        .card(ctx, "forecast", egui::Window::new("Forecast"))
-        .open(&mut open)
-        .default_size([460.0, 460.0])
+        .card(ctx, "forecast", egui::Window::new("Forecast").title_bar(false))
+        .frame(egui::Frame::new().fill(Color32::from_rgb(17, 34, 47))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(86, 115, 138)))
+            .corner_radius(16.0).inner_margin(20.0))
+        .default_size([440.0, 740.0])
         .show(ctx, |ui| {
+            ui.set_min_width(390.0);
             ui.horizontal(|ui| {
-                ui.strong(format!("{:.3}, {:.3}", at.1, at.0));
-                if let State::Ready(f) = state {
-                    if !f.office.is_empty() {
-                        ui.weak(format!("· {}", f.office));
-                    }
-                }
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(format!("POINT FORECAST · {:.3}, {:.3}", at.1, at.0))
+                        .monospace().size(10.0).color(Color32::from_rgb(145, 185, 211)));
+                    let title = match state {
+                        State::Ready(f) if f.daily.first().is_some_and(|p| p.short.to_lowercase().contains("rain") || p.short.to_lowercase().contains("shower")) => "A wet stretch ahead.",
+                        State::Ready(f) if f.daily.first().is_some_and(|p| p.short.to_lowercase().contains("thunder")) => "Storms are possible.",
+                        _ => "Weather at this point.",
+                    };
+                    ui.label(RichText::new(title).size(25.0).strong().color(Color32::WHITE));
+                    if let State::Ready(f) = state { ui.label(RichText::new(format!("{} · point forecast", f.office)).size(11.0).color(MUTED)); }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    if ui.button("×").on_hover_text("Close forecast").clicked() { close = true; }
+                });
             });
-            if let Some(station) = now.and_then(|station| station.obs.first().map(|ob| (station, ob))) {
-                ui.label(conditions_line(station.1, &station.0.station_id));
-            }
-            ui.weak(almanac_line(at, tz, Utc::now()));
-            ui.separator();
-            if let Some(m) = minute {
-                minute_strip(ui, m);
-                ui.add_space(6.0);
-            }
-            ui.strong("Temperature at selected point");
-            ui.weak("Nearest station observations; model values sampled at the map point. RTMA: recent 6 hours · HRRR/GFS: current run.");
-            crate::ui::sensor_window::temperature_comparison(
-                ui, now.map(|station| station.obs.as_slice()).unwrap_or(&[]), history,
-            );
-            if !history.has_samples() { ui.weak("Waiting for analysis and forecast samples."); }
-            ui.separator();
-            match state {
-                State::Loading => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.weak("Fetching forecast…");
-                    });
-                }
-                State::Failed(e) => {
-                    ui.colored_label(Color32::from_rgb(230, 120, 120), e);
-                    ui.small("Forecast services go down; tap the map again to retry.");
-                }
-                State::Ready(f) => body(ui, f, tz),
-            }
+            ui.add_space(15.0);
+            egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 120.0).clamp(260.0, 740.0))
+                .show(ui, |ui| match state {
+                    State::Loading => { ui.spinner(); ui.weak("Fetching forecast…"); }
+                    State::Failed(e) => { ui.colored_label(Color32::from_rgb(230, 120, 120), e); }
+                    State::Ready(f) => atlas_body(ui, f, now, history, minute, tz, at),
+                });
         });
-    open
+    !close
 }
 
-fn body(ui: &mut egui::Ui, f: &PointForecast, tz: Option<wxdata::tz::Tz>) {
-    if !f.hourly.is_empty() {
-        ui.label(RichText::new("Next 24 hours").strong());
-        hourly_strip(ui, &f.hourly, tz);
-        wind_strip(ui, &f.hourly);
-        ui.add_space(6.0);
-    }
-    ui.label(RichText::new("This week").strong());
-    ui.add_space(2.0);
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for p in &f.daily {
-            ui.horizontal(|ui| {
-                ui.add_sized(
-                    [104.0, 18.0],
-                    egui::Label::new(RichText::new(&p.name).strong()).selectable(false),
-                );
-                let temp = RichText::new(format!("{:.0}°", p.temp_f))
-                    .strong()
-                    .color(if p.is_day {
-                        Color32::from_rgb(245, 190, 90)
-                    } else {
-                        Color32::from_rgb(150, 180, 240)
-                    });
-                ui.add_sized([44.0, 18.0], egui::Label::new(temp).selectable(false));
-                if let Some(pc) = p.precip_pct {
-                    ui.add_sized(
-                        [42.0, 18.0],
-                        egui::Label::new(
-                            RichText::new(format!("{pc}%")).color(Color32::from_rgb(110, 180, 240)),
-                        )
-                        .selectable(false),
-                    );
-                } else {
-                    ui.add_sized([42.0, 18.0], egui::Label::new("").selectable(false));
-                }
-                ui.label(&p.short);
-            })
-            .response
-            .on_hover_text(if p.wind.is_empty() {
-                p.short.clone()
-            } else {
-                format!("{}\nWind {}", p.short, p.wind)
+const MUTED: Color32 = Color32::from_rgb(159, 178, 196);
+const BLUE: Color32 = Color32::from_rgb(84, 185, 255);
+const GOLD: Color32 = Color32::from_rgb(255, 208, 107);
+const MINT: Color32 = Color32::from_rgb(100, 221, 182);
+
+fn tile(ui: &mut egui::Ui, label: &str, value: String, color: Color32) {
+    egui::Frame::new().fill(Color32::from_rgb(33, 56, 75))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(54, 84, 107)))
+        .corner_radius(10.0).inner_margin(10.0).show(ui, |ui| {
+            ui.set_min_width(145.0);
+            ui.label(RichText::new(label).size(10.0).color(MUTED));
+            ui.label(RichText::new(value).size(23.0).strong().color(color));
+        });
+}
+
+fn atlas_body(
+    ui: &mut egui::Ui, f: &PointForecast, now: Option<&wxdata::obs::StationObs>,
+    history: &crate::ui::sensor_window::PointHistory, minute: Option<&[Option<f32>]>,
+    tz: Option<wxdata::tz::Tz>, at: (f64, f64),
+) {
+    let observation = now.and_then(|s| s.obs.first());
+    let current = observation.and_then(|o| o.temp_c.map(crate::ui::station_card::c_to_f))
+        .or_else(|| f.hourly.first().map(|p| p.temp_f));
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(RichText::new("CURRENT").monospace().size(10.0).color(MUTED));
+            ui.label(RichText::new(current.map_or("—".to_string(), |t| format!("{t:.0}°")))
+                .size(58.0).strong().color(GOLD));
+            if let Some((station, ob)) = now.and_then(|s| s.obs.first().map(|o| (s, o))) {
+                ui.label(RichText::new(conditions_line(ob, &station.station_id)).size(11.0).color(MUTED));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(86.0), Sense::hover());
+            let center = rect.center();
+            ui.painter().circle_stroke(center, 34.0, Stroke::new(7.0, Color32::from_rgb(64, 91, 113)));
+            let label = f.spc_risk.as_deref().unwrap_or("—");
+            let fraction = match label { "HIGH" => 1.0, "MDT" => 0.85, "ENH" => 0.7,
+                "SLGT" => 0.55, "MRGL" => 0.4, "TSTM" => 0.25, _ => 0.0 };
+            if fraction > 0.0 {
+                let points = (0..=24).map(|i| {
+                    let angle = std::f32::consts::TAU * (i as f32 / 24.0 * fraction - 0.25);
+                    center + Vec2::new(angle.cos(), angle.sin()) * 34.0
+                }).collect();
+                ui.painter().add(egui::Shape::line(points,
+                    Stroke::new(7.0, Color32::from_rgb(250, 146, 114))));
+            }
+            ui.painter().text(center, Align2::CENTER_CENTER, label, FontId::proportional(14.0), Color32::from_rgb(255, 185, 151));
+        });
+    });
+    ui.label(RichText::new("SPC Day 1 · categorical storm risk at this point").size(10.0).color(MUTED));
+    ui.add_space(14.0);
+    let risk = f.spc_risk.as_deref().unwrap_or("UNAVAILABLE");
+    egui::Frame::new().fill(Color32::from_rgb(41, 44, 53))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(100, 78, 78)))
+        .corner_radius(10.0).inner_margin(10.0).show(ui, |ui| {
+            ui.label(RichText::new(match risk {
+                "HIGH" | "MDT" | "ENH" | "SLGT" | "MRGL" => "⚡ SPC severe weather risk at this point",
+                "TSTM" => "⚡ General thunderstorms possible",
+                "NONE" => "No SPC storm-risk area at this point",
+                _ => "SPC risk unavailable right now",
+            }).strong().size(12.0).color(Color32::from_rgb(255, 181, 143)));
+            ui.label(RichText::new("Forecast outlook · check active warning polygons on the map").size(10.0).color(MUTED));
+        });
+    ui.add_space(8.0);
+    let rain_chance = f.hourly.iter().take(24).filter_map(|p| p.precip_pct).max();
+    let totals: Vec<f32> = f.models.iter().filter_map(|m| m.inches).collect();
+    let range = totals.iter().copied().reduce(f32::min).zip(totals.iter().copied().reduce(f32::max));
+    ui.columns(2, |cols| {
+        tile(&mut cols[0], "Rain probability · next 24h", rain_chance.map_or("—".into(), |p| format!("{p}%")), BLUE);
+        tile(&mut cols[1], "Model rainfall range", range.map_or("—".into(), |(lo, hi)| format!("{lo:.1}–{hi:.1} in")), MINT);
+    });
+    ui.add_space(15.0);
+    ui.horizontal(|ui| { ui.strong("Four-period outlook"); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(RichText::new(&f.office).small().color(MUTED)); }); });
+    ui.add_space(7.0);
+    ui.columns(4, |cols| for (col, period) in cols.iter_mut().zip(f.daily.iter().take(4)) {
+        egui::Frame::new().fill(Color32::from_rgb(33, 56, 75)).corner_radius(9.0).inner_margin(7.0).show(col, |ui| {
+            ui.label(RichText::new(&period.name).size(10.0).color(MUTED));
+            ui.label(RichText::new(format!("{:.0}°", period.temp_f)).strong().size(18.0)
+                .color(if period.is_day { GOLD } else { BLUE }));
+            ui.label(RichText::new(period.precip_pct.map_or("—".into(), |p| format!("{p}% rain"))).size(10.0).color(BLUE));
+        });
+    });
+    ui.add_space(15.0);
+    ui.horizontal(|ui| { ui.strong("Guidance spread"); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(RichText::new("24h rainfall · model").small().color(MUTED)); }); });
+    ui.add_space(6.0);
+    for model in &f.models {
+        egui::Frame::new().fill(Color32::from_rgb(33, 56, 75)).corner_radius(8.0)
+            .inner_margin(8.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_sized([62.0, 18.0], egui::Label::new(RichText::new(model.name).strong().size(11.0)));
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new((ui.available_width() - 73.0).max(50.0), 6.0), Sense::hover());
+                    ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(20, 42, 59));
+                    if let Some(inches) = model.inches {
+                        let width = rect.width() * (inches / 1.0).clamp(0.0, 1.0);
+                        ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, Vec2::new(width, 6.0)), 3.0, BLUE);
+                    }
+                    ui.label(RichText::new(model.inches.map_or("—".into(), |v| format!("{v:.2} in"))).size(11.0));
+                });
             });
-        }
+        ui.add_space(5.0);
+    }
+    ui.add_space(5.0);
+    ui.label(RichText::new("NWS/Open-Meteo: official point forecast · SPC: Day-1 risk · Euro/GFS/HRRR: independent model guidance. Model rainfall is not an official warning.")
+        .size(10.0).color(MUTED));
+    egui::CollapsingHeader::new("All forecast details").show(ui, |ui| {
+        ui.weak(almanac_line(at, tz, Utc::now()));
+        if let Some(m) = minute { minute_strip(ui, m); }
+        if !f.hourly.is_empty() { hourly_strip(ui, &f.hourly, tz); wind_strip(ui, &f.hourly); }
+        crate::ui::sensor_window::temperature_comparison(ui,
+            now.map(|station| station.obs.as_slice()).unwrap_or(&[]), history);
+        if !history.has_samples() { ui.weak("Waiting for analysis and forecast samples."); }
+        for p in &f.daily { ui.label(format!("{} · {:.0}° · {} · {}", p.name, p.temp_f,
+            p.precip_pct.map_or("—".into(), |v| format!("{v}% rain")), p.short)); }
     });
 }
 

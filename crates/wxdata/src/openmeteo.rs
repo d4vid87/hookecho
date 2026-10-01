@@ -63,6 +63,8 @@ pub fn parse_forecast(body: &str) -> anyhow::Result<PointForecast> {
         office: "Open-Meteo".to_string(),
         daily: out,
         hourly,
+        models: Vec::new(),
+        spc_risk: None,
     })
 }
 
