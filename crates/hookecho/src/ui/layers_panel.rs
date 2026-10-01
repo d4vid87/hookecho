@@ -667,7 +667,7 @@ pub(crate) fn body(
     entries: &[PaletteEntry],
     query: &mut String,
     accent: Color32,
-    _max_height: f32,
+    max_height: f32,
     focus_search: bool,
     pref: &mut Vec<String>,
     _outlook_day: u8,
@@ -680,6 +680,7 @@ pub(crate) fn body(
         d.get_temp::<(bool, Option<String>)>(nav_id)
             .unwrap_or_default()
     });
+    let split_library = ui.available_width() >= 560.0;
     // (dragged label, label it was dropped on) — applied after the loop so the borrow of `pref`
     // doesn't have to live inside the scroll area.
     let mut moved: Option<(String, String)> = None;
@@ -717,15 +718,17 @@ pub(crate) fn body(
         }
     });
     ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        let count = entries.iter().filter(|e| active_layer(e)).count();
-        for (label, value) in [("Browse".to_string(), false), (format!("{count} active"), true)] {
-            if ui.selectable_label(active_only == value, label).clicked() {
-                active_only = value;
-                category = None;
+    if !split_library {
+        ui.horizontal(|ui| {
+            let count = entries.iter().filter(|e| active_layer(e)).count();
+            for (label, value) in [("Browse".to_string(), false), (format!("{count} active"), true)] {
+                if ui.selectable_label(active_only == value, label).clicked() {
+                    active_only = value;
+                    category = None;
+                }
             }
-        }
-    });
+        });
+    }
     ui.add_space(10.0);
     let order: Vec<_> = matches(entries, query)
         .into_iter()
@@ -737,6 +740,74 @@ pub(crate) fn body(
         if let Some(i) = order.first() {
             return Some(entries[*i].action);
         }
+    }
+    if split_library {
+        let selected = category.get_or_insert_with(|| "Severe".to_string()).clone();
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(194.0);
+                if ui.add_sized([194.0, 38.0], egui::Button::new(format!("Active layers · {}", entries.iter().filter(|e| active_layer(e)).count()))
+                    .fill(if active_only { Color32::from_rgb(40, 85, 155) } else { Color32::from_rgb(32, 52, 71) })).clicked() {
+                    active_only = !active_only;
+                }
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().id_salt("split_library_categories").max_height(340.0).min_scrolled_height(340.0).show(ui, |ui| {
+                    for cat in ["National", "Severe", "Obs", "Models", "Reference", "Tools", "Radar", "MRMS", "Settings"]
+                        .into_iter().filter(|cat| entries.iter().any(|e| e.category == *cat)) {
+                        if cat == "Radar" {
+                            ui.add_space(8.0);
+                            ui.label(RichText::new("MORE CONTROLS").size(10.0).color(Color32::from_rgb(140, 172, 204)));
+                        }
+                        if ui.add_sized([194.0, 38.0], egui::Button::new(format!("{}  {}", category_glyph(cat), category_name(cat)))
+                            .fill(if !active_only && selected == cat { Color32::from_rgb(40, 85, 155) } else { Color32::from_rgb(32, 52, 71) }))
+                            .clicked() {
+                            category = Some(cat.to_string());
+                            active_only = false;
+                        }
+                        ui.add_space(3.0);
+                    }
+                });
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(ui.available_width().max(280.0));
+                egui::ScrollArea::vertical().id_salt("split_library_rows")
+                    .max_height(max_height.max(320.0))
+                    .min_scrolled_height(max_height.max(320.0))
+                    .show(ui, |ui| {
+                        if order.is_empty() {
+                            ui.weak("No matching controls.");
+                            return;
+                        }
+                        if !query.is_empty() {
+                            ui.label(RichText::new("SEARCH RESULTS").size(11.0).color(Color32::from_rgb(137, 202, 255)));
+                        } else if active_only {
+                            ui.label(RichText::new("ACTIVE LAYERS").size(11.0).color(Color32::from_rgb(137, 202, 255)));
+                        } else {
+                            ui.label(RichText::new(category_name(&selected).to_uppercase()).size(11.0).color(Color32::from_rgb(137, 202, 255)));
+                        }
+                        ui.add_space(6.0);
+                        let mut in_view: Vec<_> = order.iter().copied()
+                            .filter(|i| !query.is_empty() || active_only || entries[*i].category == selected)
+                            .collect();
+                        if query.is_empty() && !active_only {
+                            in_view.sort_by_key(|i| (pref.iter().position(|s| *s == entries[*i].label).unwrap_or(usize::MAX), !entries[*i].favorite, entries[*i].recent.unwrap_or(usize::MAX), !entries[*i].common));
+                        }
+                        for i in in_view {
+                            let hit = row(ui, &entries[i], Color32::from_rgb(120, 186, 255), false, true);
+                            if hit.clicked { chosen = Some(entries[i].action); }
+                            if let Some(t) = hit.explain { chosen = Some(PaletteAction::Explain(t)); }
+                            if let Some(layer) = hit.favorite { chosen = Some(PaletteAction::ToggleFavorite(layer)); }
+                            ui.add_space(4.0);
+                        }
+                        if query.is_empty() && !active_only && selected == "Radar" {
+                            after_radar(ui);
+                        }
+                    });
+            });
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(nav_id, (active_only, category)));
+        return chosen;
     }
     ui.scope(|ui| {
             if order.is_empty() {
@@ -943,6 +1014,33 @@ pub(crate) fn body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_library_keeps_category_rail_and_real_actions_visible() {
+        let ctx = egui::Context::default();
+        let entries = [PaletteEntry {
+            label: "Storm cells".into(), category: "Severe",
+            action: PaletteAction::ToggleOverlay(crate::app::OverlayToggle::Tracks),
+            on: Some(true), desc: "", common: true, key: None, health: None,
+            favorite: false, recent: None,
+        }];
+        let mut query = String::new();
+        let mut pref = Vec::new();
+        let mut labels = Vec::new();
+        for _ in 0..3 {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(680.0);
+                body(ui, &entries, &mut query, Color32::WHITE, 420.0, false,
+                    &mut pref, 0, wxdata::spc::OutlookKind::default(), |_| {});
+            });
+            labels = out.shapes.iter().filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            }).collect();
+        }
+        assert!(labels.iter().any(|s| s.contains("Severe weather")), "{labels:?}");
+        assert!(labels.iter().any(|s| s == "Storm cells"), "{labels:?}");
+    }
 
     #[test]
     fn settings_footer_opens_settings_with_one_click() {

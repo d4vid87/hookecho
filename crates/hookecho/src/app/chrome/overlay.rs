@@ -105,6 +105,7 @@ impl HookEchoApp {
         let mut all_controls = ctx.data_mut(|d| d.get_temp::<bool>(all_id).unwrap_or(false));
         // Global search always uses the complete registry, even after a focused menu or settings page.
         if context_bar && focus_search { all_controls = true; settings_page = None; }
+        let wide_library = context_bar && all_controls && settings_page.is_none() && !alerts_tab && self.chrome_rect.width() >= 650.0;
         let panel_top = if context_bar { 120.0 } else { PANEL_TOP + if self.analyst_open { 54.0 } else { 0.0 } };
         let max_h = (self.chrome_rect.height() - panel_top - if context_bar { 30.0 } else { SCRUBBER_CLEARANCE }).max(160.0);
         // Read before the body closure takes `&mut self`.
@@ -215,17 +216,39 @@ impl HookEchoApp {
                 }
                 return;
             }
-            (if sheets_layout { egui::Frame::NONE } else { crate::ui::style::glass(ui, 250) }).show(ui, |ui| {
+            let split_library = context_bar && all_controls && settings_page.is_none() && !alerts_tab && chrome.width() >= 650.0;
+            (if sheets_layout {
+                egui::Frame::NONE
+            } else if split_library {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(23, 38, 56, 246))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(89, 123, 152)))
+                    .corner_radius(16)
+                    .inner_margin(18)
+            } else {
+                crate::ui::style::glass(ui, 250)
+            }).show(ui, |ui| {
                 if sheets_layout { ui.spacing_mut().interact_size.y = 48.0; }
+                if split_library {
+                    ui.visuals_mut().faint_bg_color = egui::Color32::from_rgb(32, 51, 67);
+                    ui.visuals_mut().weak_text_color = Some(egui::Color32::from_rgb(160, 185, 204));
+                    ui.visuals_mut().widgets.noninteractive.bg_stroke.color = egui::Color32::from_rgb(61, 91, 113);
+                }
                 if context_bar && settings_page.is_none() {
+                    if split_library {
+                        ui.label(egui::RichText::new("CATEGORIES AND TOOLS SIDE BY SIDE").size(10.0).color(egui::Color32::from_rgb(140, 172, 204)));
+                    }
                     ui.horizontal(|ui| {
-                        ui.heading(if all_controls { if query.is_empty() { "All controls" } else { "Search" } } else { match section { PanelSection::Overlays => "Weather layers", PanelSection::Alerts => "Alerts", PanelSection::Tools => "Analysis tools", PanelSection::Radar => "Radar" } });
+                        ui.heading(if split_library { "Your map, organized." } else if all_controls { if query.is_empty() { "All controls" } else { "Search" } } else { match section { PanelSection::Overlays => "Weather layers", PanelSection::Alerts => "Alerts", PanelSection::Tools => "Analysis tools", PanelSection::Radar => "Radar" } });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("×").named("Close menu").clicked() { hide = true; }
                         });
                     });
+                    if split_library {
+                        ui.weak("Search and switch without losing your place.");
+                    }
                     ui.add_space(10.0);
-                    if all_controls && ui.button("‹ Back to focused menu").clicked() { all_controls = false; }
+                    if all_controls && !split_library && ui.button("‹ Back to focused menu").clicked() { all_controls = false; }
                     if !all_controls && matches!(section, PanelSection::Overlays | PanelSection::Tools) {
                         chosen = ui::layers_panel::context_catalog(ui, &entries, section == PanelSection::Tools, accent);
                         ui.separator();
@@ -364,13 +387,15 @@ impl HookEchoApp {
                     );
                     return;
                 }
-                ui.menu_button("Workspaces ▾", |ui| {
-                    if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
-                        chosen = Some(action);
-                        ui.close();
-                    }
-                });
-                ui.separator();
+                if !split_library {
+                    ui.menu_button("Workspaces ▾", |ui| {
+                        if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) {
+                            chosen = Some(action);
+                            ui.close();
+                        }
+                    });
+                    ui.separator();
+                }
                 // A drag rewrites the order in place, so persist it when it moves.
                 let order_was = self.settings.layer_order.clone();
                 let optional_action = ui::layers_panel::body(
@@ -381,7 +406,9 @@ impl HookEchoApp {
                     // Leave room for the disclosures under the tree, whatever the window
                     // height. In the sheet there is no height to read yet — it scrolls — so
                     // the tree takes half the screen and the rest scrolls past it.
-                    if sheets_layout {
+                    if split_library {
+                        (ctx.content_rect().height() - 330.0).clamp(280.0, 600.0)
+                    } else if sheets_layout {
                         chrome.height() * 0.5
                     } else {
                         420.0
@@ -477,6 +504,7 @@ impl HookEchoApp {
                         fly_to = Some(query.trim().to_string());
                     }
                 }
+                if !split_library {
                 ui.add_space(4.0);
                 for (label, icon) in [
                     ("Map settings", egui_phosphor::regular::GEAR),
@@ -496,6 +524,7 @@ impl HookEchoApp {
                             settings_page = Some(label);
                         }
                     }
+                }
                 }
             });
             if self.analyst_open && (sheets_layout || chrome.width() < 1200.0)
@@ -553,18 +582,25 @@ impl HookEchoApp {
                 .constrain_to(chrome)
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(if context_bar { 16.0 } else { PANEL_X }, panel_top))
                 .show(ctx, |ui| {
-                    ui.set_width(if phone(ctx) {
+                    ui.set_width(if wide_library {
+                        (chrome.width() - 32.0).min(720.0)
+                    } else if phone(ctx) {
                         crate::ui::m3::RAIL_W
                     } else {
                         PANEL_W
                     });
-                    ui.set_max_height(max_h);
+                    ui.set_max_height(if wide_library { (ctx.content_rect().height() - 150.0).max(440.0) } else { max_h });
+                    if wide_library { ui.set_min_height((ctx.content_rect().height() - 180.0).max(420.0)); }
+                    if wide_library {
+                        body(ui);
+                    } else {
                     egui::ScrollArea::vertical()
                             .id_salt(("floating_panel_scroll", settings_page_was, section))
                         .max_height(max_h)
                         .show(ui, |ui| {
                             body(ui);
                         });
+                    }
                 });
             self.mobile_occlusion.push(panel.response.rect);
         }
