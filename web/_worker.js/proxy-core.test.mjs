@@ -87,3 +87,11 @@ test("the trust boundary is unchanged", async () => {
   const post = new Request("https://example.test/proxy/api.weather.gov/x", { method: "POST" });
   assert.equal((await proxy(post)).status, 403);
 });
+
+test("address search reaches Nominatim through the browser proxy", async () => {
+  const calls = stubFetch(upstream({}, '[{"lat":"33.0664867","lon":"-96.0898612"}]'));
+  const res = await proxy(ask("nominatim.openstreetmap.org/search?q=532+brooke+street+greenville+tx&format=json&limit=1"));
+  assert.equal(res.status, 200);
+  assert.match(calls[0].url, /^https:\/\/nominatim\.openstreetmap\.org\/search\?/);
+  assert.equal(calls[0].init.headers["user-agent"].includes("hookecho"), true);
+});

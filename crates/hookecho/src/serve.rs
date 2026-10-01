@@ -1442,6 +1442,7 @@ const ALLOWED_HOSTS: &[&str] = &[
     "mping.ou.edu",
     "www.spotternetwork.org",
     "api.open-meteo.com",
+    "nominatim.openstreetmap.org",
     "gibs.earthdata.nasa.gov",
     // MeteoAlarm: the CAP warnings every European met service publishes in common.
     "feeds.meteoalarm.org",
