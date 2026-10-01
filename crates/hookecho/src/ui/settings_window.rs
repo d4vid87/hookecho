@@ -45,6 +45,23 @@ impl Tab {
     }
 }
 
+fn library_nav(ui: &mut egui::Ui, tab: &mut Tab) {
+    use egui::{Color32, RichText};
+    ui.set_width(194.0);
+    ui.label(RichText::new("SETTINGS LIBRARY").size(10.0).color(Color32::from_rgb(140, 172, 204)));
+    ui.add_space(8.0);
+    for (value, label, group) in Tab::ALL {
+        if label == "Keyboard shortcuts" {
+            ui.add_space(8.0);
+            ui.label(RichText::new("MORE SETTINGS").size(10.0).color(Color32::from_rgb(140, 172, 204)));
+        }
+        if ui.add_sized([194.0, 38.0], egui::Button::new(label)
+            .fill(if *tab == value { Color32::from_rgb(40, 85, 155) } else { Color32::from_rgb(32, 52, 71) }))
+            .on_hover_text(group).clicked() { *tab = value; }
+        ui.add_space(3.0);
+    }
+}
+
 /// A small set of task destinations; all existing controls remain on their focused pages.
 fn settings_home(ui: &mut egui::Ui, theme: Theme) -> Option<Tab> {
     use crate::ui::a11y::Named as _;
@@ -202,38 +219,64 @@ impl SettingsWindow {
             "Settings",
             &mut open,
             false,
-            760.0,
+            960.0,
             egui::Window::new("Settings"),
         ) else {
             self.open = open;
             return None;
         };
         let frame = egui::Frame::new()
-            .fill(ctx.global_style().visuals.panel_fill)
+            .fill(egui::Color32::from_rgb(23, 38, 56))
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(89, 123, 152)))
             .inner_margin(18.0)
             .corner_radius(12.0);
         window.vscroll(false).frame(frame).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 12.0);
             ui.spacing_mut().interact_size.y = 32.0;
             ui.spacing_mut().text_edit_width = 180.0;
+            ui.visuals_mut().faint_bg_color = egui::Color32::from_rgb(32, 51, 67);
+            ui.visuals_mut().weak_text_color = Some(egui::Color32::from_rgb(160, 185, 204));
+            ui.visuals_mut().widgets.noninteractive.bg_stroke.color = egui::Color32::from_rgb(61, 91, 113);
+            let split_library = ui.available_width() >= 650.0;
             let previous = self.tab;
-            if self.tab == Tab::Alerts {
+            if self.tab == Tab::Alerts && !split_library {
                 if ui.button("← Settings home").clicked() { self.tab = Tab::Home; }
                 alert_navigation(ui, &mut self.alert_tab);
                 ui.add_space(4.0);
             }
-            let content_height = (ui.available_height() - 54.0).max(80.0);
+            // The drawer has a fixed viewport rect, but egui's first window pass reports a
+            // shrink-wrapped `available_height`. Budget from the viewport so both columns fill it.
+            let content_height = if cfg!(target_os = "android") || ctx.content_rect().width() < 600.0 {
+                (ctx.content_rect().height() - 110.0).max(80.0)
+            } else {
+                (ctx.content_rect().height() - 354.0).max(80.0)
+            };
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), content_height),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    egui::ScrollArea::vertical()
+                    ui.horizontal(|ui| {
+                        if split_library {
+                            ui.vertical(|ui| {
+                                ui.set_width(194.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt("settings_library_nav")
+                                    .max_height(content_height)
+                                    .min_scrolled_height(content_height)
+                                    .show(ui, |ui| library_nav(ui, &mut self.tab));
+                            });
+                            ui.separator();
+                        }
+                        ui.vertical(|ui| {
+                            ui.set_width(ui.available_width());
+                        egui::ScrollArea::vertical()
                         .id_salt(("settings_content", self.tab.label(), self.alert_tab as u8))
                         .auto_shrink([false, false])
                         .max_height(content_height)
+                        .min_scrolled_height(content_height)
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            if self.tab != Tab::Home && self.tab != Tab::Alerts {
+                            if self.tab != Tab::Home && self.tab != Tab::Alerts && !split_library {
                                 if ui.button("← Settings home").clicked() {
                                     self.tab = Tab::Home;
                                 }
@@ -241,6 +284,11 @@ impl SettingsWindow {
                                 ui.heading(self.tab.label());
                                 ui.add_space(8.0);
                             }
+                            if split_library {
+                                ui.label(egui::RichText::new(self.tab.label().to_uppercase()).size(11.0).color(egui::Color32::from_rgb(137, 202, 255)));
+                                ui.add_space(8.0);
+                            }
+                            if self.tab == Tab::Alerts && split_library { alert_navigation(ui, &mut self.alert_tab); }
                             match self.tab {
                                 Tab::Home => {
                                     if let Some(tab) = settings_home(ui, settings.theme) {
@@ -250,7 +298,8 @@ impl SettingsWindow {
                                 Tab::More => {
                                     for tab in [Tab::Hotkeys, Tab::Sync, Tab::Advanced, Tab::Help] {
                                         if ui.add_sized([ui.available_width(), 44.0],
-                                            egui::Button::new(format!("{}  →", tab.label()))).clicked() {
+                                            egui::Button::new(format!("{}  →", tab.label()))
+                                                .fill(egui::Color32::from_rgb(32, 52, 71))).clicked() {
                                             self.tab = tab;
                                         }
                                     }
@@ -294,6 +343,8 @@ impl SettingsWindow {
                                 Tab::Help => help_tab(ui, &mut self.run_setup, &mut self.run_tour),
                             }
                         });
+                        });
+                    });
                 },
             );
             ui.separator();
