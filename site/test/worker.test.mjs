@@ -74,6 +74,22 @@ test("the retired product route redirects to StormDesk", async () => {
   assert.equal(response.headers.get("location"), "https://hookecho.io/stormdesk/");
 });
 
+test("city and ZIP searches return a forecast point while rejecting empty searches", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    let target;
+    globalThis.fetch = async (url) => {
+      target = url;
+      return Response.json([{ lat: "33.0983846", lon: "-96.1001322", address: { town: "Greenville", state: "Texas", postcode: "75402" } }]);
+    };
+    const result = await worker.fetch(new Request("https://hookecho.io/api/place?q=75402"), {});
+    assert.equal(result.status, 200);
+    assert.equal(target.searchParams.get("q"), "75402");
+    assert.deepEqual(await result.json(), { label: "Greenville, Texas, 75402", lat: 33.0983846, lon: -96.1001322 });
+    assert.equal((await worker.fetch(new Request("https://hookecho.io/api/place?q="), {})).status, 400);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Android visitors keep live radar primary and see the install note", () => {
   const node = (placement) => ({
     attrs: new Map([["data-placement", placement], ["hidden", ""]]),

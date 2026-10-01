@@ -118,13 +118,22 @@ if (root) {
     await Promise.allSettled([forecastTask,alertsTask]); clearTimeout(timeout);
     if (controller?.signal === signal) el('refresh').disabled = false;
   }
-  el('location-form').addEventListener('submit',event => {
-    event.preventDefault(); const value = root.querySelector('#weather-search').value.trim().toLowerCase();
-    const exact = areas.find(s => `${s.city}, ${s.state} · ${s.id}`.toLowerCase() === value || s.id.toLowerCase() === value);
-    const matches = areas.filter(s => s.city.toLowerCase() === value);
-    const match = exact || (matches.length === 1 ? matches[0] : null);
-    if (!match) { text('search-status','Choose a radar area from the suggestions, or enter its four-letter station code.'); return; }
-    text('search-status',`Forecast for the ${match.city} radar location. Select “Use my location” for your local forecast.`); load(fromSite(match));
+  let searchController;
+  el('location-form').addEventListener('submit',async event => {
+    event.preventDefault(); const value = root.querySelector('#weather-search').value.trim();
+    searchController?.abort(); searchController = new AbortController();
+    const exact = areas.find(s => `${s.city}, ${s.state} · ${s.id}`.toLowerCase() === value.toLowerCase() || s.id.toLowerCase() === value.toLowerCase());
+    if (exact) { text('search-status',`Forecast for the ${exact.city} radar location.`); load(fromSite(exact)); return; }
+    text('search-status','Finding your location…');
+    try {
+      const response = await fetch(`/api/place?q=${encodeURIComponent(value)}`, { signal: searchController.signal });
+      if (!response.ok) throw new Error(response.status === 404 ? 'No U.S. location found. Try a city and state, ZIP code, or address.' : 'Place search is unavailable. Try a radar station code or Locate me.');
+      const result = await response.json();
+      if (!Number.isFinite(result.lat) || !Number.isFinite(result.lon)) throw new Error('Place search returned an invalid location.');
+      const closest = areas.reduce((best,s) => milesBetween(result,s) < milesBetween(result,best) ? s : best);
+      text('search-status',`Forecast for ${result.label}. Radar from ${closest.id}.`);
+      load({ ...fromSite(closest), ...result, site: closest.id });
+    } catch (error) { if (error.name !== 'AbortError') text('search-status',error.message); }
   });
   el('locate').addEventListener('click',() => {
     if (!navigator.geolocation) { text('search-status','Location is unavailable. Search for a radar area instead.'); return; }
