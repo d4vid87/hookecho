@@ -2349,6 +2349,11 @@ fn prefetch_offsets(playing: bool) -> &'static [isize] {
     }
 }
 
+fn loop_ready(frames: &[Identifier], window: usize, cached: impl Fn(&str) -> bool) -> bool {
+    let tail = &frames[frames.len().saturating_sub(window.max(1))..];
+    tail.len() >= 2 && tail.iter().all(|id| cached(id.name()))
+}
+
 /// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
 /// severe-weather VCP is four volumes. A wasm heap is 32-bit and a decoded volume is tens of MB,
 /// so this is a memory budget as much as a time window.
@@ -11241,13 +11246,15 @@ impl HookEchoApp {
             return;
         }
         self.spawner.spawn(async move {
+            let timeout_site = site.clone();
             // Ask for two: the newest volume is usually still uploading, and one caught before
             // its metadata record lands can't be decoded at all. Falling back one volume shows
             // ~5-minute-old data instead of nothing.
-            let msg = match level2::latest_identifiers(&site, 2).await.map(|mut v| {
+            let msg = wxdata::task::timeout(VOLUME_TIMEOUT, async {
+                match level2::latest_identifiers(&site, 2).await.map(|mut v| {
                 let first = v.remove(0);
                 (first, v.pop())
-            }) {
+                }) {
                 Ok((id, prev)) => {
                     let name = id.name().to_string();
                     if current_name.as_deref() == Some(name.as_str()) {
@@ -11299,7 +11306,12 @@ impl HookEchoApp {
                     site,
                     err: e.to_string(),
                 },
-            };
+                }
+            }).await.unwrap_or_else(|e| DataMsg::Error {
+                view: view_idx,
+                site: timeout_site,
+                err: e.to_string(),
+            });
             let _ = tx.send(msg);
             ctx.request_repaint();
         });
@@ -11804,20 +11816,14 @@ impl HookEchoApp {
         // map to someone who has never seen this app, and the last fifteen minutes is what makes
         // radar readable — you cannot tell which way a storm is moving from a still.
         //
-        // Waits for two frames rather than starting on one, so the first thing the visitor sees
-        // move is an actual loop and not a one-frame stutter. `backfill_loop_frames` is what
-        // fetches the tail; once playing, ordinary prefetch takes over.
+        // Start only after the complete short loop is decoded. Starting with any two cached
+        // frames could jump over the missing middle frames or park on an uncached first frame.
+        // `backfill_loop_frames` fills the tail; once playing, ordinary prefetch takes over.
         if self.autoplay_pending {
             let tl = &self.views[idx].timeline;
             if tl.following && !tl.playing {
-                let window = tl.live_window.max(1);
-                let start = tl.frames.len().saturating_sub(window);
-                let ready = tl.frames[start..]
-                    .iter()
-                    .filter(|id| self.scan_cache.contains(&id.name().to_string()))
-                    .count();
-                if ready >= 2 {
-                    log::info!("loop: playing {ready}/{window} frames");
+                if loop_ready(&tl.frames, tl.live_window, |name| self.scan_cache.contains(&name.to_string())) {
+                    log::info!("loop: playing {} frames", tl.live_window.min(tl.frames.len()));
                     self.views[idx].timeline.toggle_play();
                     self.autoplay_pending = false;
                 } else {
@@ -22218,6 +22224,16 @@ mod tests {
         assert!(should_advance_timeline(false, false));
         assert!(!should_advance_timeline(true, false));
         assert!(!should_advance_timeline(false, true));
+    }
+
+    #[test]
+    fn web_autoplay_waits_for_every_frame_it_will_show() {
+        let frames: Vec<_> = (0..4)
+            .map(|i| wxdata::level2::Identifier::new(format!("KTLX20261001_170{i}00")))
+            .collect();
+        assert!(!super::loop_ready(&frames, 4, |name| name.ends_with("170000") || name.ends_with("170300")));
+        assert!(super::loop_ready(&frames, 4, |_| true));
+        assert!(!super::loop_ready(&frames[..1], 4, |_| true));
     }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,
