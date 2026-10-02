@@ -22072,9 +22072,11 @@ mod tests {
     #[test]
     fn severe_chime_preserves_other_and_emergency_sound_choices() {
         use crate::settings::{AlertSound, Settings};
-        let mut settings = Settings::default();
-        settings.warn_sound = AlertSound::Siren;
-        settings.emergency_sound = AlertSound::Alarm;
+        let settings = Settings {
+            warn_sound: AlertSound::Siren,
+            emergency_sound: AlertSound::Alarm,
+            ..Default::default()
+        };
         assert_eq!(super::new_warning_sound(&settings, false, true), AlertSound::StormChime);
         assert_eq!(super::new_warning_sound(&settings, false, false), AlertSound::Siren);
         assert_eq!(super::new_warning_sound(&settings, true, true), AlertSound::Alarm);

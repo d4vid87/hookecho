@@ -24,27 +24,6 @@ fn national_signal_counts(features: &[GeoFeature]) -> [usize; 5] {
     seen.map(|group| group.len())
 }
 
-#[cfg(test)]
-mod signal_tests {
-    use super::*;
-
-    #[test]
-    fn counts_unique_signals_by_type() {
-        let feature = |kind, title: &str| GeoFeature {
-            rings: Vec::new(), fill: [0; 4], stroke: [0; 4], kind,
-            title: title.into(), detail: String::new(), alert: None,
-        };
-        let watch = feature(wxdata::overlay::FeatureKind::WatchBox, "Tornado Watch 123");
-        let features = [
-            watch.clone(), watch,
-            feature(wxdata::overlay::FeatureKind::Warning, "Tornado Emergency"),
-            feature(wxdata::overlay::FeatureKind::Warning, "Flood Warning"),
-            feature(wxdata::overlay::FeatureKind::MesoDiscussion, "Mesoscale Discussion 234"),
-        ];
-        assert_eq!(national_signal_counts(&features), [1, 0, 1, 1, 1]);
-    }
-}
-
 impl HookEchoApp {
     pub(crate) fn national_signal_strip(&mut self, ctx: &egui::Context) {
         let counts = national_signal_counts(&self.overlays);
@@ -338,5 +317,26 @@ impl HookEchoApp {
             d.insert_temp(rules_id, rules_open);
             d.insert_temp(tracks_id, tracks_open);
         });
+    }
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    #[test]
+    fn counts_unique_signals_by_type() {
+        let feature = |kind, title: &str| GeoFeature {
+            rings: Vec::new(), fill: [0; 4], stroke: [0; 4], kind,
+            title: title.into(), detail: String::new(), alert: None,
+        };
+        let watch = feature(wxdata::overlay::FeatureKind::WatchBox, "Tornado Watch 123");
+        let features = [
+            watch.clone(), watch,
+            feature(wxdata::overlay::FeatureKind::Warning, "Tornado Emergency"),
+            feature(wxdata::overlay::FeatureKind::Warning, "Flood Warning"),
+            feature(wxdata::overlay::FeatureKind::MesoDiscussion, "Mesoscale Discussion 234"),
+        ];
+        assert_eq!(national_signal_counts(&features), [1, 0, 1, 1, 1]);
     }
 }
