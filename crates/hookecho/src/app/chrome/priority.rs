@@ -169,85 +169,91 @@ impl HookEchoApp {
         let tracks_id = egui::Id::new("priority_tracks_open");
         let mut rules_open = ctx.data_mut(|d| d.get_temp::<bool>(rules_id).unwrap_or(false));
         let mut tracks_open = ctx.data_mut(|d| d.get_temp::<bool>(tracks_id).unwrap_or(false));
-        let width = super::clearview::CORNER_WIDTH - 30.0;
+        let beacon_id = egui::Id::new("priority_beacon_open");
+        let mut beacon_open = ctx.data_mut(|d| d.get_temp::<bool>(beacon_id).unwrap_or(false));
         let playback_height = ctx.data_mut(|d| d.get_temp::<egui::Rect>(egui::Id::new("corner_scrubber_rect"))).map_or(74.0, |r| r.height());
+        let bottom = super::clearview::CORNER_BOTTOM + playback_height + 8.0;
+        let color = first.as_ref().map_or(egui::Color32::from_rgb(119, 150, 169), |(_, level, _, _)| priority::COLORS[*level]);
         let area = egui::Area::new("priority_dock".into())
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-super::clearview::CORNER_RIGHT, -(super::clearview::CORNER_BOTTOM + playback_height + 8.0)))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-super::clearview::CORNER_RIGHT, -bottom))
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 252)
-                    .inner_margin(14)
-                    .corner_radius(13.)
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(19, 35, 47, 245))
+                    .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.55)))
+                    .corner_radius(22.0)
+                    .inner_margin(egui::Margin::symmetric(9, 6))
                     .show(ui, |ui| {
-                        ui.set_width(width);
-                        ui.set_max_width(width);
-                        if let Some((a, level, inside, km)) = &first {
-                            let color = priority::COLORS[*level];
-                            egui::Frame::new()
-                                .fill(color.gamma_multiply(0.09))
-                                .stroke(egui::Stroke::new(1., color.gamma_multiply(0.6)))
-                                .corner_radius(8.)
-                                .inner_margin(12)
-                                .show(ui, |ui| {
-                                    ui.set_max_width(width - 26.);
-                                    let place = if *inside {
-                                        format!("covers {reference}")
-                                    } else {
-                                        format!(
-                                            "{} from {reference}",
-                                            crate::geo::fmt_distance(*km, self.metric(), 0)
-                                        )
-                                    };
-                                    ui.colored_label(
-                                        color,
-                                        format!("{} · {place}", priority::LABELS[*level]),
-                                    );
-                                    ui.label(egui::RichText::new(&a.event).size(18.).strong());
-                                    let expiry = a
-                                        .expires
-                                        .map(|t| {
-                                            crate::timefmt::fmt_clock(t, self.active_tz(), false)
-                                        })
-                                        .unwrap_or_else(|| "unavailable".into());
-                                    ui.horizontal_wrapped(|ui| {
-                                        let short: String = a.area.chars().take(72).collect();
-                                        ui.small(format!("{short} · expiry {expiry}"));
-                                        if ui
-                                            .button("Read bulletin ↗")
-                                            .named("Read priority alert bulletin")
-                                            .clicked()
-                                        {
-                                            bulletin = Some(a.id.clone());
-                                        }
-                                    });
-                                    if let Some(tag) =
-                                        a.damage_threat.as_deref().filter(|s| !s.is_empty())
-                                    {
-                                        ui.small(format!("Official impact: {tag}"));
-                                    }
-                                });
-                            ui.add_space(7.);
-                        } else {
-                            ui.strong("No matching alert bulletins");
-                            ui.small(format!("Around {reference} · dock thresholds applied"));
-                            ui.add_space(5.);
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            alerts = ui
-                                .button(format!("Alerts · {count}"))
-                                .named("Open full alerts list")
-                                .clicked();
-                            tracks = ui.button(format!("Tracks · {track_count}")).clicked();
-                            if ui.button("Rules").named("Display rules").clicked() {
-                                rules_open = true;
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if let Some((a, level, _, _)) = &first {
+                                ui.colored_label(color, egui::RichText::new(priority::LABELS[*level]).size(10.0).strong());
+                                ui.add_sized([116.0, 23.0], egui::Label::new(egui::RichText::new(&a.event).size(13.0).strong()).truncate())
+                                    .on_hover_text(&a.event);
+                            } else {
+                                ui.add_sized([167.0, 23.0], egui::Label::new("No matching alerts"));
                             }
-                            if self.archive_bucket().is_some() {
-                                ui.weak("Archive");
+                            if ui.small_button(if beacon_open { "Less −" } else { "More +" })
+                                .named_toggle("Show warning details and controls", beacon_open).clicked() {
+                                beacon_open = !beacon_open;
                             }
                         });
                     });
             });
         self.mobile_occlusion.push(area.response.rect);
+        if beacon_open {
+            let width = super::clearview::CORNER_WIDTH - 30.0;
+            let details = egui::Area::new("priority_beacon_details".into())
+                .order(egui::Order::Foreground)
+                .constrain_to(self.chrome_rect)
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-super::clearview::CORNER_RIGHT, -(bottom + area.response.rect.height() + 8.0)))
+                .show(ctx, |ui| {
+                    crate::ui::style::glass(ui, 252)
+                        .inner_margin(11)
+                        .corner_radius(12.0)
+                        .show(ui, |ui| {
+                            ui.set_width(width);
+                            ui.set_max_width(width);
+                            if let Some((a, level, inside, km)) = &first {
+                                egui::Frame::new()
+                                    .fill(color.gamma_multiply(0.09))
+                                    .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.6)))
+                                    .corner_radius(8.0)
+                                    .inner_margin(10)
+                                    .show(ui, |ui| {
+                                        ui.set_max_width(width - 22.0);
+                                        let place = if *inside {
+                                            format!("covers {reference}")
+                                        } else {
+                                            format!("{} from {reference}", crate::geo::fmt_distance(*km, self.metric(), 0))
+                                        };
+                                        ui.colored_label(color, format!("{} · {place}", priority::LABELS[*level]));
+                                        ui.label(egui::RichText::new(&a.event).size(18.0).strong());
+                                        let expiry = a.expires.map(|t| crate::timefmt::fmt_clock(t, self.active_tz(), false))
+                                            .unwrap_or_else(|| "unavailable".into());
+                                        ui.small(format!("{} · expiry {expiry}", a.area.chars().take(72).collect::<String>()));
+                                        if ui.button("Read bulletin ↗").named("Read priority alert bulletin").clicked() {
+                                            bulletin = Some(a.id.clone());
+                                        }
+                                        if let Some(tag) = a.damage_threat.as_deref().filter(|s| !s.is_empty()) {
+                                            ui.small(format!("Official impact: {tag}"));
+                                        }
+                                    });
+                            } else {
+                                ui.strong("No matching alert bulletins");
+                                ui.small(format!("Around {reference} · dock thresholds applied"));
+                            }
+                            ui.add_space(7.0);
+                            ui.horizontal_wrapped(|ui| {
+                                alerts = ui.button(format!("Alerts · {count}")).named("Open full alerts list").clicked();
+                                tracks = ui.button(format!("Tracks · {track_count}")).clicked();
+                                if ui.button("Rules").named("Display rules").clicked() { rules_open = true; }
+                                if self.archive_bucket().is_some() { ui.weak("Archive"); }
+                            });
+                        });
+                });
+            self.mobile_occlusion.push(details.response.rect);
+        }
         if let Some(id) = bulletin {
             self.open_alert_popup(&id);
         }
@@ -260,6 +266,7 @@ impl HookEchoApp {
             self.filters.show_tracks = true;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            beacon_open = false;
             rules_open = false;
             tracks_open = false;
         }
@@ -314,6 +321,7 @@ impl HookEchoApp {
             }
         }
         ctx.data_mut(|d| {
+            d.insert_temp(beacon_id, beacon_open);
             d.insert_temp(rules_id, rules_open);
             d.insert_temp(tracks_id, tracks_open);
         });
