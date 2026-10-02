@@ -10,12 +10,18 @@ fn launch_home_open(panel_open: bool, drawer_open: bool, home: bool) -> bool {
     !panel_open || drawer_open || !home
 }
 
-fn cobalt_choice(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let button = egui::Button::new(label);
-    let button = if selected {
-        button.fill(egui::Color32::from_rgb(32, 78, 153))
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(154, 191, 255)))
-    } else { button };
+fn rail_heading(ui: &mut egui::Ui, label: &str) {
+    ui.label(egui::RichText::new(label).size(10.0).strong().color(egui::Color32::from_rgb(156, 185, 207)));
+}
+
+fn rail_choice(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let button = egui::Button::new(egui::RichText::new(label).size(13.0))
+        .min_size(egui::vec2(172.0, 32.0))
+        .fill(if selected { egui::Color32::from_rgb(45, 110, 209) }
+              else { egui::Color32::TRANSPARENT })
+        .stroke(if selected { egui::Stroke::new(1.0, egui::Color32::from_rgb(138, 196, 255)) }
+                 else { egui::Stroke::NONE })
+        .corner_radius(5.0);
     ui.add(button)
 }
 
@@ -95,32 +101,45 @@ impl HookEchoApp {
             });
         self.mobile_occlusion.push(toolbar.response.rect);
         self.tour_anchors.menu = Some(toolbar.response.rect);
-        let modes = egui::Area::new("context_modes".into())
+        let mut custom_locations = false;
+        let mut point_forecast = false;
+        let modes = (!self.drawer.is_open() && !self.panel_open).then(|| egui::Area::new("context_modes".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 76.0))
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 252).inner_margin(egui::Margin::same(3)).corner_radius(5.0).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
-                    ui.horizontal(|ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(18, 37, 56, 240))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(82, 117, 143)))
+                    .corner_radius(15.0)
+                    .inner_margin(egui::Margin::same(8))
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 12], blur: 30, spread: 0,
+                        color: egui::Color32::from_black_alpha(120),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_width(172.0);
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        rail_heading(ui, "VIEWS");
                         let regular_radar = !self.analyst_open && self.workspace_return_session.is_none();
-                        single = cobalt_choice(ui, "◉ Radar", regular_radar)
+                        single = rail_choice(ui, "▣  Radar", regular_radar)
                             .named_toggle("Single radar map", regular_radar).clicked();
-                        for name in ["Chase", "National overview", "Analysis"] {
+                        for (name, glyph) in [("Chase", "↗"), ("National overview", "◉"), ("Analysis", "◫")] {
                             if let Some(index) = self.settings.workspaces.iter().position(|ws| ws.name == name) {
-                                if cobalt_choice(ui, name, self.active_workspace.as_deref() == Some(name))
-                                    .named_toggle(name, self.active_workspace.as_deref() == Some(name)).clicked() {
+                                let selected = self.active_workspace.as_deref() == Some(name);
+                                if rail_choice(ui, &format!("{glyph}  {name}"), selected)
+                                    .named_toggle(name, selected).clicked() {
                                     workspace_choice = Some(index);
                                 }
                             }
                         }
                         ui.separator();
+                        rail_heading(ui, "LAYERS");
                         let mrms_on = self.views[self.active].fields_on.contains(&crate::render::FieldLayer::Mrms);
-                        mrms = cobalt_choice(ui, "● MRMS", mrms_on)
+                        mrms = rail_choice(ui, "◉  MRMS", mrms_on)
                             .named_toggle("MRMS national mosaic", mrms_on).clicked();
                         let spc_on = self.filters.outlook_day != 0;
-                        spc = cobalt_choice(ui, "● SPC Outlook", spc_on)
+                        spc = rail_choice(ui, "◉  SPC Outlook", spc_on)
                             .named_toggle("SPC Outlook", spc_on).clicked();
                         if spc_on {
                             ui.menu_button(format!("Day {} ▾", self.filters.outlook_day), |ui| {
@@ -132,8 +151,15 @@ impl HookEchoApp {
                                 }
                             });
                         }
+                        ui.separator();
+                        rail_heading(ui, "YOUR MAP");
+                        custom_locations = rail_choice(ui, "⌖  Custom locations", false)
+                            .named("Custom locations").clicked();
+                        point_forecast = rail_choice(ui, "⊕  Point forecast", self.tool == MapTool::Forecast)
+                            .named_toggle("Tool: Point forecast", self.tool == MapTool::Forecast).clicked();
                         if self.analyst_open {
-                            ui.menu_button(format!("{} Options", ph::SLIDERS_HORIZONTAL), |ui| {
+                            ui.separator();
+                            ui.menu_button("◫  Analysis options ▾", |ui| {
                                 ui.label(format!("Active pane {}", self.active + 1));
                                 ui.horizontal(|ui| {
                                     ui.label("Panes");
@@ -155,9 +181,8 @@ impl HookEchoApp {
                             });
                         }
                     });
-                });
-            });
-        self.mobile_occlusion.push(modes.response.rect);
+            }));
+        if let Some(modes) = modes { self.mobile_occlusion.push(modes.response.rect); }
         if menu {
             self.panel_open = launch_home_open(self.panel_open, self.drawer.is_open(), home);
             self.sidebar_focus_search = false;
@@ -191,6 +216,8 @@ impl HookEchoApp {
                 self.panel_open = false;
             }
         }
+        if custom_locations { self.apply_palette(PaletteAction::OpenWindow(AppWindow::Markers), ctx); }
+        if point_forecast { self.apply_palette(PaletteAction::Tool(MapTool::Forecast), ctx); }
         if mrms { self.apply_palette(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms), ctx); }
         if spc { self.apply_palette(PaletteAction::ToggleOutlook, ctx); }
         if let Some(day) = outlook_day { self.apply_palette(PaletteAction::SetOutlookDay(day), ctx); }
