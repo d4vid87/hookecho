@@ -6323,6 +6323,9 @@ impl HookEchoApp {
         };
         for m in &self.settings.markers {
             let Some(name) = &m.icon else { continue };
+            if name.starts_with("builtin:") {
+                continue;
+            }
             if self.marker_icon_tex.contains_key(name) {
                 continue;
             }
@@ -15794,6 +15797,7 @@ impl HookEchoApp {
                 .as_ref()
                 .and_then(|n| self.marker_icon_tex.get(n))
                 .and_then(|t| t.as_ref());
+            let built_in = crate::ui::marker_window::builtin_icon(m.icon.as_deref(), m.home);
             let label_dx = if let Some(tex) = tex {
                 // Round the icon into a disc with a white ring, so a marker reads as a map pin
                 // rather than a photo pasted on the map. A corner radius of half the size is a
@@ -15817,6 +15821,11 @@ impl HookEchoApp {
                     egui::Stroke::new(1.5, egui::Color32::from_white_alpha(230)),
                 );
                 d / 2.0 + 2.0
+            } else if let Some(icon) = built_in {
+                painter.circle_filled(p, 13.0, egui::Color32::from_rgb(40, 107, 195));
+                painter.circle_stroke(p, 13.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(189, 232, 255)));
+                painter.text(p, egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(16.0), egui::Color32::WHITE);
+                16.0
             } else {
                 painter.circle_filled(p, 4.0, col);
                 painter.circle_stroke(p, 4.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
@@ -20684,10 +20693,10 @@ impl eframe::App for HookEchoApp {
                 Ok((name, lat, lon)) => {
                     self.settings.markers.push(crate::settings::Marker {
                         id: crate::settings::new_marker_id(),
-                        name: name.clone(),
+                        name: self.marker_window.pending_name.take().unwrap_or_else(|| name.clone()),
                         lat,
                         lon,
-                        icon: None,
+                        icon: self.marker_window.pending_icon.take(),
                         alert_radius_mi: crate::settings::default_alert_radius_mi(),
                         video_url: String::new(),
                         home: false,
@@ -20697,10 +20706,14 @@ impl eframe::App for HookEchoApp {
                     let cam = &mut self.views[self.active].camera;
                     cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
                     cam.zoom = cam.zoom.max(9.0);
-                    self.marker_window.status = Some(format!("Added \"{name}\""));
+                    self.marker_window.status = Some(format!("Added \"{}\"", self.settings.markers.last().unwrap().name));
                     self.marker_window.query.clear();
                 }
-                Err(e) => self.marker_window.status = Some(e),
+                Err(e) => {
+                    self.marker_window.pending_name = None;
+                    self.marker_window.pending_icon = None;
+                    self.marker_window.status = Some(e);
+                }
             }
         }
         let metric = self.metric();
@@ -20711,6 +20724,13 @@ impl eframe::App for HookEchoApp {
             &mut self.drawer,
             metric,
         );
+        if let Some(i) = self.marker_window.focus {
+            if let Some(marker) = self.settings.markers.get(i) {
+                let cam = &mut self.views[self.active].camera;
+                cam.center = crate::render::mercator::lonlat_to_world(marker.lon, marker.lat);
+                cam.zoom = cam.zoom.max(9.0);
+            }
+        }
         // The map popup indexes into the same list: a delete above it leaves it describing the
         // wrong marker, which is the one way this UI can lie about which place you are editing.
         if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
