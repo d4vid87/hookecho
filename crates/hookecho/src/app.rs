@@ -3359,8 +3359,6 @@ pub struct HookEchoApp {
     show_scan_progress: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
     show_radar_sites: bool,
-    radar_site_more_names: bool,
-    radar_sites_nearby_only: bool,
     /// Beam-vs-terrain blockage shading: the resident raster, what it was built for, and the
     /// world rect it covers. Built off-thread (it fetches DEM tiles), so it arrives on a channel.
     show_blockage: bool,
@@ -4285,8 +4283,6 @@ impl HookEchoApp {
             show_range_rings: false,
             show_scan_progress: false,
             show_radar_sites: true,
-            radar_site_more_names: false,
-            radar_sites_nearby_only: false,
             show_blockage: false,
             blockage_tex: None,
             blockage_pending: None,
@@ -6303,8 +6299,6 @@ impl HookEchoApp {
                 let is_current = self.views[idx].site.as_deref() == Some(s.id);
                 to_screen_hit(s.longitude as f64, s.latitude as f64) <= tap_r2(16.0)
                     || (is_current && radar_site_pill(p, prect, true).contains(pos))
-                    || (self.labels.was_shown(crate::labelplace::key(s.id))
-                        && radar_site_label_rect(p).contains(pos))
             })
             .min_by(|a, b| {
                 to_screen_hit(a.longitude as f64, a.latitude as f64)
@@ -13659,7 +13653,16 @@ impl HookEchoApp {
             && prect.width() > 700.0
             && !chrome::compact(ctx)
         {
-            egui::Area::new(egui::Id::new("radar_site_labels"))
+            let focused = response.hover_pos().and_then(|pos| {
+                sites_in_world().iter().filter_map(|(s, w)| {
+                    let (x, y) = cam.world_to_screen(*w, vp);
+                    let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
+                    (d <= 16.0 * 16.0).then_some((s, d))
+                }).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(s, _)| *s)
+            }).or_else(|| sites_in_world().iter()
+                .find(|(s, _)| self.views[idx].site.as_deref() == Some(s.id))
+                .map(|(s, _)| *s));
+            egui::Area::new(egui::Id::new("radar_lens"))
                 .order(egui::Order::Foreground)
                 .fixed_pos(egui::pos2(prect.right() - 267.0, prect.top() + 76.0))
                 .show(ctx, |ui| {
@@ -13667,19 +13670,14 @@ impl HookEchoApp {
                         .fill(egui::Color32::from_rgb(16, 41, 62))
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(101, 151, 189)))
                         .show(ui, |ui| {
-                        ui.label(egui::RichText::new("RADAR SITES").small().strong());
-                        ui.horizontal(|ui| {
-                            let accent = crate::theme::accent(self.settings.theme);
-                            let button = |label, selected| egui::Button::new(
-                                egui::RichText::new(label).color(egui::Color32::WHITE))
-                                .fill(if selected { accent } else { egui::Color32::from_rgb(29, 65, 95) });
-                            if ui.add(button("More names", self.radar_site_more_names)).clicked() {
-                                self.radar_site_more_names = !self.radar_site_more_names;
+                            ui.label(egui::RichText::new("RADAR LENS").small().strong().color(egui::Color32::from_rgb(128, 200, 255)));
+                            ui.label("Point to a pin to identify the site.");
+                            if let Some(site) = focused {
+                                ui.separator();
+                                ui.label(egui::RichText::new(site.id).strong().size(17.0).color(egui::Color32::WHITE));
+                                ui.label(format!("{}, {}", site.city, site.state));
+                                ui.label(egui::RichText::new("Visual range guide").small().color(egui::Color32::from_rgb(149, 188, 211)));
                             }
-                            if ui.add(button("Nearby only", self.radar_sites_nearby_only)).clicked() {
-                                self.radar_sites_nearby_only = !self.radar_sites_nearby_only;
-                            }
-                        });
                     });
                 });
         }
@@ -15698,151 +15696,66 @@ impl HookEchoApp {
             }
         }
 
-        // Adaptive site labels: all sites stay discoverable as quiet dots, while only a spaced
-        // selection gets names. The selected radar keeps its unmistakable pill and halo.
+        // Radar lens: spaced bright pins keep the network legible; every site remains clickable.
         if self.show_radar_sites {
-            let accent = crate::theme::accent(self.settings.theme);
             let current = self.views[idx].site.as_deref();
-            let selected_pos = sites_in_world()
-                .iter()
-                .find(|(s, _)| Some(s.id) == current)
-                .map(|(_, w)| {
+            let hovered = response.hover_pos().and_then(|pos| {
+                sites_in_world().iter().filter_map(|(s, w)| {
                     let (x, y) = cam.world_to_screen(*w, vp);
-                    egui::pos2(prect.left() + x, prect.top() + y)
-                });
-            let spacing = if cam.zoom < 6.0 {
-                180.0
-            } else if cam.zoom < 8.0 {
-                125.0
-            } else {
-                90.0
-            } * if self.radar_site_more_names {
-                0.68
-            } else {
-                1.0
-            };
+                    let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
+                    (d <= 16.0 * 16.0).then_some((s.id, d))
+                }).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(id, _)| id)
+            });
+            let focus = hovered.or(current);
+            let spacing = 110.0;
             let mut cells = std::collections::HashMap::new();
             for (s, w) in sites_in_world() {
-                if Some(s.id) == current {
-                    continue;
-                }
+                if !s.id.starts_with('K') || !(-126.0..-66.0).contains(&s.longitude)
+                    || !(24.0..50.0).contains(&s.latitude) { continue; }
                 let (sx, sy) = cam.world_to_screen(*w, vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
-                if !prect.contains(p)
-                    || (self.radar_sites_nearby_only
-                        && selected_pos.is_none_or(|selected| selected.distance(p) > 260.0))
-                {
-                    continue;
-                }
+                if !prect.contains(p) { continue; }
                 let cell = ((sx / spacing).floor() as i32, (sy / spacing).floor() as i32);
-                let center = egui::pos2(
-                    (cell.0 as f32 + 0.5) * spacing,
-                    (cell.1 as f32 + 0.5) * spacing,
-                );
+                let center = egui::pos2((cell.0 as f32 + 0.5) * spacing, (cell.1 as f32 + 0.5) * spacing);
                 let score = center.distance_sq(egui::pos2(sx, sy));
                 let entry = cells.entry(cell).or_insert((s.id, score));
-                if score < entry.1 {
-                    *entry = (s.id, score);
-                }
+                if score < entry.1 { *entry = (s.id, score); }
             }
-            let named: std::collections::HashSet<&str> =
-                cells.values().map(|(id, _)| *id).collect();
-            // Returning labels reserve their slots first so names do not flicker during a pan.
-            for returning in [true, false] {
-                for (s, w) in sites_in_world() {
-                    if self.labels.was_shown(crate::labelplace::key(s.id)) != returning {
-                        continue;
+            let strong: std::collections::HashSet<&str> = cells.values().map(|(id, _)| *id).collect();
+            for (s, w) in sites_in_world() {
+                let (sx, sy) = cam.world_to_screen(*w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) { continue; }
+                let selected = current == Some(s.id);
+                let bright = selected || hovered == Some(s.id) || strong.contains(s.id);
+                painter.circle_filled(p, if bright { 5.4 } else { 2.4 },
+                    if bright { egui::Color32::from_rgb(31, 108, 212) }
+                    else { egui::Color32::from_rgba_unmultiplied(139, 184, 213, 110) });
+                if bright {
+                    painter.circle_stroke(p, 5.4, egui::Stroke::new(1.4, egui::Color32::from_rgb(194, 231, 255)));
+                    painter.circle_filled(p, 1.5, egui::Color32::WHITE);
+                }
+                if focus == Some(s.id) {
+                    // A screen-space guide, not a claim about radar coverage.
+                    for n in (0..72).step_by(2) {
+                        let angle = |i: usize| i as f32 * std::f32::consts::TAU / 72.0;
+                        let point = |i: usize| p + 83.0 * egui::vec2(angle(i).cos(), angle(i).sin());
+                        painter.line_segment([point(n), point(n + 1)],
+                            egui::Stroke::new(1.1, egui::Color32::from_rgb(110, 204, 255)));
                     }
-                    let (sx, sy) = cam.world_to_screen(*w, vp);
-                    let p = egui::pos2(prect.left() + sx, prect.top() + sy);
-                    if !prect.contains(p) {
-                        continue;
+                    painter.circle_stroke(p, 15.0, egui::Stroke::new(1.6, egui::Color32::from_rgb(105, 192, 255)));
+                    if selected {
+                        let pill = radar_site_pill(p, prect, true);
+                        painter.rect_filled(pill, 13.0, egui::Color32::from_rgb(31, 108, 212));
+                        painter.text(pill.center(), egui::Align2::CENTER_CENTER, s.id,
+                            egui::FontId::monospace(13.0), egui::Color32::WHITE);
+                    } else {
+                        let badge = egui::Rect::from_min_size(p + egui::vec2(12.0, -18.0), egui::vec2(52.0, 24.0));
+                        painter.rect_filled(badge, 8.0, egui::Color32::from_rgb(16, 41, 62));
+                        painter.rect_stroke(badge, 8.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(105, 192, 255)), egui::StrokeKind::Inside);
+                        painter.text(badge.center(), egui::Align2::CENTER_CENTER, s.id,
+                            egui::FontId::monospace(12.0), egui::Color32::WHITE);
                     }
-                    let is_current = current == Some(s.id);
-                    if self.radar_sites_nearby_only
-                        && !is_current
-                        && selected_pos.is_none_or(|selected| selected.distance(p) > 260.0)
-                    {
-                        continue;
-                    }
-                    if !is_current {
-                        let has_name = named.contains(s.id);
-                        painter.circle_filled(
-                            p,
-                            if has_name { 4.0 } else { 2.4 },
-                            egui::Color32::from_rgb(13, 39, 56),
-                        );
-                        painter.circle_stroke(
-                            p,
-                            if has_name { 4.0 } else { 2.4 },
-                            egui::Stroke::new(
-                                1.2,
-                                egui::Color32::from_rgba_unmultiplied(
-                                    147,
-                                    198,
-                                    226,
-                                    if has_name { 210 } else { 100 },
-                                ),
-                            ),
-                        );
-                        if has_name
-                            && self.labels.place(
-                                crate::labelplace::key(s.id),
-                                radar_site_label_rect(p).expand(2.0),
-                                crate::labelplace::Priority::Minor,
-                            )
-                        {
-                            let at = p + egui::vec2(9.0, -8.0);
-                            painter.text(
-                                at + egui::vec2(1.0, 1.0),
-                                egui::Align2::LEFT_BOTTOM,
-                                s.id,
-                                egui::FontId::monospace(11.0),
-                                egui::Color32::from_rgb(6, 21, 31),
-                            );
-                            painter.text(
-                                at,
-                                egui::Align2::LEFT_BOTTOM,
-                                s.id,
-                                egui::FontId::monospace(11.0),
-                                egui::Color32::from_rgb(218, 240, 252),
-                            );
-                        }
-                        continue;
-                    }
-                    painter.circle_filled(
-                        p,
-                        17.0,
-                        egui::Color32::from_rgba_unmultiplied(46, 112, 206, 42),
-                    );
-                    painter.circle_stroke(p, 17.0, egui::Stroke::new(1.3, accent));
-                    painter.circle_filled(p, 8.0, egui::Color32::from_rgb(13, 28, 40));
-                    painter.circle_stroke(p, 8.0, egui::Stroke::new(2.0, accent));
-                    painter.circle_filled(p, 2.5, accent);
-                    let pill = radar_site_pill(p, prect, true);
-                    painter.line_segment(
-                        [p + egui::vec2(8.0, 0.0), pill.left_center()],
-                        egui::Stroke::new(2.0, accent),
-                    );
-                    painter.rect_filled(pill, 14.0, accent);
-                    painter.rect_stroke(
-                        pill,
-                        14.0,
-                        egui::Stroke::new(1.5, accent),
-                        egui::StrokeKind::Inside,
-                    );
-                    painter.circle_stroke(
-                        pill.left_center() + egui::vec2(14.0, 0.0),
-                        5.0,
-                        egui::Stroke::new(1.5, egui::Color32::from_rgb(13, 28, 40)),
-                    );
-                    painter.text(
-                        pill.left_center() + egui::vec2(27.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        s.id,
-                        egui::FontId::monospace(13.0),
-                        egui::Color32::from_rgb(13, 28, 40),
-                    );
                 }
             }
         }
@@ -18712,10 +18625,6 @@ fn radar_site_pill(site: egui::Pos2, map: egui::Rect, selected: bool) -> egui::R
         -14.0
     };
     egui::Rect::from_min_size(site + egui::vec2(12.0, dy), egui::vec2(78.0, 28.0))
-}
-
-fn radar_site_label_rect(site: egui::Pos2) -> egui::Rect {
-    egui::Rect::from_min_size(site + egui::vec2(8.0, -22.0), egui::vec2(39.0, 16.0))
 }
 
 /// Every radar site with its world-space position, projected once.
