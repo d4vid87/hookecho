@@ -16377,6 +16377,50 @@ impl HookEchoApp {
                 color,
             );
         }
+
+        // Point forecast: keep the sampled pixel visible against every radar palette. The
+        // black edge separates the white reticle from bright echoes; the cobalt core matches
+        // the map's selected-state color. Before selection the same halo follows the pointer.
+        if idx == self.active {
+            let target = if self.forecast_open {
+                self.forecast_at.map(|(lon, lat)| {
+                    let w = crate::render::mercator::lonlat_to_world(lon, lat);
+                    let (x, y) = cam.world_to_screen(w, vp);
+                    egui::pos2(prect.left() + x, prect.top() + y)
+                })
+            } else if self.tool == MapTool::Forecast {
+                response.hover_pos()
+            } else {
+                None
+            };
+            if let Some(p) = target.filter(|p| prect.contains(*p)) {
+                let dark = egui::Color32::from_rgb(3, 21, 35);
+                let white = egui::Color32::WHITE;
+                let blue = egui::Color32::from_rgb(85, 180, 255);
+                painter.circle_stroke(p, 33.0, egui::Stroke::new(8.0, dark));
+                painter.circle_stroke(p, 33.0, egui::Stroke::new(3.0, white));
+                for segment in 0..6 {
+                    let start = segment as f32 * std::f32::consts::TAU / 6.0;
+                    let arc = (0..=6)
+                        .map(|step| {
+                            let a = start + step as f32 * std::f32::consts::TAU / 66.0;
+                            p + egui::vec2(a.cos(), a.sin()) * 45.0
+                        })
+                        .collect();
+                    painter.add(egui::Shape::line(arc, egui::Stroke::new(2.5, blue)));
+                }
+                for axis in [egui::vec2(0.0, -1.0), egui::vec2(1.0, 0.0),
+                    egui::vec2(0.0, 1.0), egui::vec2(-1.0, 0.0)] {
+                    let ends = [p + axis * 39.0, p + axis * 62.0];
+                    painter.line_segment(ends, egui::Stroke::new(8.0, dark));
+                    painter.line_segment(ends, egui::Stroke::new(3.0, white));
+                }
+                painter.circle_filled(p, 10.0, dark);
+                painter.circle_filled(p, 7.0, egui::Color32::from_rgb(38, 118, 214));
+                painter.circle_stroke(p, 7.0, egui::Stroke::new(2.5, white));
+                painter.circle_filled(p, 2.0, white);
+            }
+        }
     }
 
     /// Whether a registry-backed observed field answers the instant this pane is showing.
