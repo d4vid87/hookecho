@@ -14624,60 +14624,47 @@ impl HookEchoApp {
                         .collect();
                     painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, gray)));
                 }
-                // SCIT positions retain their geometry; cross-ticks mark each forecast time.
+                // Cobalt spine: dark keyline keeps the projected route distinct on bright radar,
+                // while outlined stops remain visible even when time labels are suppressed.
                 if self.filters.show_tracks && !c.track.is_empty()
                     && ui::priority::track_visible(c, &self.settings.priority_rules, chrono::Utc::now()) {
-                    let white = egui::Color32::WHITE;
-                    let mut prev = p;
-                    for tp in c.track.iter().filter(|point| point.minutes <= self.settings.priority_rules.track_horizon_min.clamp(15,60)
+                    let dark = egui::Color32::from_rgb(6, 20, 33);
+                    let blue = egui::Color32::from_rgb(98, 185, 255);
+                    let points: Vec<_> = c.track.iter().filter(|point| point.minutes <= self.settings.priority_rules.track_horizon_min.clamp(15,60)
                         && point.lon.is_finite() && point.lat.is_finite()
-                        && point.lon.abs() <= 180.0 && point.lat.abs() <= 90.0) {
-                        let tpp = to_screen(tp.lon, tp.lat);
-                        let direction = (tpp - prev).normalized();
-                        let tick = egui::vec2(-direction.y, direction.x) * 12.0;
-                        for (width, color) in [(4.0, egui::Color32::BLACK), (2.0, white)] {
+                        && point.lon.abs() <= 180.0 && point.lat.abs() <= 90.0)
+                        .map(|tp| (to_screen(tp.lon, tp.lat), tp.minutes)).collect();
+                    let mut prev = p;
+                    for &(tpp, _) in &points {
+                        for (width, color) in [(9.0, dark), (4.5, blue)] {
                             painter.line_segment([prev, tpp], egui::Stroke::new(width, color));
-                            if direction.length_sq() > 0.0 {
-                                painter.line_segment(
-                                    [tpp - tick, tpp + tick],
-                                    egui::Stroke::new(width, color),
-                                );
-                            }
                         }
-                        if self.filters.show_tracks && cam.zoom >= 7.0
-                            && selected_cell == Some(c.id.as_str())
-                        {
-                            let uncertainty = ui::cell_window::error_km(c)
-                                .zip(c.mvt_kt)
-                                .filter(|(_, kt)| *kt > 1.0)
-                                .map_or(0, |(km, kt)| {
-                                    (km / (kt as f64 * 1.852 / 60.0)).round() as u16
-                                });
-                            let txt = ui::cell_window::track_time_range(
-                                c.time,
-                                tp.minutes,
-                                uncertainty,
-                                self.settings.tz_for(view.site.as_deref()),
-                            );
-                            let lp = tpp + egui::vec2(6.0, -16.0);
+                        prev = tpp;
+                    }
+                    for (tpp, minutes) in points {
+                        painter.circle_filled(tpp, 8.0, dark);
+                        painter.circle_stroke(tpp, 6.0, egui::Stroke::new(2.0, blue));
+                        painter.circle_filled(tpp, 2.0, blue);
+                        if cam.zoom >= 7.0 && selected_cell == Some(c.id.as_str()) {
+                            let txt = format!("+{minutes}m");
+                            let lp = tpp + egui::vec2(12.0, -2.0);
                             for off in [egui::vec2(1.0, 1.0), egui::vec2(-1.0, -1.0)] {
                                 painter.text(
                                     lp + off,
-                                    egui::Align2::LEFT_BOTTOM,
+                                    egui::Align2::LEFT_CENTER,
                                     &txt,
-                                    egui::FontId::proportional(14.0),
-                                    egui::Color32::BLACK,
+                                    egui::FontId::proportional(12.0),
+                                    dark,
                                 );
                             }
                             painter.text(
                                 lp,
-                                egui::Align2::LEFT_BOTTOM,
+                                egui::Align2::LEFT_CENTER,
                                 &txt,
-                                egui::FontId::proportional(14.0),
-                                white,
+                                egui::FontId::proportional(12.0),
+                                egui::Color32::WHITE,
                             );
                         }
-                        prev = tpp;
                     }
                 }
                 if !prect.contains(p) {
