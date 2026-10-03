@@ -80,7 +80,7 @@ HookEcho opens in **Radar**, a full-bleed single map. The fixed header keeps
 has four task sections: **Radar** (site, product, tilt, threshold), **Overlays**
 (storm tracks, MRMS, storm attributes, SPC outlook), **Alerts** (warning count
 and list), and **Tools** (catalog and saved workspaces). Ctrl+S focuses search;
-Escape closes search or the menu.
+Space plays or pauses radar, and Escape hides or restores map controls.
 
 **Analyst** uses the same header plus a fixed toolbar for presets, pane count,
 linked map/time, active pane and Inspector. Returning to Radar restores the

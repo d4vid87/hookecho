@@ -46,8 +46,8 @@ const fn plain(key: egui::Key, action: BindableAction) -> Binding {
 }
 
 /// The shipped table: 1–6 select products, PageUp/Down change tilt, F3 site dialog, F5 reload,
-/// and so on. Escape is deliberately absent — it means "close/cancel whatever is in front of
-/// you", which is per-widget and not something one global binding can own.
+/// and so on. Space and Escape are fixed map controls handled before this customizable table:
+/// playback and clean-map mode must stay reachable even with custom bindings.
 pub(crate) fn defaults() -> Vec<Binding> {
     use egui::Key as K;
     use BindableAction as A;

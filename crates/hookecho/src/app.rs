@@ -13659,6 +13659,7 @@ impl HookEchoApp {
 
         if idx == self.active
             && self.show_radar_sites
+            && !self.obs_mode
             && !self.forecast_open
             && prect.width() > 700.0
             && !chrome::compact(ctx)
@@ -20406,6 +20407,16 @@ impl eframe::App for HookEchoApp {
             self.apply_action(BindableAction::CommandSearch, ctx);
         }
         if !self.capture_key {
+            // Space mirrors the transport button. A focused editor owns its spaces; Escape is
+            // the map-wide show/hide switch even when a menu currently has focus.
+            if !ctx.memory(|m| m.focused().is_some())
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
+            {
+                self.views[self.active].timeline.toggle_play();
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.apply_action(BindableAction::ToggleObs, ctx);
+            }
             let bindings = hotkeys::active(&self.settings).into_owned();
             for action in hotkeys::poll(ctx, &bindings) {
                 self.apply_action(action, ctx);
@@ -21437,9 +21448,9 @@ impl eframe::App for HookEchoApp {
                 .interactable(false)
                 .show(root, |ui| {
                     let txt = if self.obs_tour {
-                        "OBS · tour (F8 exit · F9 stop tour)"
+                        "Map only · tour (Esc or F8 shows controls · F9 stops tour)"
                     } else {
-                        "OBS mode (F8 exit · F9 tour)"
+                        "Map only · Esc or F8 shows controls"
                     };
                     egui::Frame::new()
                         .fill(egui::Color32::from_black_alpha(150))

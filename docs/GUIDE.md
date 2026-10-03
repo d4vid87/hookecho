@@ -15,8 +15,8 @@ storm tracks and other maps, **Alerts** for warnings, and **Tools** for the
 catalog and saved workspaces. Click the gear to open Settings directly.
 
 **If you remember one shortcut, use `Ctrl+S`.** It opens and focuses search
-from the current view. **Escape** closes search or the menu without changing
-modes. The [interface guide](INTERFACE.md) shows every section and how to move
+from the current view. **Space** plays or pauses radar; **Escape** hides or restores
+the map controls. The [interface guide](INTERFACE.md) shows every section and how to move
 between Radar and Analyst.
 
 ## Watch a storm right now

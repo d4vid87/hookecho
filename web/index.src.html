@@ -54,10 +54,11 @@
          after load so the worker's install never competes with the wasm for bandwidth, and
          skipped on file:// and any insecure origin, where it would only throw. -->
     <script>
-      // Keep app shortcuts in the canvas: the browser otherwise blurs it on Escape.
+      // Keep app shortcuts in the canvas: Escape otherwise blurs it and Space scrolls the page.
       addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") e.preventDefault();
         if (e.key === "Escape") e.preventDefault();
+        if (e.key === " " && e.target?.id === "hookecho") e.preventDefault();
       }, { capture: true });
       if ("serviceWorker" in navigator) {
         addEventListener("load", () => {

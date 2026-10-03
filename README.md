@@ -150,8 +150,9 @@ main map.
 ## Find your way around
 
 - **Radar | Analyst:** choose one map or resume your analysis arrangement.
-- **Search or Ctrl+S:** find a place, radar, setting, or weather layer. Escape closes search or the menu.
-- **Play button:** animate recent radar pictures.
+- **Search or Ctrl+S:** find a place, radar, setting, or weather layer.
+- **Play button or Space:** start and stop recent radar animation.
+- **Escape:** hide all map controls; press it again to bring them back.
 - **Timeline:** move backward through recent scans or forward into future radar.
 - **LIVE button:** jump back to current conditions.
 - **Radar section:** site, product, tilt, threshold, and custom locations.

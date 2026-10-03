@@ -47,8 +47,8 @@ pub(crate) fn show(
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new(
-                        "Ctrl + = / − / 0 resize the interface · Escape closes whatever is in \
-                         front · rebind anything in Settings → Hotkeys · F1 opens Help, which \
+                        "Ctrl + = / − / 0 resize the interface · Space plays or pauses radar · \
+                         Escape hides or restores map controls · other keys can be changed in Settings → Hotkeys · F1 opens Help, which \
                          searches these and the glossary together",
                     )
                     .size(style::FONT_SM)

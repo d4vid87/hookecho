@@ -15,7 +15,7 @@ HookEcho opens in **Radar**: one map, one timeline, and a short menu. **Analyst*
 | **Alerts** | Warning visibility and the alerts in view. The badge shows the count; incoming alerts do not open the section. |
 | **Tools** | Searchable products and tools, plus saved workspaces. |
 
-Click the gear for Settings in one step. **Ctrl+S** opens and focuses global search. **Escape** dismisses search or the open menu without changing modes.
+Click the gear for Settings in one step. **Ctrl+S** opens and focuses global search. **Space** plays or pauses radar; **Escape** hides or restores the map controls.
 
 ## Regional Clusters
 
