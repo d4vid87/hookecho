@@ -80,6 +80,9 @@ export const ALLOWED_HOSTS = [
 ];
 
 export const MAX_BYTES = 64 * 1024 * 1024;
+// Daytime GOES C02 CONUS files reach about 70 MB before the browser downsamples them.
+const goesMaxBytes = 96 * 1024 * 1024;
+const responseLimit = (host) => host.startsWith("noaa-goes") ? goesMaxBytes : MAX_BYTES;
 
 // GRIB messages are read by byte range. Keep this exception limited to the model feeds.
 const RANGE_HOSTS = new Set([
@@ -208,13 +211,13 @@ const badGateway = () =>
   });
 
 // Stop a hostile or broken upstream mid-stream rather than after buffering it.
-function capped(body) {
+function capped(body, limit) {
   let seen = 0;
   return body.pipeThrough(
     new TransformStream({
       transform(chunk, controller) {
         seen += chunk.byteLength;
-        if (seen > MAX_BYTES) throw new Error("response over cap");
+        if (seen > limit) throw new Error("response over cap");
         controller.enqueue(chunk);
       },
     }),
@@ -249,7 +252,8 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   if (range && upstream.status !== 206) return badGateway();
 
   const length = Number(upstream.headers.get("content-length") || 0);
-  if (length > MAX_BYTES) return refused("response over cap");
+  const limit = responseLimit(host);
+  if (length > limit) return refused("response over cap");
 
   const validators = validatorsOf(upstream);
   const headers = {
@@ -267,5 +271,5 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
     return new Response(null, { status: 304, headers });
   }
 
-  return new Response(upstream.body ? capped(upstream.body) : null, { status: range ? 206 : 200, headers });
+  return new Response(upstream.body ? capped(upstream.body, limit) : null, { status: range ? 206 : 200, headers });
 }

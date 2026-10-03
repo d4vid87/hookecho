@@ -1545,6 +1545,11 @@ static PROXY_MISSES: AtomicU64 = AtomicU64::new(0);
 /// Nothing bigger than this comes back through the proxy. An archive volume is a few MB; this is
 /// generous for every feed on the list and still bounds a hostile or broken upstream.
 const PROXY_MAX_BYTES: usize = 64 * 1024 * 1024;
+const GOES_PROXY_MAX_BYTES: usize = 96 * 1024 * 1024;
+
+fn proxy_max_bytes(host: &str) -> usize {
+    if host.starts_with("noaa-goes") { GOES_PROXY_MAX_BYTES } else { PROXY_MAX_BYTES }
+}
 
 /// `GET /proxy/{host}/{rest}` → `https://{host}/{rest}`, for the browser build.
 ///
@@ -1609,7 +1614,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
     }
 
     PROXY_MISSES.fetch_add(1, Ordering::Relaxed);
-    match server.rt.block_on(fetch_capped(&server.http, &url)) {
+    match server.rt.block_on(fetch_capped(&server.http, &url, proxy_max_bytes(host))) {
         Ok((ctype, body)) => {
             let body = std::sync::Arc::new(body);
             let etag = etag_of(&body);
@@ -1743,11 +1748,11 @@ fn proxy_reply(
     }
 }
 
-/// One upstream GET, no inherited headers, stopped at [`PROXY_MAX_BYTES`] mid-stream rather than
-/// after the fact.
+/// One upstream GET, no inherited headers, stopped at the host's byte cap mid-stream.
 async fn fetch_capped(
     http: &reqwest::Client,
     url: &str,
+    limit: usize,
 ) -> anyhow::Result<(&'static str, Vec<u8>)> {
     let mut resp = http
         .get(url)
@@ -1763,8 +1768,8 @@ async fn fetch_capped(
     );
     let mut body = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
-        if body.len() + chunk.len() > PROXY_MAX_BYTES {
-            anyhow::bail!("response over {PROXY_MAX_BYTES} bytes");
+        if body.len() + chunk.len() > limit {
+            anyhow::bail!("response over {limit} bytes");
         }
         body.extend_from_slice(&chunk);
     }
@@ -2187,6 +2192,12 @@ mod tests {
         assert_eq!(cache_seconds("opendata.dwd.de", ""), 15);
         assert_eq!(cache_seconds("tgftp.nws.noaa.gov", ""), 300);
         assert_eq!(cache_seconds("basemaps.cartocdn.com", ""), 300);
+    }
+
+    #[test]
+    fn daytime_goes_files_have_a_bounded_larger_proxy_limit() {
+        assert_eq!(proxy_max_bytes("noaa-goes19.s3.amazonaws.com"), 96 * 1024 * 1024);
+        assert_eq!(proxy_max_bytes("noaa-gfs-bdp-pds.s3.amazonaws.com"), PROXY_MAX_BYTES);
     }
 
     #[test]

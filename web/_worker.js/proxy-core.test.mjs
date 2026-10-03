@@ -114,3 +114,9 @@ test("RTMA host is permitted, but malformed or oversized ranges are refused", as
   }
   assert.equal(calls.length, 1);
 });
+
+test("daytime GOES imagery may exceed the general feed cap", async () => {
+  stubFetch(upstream({ "content-length": String(70 * 1024 * 1024) }));
+  assert.equal((await proxy(ask("noaa-goes19.s3.amazonaws.com/daytime.nc"))).status, 200);
+  assert.equal((await proxy(ask("noaa-hrrr-bdp-pds.s3.amazonaws.com/large.grib2"))).status, 403);
+});
