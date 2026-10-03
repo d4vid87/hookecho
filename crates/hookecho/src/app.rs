@@ -13653,6 +13653,7 @@ impl HookEchoApp {
 
         if idx == self.active
             && self.show_radar_sites
+            && !self.forecast_open
             && prect.width() > 700.0
             && !chrome::compact(ctx)
         {

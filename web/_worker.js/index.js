@@ -30,7 +30,9 @@ export default {
       return response;
     }
     return handleProxy(request, {
-      fetchInit: (host, search) => ({ cf: { cacheTtl: cacheSeconds(host, search), cacheEverything: true } }),
+      fetchInit: (host, search, range) => ({ cf: range
+        ? { cacheTtl: 0, cacheEverything: false }
+        : { cacheTtl: cacheSeconds(host, search), cacheEverything: true } }),
       // The browser gets the same TTL the edge is holding the bytes for — one policy, stated
       // once in `cacheSeconds`, so a proxied response can be reused without asking us again.
       extraHeaders: (host, search) => ({

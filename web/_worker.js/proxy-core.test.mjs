@@ -95,3 +95,22 @@ test("address search reaches Nominatim through the browser proxy", async () => {
   assert.match(calls[0].url, /^https:\/\/nominatim\.openstreetmap\.org\/search\?/);
   assert.equal(calls[0].init.headers["user-agent"].includes("hookecho"), true);
 });
+
+test("model byte ranges reach the upstream and remain partial responses", async () => {
+  const calls = stubFetch(new Response("GRIB", { status: 206, headers: { "content-range": "bytes 0-3/100" } }));
+  const res = await proxy(ask("noaa-gfs-bdp-pds.s3.amazonaws.com/model.grib2", { range: "bytes=0-3", cookie: "secret" }));
+  assert.equal(res.status, 206);
+  assert.equal(res.headers.get("content-range"), "bytes 0-3/100");
+  assert.equal(await res.text(), "GRIB");
+  assert.deepEqual(calls[0].init.headers, { "user-agent": calls[0].init.headers["user-agent"], range: "bytes=0-3" });
+});
+
+test("RTMA host is permitted, but malformed or oversized ranges are refused", async () => {
+  const calls = stubFetch(new Response("idx"));
+  assert.equal((await proxy(ask("nomads.ncep.noaa.gov/pub/data/file.idx"))).status, 200);
+  assert.equal(calls.length, 1);
+  for (const range of ["bytes=4-1", "bytes=0-abc", "bytes=0-67108864", "bytes=0-1,3-4"]) {
+    assert.equal((await proxy(ask("noaa-gfs-bdp-pds.s3.amazonaws.com/file", { range }))).status, 403);
+  }
+  assert.equal(calls.length, 1);
+});

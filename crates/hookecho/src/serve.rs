@@ -130,6 +130,7 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
     // a header wall, is hung up on rather than humoured.
     let mut authorized = server.token.is_empty();
     let mut if_none_match = None;
+    let mut range = None;
     {
         let supplied = query_token(query);
         for _ in 0..64 {
@@ -147,6 +148,8 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
                 }
             } else if name.eq_ignore_ascii_case("if-none-match") {
                 if_none_match = Some(value.trim().to_string());
+            } else if name.eq_ignore_ascii_case("range") {
+                range = Some(value.trim().to_string());
             }
         }
         // A dashboard that can only put things in a URL (a picture element, a widget) has no
@@ -157,13 +160,13 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
         }
     }
     let reply = if authorized {
-        route(server, path, query, if_none_match.as_deref())
+        route(server, path, query, if_none_match.as_deref(), range.as_deref())
     } else if server.public {
         // The public hostname serves the fixed frames the site embeds and nothing else. Anything
         // else — another size, another product, a status page — needs the token, which is how the
         // owner keeps the full parameter surface without handing it to the internet.
         if is_preset(path, query) {
-            route(server, path, query, if_none_match.as_deref())
+            route(server, path, query, if_none_match.as_deref(), range.as_deref())
         } else {
             count("denied");
             (
@@ -292,7 +295,7 @@ fn image_reply(ctype: &'static str, body: Vec<u8>) -> Reply {
     }
 }
 
-fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
+fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, range: Option<&str>) -> Reply {
     count(match path {
         "/" => "index",
         "/status.json" | "/alerts.json" | "/obs.json" | "/health.json"
@@ -388,7 +391,7 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
             metrics(server).into_bytes(),
         )
             .into(),
-        _ if path.starts_with("/proxy/") => proxy(server, path, query, if_none_match),
+        _ if path.starts_with("/proxy/") => proxy(server, path, query, if_none_match, range),
         _ if server.web_root.is_some() => static_file(server, path).into(),
         _ => not_found().into(),
     }
@@ -1422,6 +1425,7 @@ const ALLOWED_HOSTS: &[&str] = &[
     "noaa-goes19.s3.amazonaws.com",
     "noaa-goes18.s3.amazonaws.com",
     "noaa-gfs-bdp-pds.s3.amazonaws.com",
+    "nomads.ncep.noaa.gov",
     "data.ecmwf.int",
     "mrms.ncep.noaa.gov",
     "www.nohrsc.noaa.gov",
@@ -1546,9 +1550,9 @@ const PROXY_MAX_BYTES: usize = 64 * 1024 * 1024;
 ///
 /// The trust boundary, in four rules: the host must be in [`ALLOWED_HOSTS`] exactly, only GET is
 /// ever issued upstream (this server never speaks another method), no client header reaches the
-/// upstream, and the response is capped and stripped down to a known content type. Same-origin by
-/// construction, so no CORS header of our own is needed.
-fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
+/// upstream except a validated model byte range, and the response is capped and stripped down to
+/// a known content type. Same-origin by construction, so no CORS header of our own is needed.
+fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, range: Option<&str>) -> Reply {
     let forbidden = |why: &str| -> Reply {
         log::warn!("proxy refused {path}: {why}");
         (
@@ -1563,6 +1567,24 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
     };
     if !ALLOWED_HOSTS.contains(&host) {
         return forbidden("host not in allowlist");
+    }
+    if let Some(range) = range {
+        if !valid_model_range(host, range) {
+            return forbidden("invalid model byte range");
+        }
+        let url = if query.is_empty() { format!("https://{host}/{rest}") } else { format!("https://{host}/{rest}?{query}") };
+        return match server.rt.block_on(fetch_capped_range(&server.http, &url, range)) {
+            Ok((ctype, body, content_range)) => Reply {
+                status: "206 Partial Content",
+                ctype,
+                body,
+                headers: vec![("Content-Range", content_range)],
+            },
+            Err(e) => {
+                log::warn!("proxy range fetch of {url} failed: {e}");
+                ("502 Bad Gateway", "application/json", br#"{"error":"upstream fetch failed"}"#.to_vec()).into()
+            }
+        };
     }
     let url = if query.is_empty() {
         format!("https://{host}/{rest}")
@@ -1621,6 +1643,72 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) 
                 .into()
         }
     }
+}
+
+fn valid_model_range(host: &str, range: &str) -> bool {
+    const HOSTS: &[&str] = &[
+        "noaa-gfs-bdp-pds.s3.amazonaws.com",
+        "noaa-hrrr-bdp-pds.s3.amazonaws.com",
+        "noaa-rap-pds.s3.amazonaws.com",
+        "noaa-nam-pds.s3.amazonaws.com",
+        "noaa-nbm-grib2-pds.s3.amazonaws.com",
+        "nomads.ncep.noaa.gov",
+    ];
+    let Some((start, end)) = range.strip_prefix("bytes=").and_then(|s| s.split_once('-')) else {
+        return false;
+    };
+    let Ok(start) = start.parse::<u64>() else {
+        return false;
+    };
+    let end = if end.is_empty() {
+        None
+    } else {
+        match end.parse::<u64>() {
+            Ok(end) => Some(end),
+            Err(_) => return false,
+        }
+    };
+    HOSTS.contains(&host)
+        && end.is_none_or(|end| end >= start && end - start < PROXY_MAX_BYTES as u64)
+}
+
+async fn fetch_capped_range(
+    http: &reqwest::Client,
+    url: &str,
+    range: &str,
+) -> anyhow::Result<(&'static str, Vec<u8>, String)> {
+    let mut resp = http
+        .get(url)
+        .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT)
+        .header(reqwest::header::RANGE, range)
+        .send()
+        .await?
+        .error_for_status()?;
+    anyhow::ensure!(
+        resp.status() == reqwest::StatusCode::PARTIAL_CONTENT,
+        "upstream ignored byte range"
+    );
+    let ctype = proxy_content_type(
+        resp.headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    );
+    let content_range = resp
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        anyhow::ensure!(
+            body.len() + chunk.len() <= PROXY_MAX_BYTES,
+            "response over cap"
+        );
+        body.extend_from_slice(&chunk);
+    }
+    Ok((ctype, body, content_range))
 }
 
 /// The response for a proxied body, 304 if the client already holds it.
@@ -2004,12 +2092,12 @@ mod tests {
             ctype,
             body,
             ..
-        } = route(&server, "/etc/passwd", "", None);
+        } = route(&server, "/etc/passwd", "", None, None);
         assert_eq!(status, "404 Not Found");
         assert_eq!(ctype, "application/json");
         assert!(String::from_utf8_lossy(&body).contains("no such endpoint"));
 
-        let status = route(&server, "/", "", None).status;
+        let status = route(&server, "/", "", None, None).status;
         assert_eq!(status, "200 OK");
     }
 
@@ -2038,7 +2126,7 @@ mod tests {
             "/..%2f..%2fetc/passwd",
             "//etc/passwd",
         ] {
-            let status = route(&server, path, "", None).status;
+            let status = route(&server, path, "", None, None).status;
             assert_eq!(status, "404 Not Found", "{path} must not be served");
         }
         assert_eq!(
@@ -2081,10 +2169,10 @@ mod tests {
             )),
             render: Mutex::new(()),
         };
-        let body = route(&server, "/lite/", "", None).body;
+        let body = route(&server, "/lite/", "", None, None).body;
         assert_eq!(String::from_utf8_lossy(&body), "<!doctype html>lite");
         // Still no way out of the root, trailing slash or not.
-        assert_eq!(route(&server, "/../", "", None).status, "404 Not Found");
+        assert_eq!(route(&server, "/../", "", None, None).status, "404 Not Found");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2099,6 +2187,16 @@ mod tests {
         assert_eq!(cache_seconds("opendata.dwd.de", ""), 15);
         assert_eq!(cache_seconds("tgftp.nws.noaa.gov", ""), 300);
         assert_eq!(cache_seconds("basemaps.cartocdn.com", ""), 300);
+    }
+
+    #[test]
+    fn model_ranges_are_bounded_and_host_scoped() {
+        assert!(valid_model_range("noaa-gfs-bdp-pds.s3.amazonaws.com", "bytes=0-1023"));
+        assert!(valid_model_range("nomads.ncep.noaa.gov", "bytes=1024-"));
+        assert!(!valid_model_range("api.weather.gov", "bytes=0-1023"));
+        assert!(!valid_model_range("noaa-gfs-bdp-pds.s3.amazonaws.com", "bytes=4-1"));
+        assert!(!valid_model_range("noaa-gfs-bdp-pds.s3.amazonaws.com", "bytes=0-67108864"));
+        assert!(!valid_model_range("noaa-gfs-bdp-pds.s3.amazonaws.com", "bytes=0-abc"));
     }
 
     /// The byte bound is what stops a handful of archive volumes from being the whole heap. It has
@@ -2175,7 +2273,7 @@ mod tests {
             "/proxy/evil.example.com#api.weather.gov/alerts",
             "/proxy/api.weather.gov",
         ] {
-            let status = route(&server, path, "", None).status;
+            let status = route(&server, path, "", None, None).status;
             assert_eq!(status, "403 Forbidden", "{path} must not be proxied");
         }
     }
@@ -2212,7 +2310,7 @@ mod tests {
         };
         let i = ROUTES.iter().position(|r| *r == "index").unwrap();
         let before = REQUESTS[i].load(Ordering::Relaxed);
-        route(&server, "/", "", None);
+        route(&server, "/", "", None, None);
         // Counters are process-wide and the test threads share them, so this asserts movement
         // rather than an exact delta — another test routing "/" must not fail this one.
         assert!(REQUESTS[i].load(Ordering::Relaxed) > before);

@@ -4,8 +4,8 @@
 // net.rs), because NOAA's buckets and the NWS API send no `Access-Control-Allow-Origin`. A static
 // host alone therefore serves a demo that draws nothing. This is the same trust boundary the
 // native `--serve` proxy enforces (crates/hookecho/src/serve.rs): the host must be in the
-// allowlist exactly, only GET is issued upstream, no client header is forwarded, and the response
-// is capped and stripped down to a known content type.
+// allowlist exactly, only GET is issued upstream, only validated model byte ranges are forwarded,
+// and the response is capped and stripped down to a known content type.
 //
 // web/_worker.js/index.js (Cloudflare Pages) imports this. It is kept separate from the wiring so
 // another host's function can reuse the same allowlist and checks rather than restating them.
@@ -27,6 +27,7 @@ export const ALLOWED_HOSTS = [
   "noaa-goes19.s3.amazonaws.com",
   "noaa-goes18.s3.amazonaws.com",
   "noaa-gfs-bdp-pds.s3.amazonaws.com",
+  "nomads.ncep.noaa.gov",
   "data.ecmwf.int",
   "mrms.ncep.noaa.gov",
   "www.nohrsc.noaa.gov",
@@ -79,6 +80,29 @@ export const ALLOWED_HOSTS = [
 ];
 
 export const MAX_BYTES = 64 * 1024 * 1024;
+
+// GRIB messages are read by byte range. Keep this exception limited to the model feeds.
+const RANGE_HOSTS = new Set([
+  "noaa-gfs-bdp-pds.s3.amazonaws.com",
+  "noaa-hrrr-bdp-pds.s3.amazonaws.com",
+  "noaa-rap-pds.s3.amazonaws.com",
+  "noaa-nam-pds.s3.amazonaws.com",
+  "noaa-nbm-grib2-pds.s3.amazonaws.com",
+  "nomads.ncep.noaa.gov",
+]);
+
+function modelRange(request, host) {
+  const value = request.headers.get("range");
+  if (!value) return null;
+  if (!RANGE_HOSTS.has(host)) return false;
+  const match = /^bytes=(\d+)-(\d*)$/.exec(value);
+  if (!match) return false;
+  const start = Number(match[1]);
+  const end = match[2] ? Number(match[2]) : null;
+  if (!Number.isSafeInteger(start) || (end !== null &&
+      (!Number.isSafeInteger(end) || end < start || end - start + 1 > MAX_BYTES))) return false;
+  return value;
+}
 
 // Live feeds go stale in seconds; everything else can sit in the CDN cache for five minutes,
 // which is what keeps a front-page demo off NOAA's rate limits.
@@ -207,19 +231,22 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   const host = rest.slice(0, slash);
   if (!ALLOWED_HOSTS.includes(host)) return refused("host not in allowlist");
   if (request.method !== "GET") return refused("GET only");
+  const range = modelRange(request, host);
+  if (range === false) return refused("invalid model byte range");
 
   const target = `https://${host}/${rest.slice(slash + 1)}${url.search}`;
   let upstream;
   try {
-    // No client header is forwarded — this is a fresh request, not a rewrite of theirs.
+    // Only a validated model byte range is forwarded; all other client headers stay private.
     upstream = await fetch(target, {
-      headers: { "user-agent": USER_AGENT },
-      ...fetchInit(host, url.search),
+      headers: { "user-agent": USER_AGENT, ...(range ? { range } : {}) },
+      ...fetchInit(host, url.search, !!range),
     });
   } catch {
     return badGateway();
   }
   if (!upstream.ok) return badGateway();
+  if (range && upstream.status !== 206) return badGateway();
 
   const length = Number(upstream.headers.get("content-length") || 0);
   if (length > MAX_BYTES) return refused("response over cap");
@@ -229,15 +256,16 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
     "content-type": contentType(upstream.headers.get("content-type") || ""),
     ...(validators.etag ? { etag: validators.etag } : {}),
     ...(validators.lastModified ? { "last-modified": validators.lastModified } : {}),
+    ...(range && upstream.headers.get("content-range") ? { "content-range": upstream.headers.get("content-range") } : {}),
     ...extraHeaders(host, url.search),
   };
 
   // Answered at the edge: the upstream fetch above was served from `cf.cacheTtl` in the common
   // case, so this costs no origin call and no bytes on the wire back.
-  if (notModified(request, validators)) {
+  if (!range && notModified(request, validators)) {
     upstream.body?.cancel();
     return new Response(null, { status: 304, headers });
   }
 
-  return new Response(upstream.body ? capped(upstream.body) : null, { headers });
+  return new Response(upstream.body ? capped(upstream.body) : null, { status: range ? 206 : 200, headers });
 }
