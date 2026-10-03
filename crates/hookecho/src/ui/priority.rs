@@ -79,8 +79,13 @@ pub fn rows<'a>(
     rows.retain(|f| seen.insert(f.alert.as_ref().unwrap().id.as_str()));
     rows
 }
+pub fn track_strength_visible(cell: &Cell, rules: &PriorityRules) -> bool {
+    rules.track_min_dbz.is_finite()
+        && cell.max_dbz.is_some_and(|dbz| dbz.is_finite() && dbz >= rules.track_min_dbz.clamp(20.0, 70.0))
+}
 pub fn track_visible(cell: &Cell, rules: &PriorityRules, now: DateTime<Utc>) -> bool {
-    super::cell_window::projection_valid(cell, now)
+    track_strength_visible(cell, rules)
+        && super::cell_window::projection_valid(cell, now)
         && cell.time.is_some_and(|t| {
             (now - t).num_seconds().max(0) <= i64::from(rules.track_age_min.clamp(1, 15)) * 60
         })
@@ -118,6 +123,7 @@ pub fn dock_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
 
 pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
     ui.strong("Estimated storm tracks");
+    ui.add(egui::Slider::new(&mut rules.track_min_dbz, 20.0..=70.0).text("Minimum cell reflectivity (dBZ)"));
     ui.add(egui::Slider::new(&mut rules.track_age_min, 1..=15).text("Maximum age (min)"));
     ui.add(
         egui::Slider::new(&mut rules.track_error_nm, 0.5..=20.0)
@@ -130,7 +136,7 @@ pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
                 ui.selectable_value(&mut rules.track_horizon_min, n, format!("{n} minutes"));
             }
         });
-    ui.weak("Tracks with missing age, motion, or error stay out of the projection. Their detections remain available.");
+    ui.weak("Only cells meeting the reflectivity limit draw tracks. This is a display filter, not an official severe-weather threshold; missing age, motion, or error also keeps a projection off the map.");
 }
 
 #[cfg(test)]
@@ -198,10 +204,16 @@ mod tests {
             lat: 32.,
             mvt_deg: Some(45.),
             mvt_kt: Some(25.),
+            max_dbz: Some(55.),
             fcst_err_nm: Some(2.),
             ..Default::default()
         };
         assert!(track_visible(&c, &r, now));
+        c.max_dbz = Some(49.9);
+        assert!(!track_visible(&c, &r, now));
+        c.max_dbz = None;
+        assert!(!track_visible(&c, &r, now));
+        c.max_dbz = Some(55.);
         c.fcst_err_nm = Some(8.);
         assert!(!track_visible(&c, &r, now));
         c.fcst_err_nm = None;

@@ -34,11 +34,12 @@ pub struct PriorityRules {
     pub track_age_min: u16,
     pub track_error_nm: f32,
     pub track_horizon_min: u16,
+    pub track_min_dbz: f32,
 }
 impl Default for PriorityRules {
     fn default() -> Self {
         Self { minimum: 0, radii_mi: [25.0, 75.0, 100.0, 150.0], track_age_min: 5,
-            track_error_nm: 5.0, track_horizon_min: 30 }
+            track_error_nm: 5.0, track_horizon_min: 30, track_min_dbz: 50.0 }
     }
 }
 

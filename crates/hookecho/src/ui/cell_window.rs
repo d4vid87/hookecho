@@ -73,7 +73,7 @@ pub fn show(
             });
             ui.add_space(8.0);
             ui.label(
-                egui::RichText::new("An edge dock leaves more radar visible.")
+                egui::RichText::new("Radar-estimated storm motion, hail, and intensity.")
                     .size(12.0)
                     .color(egui::Color32::from_rgb(170, 188, 204)),
             );
