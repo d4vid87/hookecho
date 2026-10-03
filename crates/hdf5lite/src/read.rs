@@ -234,3 +234,54 @@ pub(crate) fn raw_bytes(d: &[u8], ds: &Dataset) -> Result<Vec<u8>> {
         }
     }
 }
+
+/// Read only display-grid points from a large chunked HDF5 image. Each compressed chunk is
+/// expanded at most once; the full uncompressed image is never allocated.
+pub(crate) fn strided_f64_2d(d: &[u8], ds: &Dataset, step: usize) -> Result<Vec<f64>> {
+    let [height, width] = ds.dims.as_slice() else {
+        return Err(Error::Unsupported("strided read requires a 2D dataset".into()));
+    };
+    let (height, width) = (*height as usize, *width as usize);
+    let out_width = width.div_ceil(step);
+    let mut out = vec![f64::NAN; out_width * height.div_ceil(step)];
+    let elem = ds.dtype.size_of();
+    match &ds.layout {
+        Layout::Chunked { btree_addr, dims } if dims.len() == 2 => {
+            if *btree_addr == u64::MAX { return Ok(out); }
+            let chunk_elems = dims[0] as usize * dims[1] as usize;
+            for chunk in btree::chunks(d, *btree_addr, 2)? {
+                let (y0, x0) = (chunk.offset[0] as usize, chunk.offset[1] as usize);
+                let (y1, x1) = ((y0 + dims[0] as usize).min(height), (x0 + dims[1] as usize).min(width));
+                let (first_y, first_x) = (y0.div_ceil(step) * step, x0.div_ceil(step) * step);
+                if first_y >= y1 || first_x >= x1 { continue; }
+                let end = (chunk.addr as usize).checked_add(chunk.size as usize).ok_or(Error::Truncated {
+                    what: "chunk data", need: usize::MAX, have: d.len(),
+                })?;
+                let raw = d.get(chunk.addr as usize..end).ok_or(Error::Truncated {
+                    what: "chunk data", need: end, have: d.len(),
+                })?;
+                let decoded = ds.filters.decode(raw, chunk_elems * elem, elem)?;
+                for y in (first_y..y1).step_by(step) {
+                    for x in (first_x..x1).step_by(step) {
+                        let at = ((y - y0) * dims[1] as usize + (x - x0)) * elem;
+                        if let Some(bytes) = decoded.get(at..at + elem) {
+                            out[(y / step) * out_width + x / step] = ds.decode_one(bytes);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {
+            let raw = raw_bytes(d, ds)?;
+            for y in (0..height).step_by(step) {
+                for x in (0..width).step_by(step) {
+                    let at = (y * width + x) * elem;
+                    if let Some(bytes) = raw.get(at..at + elem) {
+                        out[(y / step) * out_width + x / step] = ds.decode_one(bytes);
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}

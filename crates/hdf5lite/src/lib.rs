@@ -185,4 +185,10 @@ impl File {
         let raw = read::raw_bytes(&self.data, &ds)?;
         Ok(ds.decode(&raw))
     }
+
+    /// Sample a two-dimensional dataset before allocating its decoded grid.
+    pub fn read_f64_strided_2d(&self, name: &str, stride: usize) -> Result<Vec<f64>> {
+        let ds = self.dataset(name)?;
+        read::strided_f64_2d(&self.data, &ds, stride.max(1))
+    }
 }

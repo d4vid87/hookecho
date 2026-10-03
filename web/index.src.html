@@ -96,8 +96,8 @@
       // `WebAssembly.Module` is structured-cloneable, so the worker gets a second *instance* —
       // its own heap, its own thread — without a second download or a second compile.
       //
-      // What it is for: decoding a Level 2 volume is seconds of bzip2, and on this thread that is
-      // seconds of frozen map. See web/decode-worker.js and crates/wxdata/src/wasm_worker.rs.
+      // Radar and GOES decoding can freeze the map thread; the worker also handles vector tiles.
+      // See web/decode-worker.js and crates/wxdata/src/wasm_worker.rs.
       const glueUrl = new URL("./dist/hookecho.js?boot=2", import.meta.url).href;
       const wasmUrl = new URL("./dist/hookecho_bg.wasm", import.meta.url).href;
       const module = await WebAssembly.compileStreaming(fetch(wasmUrl, { signal: AbortSignal.timeout(60000) }));
@@ -106,7 +106,7 @@
       // the spawn as a callback so its failure path can be tested without a browser.
       globalThis.__decodeVolume = makeBridge({
         spawnWorker: () => {
-          const w = new Worker(new URL("./decode-worker.js?v=vector-tiles", import.meta.url), { type: "module" });
+          const w = new Worker(new URL("./decode-worker.js?v=goes-abi", import.meta.url), { type: "module" });
           w.postMessage({ module, glue: glueUrl });
           return w;
         },

@@ -49,6 +49,20 @@ pub async fn tessellate_vector(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("vector", payload).await
 }
 
+/// Decode a GOES band into a bounded display grid on the worker heap.
+pub async fn decode_abi(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("abi", bytes).await
+}
+
+/// Compose three decoded GOES bands without pausing map input.
+pub async fn compose_abi(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("abi-rgb", payload).await
+}
+
+pub async fn project_abi(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("abi-project", payload).await
+}
+
 /// Run one job on the worker. `op` names the export it should call.
 async fn call(op: &str, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     let global = js_sys::global();

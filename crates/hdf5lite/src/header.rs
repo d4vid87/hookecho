@@ -173,6 +173,15 @@ impl Dataset {
         }
         out
     }
+
+    pub(crate) fn decode_one(&self, raw: &[u8]) -> f64 {
+        let value = self.dtype.read(raw);
+        if self.fill_value.is_some_and(|fill| fill == value) {
+            f64::NAN
+        } else {
+            value * self.scale_factor.unwrap_or(1.0) + self.add_offset.unwrap_or(0.0)
+        }
+    }
 }
 
 /// Object header message types we act on. Everything else is skipped by its recorded length.

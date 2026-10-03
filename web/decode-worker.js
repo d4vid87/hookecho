@@ -1,12 +1,12 @@
-// Level 2 decode, off the thread that draws the map.
+// Radar, vector-tile and GOES decode, off the thread that draws the map.
 //
 // A volume is a gzip wrapper around ~130 bzip2 records — seconds of solid CPU, and on the main
 // thread that is seconds of frozen map. The live stream pays a smaller version of the same bill
 // at every sweep boundary, which is why it comes here too. This worker runs a second instance of
 // the *same* wasm module the page already compiled (the page transfers the `WebAssembly.Module`
 // itself, which is structured-cloneable, so there is no second download and no second compile)
-// and calls one of two exports: `decode_archive2` for an archived volume, `assemble_live_chunks`
-// for the live stream's chunk window. The app never boots here.
+// and calls the export selected by the job: radar decode/assembly, vector tessellation, or
+// GOES ABI decode, projection and RGB composition. The app never boots here.
 //
 // The heap is the point as much as the thread: decoding peaks at well over 100 MB of scratch, and
 // here that lives in a throwaway wasm memory instead of the one holding every texture and tile.
@@ -14,7 +14,7 @@
 // Protocol, both directions over postMessage:
 //   in   { module, glue }        boot: compiled module + the URL of the wasm-bindgen glue
 //   in   { id, op, bytes }       run a job (bytes' buffer is transferred in). `op` is
-//                                "assemble" for a live chunk window, anything else for a volume.
+//                                "assemble", "vector", "abi", "abi-project", "abi-rgb", or "decode".
 //   out  { id, ok: ArrayBuffer } postcard-encoded Scan (transferred out)
 //   out  { id, err, fatal }      the job failed; `fatal` means a trap poisoned this heap
 
@@ -43,7 +43,10 @@ self.onmessage = async (e) => {
   try {
     const wasm = await ready;
     const run = op === "vector" ? wasm.tessellate_vector_tile
-      : op === "assemble" ? wasm.assemble_live_chunks : wasm.decode_archive2;
+      : op === "assemble" ? wasm.assemble_live_chunks
+      : op === "abi" ? wasm.decode_goes_abi
+      : op === "abi-rgb" ? wasm.compose_goes_rgb
+      : op === "abi-project" ? wasm.project_goes_abi : wasm.decode_archive2;
     const out = run(new Uint8Array(bytes));
     // Transfer rather than copy: a decoded volume is tens of MB and the worker is done with it.
     self.postMessage({ id, ok: out.buffer }, [out.buffer]);

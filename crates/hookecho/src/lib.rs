@@ -206,6 +206,24 @@ pub fn tessellate_vector_tile(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen:
     vector_tiles::build_worker_tile(&payload).map_err(|e| e.to_string().into())
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn decode_goes_abi(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::abi::decode_worker(bytes).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn compose_goes_rgb(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::abi::compose_worker(bytes).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn project_goes_abi(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::abi::project_worker(bytes).map_err(|e| e.to_string().into())
+}
+
 /// Web entry point, called from `web/index.html` with the id of a `<canvas>`.
 ///
 /// Same `HookEchoApp` as every other platform — eframe's `WebRunner` takes the identical creation

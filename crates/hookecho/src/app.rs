@@ -770,11 +770,17 @@ impl OverlaySource {
                     at.unwrap_or(received),
                 )
                 .await?;
-                OverlayMsg::RegisteredField(
-                    layer,
-                    image.into_frame(received)?,
-                    None,
-                )
+                #[cfg(target_arch = "wasm32")]
+                let frame = {
+                    let payload = postcard::to_allocvec(&image)?;
+                    let encoded = wxdata::wasm_worker::project_abi(payload).await
+                        .map_err(|e| anyhow::anyhow!("GOES worker: {e}"))?;
+                    let display = postcard::from_bytes(&encoded)?;
+                    image.into_frame_with_display(received, display)?
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                let frame = image.into_frame(received)?;
+                OverlayMsg::RegisteredField(layer, frame, None)
             }
             OverlaySource::GoesRgb(scene, at) => OverlayMsg::Rgb(
                 crate::render::FieldLayer::GoesTrueColor,

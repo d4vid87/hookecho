@@ -196,6 +196,61 @@ pub struct RgbImage {
     pub received_time: Option<DateTime<Utc>>,
 }
 
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RgbWire {
+    width: usize,
+    height: usize,
+    pixels: Vec<[u8; 4]>,
+    valid_time: DateTime<Utc>,
+    lon_west: f64,
+    lon_east: f64,
+    lat_north: f64,
+    lat_south: f64,
+    source_identity: String,
+    received_time: Option<DateTime<Utc>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<RgbImage> for RgbWire {
+    fn from(image: RgbImage) -> Self {
+        Self { width: image.width, height: image.height, pixels: image.pixels,
+            valid_time: image.valid_time, lon_west: image.lon_west, lon_east: image.lon_east,
+            lat_north: image.lat_north, lat_south: image.lat_south,
+            source_identity: image.source_identity, received_time: image.received_time }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<RgbWire> for RgbImage {
+    fn from(image: RgbWire) -> Self {
+        Self { width: image.width, height: image.height, pixels: image.pixels,
+            valid_time: image.valid_time, recipe: &TRUE_COLOR,
+            lon_west: image.lon_west, lon_east: image.lon_east,
+            lat_north: image.lat_north, lat_south: image.lat_south,
+            source_identity: image.source_identity, received_time: image.received_time }
+    }
+}
+
+/// Worker entry points use a bounded display grid and keep HDF5 decoding off the map thread.
+#[cfg(target_arch = "wasm32")]
+pub fn decode_worker(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    Ok(postcard::to_allocvec(&decode_with_max_dim(bytes, 1200)?)?)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn compose_worker(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let (red, green, blue): (Image, Image, Image) = postcard::from_bytes(&bytes)?;
+    let image = compose_rgb(&TRUE_COLOR, [&red, &green, &blue])?;
+    Ok(postcard::to_allocvec(&RgbWire::from(image))?)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn project_worker(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let image: Image = postcard::from_bytes(&bytes)?;
+    Ok(postcard::to_allocvec(&image.display_grid(image.width.min(700), image.height.min(700))?)?)
+}
+
 pub async fn fetch_rgb(
     http: &reqwest::Client,
     satellite: Satellite,
@@ -218,6 +273,15 @@ pub async fn fetch_rgb_at(
         fetch_at(http, satellite, scene, recipe.bands[2], at),
     )
     .await?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let payload = postcard::to_allocvec(&(red, green, blue))?;
+        let encoded = crate::wasm_worker::compose_abi(payload).await
+            .map_err(|e| anyhow::anyhow!("GOES worker: {e}"))?;
+        let image: RgbWire = postcard::from_bytes(&encoded)?;
+        return Ok(image.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     compose_rgb(recipe, [&red, &green, &blue])
 }
 
@@ -423,6 +487,13 @@ pub async fn fetch_at(
             (bytes, received)
         }
     };
+    #[cfg(target_arch = "wasm32")]
+    let mut image: Image = {
+        let encoded = crate::wasm_worker::decode_abi(bytes).await
+            .map_err(|e| anyhow::anyhow!("GOES worker: {e}"))?;
+        postcard::from_bytes(&encoded)?
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let mut image = decode(bytes)?;
     image.source_identity = key;
     image.received_time = Some(received_time);
@@ -435,7 +506,7 @@ pub async fn fetch_at(
     Ok(image)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Projection {
     pub longitude_origin_deg: f64,
     pub perspective_height_m: f64,
@@ -487,7 +558,7 @@ impl Projection {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Image {
     pub width: usize,
     pub height: usize,
@@ -551,12 +622,20 @@ impl Image {
     }
 
     pub fn into_frame(self, received_time: DateTime<Utc>) -> anyhow::Result<FieldFrame> {
+        let display = self.display_grid(self.width.min(700), self.height.min(700))?;
+        self.into_frame_with_display(received_time, display)
+    }
+
+    pub fn into_frame_with_display(
+        self,
+        received_time: DateTime<Utc>,
+        display: crate::mrms::MrmsField,
+    ) -> anyhow::Result<FieldFrame> {
         let descriptor = descriptor_for_band(self.band)
             .ok_or_else(|| anyhow::anyhow!("ABI: C{:02} is not registered", self.band))?;
         let valid_time = self.valid_time;
         let source_identity = self.source_identity.clone();
         let received_time = self.received_time.unwrap_or(received_time);
-        let display = self.display_grid(self.width.min(700), self.height.min(700))?;
         Ok(FieldFrame::from_abi(
             descriptor,
             self,
@@ -621,6 +700,11 @@ fn nearest(values: &[f64], target: f64) -> Option<usize> {
 }
 
 pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Image> {
+    decode_with_max_dim(bytes, usize::MAX)
+}
+
+/// Keep only display-resolution points before HDF5 expands a full CONUS band into memory.
+pub fn decode_with_max_dim(bytes: Vec<u8>, max_dim: usize) -> anyhow::Result<Image> {
     let file = hdf5lite::File::open(bytes).map_err(|e| anyhow::anyhow!("ABI: {e}"))?;
     let dims = file
         .dataset("CMI")
@@ -629,15 +713,17 @@ pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Image> {
     let [height, width] = dims.as_slice() else {
         anyhow::bail!("ABI CMI: expected a two-dimensional image");
     };
-    let (height, width) = (*height as usize, *width as usize);
+    let (native_height, native_width) = (*height as usize, *width as usize);
+    let stride = native_width.max(native_height).div_ceil(max_dim.max(1)).max(1);
+    let (height, width) = (native_height.div_ceil(stride), native_width.div_ceil(stride));
     let mut values: Vec<f32> = file
-        .read_f64("CMI")
+        .read_f64_strided_2d("CMI", stride)
         .map_err(|e| anyhow::anyhow!("ABI CMI: {e}"))?
         .into_iter()
         .map(|value| value as f32)
         .collect();
     let quality: Vec<u8> = file
-        .read_f64("DQF")
+        .read_f64_strided_2d("DQF", stride)
         .map_err(|e| anyhow::anyhow!("ABI DQF: {e}"))?
         .into_iter()
         .map(|value| if value.is_finite() { value as u8 } else { 3 })
@@ -684,10 +770,12 @@ pub fn decode(bytes: Vec<u8>) -> anyhow::Result<Image> {
         quality,
         x: file
             .read_f64("x")
-            .map_err(|e| anyhow::anyhow!("ABI x: {e}"))?,
+            .map_err(|e| anyhow::anyhow!("ABI x: {e}"))?
+            .into_iter().step_by(stride).collect(),
         y: file
             .read_f64("y")
-            .map_err(|e| anyhow::anyhow!("ABI y: {e}"))?,
+            .map_err(|e| anyhow::anyhow!("ABI y: {e}"))?
+            .into_iter().step_by(stride).collect(),
         projection,
         valid_time: t,
         source_identity: root
@@ -736,6 +824,22 @@ mod tests {
             frame.sample(lon, lat).value,
             Some(frame.native_abi().unwrap().values[250 * 500 + 250])
         );
+    }
+
+    #[test]
+    fn bounded_decode_samples_the_same_scientific_cells() {
+        let bytes = include_bytes!("../tests/data/g19-c13-meso.nc").to_vec();
+        let full = decode(bytes.clone()).unwrap();
+        let small = decode_with_max_dim(bytes, 100).unwrap();
+        assert_eq!((small.width, small.height), (100, 100));
+        for (x, y) in [(0, 0), (31, 47), (99, 99)] {
+            let at = y * small.width + x;
+            let source = (y * 5) * full.width + x * 5;
+            assert_eq!(small.quality[at], full.quality[source]);
+            assert_eq!(small.values[at].to_bits(), full.values[source].to_bits());
+            assert_eq!(small.x[x], full.x[x * 5]);
+            assert_eq!(small.y[y], full.y[y * 5]);
+        }
     }
 
     #[test]

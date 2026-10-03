@@ -411,7 +411,7 @@ pub fn rotation_track(minutes: u16) -> &'static str {
 }
 
 /// A decoded MRMS reflectivity field: a regular lat/lon grid of dBZ (`NaN` = no data).
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct MrmsField {
     /// Row-major `ny × nx` dBZ values; row 0 is the northernmost latitude.
     pub values: Vec<f32>,
