@@ -57,7 +57,7 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         FeatureKind::Watch | FeatureKind::WatchBox if event.starts_with("Tornado Watch") => {
             ([230, 40, 40], 8, Some((5.0, 5.0)))
         }
-        FeatureKind::Watch if matches!(event, "Fire Weather Watch" | "Extreme Heat Watch") => {
+        FeatureKind::Watch if matches!(event, "Fire Weather Watch" | "Extreme Heat Watch" | "Freeze Watch") => {
             ([f.stroke[0], f.stroke[1], f.stroke[2]], 8, Some((5.0, 5.0)))
         }
         FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
@@ -1037,6 +1037,14 @@ mod tests {
             alert.stroke = [rgb[0], rgb[1], rgb[2], 235];
             assert_eq!(style(&alert).unwrap().rgb, rgb, "{event}");
         }
+    }
+
+    #[test]
+    fn freeze_watch_map_edge_and_label_are_dark_blue() {
+        let mut alert = feature(FeatureKind::Watch);
+        alert.title = "Freeze Watch".into();
+        alert.stroke = [49, 99, 179, 235];
+        assert_eq!(style(&alert).unwrap().rgb, [49, 99, 179]);
     }
 
     #[test]
