@@ -150,7 +150,7 @@ fn metric(ui: &mut egui::Ui, label: &str, value: String, hint: String, color: eg
         });
     ui.add_space(7.0);
 }
-fn opt(v: Option<f32>, unit: &str, decimals: usize) -> String {
+pub(crate) fn opt(v: Option<f32>, unit: &str, decimals: usize) -> String {
     v.map(|x| format!("{x:.*}{unit}", decimals))
         .unwrap_or_else(|| "—".into())
 }

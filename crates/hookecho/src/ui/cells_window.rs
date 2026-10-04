@@ -6,6 +6,7 @@
 //! the worst row, fly there.
 
 use wxdata::level3::Cell;
+use super::cell_window::opt;
 
 /// Which column the table is ordered by.
 #[derive(Default, PartialEq, Clone, Copy)]
@@ -162,132 +163,146 @@ pub fn show(
     {
         w.selected = order.first().map(|i| cells[*i].id.clone());
     }
-    let width = (ctx.content_rect().width() - 48.0).clamp(300.0, 960.0);
+    let width = (ctx.content_rect().width() - 24.0).clamp(280.0, 390.0);
+    let height = (ctx.content_rect().height() - 88.0).clamp(360.0, 690.0);
+    let ink = egui::Color32::from_rgb(17, 38, 58);
+    let border = egui::Color32::from_rgb(97, 132, 160);
+    let muted = egui::Color32::from_rgb(158, 184, 203);
+    let blue = egui::Color32::from_rgb(130, 196, 255);
+    let amber = egui::Color32::from_rgb(255, 207, 115);
+    let green = egui::Color32::from_rgb(112, 223, 186);
+    let mut close_clicked = false;
     egui::Window::new("Storm attributes")
         .open(&mut open)
-        .default_width(width)
-        .default_pos(egui::pos2(24.0, 64.0))
-        .default_height((ctx.content_rect().height() - 128.0).clamp(300.0, 600.0))
-        .resizable(true)
+        .title_bar(false)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 76.0))
+        .fixed_size(egui::vec2(width, height))
         .vscroll(true)
         .collapsible(false)
-        .frame(crate::ui::style::window(ctx).inner_margin(16))
+        .frame(egui::Frame::new()
+            .fill(ink)
+            .stroke(egui::Stroke::new(1.0, border))
+            .corner_radius(16.0)
+            .inner_margin(egui::Margin::same(16)))
         .show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.weak(format!("{} cells", cells.len()));
-                ui.add(
-                    egui::TextEdit::singleline(&mut w.query)
-                        .hint_text("Find a cell…")
-                        .desired_width(150.0),
-                );
-                egui::ComboBox::from_id_salt("cell_sort")
-                    .selected_text("Sort by…")
-                    .show_ui(ui, |ui| {
-                        for (label, key) in [
-                            ("Severity", SortCol::Rank),
-                            ("Cell ID", SortCol::Id),
-                            ("Range", SortCol::Range),
-                            ("Reflectivity", SortCol::MaxDbz),
-                            ("Cell top", SortCol::Top),
-                            ("VIL", SortCol::Vil),
-                            ("Hail probability", SortCol::Poh),
-                            ("Severe hail", SortCol::Posh),
-                            ("Hail size", SortCol::Hail),
-                        ] {
-                            ui.selectable_value(&mut w.sort, key, label);
-                        }
-                    });
-                ui.checkbox(&mut w.desc, "Descending");
-                ui.menu_button("Export CSV", |ui| {
-                    crate::ui::csv_buttons(
-                        ui,
-                        "cells.csv",
-                        "Filtered cells in current sort",
-                        || to_csv(cells, scores, &order),
-                    );
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("RADAR SCIT · TRACKED CELLS").size(10.0).color(muted));
+                    ui.label(egui::RichText::new("Storm dock").size(23.0).strong());
+                    ui.label(egui::RichText::new("The map stays visible while you inspect a cell.").size(11.0).color(muted));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    close_clicked = ui.button("×").on_hover_text("Close storm attributes").clicked();
                 });
             });
-            ui.add_space(12.0);
-            if order.is_empty() {
-                ui.weak("No matching storm cells.");
-                return;
-            }
-            let draw_list = |ui: &mut egui::Ui, selected: &mut Option<String>| {
-                ui.horizontal(|ui| {
-                    ui.strong("Cell");
-                    ui.weak("     Range · Peak reflectivity");
+            ui.add_space(10.0);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{} shown · {} detected", order.len(), cells.len())).size(11.0).color(muted));
+                ui.add(egui::TextEdit::singleline(&mut w.query).hint_text("Find a cell ID…").desired_width(170.0));
+            });
+            ui.horizontal(|ui| {
+                let sort_name = match w.sort {
+                    SortCol::Rank => "Highest priority", SortCol::Id => "Cell ID", SortCol::Range => "Radar range",
+                    SortCol::MaxDbz => "Reflectivity", SortCol::Top => "Cell top", SortCol::Vil => "VIL",
+                    SortCol::Poh => "Hail probability", SortCol::Posh => "Severe hail", SortCol::Hail => "Hail size",
+                };
+                egui::ComboBox::from_id_salt("cell_sort").selected_text(sort_name).show_ui(ui, |ui| {
+                    for (label, key) in [
+                        ("Highest priority", SortCol::Rank), ("Cell ID", SortCol::Id), ("Radar range", SortCol::Range),
+                        ("Reflectivity", SortCol::MaxDbz), ("Cell top", SortCol::Top), ("VIL", SortCol::Vil),
+                        ("Hail probability", SortCol::Poh), ("Severe hail", SortCol::Posh), ("Hail size", SortCol::Hail),
+                    ] { ui.selectable_value(&mut w.sort, key, label); }
                 });
-                egui::ScrollArea::vertical()
-                    .id_salt("storm_list")
-                    .max_height(440.0)
-                    .show(ui, |ui| {
-                        for &i in &order {
+                if ui.small_button(if w.desc { "↓" } else { "↑" }).on_hover_text("Reverse sort order").clicked() { w.desc = !w.desc; }
+                ui.menu_button("Export CSV ↓", |ui| {
+                    crate::ui::csv_buttons(ui, "cells.csv", "Filtered cells in current sort", || to_csv(cells, scores, &order));
+                });
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.label(egui::RichText::new("SELECT A CELL").size(10.0).strong().color(muted));
+            egui::ScrollArea::vertical().id_salt("storm_dock_cells").max_height(112.0).show(ui, |ui| {
+                for chunk in order.chunks(3) {
+                    ui.columns(3, |cols| {
+                        for (col, &i) in cols.iter_mut().zip(chunk) {
                             let c = &cells[i];
-                            let range = c
-                                .range_nm
-                                .map(|v| format!("{v:.0} NM"))
-                                .unwrap_or_else(|| "—".into());
-                            let peak = c
-                                .max_dbz
-                                .map(|v| format!("{v:.0} dBZ"))
-                                .unwrap_or_else(|| "—".into());
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), 44.0],
-                                    egui::Button::new(format!("{}     {range} · {peak}", c.id))
-                                        .selected(selected.as_ref() == Some(&c.id)),
-                                )
-                                .clicked()
-                            {
-                                *selected = Some(c.id.clone());
-                            }
+                            let dbz = c.max_dbz.map(|v| format!("{v:.0} dBZ")).unwrap_or_else(|| "—".into());
+                            let active = w.selected.as_ref() == Some(&c.id);
+                            let fill = if active { egui::Color32::from_rgb(40, 83, 133) } else { egui::Color32::from_rgb(32, 58, 80) };
+                            let button = egui::Button::new(format!("{}\n{dbz}", c.id))
+                                .fill(fill)
+                                .stroke(egui::Stroke::new(1.0, if active { blue } else { egui::Color32::from_rgb(62, 96, 122) }))
+                                .corner_radius(8.0);
+                            if col.add_sized([col.available_width(), 48.0], button).clicked() { w.selected = Some(c.id.clone()); }
                         }
                     });
-            };
-            let detail = |ui: &mut egui::Ui, selected: &Option<String>| {
-                if let Some(c) = cells.iter().find(|c| Some(&c.id) == selected.as_ref()) {
-                    ui.horizontal(|ui| {
-                        ui.heading(format!("Cell {}", c.id));
-                        if ui.button("Center on map").clicked() {
+                }
+            });
+            ui.add_space(9.0);
+            ui.separator();
+            if let Some(c) = cells.iter().find(|c| Some(&c.id) == w.selected.as_ref()) {
+                let score = cells.iter().position(|x| x.id == c.id).and_then(|i| scores.get(i)).copied().unwrap_or(0);
+                ui.label(egui::RichText::new(format!("SELECTED STORM · SEVERITY {score}/100")).size(10.0).color(muted));
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("Cell {}", c.id)).size(23.0).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new("Center on map ↗").fill(egui::Color32::from_rgb(43, 105, 189))).clicked() {
                             chosen = Some(c.id.clone());
                         }
                     });
-                    let score = cells
-                        .iter()
-                        .position(|x| x.id == c.id)
-                        .and_then(|i| scores.get(i));
-                    if let Some(score) = score {
-                        ui.weak(format!("Severity score {score}/100"));
-                    }
-                    if zdr_cells.contains(&c.id) {
-                        ui.label("ZDR column detected");
-                    }
-                    crate::ui::cell_window::attributes(
-                        ui,
-                        c,
-                        trends.get(&c.id).map(Vec::as_slice).unwrap_or(&[]),
-                    );
-                }
-            };
-            let mut detail = detail;
-            if ui.available_width() >= 740.0 {
-                ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(290.0, 440.0),
-                        egui::Layout::top_down(egui::Align::LEFT),
-                        |ui| draw_list(ui, &mut w.selected),
-                    );
-                    ui.separator();
-                    ui.vertical(|ui| detail(ui, &w.selected));
                 });
-            } else {
-                draw_list(ui, &mut w.selected);
-                ui.separator();
-                detail(ui, &w.selected);
+                let range = c.range_nm.map(|v| format!("{v:.0} NM")).unwrap_or_else(|| "— NM".into());
+                let movement = match (c.mvt_deg, c.mvt_kt) {
+                    (Some(d), Some(k)) => format!("{} · {k:.0} kt", crate::geo::compass(d)),
+                    _ => "Motion unavailable".into(),
+                };
+                ui.label(egui::RichText::new(format!("{range} from radar · {movement}")).size(11.0).color(muted));
+                ui.add_space(10.0);
+                metric_card(ui, "Reflectivity", opt(c.max_dbz, " dBZ", 0), amber);
+                ui.columns(2, |cols| {
+                    metric_card(&mut cols[0], "Motion", opt(c.mvt_kt.map(|k| k * 1.150_78), " mph", 0), blue);
+                    metric_card(&mut cols[1], "Hail", opt(c.hail_in, " in", 2), green);
+                });
+                ui.add_space(5.0);
+                dock_fact(ui, "Position", format!("{:.3}° · {:.3}°", c.lat, c.lon), muted);
+                dock_fact(ui, "Top / peak", format!("{} / {}", opt(c.top_kft, " kft", 1), opt(c.max_dbz_hgt_kft, " kft", 1)), muted);
+                dock_fact(ui, "Forecast error", opt(c.fcst_err_nm, " NM", 1), muted);
+                if zdr_cells.contains(&c.id) { ui.label(egui::RichText::new("ZDR column detected").color(amber)); }
+                egui::CollapsingHeader::new("All radar details").show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                        crate::ui::cell_window::attributes(ui, c, trends.get(&c.id).map(Vec::as_slice).unwrap_or(&[]));
+                    });
+                });
+            } else if order.is_empty() {
+                ui.label(egui::RichText::new("No matching storm cells.").color(muted));
             }
         });
-    w.open = open;
+    w.open = open && !close_clicked;
     chosen
+}
+
+fn metric_card(ui: &mut egui::Ui, title: &str, value: String, color: egui::Color32) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(32, 59, 82))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(62, 96, 121)))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width() - 20.0);
+            ui.label(egui::RichText::new(title).size(10.0).color(egui::Color32::from_rgb(161, 189, 207)));
+            ui.label(egui::RichText::new(value).size(20.0).strong().color(color));
+        });
+}
+
+fn dock_fact(ui: &mut egui::Ui, name: &str, value: String, muted: egui::Color32) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(name).size(11.0).color(muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(value).size(11.0).strong());
+        });
+    });
+    ui.separator();
 }
 
 #[cfg(test)]

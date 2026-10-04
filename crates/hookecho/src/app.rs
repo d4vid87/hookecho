@@ -13661,6 +13661,7 @@ impl HookEchoApp {
             && self.show_radar_sites
             && !self.obs_mode
             && !self.forecast_open
+            && !self.cells_window.open
             && self.warning_popup.is_none()
             && prect.width() > 700.0
             && !chrome::compact(ctx)
