@@ -13792,11 +13792,11 @@ impl HookEchoApp {
         // themselves are drawn much further down with the rest of the cell layer. Reserving here
         // and drawing there is the whole reason the placer separates the two: a warning label
         // must not lose its slot to a town name that merely happened to be painted earlier.
-        let cell_labels_shown: std::collections::HashMap<String, (String, Option<f32>)> = if self.filters.show_cells
+        let cell_labels_shown: std::collections::HashMap<String, (String, Option<f32>, Option<f32>)> = if self.filters.show_cells
             && self.cells_site.as_deref() == view.site.as_deref()
         {
             let selected = self.cell_popup.as_ref().map(|c| c.id.as_str());
-            let mut ids: Vec<(String, String, Option<f32>, egui::Pos2, bool, bool, i32)> = self
+            let mut ids: Vec<(String, String, Option<f32>, Option<f32>, egui::Pos2, bool, bool, i32)> = self
                 .active_storm_cells()
                 .iter()
                 .filter(|c| ui::priority::cell_marker_visible(c) && c.kind == CellKind::Storm && !c.id.is_empty())
@@ -13807,20 +13807,20 @@ impl HookEchoApp {
                         feature.kind == overlay::FeatureKind::Warning
                             && feature.distance_km(c.lon, c.lat) < 0.5
                     });
-                    (c.id.clone(), cell_glance_label(c), cell_label_dbz(c),
+                    (c.id.clone(), cell_glance_label(c), cell_label_dbz(c), c.hail_in.filter(|v| *v > 0.0),
                         egui::pos2(prect.left() + sx, prect.top() + sy),
                         selected == Some(c.id.as_str()), warned, cell_strength(c))
                 })
                 .collect();
-            ids.sort_by_key(|(_, _, _, _, selected, warned, strength)| {
+            ids.sort_by_key(|(_, _, _, _, _, selected, warned, strength)| {
                 (!*selected, !*warned, std::cmp::Reverse(*strength))
             });
             ids.into_iter()
-                .filter(|(_, _, _, p, _, _, _)| prect.contains(*p))
-                .filter(|(id, label, dbz, p, _, _, _)| {
+                .filter(|(_, _, _, _, p, _, _, _)| prect.contains(*p))
+                .filter(|(id, label, dbz, hail, p, _, _, _)| {
                     let anchor = *p + egui::vec2(8.0, -8.0);
                     let size = if dbz.is_some() {
-                        egui::vec2(86.0, 31.0)
+                        cell_strength_label_size(*hail)
                     } else {
                         egui::vec2(label.len() as f32 * 6.5, 13.0)
                     };
@@ -13833,7 +13833,7 @@ impl HookEchoApp {
                         crate::labelplace::Priority::Warning,
                     )
                 })
-                .map(|(id, label, dbz, _, _, _, _)| (id, (label, dbz)))
+                .map(|(id, label, dbz, hail, _, _, _, _)| (id, (label, dbz, hail)))
                 .collect()
         } else {
             std::collections::HashMap::new()
@@ -14610,7 +14610,6 @@ impl HookEchoApp {
                 }
             }
 
-            let selected_cell = self.cell_popup.as_ref().map(|cell| cell.id.as_str());
             for c in self.active_storm_cells() {
                 if !ui::priority::cell_marker_visible(c) {
                     continue;
@@ -14649,23 +14648,16 @@ impl HookEchoApp {
                         painter.circle_filled(tpp, 8.0, dark);
                         painter.circle_stroke(tpp, 6.0, egui::Stroke::new(2.0, blue));
                         painter.circle_filled(tpp, 2.0, blue);
-                        if cam.zoom >= 7.0 && selected_cell == Some(c.id.as_str()) {
+                        if cam.zoom >= 6.0 && (minutes == 15 || minutes == 30) {
                             let txt = format!("+{minutes}m");
-                            let lp = tpp + egui::vec2(12.0, -2.0);
-                            for off in [egui::vec2(1.0, 1.0), egui::vec2(-1.0, -1.0)] {
-                                painter.text(
-                                    lp + off,
-                                    egui::Align2::LEFT_CENTER,
-                                    &txt,
-                                    egui::FontId::proportional(12.0),
-                                    dark,
-                                );
-                            }
+                            let tag = egui::Rect::from_min_size(tpp + egui::vec2(10.0, -19.0), egui::vec2(40.0, 17.0));
+                            painter.rect_filled(tag, 4.0, dark);
+                            painter.rect_stroke(tag, 4.0, egui::Stroke::new(1.0, blue), egui::StrokeKind::Inside);
                             painter.text(
-                                lp,
-                                egui::Align2::LEFT_CENTER,
+                                tag.center(),
+                                egui::Align2::CENTER_CENTER,
                                 &txt,
-                                egui::FontId::proportional(12.0),
+                                egui::FontId::proportional(11.0),
                                 egui::Color32::WHITE,
                             );
                         }
@@ -14688,9 +14680,9 @@ impl HookEchoApp {
                     painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, marker_color));
                     painter.circle_filled(p, 2.0, marker_color);
                 }
-                if let Some((label, dbz)) = cell_labels_shown.get(&c.id) {
+                if let Some((label, dbz, hail)) = cell_labels_shown.get(&c.id) {
                     if let Some(dbz) = dbz {
-                        draw_cell_strength_label(&painter, p, &c.id, *dbz);
+                        draw_cell_strength_label(&painter, p, &c.id, *dbz, *hail);
                     } else {
                         painter.text(
                             p + egui::vec2(8.0, -8.0),
@@ -19160,21 +19152,29 @@ fn cell_glance_label(cell: &Cell) -> String {
 fn cell_label_dbz(cell: &Cell) -> Option<f32> {
     (cell.kind == CellKind::Storm
         && cell.tvs.as_deref().is_none_or(|v| v.trim().is_empty())
-        && cell.meso.as_deref().is_none_or(|v| v.trim().is_empty())
-        && cell.hail_in.is_none_or(|v| v <= 0.0))
+        && cell.meso.as_deref().is_none_or(|v| v.trim().is_empty()))
         .then_some(cell.max_dbz?)
         .filter(|dbz| dbz.is_finite())
 }
 
-fn draw_cell_strength_label(painter: &egui::Painter, p: egui::Pos2, id: &str, dbz: f32) {
-    let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, -39.0), egui::vec2(86.0, 31.0));
+fn cell_strength_label_size(hail: Option<f32>) -> egui::Vec2 {
+    if hail.is_some() { egui::vec2(98.0, 43.0) } else { egui::vec2(86.0, 31.0) }
+}
+
+fn draw_cell_strength_label(painter: &egui::Painter, p: egui::Pos2, id: &str, dbz: f32, hail: Option<f32>) {
+    let size = cell_strength_label_size(hail);
+    let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, -8.0 - size.y), size);
     painter.rect_filled(rect, 6.0, egui::Color32::from_rgba_unmultiplied(12, 39, 56, 245));
     painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(247, 215, 120)), egui::StrokeKind::Inside);
     painter.text(rect.min + egui::vec2(7.0, 5.0), egui::Align2::LEFT_TOP, id,
         egui::FontId::monospace(10.0), egui::Color32::from_rgb(255, 219, 107));
     painter.text(rect.right_top() + egui::vec2(-7.0, 5.0), egui::Align2::RIGHT_TOP,
         format!("{dbz:.0} dBZ"), egui::FontId::proportional(12.0), egui::Color32::from_rgb(255, 225, 123));
-    let bar = egui::Rect::from_min_size(rect.min + egui::vec2(7.0, 24.0), egui::vec2(72.0, 3.0));
+    if let Some(hail) = hail {
+        painter.text(rect.min + egui::vec2(7.0, 22.0), egui::Align2::LEFT_TOP,
+            format!("{hail:.1}\" hail"), egui::FontId::proportional(10.0), egui::Color32::from_rgb(210, 225, 235));
+    }
+    let bar = egui::Rect::from_min_size(rect.min + egui::vec2(7.0, size.y - 7.0), egui::vec2(size.x - 14.0, 3.0));
     painter.rect_filled(bar, 2.0, egui::Color32::from_rgb(69, 96, 117));
     let filled = bar.width() * (dbz / 70.0).clamp(0.0, 1.0);
     for (start, end, color) in [
@@ -22303,6 +22303,9 @@ mod tests {
         assert_eq!(super::cell_strength(&cell), 50_000);
         let plain = wxdata::level3::Cell { tvs: None, meso: None, hail_in: None, ..cell };
         assert_eq!(super::cell_label_dbz(&plain), Some(65.0));
+        let hail = wxdata::level3::Cell { hail_in: Some(0.5), ..plain };
+        assert_eq!(super::cell_label_dbz(&hail), Some(65.0));
+        assert_eq!(super::cell_strength_label_size(hail.hail_in).y, 43.0);
     }
 
 
