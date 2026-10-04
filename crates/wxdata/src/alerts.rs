@@ -181,6 +181,7 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
         "Flood Warning" => [0, 160, 90],
         "Fire Weather Watch" | "Red Flag Warning" | "Extreme Heat Warning"
         | "Excessive Heat Warning" => [205, 133, 63],
+        "Extreme Heat Watch" => [166, 94, 42],
         // NWS's own color for the product. A snow squall is a short-fuse life-threatening
         // warning and used to draw in the same generic red as everything else with "warning" in
         // its name, which is the one thing it must not look like on a winter map.
@@ -686,6 +687,7 @@ mod tests {
         assert_eq!(event_style("Red Flag Warning"), (FeatureKind::Warning, [205, 133, 63]));
         assert_eq!(event_style("Extreme Heat Warning"), (FeatureKind::Warning, [205, 133, 63]));
         assert_eq!(event_style("Excessive Heat Warning"), (FeatureKind::Warning, [205, 133, 63]));
+        assert_eq!(event_style("Extreme Heat Watch"), (FeatureKind::Watch, [166, 94, 42]));
         assert_ne!(event_style("Extreme Heat Warning").1, event_style("Tornado Warning").1);
     }
 
