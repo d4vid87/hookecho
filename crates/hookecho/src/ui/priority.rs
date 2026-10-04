@@ -79,9 +79,13 @@ pub fn rows<'a>(
     rows.retain(|f| seen.insert(f.alert.as_ref().unwrap().id.as_str()));
     rows
 }
+pub fn cell_marker_visible(cell: &Cell) -> bool {
+    cell.max_dbz.is_some_and(|dbz| dbz.is_finite() && dbz > 50.0)
+}
 pub fn track_strength_visible(cell: &Cell, rules: &PriorityRules) -> bool {
     rules.track_min_dbz.is_finite()
-        && cell.max_dbz.is_some_and(|dbz| dbz.is_finite() && dbz >= rules.track_min_dbz.clamp(20.0, 70.0))
+        && cell_marker_visible(cell)
+        && cell.max_dbz.is_some_and(|dbz| dbz >= rules.track_min_dbz.clamp(50.0, 70.0))
 }
 pub fn track_visible(cell: &Cell, rules: &PriorityRules, now: DateTime<Utc>) -> bool {
     track_strength_visible(cell, rules)
@@ -123,7 +127,7 @@ pub fn dock_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
 
 pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
     ui.strong("Estimated storm tracks");
-    ui.add(egui::Slider::new(&mut rules.track_min_dbz, 20.0..=70.0).text("Minimum cell reflectivity (dBZ)"));
+    ui.add(egui::Slider::new(&mut rules.track_min_dbz, 50.0..=70.0).text("Minimum cell reflectivity (dBZ)"));
     ui.add(egui::Slider::new(&mut rules.track_age_min, 1..=15).text("Maximum age (min)"));
     ui.add(
         egui::Slider::new(&mut rules.track_error_nm, 0.5..=20.0)
@@ -209,6 +213,8 @@ mod tests {
             ..Default::default()
         };
         assert!(track_visible(&c, &r, now));
+        c.max_dbz = Some(50.0);
+        assert!(!track_visible(&c, &r, now));
         c.max_dbz = Some(49.9);
         assert!(!track_visible(&c, &r, now));
         c.max_dbz = None;
@@ -224,5 +230,13 @@ mod tests {
         c.time = Some(now);
         c.mvt_deg = Some(f32::NAN);
         assert!(!track_visible(&c, &r, now));
+    }
+    #[test]
+    fn map_cell_markers_require_more_than_fifty_dbz() {
+        let mut cell = Cell::default();
+        for (dbz, visible) in [(None, false), (Some(50.0), false), (Some(50.1), true), (Some(f32::NAN), false)] {
+            cell.max_dbz = dbz;
+            assert_eq!(cell_marker_visible(&cell), visible);
+        }
     }
 }

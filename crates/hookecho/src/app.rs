@@ -13341,7 +13341,7 @@ impl HookEchoApp {
                                 && !self.active_storm_cells().is_empty();
                             let picked = cell_hit
                                 .then(|| {
-                                    self.active_storm_cells().iter().find(|c| {
+                                    self.active_storm_cells().iter().filter(|c| ui::priority::cell_marker_visible(c)).find(|c| {
                                         let w =
                                             crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                                         let (sx, sy) = cam.world_to_screen(w, vp);
@@ -13799,7 +13799,7 @@ impl HookEchoApp {
             let mut ids: Vec<(String, String, Option<f32>, egui::Pos2, bool, bool, i32)> = self
                 .active_storm_cells()
                 .iter()
-                .filter(|c| c.kind == CellKind::Storm && !c.id.is_empty())
+                .filter(|c| ui::priority::cell_marker_visible(c) && c.kind == CellKind::Storm && !c.id.is_empty())
                 .map(|c| {
                     let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                     let (sx, sy) = cam.world_to_screen(w, vp);
@@ -14298,7 +14298,8 @@ impl HookEchoApp {
                 let mut etas: Vec<(f64, usize, usize)> = Vec::new();
                 let cells = self.active_storm_cells();
                 for (ci, c) in cells.iter().enumerate() {
-                    if !self.filters.show_tracks || !ui::priority::track_visible(c, &self.settings.priority_rules, chrono::Utc::now()) { continue; }
+                    if !self.filters.show_tracks || !ui::priority::cell_marker_visible(c)
+                        || !ui::priority::track_visible(c, &self.settings.priority_rules, chrono::Utc::now()) { continue; }
                     let Some(error_km) = ui::cell_window::error_km(c) else { continue };
                     let (Some(dir), Some(kt)) = (c.mvt_deg, c.mvt_kt) else {
                         continue;
@@ -14611,6 +14612,9 @@ impl HookEchoApp {
 
             let selected_cell = self.cell_popup.as_ref().map(|cell| cell.id.as_str());
             for c in self.active_storm_cells() {
+                if !ui::priority::cell_marker_visible(c) {
+                    continue;
+                }
                 let p = to_screen(c.lon, c.lat);
                 // Past track (packet 23): faint gray polyline leading up to the current position.
                 if self.filters.show_tracks
@@ -22300,6 +22304,7 @@ mod tests {
         let plain = wxdata::level3::Cell { tvs: None, meso: None, hail_in: None, ..cell };
         assert_eq!(super::cell_label_dbz(&plain), Some(65.0));
     }
+
 
     #[test]
     fn menu_wheel_and_pinch_do_not_interrupt_the_map() {
