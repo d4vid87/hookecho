@@ -48,6 +48,8 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         }
         FeatureKind::Warning if event == "Severe Thunderstorm Warning" =>
             ([255, 225, 40], 12, None),
+        FeatureKind::Warning if event == "Freeze Warning" =>
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 12, None),
         FeatureKind::Warning
             if matches!(event, "Red Flag Warning" | "Extreme Heat Warning" | "Excessive Heat Warning") =>
         {
@@ -997,7 +999,7 @@ mod tests {
         let clip = Rect::from_min_max(Pos2::ZERO, egui::pos2(100.0, 100.0));
         let points = [egui::pos2(10.0, 10.0), egui::pos2(90.0, 10.0)];
         let mut warning = feature(FeatureKind::Warning);
-        for event in ["Severe Thunderstorm Warning", "Tornado Warning", "Flood Warning"] {
+        for event in ["Severe Thunderstorm Warning", "Tornado Warning", "Flood Warning", "Freeze Warning"] {
             warning.title = event.into();
             for scale in [0.5, 1.0, 2.0] {
                 let mut shapes = Vec::new();
@@ -1045,6 +1047,12 @@ mod tests {
         alert.title = "Freeze Watch".into();
         alert.stroke = [49, 99, 179, 235];
         assert_eq!(style(&alert).unwrap().rgb, [49, 99, 179]);
+        alert.kind = FeatureKind::Warning;
+        alert.title = "Freeze Warning".into();
+        alert.stroke = [0, 153, 255, 235];
+        let warning = style(&alert).unwrap();
+        assert_eq!(warning.rgb, [0, 153, 255]);
+        assert!(warning.warning);
     }
 
     #[test]

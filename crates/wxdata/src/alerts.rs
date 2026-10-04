@@ -184,6 +184,7 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
         "Extreme Heat Watch" => [166, 94, 42],
         "Heat Advisory" => [190, 117, 66],
         "Freeze Watch" => [49, 99, 179],
+        "Freeze Warning" => [0, 153, 255],
         // NWS's own color for the product. A snow squall is a short-fuse life-threatening
         // warning and used to draw in the same generic red as everything else with "warning" in
         // its name, which is the one thing it must not look like on a winter map.
@@ -697,6 +698,7 @@ mod tests {
     #[test]
     fn freeze_watch_is_dark_blue() {
         assert_eq!(event_style("Freeze Watch"), (FeatureKind::Watch, [49, 99, 179]));
+        assert_eq!(event_style("Freeze Warning"), (FeatureKind::Warning, [0, 153, 255]));
     }
 
     #[test]
