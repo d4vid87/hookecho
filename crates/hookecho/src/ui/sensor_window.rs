@@ -145,13 +145,14 @@ fn dashboard(
     // ScrollArea's available width can grow to its contents. Keep the atlas within the
     // drawer instead of letting its chart and cards request the full browser viewport.
     let content_width = (ui.ctx().content_rect().width() - 40.0).min(780.0).max(250.0);
+    let inner_width = content_width - 36.0;
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.set_width(content_width);
         ui.set_max_width(content_width);
         egui::Frame::new().fill(BG).corner_radius(12.0)
             .inner_margin(egui::Margin::same(18)).show(ui, |ui| {
-            ui.set_width(content_width - 36.0);
-            ui.set_max_width(content_width - 36.0);
+            ui.set_width(inner_width);
+            ui.set_max_width(inner_width);
             ui.label(egui::RichText::new(format!("{} / {}", station.station_id, station.name.to_uppercase()))
                 .monospace().size(10.0).color(BLUE));
             ui.label(egui::RichText::new("Temperature & trend").size(24.0).strong().color(egui::Color32::WHITE));
@@ -176,13 +177,13 @@ fn dashboard(
             ui.label(egui::RichText::new("COMPARE SOURCES ON THE SAME SCALE")
                 .size(10.0).strong().color(BLUE));
             ui.add_space(6.0);
-            atlas_chart(ui, &station.obs, history);
+            atlas_chart(ui, inner_width, &station.obs, history);
             ui.label(egui::RichText::new("Observed: station reading · RTMA/URMA: recent analysis · HRRR: current run · Global: loaded forecast frames. Model values are not station measurements.")
                 .size(10.0).color(MUTED));
             ui.add_space(12.0);
-            let compact = ui.available_width() < 540.0;
+            let compact = inner_width < 540.0;
             let gap = 9.0;
-            let width = if compact { ui.available_width() } else { (ui.available_width() - gap) / 2.0 };
+            let width = if compact { inner_width } else { (inner_width - gap) / 2.0 };
             let cards = [
                 ("Dewpoint", opt(cur.dewpoint_c.map(c_to_f), "°F", 0),
                     station.obs.iter().rev().filter_map(|o| o.dewpoint_c.map(c_to_f)).collect::<Vec<_>>(), egui::Color32::from_rgb(108, 224, 189)),
@@ -256,7 +257,7 @@ fn atlas_card(ui: &mut egui::Ui, width: f32, label: &str, value: &str, points: &
         });
 }
 
-fn atlas_chart(ui: &mut egui::Ui, observations: &[Observation], history: Option<&PointHistory>) {
+fn atlas_chart(ui: &mut egui::Ui, width: f32, observations: &[Observation], history: Option<&PointHistory>) {
     let empty = PointHistory::default();
     let history = history.unwrap_or(&empty);
     let mut series = [
@@ -283,8 +284,8 @@ fn atlas_chart(ui: &mut egui::Ui, observations: &[Observation], history: Option<
     egui::Frame::new().fill(egui::Color32::from_rgb(12, 27, 43))
         .stroke(egui::Stroke::new(1.0, LINE)).corner_radius(9.0)
         .inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 150.0), egui::Sense::hover());
+            ui.set_width(width - 20.0);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width - 20.0, 150.0), egui::Sense::hover());
             let plot = rect.shrink2(egui::vec2(12.0, 14.0));
             let painter = ui.painter();
             painter.line_segment([egui::pos2(plot.left(), plot.bottom()), egui::pos2(plot.right(), plot.bottom())],
