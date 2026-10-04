@@ -104,6 +104,7 @@ impl HookEchoApp {
         let mut custom_locations = false;
         let mut point_forecast = false;
         let mut storm_attributes = false;
+        let mut sensor_dashboard = false;
         let modes = (!self.drawer.is_open() && !self.panel_open).then(|| egui::Area::new("context_modes".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
@@ -160,6 +161,8 @@ impl HookEchoApp {
                             .named_toggle("Tool: Point forecast", self.tool == MapTool::Forecast).clicked();
                         storm_attributes = rail_choice(ui, "◈  Storm attributes", self.cells_window.open)
                             .named("Storm attributes").clicked();
+                        sensor_dashboard = rail_choice(ui, "◷  Sensor dashboard", self.show_sensors)
+                            .named_toggle("Sensor dashboard", self.show_sensors).clicked();
                         if self.analyst_open {
                             ui.separator();
                             ui.menu_button("◫  Analysis options ▾", |ui| {
@@ -222,6 +225,7 @@ impl HookEchoApp {
         if custom_locations { self.apply_palette(PaletteAction::OpenWindow(AppWindow::Markers), ctx); }
         if point_forecast { self.apply_palette(PaletteAction::Tool(MapTool::Forecast), ctx); }
         if storm_attributes { self.apply_palette(PaletteAction::OpenWindow(AppWindow::StormTable), ctx); }
+        if sensor_dashboard { self.apply_palette(PaletteAction::ToggleOverlay(OverlayToggle::Sensors), ctx); }
         if mrms { self.apply_palette(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms), ctx); }
         if spc { self.apply_palette(PaletteAction::ToggleOutlook, ctx); }
         if let Some(day) = outlook_day { self.apply_palette(PaletteAction::SetOutlookDay(day), ctx); }
