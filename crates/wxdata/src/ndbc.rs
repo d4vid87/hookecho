@@ -9,7 +9,8 @@
 
 use crate::metar::SurfaceOb;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use crate::clock::Instant;
 
 const LATEST: &str = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt";
 

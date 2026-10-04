@@ -6522,8 +6522,8 @@ impl HookEchoApp {
             self.settings.matrix_token.trim().to_string(),
         );
         if !hs.is_empty() && !room.is_empty() && !token.is_empty() {
-            let txn = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let txn = wxdata::clock::SystemTime::now()
+                .duration_since(wxdata::clock::UNIX_EPOCH)
                 .map(|d| d.as_millis())
                 .unwrap_or(0);
             let url = crate::notify::matrix_url(&hs, &room, txn);

@@ -10,7 +10,8 @@
 //! before anything fires.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use wxdata::clock::Instant;
 
 /// Echo at or above this counts as "rain arriving" — below it is drizzle and clutter.
 pub const THRESH_DBZ: f32 = 25.0;
