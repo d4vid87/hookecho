@@ -56,7 +56,7 @@ impl HookEchoApp {
                 ui.set_width((self.chrome_rect.width() - 20.0).max(200.0));
                 ui.horizontal(|ui| {
                     let site_label = if radar_focus {
-                        "◉ HookEcho".to_owned()
+                        format!("{} HookEcho", ph::RADIO_BUTTON)
                     } else {
                         format!("{site} · {product}")
                     };
@@ -131,16 +131,20 @@ impl HookEchoApp {
                 });
                 if radar_focus {
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!("● {site} · {freshness}"))
-                                .color(freshness_color)
-                                .strong(),
-                        );
+                        let badge = || egui::Frame::new()
+                            .fill(Color32::from_rgb(14, 38, 60))
+                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(78, 137, 179)))
+                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::symmetric(6, 3));
+                        badge().show(ui, |ui| {
+                            ui.label(RichText::new(format!("● {site} · {freshness}"))
+                                .color(freshness_color).strong());
+                        });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format!(
-                                "{product} · {}",
-                                age.map_or("waiting".to_owned(), |m| format!("{m}m ago"))
-                            ));
+                            badge().show(ui, |ui| {
+                                ui.label(format!("{product} · {}",
+                                    age.map_or("waiting".to_owned(), |m| format!("{m}m ago"))));
+                            });
                         });
                     });
                 } else {
@@ -297,6 +301,11 @@ impl HookEchoApp {
                                         ),
                                     )
                                     .selected(selected)
+                                    .fill(if radar_focus && selected {
+                                        Color32::from_rgb(38, 105, 185)
+                                    } else {
+                                        Color32::from_rgb(40, 49, 58)
+                                    })
                                     .min_size(vec2((self.chrome_rect.width() - 28.0) / 4.0, 56.0));
                                     let name = match section {
                                         PanelSection::Radar => "Radar controls",
