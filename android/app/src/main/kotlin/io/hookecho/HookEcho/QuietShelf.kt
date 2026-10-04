@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -72,14 +73,14 @@ fun QuietShelf(
     onClose: () -> Unit,
     onAction: (String) -> Unit
 ) {
-    Box(
+    BoxWithConstraints(
         Modifier.fillMaxSize()
             .background(Color(0x99000813))
             .clickable(onClick = onClose),
         contentAlignment = Alignment.BottomCenter
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth().height(530.dp).clickable {},
+            modifier = Modifier.fillMaxWidth().height(minOf(530.dp, maxHeight * 0.82f)).clickable {},
             shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
             color = navy,
             shadowElevation = 18.dp

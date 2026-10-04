@@ -163,7 +163,7 @@ impl HookEchoApp {
             }
         }
 
-        if !radar_focus || self.panel_open {
+        if !radar_focus {
             let bottom = self.chrome_rect.bottom() - 4.0;
             let destinations = egui::Area::new("mobile_destinations".into())
                 .order(egui::Order::Foreground)
