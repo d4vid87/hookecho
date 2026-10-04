@@ -13,11 +13,12 @@ const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 pub const USER_AGENT: &str = "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)";
 
 /// Opt-in alert products. Other event types remain enabled.
-pub const OPTIONAL_EVENTS: [&str; 12] = [
+pub const OPTIONAL_EVENTS: [&str; 13] = [
     "Small Craft Advisory",
     "Gale Warning",
     "Gale Watch",
     "Special Marine Warning",
+    "Marine Weather Statement",
     "Hazardous Seas Warning",
     "Coastal Flood Warning",
     "Coastal Flood Advisory",
