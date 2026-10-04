@@ -175,10 +175,10 @@ mod tests {
         assert!(visible(&watch, &r, (-96.5, 32.5), now));
         r.radii_mi[1] = 10.;
         assert!(!visible(&watch, &r, (-96.5, 32.5), now));
-        assert_eq!(
-            serde_json::from_str::<PriorityRules>("{}").unwrap(),
-            PriorityRules::default()
-        );
+        // Missing version means legacy settings; migration upgrades it after deserialization.
+        let legacy = serde_json::from_str::<PriorityRules>("{}").unwrap();
+        assert_eq!(legacy.track_age_default_version, 0);
+        assert_eq!(legacy.track_age_min, PriorityRules::default().track_age_min);
     }
     #[test]
     fn map_keeps_every_alert_category_outside_dock_thresholds() {
