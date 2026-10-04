@@ -241,20 +241,37 @@ fn wind_label(cur: &Observation) -> String {
 }
 
 fn atlas_card(ui: &mut egui::Ui, width: f32, label: &str, value: &str, points: &[f32], color: egui::Color32) {
-    egui::Frame::new().fill(TILE).stroke(egui::Stroke::new(1.0, LINE))
-        .corner_radius(9.0).inner_margin(egui::Margin::same(11)).show(ui, |ui| {
-            ui.set_width(width - 22.0);
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(label).size(11.0).color(egui::Color32::WHITE));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(value).size(17.0).strong().color(egui::Color32::WHITE));
-                });
-            });
-            ui.add_space(6.0);
-            let size = egui::vec2((width - 22.0).max(80.0), 45.0);
-            crate::theme::sparkline_sized(ui, points, color, size);
-            ui.label(egui::RichText::new("older  →  latest").size(9.0).color(MUTED));
-        });
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 87.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 9.0, TILE);
+    painter.rect_stroke(rect, 9.0, egui::Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+    painter.text(rect.left_top() + egui::vec2(11.0, 11.0), egui::Align2::LEFT_TOP,
+        label, egui::FontId::proportional(11.0), egui::Color32::WHITE);
+    painter.text(rect.right_top() + egui::vec2(-11.0, 9.0), egui::Align2::RIGHT_TOP,
+        value, egui::FontId::proportional(17.0), egui::Color32::WHITE);
+    let plot = egui::Rect::from_min_max(
+        rect.left_top() + egui::vec2(12.0, 39.0),
+        rect.right_bottom() - egui::vec2(12.0, 13.0),
+    );
+    painter.line_segment([egui::pos2(plot.left(), plot.bottom()), egui::pos2(plot.right(), plot.bottom())],
+        egui::Stroke::new(1.0, LINE));
+    let values: Vec<f32> = points.iter().copied().filter(|v| v.is_finite()).collect();
+    if values.len() >= 2 {
+        let lo = values.iter().copied().reduce(f32::min).unwrap();
+        let hi = values.iter().copied().reduce(f32::max).unwrap();
+        let span = (hi - lo).max(1.0);
+        let positions: Vec<_> = values.iter().enumerate().map(|(i, value)| egui::pos2(
+            plot.left() + plot.width() * i as f32 / (values.len() - 1) as f32,
+            plot.bottom() - 4.0 - (plot.height() - 8.0) * (*value - lo) / span,
+        )).collect();
+        for pair in positions.windows(2) {
+            painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.8, color));
+        }
+        painter.circle_filled(*positions.last().unwrap(), 3.0, color);
+    } else {
+        painter.text(plot.center(), egui::Align2::CENTER_CENTER, "no trend data",
+            egui::FontId::proportional(10.0), MUTED);
+    }
 }
 
 fn atlas_chart(ui: &mut egui::Ui, width: f32, observations: &[Observation], history: Option<&PointHistory>) {
