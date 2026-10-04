@@ -15773,8 +15773,8 @@ impl HookEchoApp {
                 continue;
             }
             let col = crate::theme::accent(self.settings.theme);
-            // Home wears its watch radius: the ring is the ground truth for "within 20 miles",
-            // and a circle you can see beats a number you have to trust.
+            // Beacon Halo: a dark keyline separates the watch boundary from radar returns,
+            // while the soft cobalt outer strokes keep it visible over dark map tiles.
             if m.home && m.alert_radius_mi > 0.0 {
                 let km = m.alert_radius_mi * crate::geo::KM_PER_MILE;
                 let edge = crate::geo::destination_point([m.lon, m.lat], 90.0, km);
@@ -15782,14 +15782,33 @@ impl HookEchoApp {
                 let (ex, _) = cam.world_to_screen(ew, vp);
                 let r = (prect.left() + ex - p.x).abs();
                 if r > 4.0 && r < 4000.0 {
-                    painter.circle_stroke(
-                        p,
-                        r,
-                        egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 70),
-                        ),
-                    );
+                    for (width, color) in [
+                        (24.0, egui::Color32::from_rgba_unmultiplied(106, 199, 255, 24)),
+                        (15.0, egui::Color32::from_rgba_unmultiplied(106, 199, 255, 52)),
+                        (9.0, egui::Color32::from_rgb(6, 26, 43)),
+                        (4.0, egui::Color32::from_rgb(167, 228, 255)),
+                    ] {
+                        painter.circle_stroke(p, r, egui::Stroke::new(width, color));
+                    }
+                    if r > 9.0 {
+                        painter.circle_stroke(p, r - 5.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(62, 156, 219)));
+                    }
+                    if r >= 35.0 {
+                        let edge = p + egui::vec2(r * std::f32::consts::FRAC_1_SQRT_2, -r * std::f32::consts::FRAC_1_SQRT_2);
+                        let badge = egui::Rect::from_min_size(
+                            egui::pos2(
+                                (edge.x + 12.0).clamp(prect.left() + 8.0, (prect.right() - 124.0).max(prect.left() + 8.0)),
+                                (edge.y - 38.0).clamp(prect.top() + 8.0, (prect.bottom() - 37.0).max(prect.top() + 8.0)),
+                            ),
+                            egui::vec2(116.0, 29.0),
+                        );
+                        painter.line_segment([edge, badge.left_bottom()], egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 251, 255)));
+                        painter.rect_filled(badge, 7.0, egui::Color32::from_rgb(13, 43, 66));
+                        painter.rect_stroke(badge, 7.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(135, 204, 255)), egui::StrokeKind::Inside);
+                        painter.text(badge.center(), egui::Align2::CENTER_CENTER,
+                            format!("{:.0} MI WATCH", m.alert_radius_mi),
+                            egui::FontId::proportional(12.0), egui::Color32::from_rgb(242, 249, 255));
+                    }
                 }
             }
             // Uploaded icon if one is loaded; otherwise the default accent dot.
