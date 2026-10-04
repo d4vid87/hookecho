@@ -83,9 +83,15 @@ impl HookEchoApp {
         let mut scrub_rect = None;
         // Wide enough for the track to be worth scrubbing, never so wide it spans a 4K map — and
         // never wider than the screen, which on a phone the 420 pt floor would otherwise be.
-        let width = if corner { super::clearview::CORNER_WIDTH - 22.0 } else if phone_landscape { (self.chrome_rect.width() * 0.5 - 20.0).max(220.0) } else { (self.chrome_rect.width() - 160.0)
-            .clamp(420.0, if narrow { 420.0 } else { 520.0 })
-            .min(self.chrome_rect.width() - 16.0) };
+        let width = if corner {
+            super::clearview::CORNER_WIDTH - 22.0
+        } else if phone_landscape {
+            (self.chrome_rect.width() * 0.5 - 20.0).max(220.0)
+        } else {
+            (self.chrome_rect.width() - 160.0)
+                .clamp(420.0, if narrow { 420.0 } else { 520.0 })
+                .min(self.chrome_rect.width() - 16.0)
+        };
         // The phone's pill drops the two extras: the readouts fit a desktop row, not a 400 pt one,
         // and rain arrival has its own chip lane.
         let (dvr, rain) = if narrow { (0, None) } else { (dvr, rain) };
@@ -95,7 +101,7 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(
                 if corner { egui::Align2::RIGHT_BOTTOM } else if phone_landscape { egui::Align2::LEFT_BOTTOM } else { egui::Align2::CENTER_BOTTOM },
-                egui::vec2(if corner { -super::clearview::CORNER_RIGHT } else if phone_landscape { 10.0 } else { 0.0 }, if narrow { -84.0 } else { -super::clearview::CORNER_BOTTOM }),
+                egui::vec2(if corner { -super::clearview::CORNER_RIGHT } else if phone_landscape { 10.0 } else { 0.0 }, if cfg!(target_os = "android") && narrow && !self.analyst_open { -80.0 } else if narrow { -84.0 } else { -super::clearview::CORNER_BOTTOM }),
             )
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 255)
@@ -107,6 +113,9 @@ impl HookEchoApp {
                     ))
                     .show(ui, |ui| {
                 ui.set_width(width);
+                if cfg!(target_os = "android") && narrow && !self.analyst_open {
+                    ui.label(egui::RichText::new("RADAR PLAYBACK").size(10.0).strong().color(egui::Color32::from_rgb(166, 217, 252)));
+                }
                 if compact_live {
                     ui.spacing_mut().item_spacing = egui::vec2(if corner { 3.0 } else { 4.0 }, 0.0);
                 }
@@ -426,7 +435,9 @@ impl HookEchoApp {
                 });
             });
         if corner {
-            ctx.data_mut(|d| d.insert_temp(egui::Id::new("corner_scrubber_rect"), area.response.rect));
+            ctx.data_mut(|d| {
+                d.insert_temp(egui::Id::new("corner_scrubber_rect"), area.response.rect)
+            });
         }
         self.settings.live_loop_frames = loop_frames;
         if was_cut_playback && !self.views[self.active].timeline.cut_playback {
