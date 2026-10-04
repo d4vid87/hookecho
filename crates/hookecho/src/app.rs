@@ -2758,6 +2758,8 @@ struct ModeSession {
     inspector: bool,
 }
 
+type MarkerGeocodeResult = Result<Vec<(String, String, f64, f64)>, String>;
+
 #[derive(Clone, Copy)]
 struct PaneSession {
     thresholds: [Option<f32>; Moment::ALL.len()],
@@ -2870,8 +2872,8 @@ pub struct HookEchoApp {
     update_rx: Receiver<ui::about_window::UpdateState>,
     geocode_tx: Sender<Result<(String, f64, f64), String>>,
     geocode_rx: Receiver<Result<(String, f64, f64), String>>,
-    marker_geocode_tx: Sender<Result<Vec<(String, String, f64, f64)>, String>>,
-    marker_geocode_rx: Receiver<Result<Vec<(String, String, f64, f64)>, String>>,
+    marker_geocode_tx: Sender<MarkerGeocodeResult>,
+    marker_geocode_rx: Receiver<MarkerGeocodeResult>,
     /// `(lon, lat)` from the hosting edge's own geo-IP (browser build only), used once at boot to
     /// open on the nearest radar. Never fed on native, where the saved view is the answer.
     #[cfg(target_arch = "wasm32")]
@@ -13802,7 +13804,8 @@ impl HookEchoApp {
             && self.cells_site.as_deref() == view.site.as_deref()
         {
             let selected = self.cell_popup.as_ref().map(|c| c.id.as_str());
-            let mut ids: Vec<(String, String, Option<f32>, Option<f32>, egui::Pos2, bool, bool, i32)> = self
+            type CellLabelCandidate = (String, String, Option<f32>, Option<f32>, egui::Pos2, bool, bool, i32);
+            let mut ids: Vec<CellLabelCandidate> = self
                 .active_storm_cells()
                 .iter()
                 .filter(|c| ui::priority::cell_marker_visible(c) && c.kind == CellKind::Storm && !c.id.is_empty())

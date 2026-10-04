@@ -143,7 +143,7 @@ fn dashboard(
     let age = cur.time.map(|t| (Utc::now() - t).num_minutes().max(0));
     // ScrollArea's available width can grow to its contents. Keep the atlas within the
     // drawer instead of letting its chart and cards request the full browser viewport.
-    let content_width = (ui.ctx().content_rect().width() - 40.0).min(780.0).max(250.0);
+    let content_width = (ui.ctx().content_rect().width() - 40.0).clamp(250.0, 780.0);
     let inner_width = content_width - 36.0;
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.set_width(content_width);
