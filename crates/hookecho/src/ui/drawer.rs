@@ -104,6 +104,31 @@ impl Drawer {
         width: f32,
         w: egui::Window<'a>,
     ) -> Option<egui::Window<'a>> {
+        self.page_sized_with_header(ctx, title, open, gear, width, false, w)
+    }
+
+    /// A wide page with a quiet header: title at left, close at right, and no expand action.
+    pub fn page_sized_fixed<'a>(
+        &mut self,
+        ctx: &egui::Context,
+        title: &str,
+        open: &mut bool,
+        width: f32,
+        w: egui::Window<'a>,
+    ) -> Option<egui::Window<'a>> {
+        self.page_sized_with_header(ctx, title, open, false, width, true, w)
+    }
+
+    fn page_sized_with_header<'a>(
+        &mut self,
+        ctx: &egui::Context,
+        title: &str,
+        open: &mut bool,
+        gear: bool,
+        width: f32,
+        close_right: bool,
+        w: egui::Window<'a>,
+    ) -> Option<egui::Window<'a>> {
         // A page that isn't open doesn't get a slot: several callers reach `page` before their
         // own `open` check, and a closed page silently holding the top of the stack would hide
         // the one the user actually asked for.
@@ -131,7 +156,7 @@ impl Drawer {
         let depth = self.stack.len();
         let mut gear_on = self.gear;
         let mut expanded = self.expanded;
-        let can_expand = width > WIDTH;
+        let can_expand = width > WIDTH && !close_right;
         let mut close = false;
         egui::Area::new(egui::Id::new("drawer_header"))
             .fixed_pos(head.min)
@@ -146,25 +171,34 @@ impl Drawer {
                         } else {
                             (egui_phosphor::regular::X, "Close")
                         };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(glyph).size(crate::ui::style::FONT_LG),
+                        let mut close_button = |ui: &mut egui::Ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(glyph).size(crate::ui::style::FONT_LG),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
                                 )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE),
-                            )
-                            .named(hint)
-                            .clicked()
-                        {
-                            close = true;
+                                .named(hint)
+                                .clicked()
+                            {
+                                close = true;
+                            }
+                        };
+                        if !close_right {
+                            close_button(ui);
                         }
                         ui.label(
                             egui::RichText::new(title)
                                 .size(crate::ui::style::FONT_LG)
                                 .strong(),
                         );
-                        if gear || can_expand {
+                        if close_right {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                close_button(ui);
+                            });
+                        } else if gear || can_expand {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {

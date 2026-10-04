@@ -107,11 +107,10 @@ pub fn show(
     drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     let mut open = true;
-    let Some(window) = drawer.page_sized(
+    let Some(window) = drawer.page_sized_fixed(
         ctx,
         "Sensors",
         &mut open,
-        false,
         820.0,
         egui::Window::new("Sensors"),
     ) else {
