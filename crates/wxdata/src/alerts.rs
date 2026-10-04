@@ -13,9 +13,11 @@ const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 pub const USER_AGENT: &str = "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)";
 
 /// Opt-in alert products. Other event types remain enabled.
-pub const OPTIONAL_EVENTS: [&str; 10] = [
+pub const OPTIONAL_EVENTS: [&str; 12] = [
     "Small Craft Advisory",
     "Gale Warning",
+    "Gale Watch",
+    "Special Marine Warning",
     "Hazardous Seas Warning",
     "Coastal Flood Warning",
     "Coastal Flood Advisory",
@@ -177,6 +179,7 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
         "Severe Thunderstorm Warning" => [255, 165, 0],
         "Flash Flood Warning" => [57, 255, 20],
         "Flood Warning" => [0, 160, 90],
+        "Fire Weather Watch" | "Extreme Heat Warning" => [205, 133, 63],
         // NWS's own color for the product. A snow squall is a short-fuse life-threatening
         // warning and used to draw in the same generic red as everything else with "warning" in
         // its name, which is the one thing it must not look like on a winter map.
@@ -593,7 +596,7 @@ mod tests {
     fn optional_events_are_filtered_before_inline_and_zone_geometry() {
         use serde_json::json;
         let retained = ["Tornado Warning", "Severe Thunderstorm Warning", "Flood Warning",
-            "Flash Flood Warning", "High Surf Warning", "Special Marine Warning",
+            "Flash Flood Warning", "High Surf Warning",
             "Special Weather Statement", "Tornado Watch"];
         let polygon = json!({"type":"Polygon","coordinates":[[[-80.,40.],[-79.,40.],[-79.,41.],[-80.,40.]]]});
         let events: Vec<_> = OPTIONAL_EVENTS.into_iter().chain(retained).collect();
@@ -609,7 +612,7 @@ mod tests {
         }
         let feed = json!({"type":"FeatureCollection", "features":features}).to_string();
         let zones = json!({"type":"FeatureCollection", "features":zones}).to_string();
-        for enabled in [vec![], vec!["Gale Warning".to_owned()], vec!["Flood Watch".to_owned()]] {
+        for enabled in [vec![], vec!["Gale Watch".to_owned()], vec!["Special Marine Warning".to_owned()]] {
             let excluded: Vec<_> = OPTIONAL_EVENTS.into_iter().filter(|e| !event_enabled(e, &enabled)).collect();
             let body = filter_events(&feed, &excluded).unwrap();
             let inline = parse_alerts(&body).unwrap();
@@ -674,6 +677,13 @@ mod tests {
     #[test]
     fn flash_flood_warning_is_neon_green() {
         assert_eq!(event_style("Flash Flood Warning"), (FeatureKind::Warning, [57, 255, 20]));
+    }
+
+    #[test]
+    fn fire_and_heat_alerts_are_brown() {
+        assert_eq!(event_style("Fire Weather Watch"), (FeatureKind::Watch, [205, 133, 63]));
+        assert_eq!(event_style("Extreme Heat Warning"), (FeatureKind::Warning, [205, 133, 63]));
+        assert_ne!(event_style("Extreme Heat Warning").1, event_style("Tornado Warning").1);
     }
 
     #[test]
