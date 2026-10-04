@@ -48,9 +48,17 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         }
         FeatureKind::Warning if event == "Severe Thunderstorm Warning" =>
             ([255, 225, 40], 12, None),
+        FeatureKind::Warning
+            if matches!(event, "Red Flag Warning" | "Extreme Heat Warning" | "Excessive Heat Warning") =>
+        {
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 12, None)
+        }
         FeatureKind::Warning => ([255, 117, 93], 12, None),
         FeatureKind::Watch | FeatureKind::WatchBox if event.starts_with("Tornado Watch") => {
             ([230, 40, 40], 8, Some((5.0, 5.0)))
+        }
+        FeatureKind::Watch if event == "Fire Weather Watch" => {
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 8, Some((5.0, 5.0)))
         }
         FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
         FeatureKind::Statement
@@ -1004,6 +1012,21 @@ mod tests {
         }
         assert!(!style(&feature(FeatureKind::Watch)).unwrap().warning);
         assert!(!style(&feature(FeatureKind::Statement)).unwrap().warning);
+    }
+
+    #[test]
+    fn fire_and_heat_map_edges_and_labels_keep_the_alert_color() {
+        for (kind, event) in [
+            (FeatureKind::Watch, "Fire Weather Watch"),
+            (FeatureKind::Warning, "Red Flag Warning"),
+            (FeatureKind::Warning, "Extreme Heat Warning"),
+            (FeatureKind::Warning, "Excessive Heat Warning"),
+        ] {
+            let mut alert = feature(kind);
+            alert.title = event.into();
+            alert.stroke = [205, 133, 63, 235];
+            assert_eq!(style(&alert).unwrap().rgb, [205, 133, 63], "{event}");
+        }
     }
 
     #[test]
