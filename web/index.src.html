@@ -120,23 +120,30 @@
       const dead = (msg) => {
         const el = boot.isConnected ? boot : document.body.appendChild(boot);
         el.textContent = msg;
+        const retry = document.createElement("button");
+        retry.textContent = "Reload HookEcho";
+        retry.onclick = () => location.reload();
+        el.appendChild(retry);
       };
-      // Reload rather than sit on a dead canvas — but at most once, or a GPU that dies on every
-      // boot turns into a reload loop.
-      document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
-        e.preventDefault();
+      // A GPU loss or wasm panic leaves the last frame painted but inert. Retry once, then
+      // offer a manual reload instead of entering a loop if the same failure persists.
+      const recover = (message) => {
         // Throttle in the URL, not sessionStorage — WebKit blocks storage in third-party
         // iframes, and a throttle that fails open is a reload loop. One reload per navigation.
         const url = new URL(location.href);
         if (url.searchParams.has("relaunched")) {
-          dead("Graphics context lost — reload the page.");
+          dead(message);
           return;
         }
         url.searchParams.append("relaunched", "1");
         location.href = url.href;
+      };
+      document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
+        e.preventDefault();
+        recover("Graphics context lost — reload the page.");
       });
       addEventListener("error", (e) => {
-        if (String(e.message || "").includes("unreachable")) dead("HookEcho stopped: " + e.message);
+        if (String(e.message || "").includes("unreachable")) recover("HookEcho stopped: " + e.message);
       });
 
         // The module is already compiled above — hand it over rather than fetching the wasm twice.
