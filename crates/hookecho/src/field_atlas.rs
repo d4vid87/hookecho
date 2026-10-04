@@ -61,6 +61,9 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
             ([f.stroke[0], f.stroke[1], f.stroke[2]], 8, Some((5.0, 5.0)))
         }
         FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
+        FeatureKind::Advisory if event == "Heat Advisory" => {
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 6, Some((1.5, 5.0)))
+        }
         FeatureKind::Statement
             if f.alert
                 .as_ref()
@@ -1022,10 +1025,15 @@ mod tests {
             (FeatureKind::Warning, "Red Flag Warning"),
             (FeatureKind::Warning, "Extreme Heat Warning"),
             (FeatureKind::Warning, "Excessive Heat Warning"),
+            (FeatureKind::Advisory, "Heat Advisory"),
         ] {
             let mut alert = feature(kind);
             alert.title = event.into();
-            let rgb = if event == "Extreme Heat Watch" { [166, 94, 42] } else { [205, 133, 63] };
+            let rgb = match event {
+                "Extreme Heat Watch" => [166, 94, 42],
+                "Heat Advisory" => [190, 117, 66],
+                _ => [205, 133, 63],
+            };
             alert.stroke = [rgb[0], rgb[1], rgb[2], 235];
             assert_eq!(style(&alert).unwrap().rgb, rgb, "{event}");
         }
