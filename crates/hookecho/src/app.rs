@@ -2870,6 +2870,8 @@ pub struct HookEchoApp {
     update_rx: Receiver<ui::about_window::UpdateState>,
     geocode_tx: Sender<Result<(String, f64, f64), String>>,
     geocode_rx: Receiver<Result<(String, f64, f64), String>>,
+    marker_geocode_tx: Sender<Result<Vec<(String, String, f64, f64)>, String>>,
+    marker_geocode_rx: Receiver<Result<Vec<(String, String, f64, f64)>, String>>,
     /// `(lon, lat)` from the hosting edge's own geo-IP (browser build only), used once at boot to
     /// open on the nearest radar. Never fed on native, where the saved view is the answer.
     #[cfg(target_arch = "wasm32")]
@@ -3927,6 +3929,7 @@ impl HookEchoApp {
         }
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
+        let (marker_geocode_tx, marker_geocode_rx) = std::sync::mpsc::channel();
         let (ipgeo_tx, ipgeo_rx) = std::sync::mpsc::channel::<(f64, f64)>();
         #[cfg(not(target_arch = "wasm32"))]
         drop(ipgeo_tx); // native never asks; the receiver just stays empty
@@ -3990,6 +3993,8 @@ impl HookEchoApp {
             update_rx,
             geocode_tx,
             geocode_rx,
+            marker_geocode_tx,
+            marker_geocode_rx,
             #[cfg(target_arch = "wasm32")]
             ipgeo_tx,
             ipgeo_rx,
@@ -20782,7 +20787,7 @@ impl eframe::App for HookEchoApp {
                 self.goto_view(&site, lon, lat, 8.0, None);
             }
         }
-        // Drain geocode results: the search pill navigates, the marker window adds a marker.
+        // Drain search-pill geocoding results.
         while let Ok(res) = self.geocode_rx.try_recv() {
             if std::mem::take(&mut self.geocode_nav) {
                 match res {
@@ -20803,26 +20808,13 @@ impl eframe::App for HookEchoApp {
                 }
                 continue;
             }
+        }
+        while let Ok(res) = self.marker_geocode_rx.try_recv() {
             self.marker_window.searching = false;
             match res {
-                Ok((name, lat, lon)) => {
-                    self.settings.markers.push(crate::settings::Marker {
-                        id: crate::settings::new_marker_id(),
-                        name: self.marker_window.pending_name.take().unwrap_or_else(|| name.clone()),
-                        lat,
-                        lon,
-                        icon: self.marker_window.pending_icon.take(),
-                        alert_radius_mi: crate::settings::default_alert_radius_mi(),
-                        video_url: String::new(),
-                        home: false,
-                    });
-                    self.settings.save();
-                    // Fly the active pane to the new marker (same idiom as the alert panel).
-                    let cam = &mut self.views[self.active].camera;
-                    cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
-                    cam.zoom = cam.zoom.max(9.0);
-                    self.marker_window.status = Some(format!("Added \"{}\"", self.settings.markers.last().unwrap().name));
-                    self.marker_window.query.clear();
+                Ok(results) => {
+                    self.marker_window.results = results;
+                    self.marker_window.status = None;
                 }
                 Err(e) => {
                     self.marker_window.pending_name = None;
@@ -20839,6 +20831,24 @@ impl eframe::App for HookEchoApp {
             &mut self.drawer,
             metric,
         );
+        if let Some((name, lat, lon)) = self.marker_window.chosen.take() {
+            self.settings.markers.push(crate::settings::Marker {
+                id: crate::settings::new_marker_id(),
+                name: self.marker_window.pending_name.take().unwrap_or_else(|| name.clone()),
+                lat,
+                lon,
+                icon: self.marker_window.pending_icon.take(),
+                alert_radius_mi: crate::settings::default_alert_radius_mi(),
+                video_url: String::new(),
+                home: false,
+            });
+            self.settings.save();
+            let cam = &mut self.views[self.active].camera;
+            cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
+            cam.zoom = cam.zoom.max(9.0);
+            self.marker_window.status = Some(format!("Added \"{}\"", self.settings.markers.last().unwrap().name));
+            self.marker_window.query.clear();
+        }
         if let Some(i) = self.marker_window.focus {
             if let Some(marker) = self.settings.markers.get(i) {
                 let cam = &mut self.views[self.active].camera;
@@ -20859,10 +20869,10 @@ impl eframe::App for HookEchoApp {
             self.marker_window.searching = true;
             self.marker_window.status = Some("Searching…".into());
             let http = self.http.clone();
-            let tx = self.geocode_tx.clone();
+            let tx = self.marker_geocode_tx.clone();
             let ctx2 = ctx.clone();
             self.spawner.spawn(async move {
-                let _ = tx.send(wxdata::geocode::search(&http, &query).await);
+                let _ = tx.send(wxdata::geocode::search_results(&http, &query).await);
                 ctx2.request_repaint();
             });
         }

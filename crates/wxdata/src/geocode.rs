@@ -8,6 +8,12 @@
 /// Geocode `query` to a short label plus latitude/longitude. `Err` with a human-readable reason
 /// when the query is empty, the request fails, or nothing matches.
 pub async fn search(client: &reqwest::Client, query: &str) -> Result<(String, f64, f64), String> {
+    let result = search_results(client, query).await?.remove(0);
+    Ok((result.0, result.2, result.3))
+}
+
+/// Return up to five address choices with their full names for disambiguation.
+pub async fn search_results(client: &reqwest::Client, query: &str) -> Result<Vec<(String, String, f64, f64)>, String> {
     let q = query.trim();
     if q.is_empty() {
         return Err("Enter an address or place".into());
@@ -17,7 +23,7 @@ pub async fn search(client: &reqwest::Client, query: &str) -> Result<(String, f6
             "https://nominatim.openstreetmap.org/search",
         ))
         .timeout(crate::net::FEED_TIMEOUT)
-        .query(&[("q", q), ("format", "json"), ("limit", "1")])
+        .query(&[("q", q), ("format", "json"), ("limit", "5")])
         .header("User-Agent", crate::alerts::USER_AGENT)
         .header("Accept", "application/json")
         .send()
@@ -29,32 +35,36 @@ pub async fn search(client: &reqwest::Client, query: &str) -> Result<(String, f6
         .await
         .map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let first = v.get(0).ok_or_else(|| format!("No match for \"{q}\""))?;
-    // Nominatim returns lat/lon as strings.
-    let lat = first
-        .get("lat")
-        .and_then(|s| s.as_str())
-        .and_then(|s| s.parse::<f64>().ok())
-        .ok_or("Bad coordinates in result")?;
-    let lon = first
-        .get("lon")
-        .and_then(|s| s.as_str())
-        .and_then(|s| s.parse::<f64>().ok())
-        .ok_or("Bad coordinates in result")?;
-    // Short label: the first two comma-parts of the display name (e.g. "Norman, Cleveland County").
-    let label = first
-        .get("display_name")
-        .and_then(|s| s.as_str())
-        .map(|s| {
-            s.split(',')
-                .take(2)
-                .map(str::trim)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| q.to_string());
-    Ok((label, lat, lon))
+    let results = v.as_array().ok_or("Bad address search response")?;
+    if results.is_empty() { return Err(format!("No match for \"{q}\"")); }
+    results.iter().map(|first| {
+        // Nominatim returns lat/lon as strings.
+        let lat = first
+            .get("lat")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or("Bad coordinates in result")?;
+        let lon = first
+            .get("lon")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or("Bad coordinates in result")?;
+        // Short label: the first two comma-parts of the display name (e.g. "Norman, Cleveland County").
+        let label = first
+            .get("display_name")
+            .and_then(|s| s.as_str())
+            .map(|s| {
+                s.split(',')
+                    .take(2)
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| q.to_string());
+        let address = first.get("display_name").and_then(|s| s.as_str()).unwrap_or(q).to_string();
+        Ok((label, address, lat, lon))
+    }).collect()
 }
 
 #[cfg(test)]

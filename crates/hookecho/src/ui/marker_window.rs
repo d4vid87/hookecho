@@ -38,6 +38,8 @@ pub struct MarkerWindow {
     pub focus: Option<usize>,
     pub pending_name: Option<String>,
     pub pending_icon: Option<String>,
+    pub results: Vec<(String, String, f64, f64)>,
+    pub chosen: Option<(String, f64, f64)>,
     selected: Option<usize>,
     adding: bool,
     new_name: String,
@@ -61,6 +63,7 @@ impl MarkerWindow {
         let mut make_home = None;
         self.removed = None;
         self.focus = None;
+        self.chosen = None;
         let Some(window) = drawer.page_sized(
             ctx, "Location Markers", &mut open, false, 420.0,
             egui::Window::new("Location Markers"),
@@ -84,16 +87,30 @@ impl MarkerWindow {
                         let width = (ui.available_width() - 89.0).max(90.0);
                         let field = ui.add(egui::TextEdit::singleline(&mut self.query)
                             .hint_text("City, address, or place").desired_width(width));
+                        if field.changed() { self.results.clear(); }
                         let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         let clicked = ui.add_enabled(!self.searching, primary_button(if self.searching { "Searching…" } else { "Search" })).clicked();
                         if (clicked || entered) && !self.searching && !self.query.trim().is_empty() {
                             self.pending_name = None;
                             self.pending_icon = None;
+                            self.results.clear();
                             go = Some(self.query.trim().to_string());
                         }
                     });
                     if let Some(status) = &self.status {
                         ui.label(RichText::new(status).size(11.0).color(MUTED));
+                    }
+                    if !self.results.is_empty() {
+                        ui.add_space(5.0);
+                        ui.label(RichText::new("Choose the correct address").size(11.0).color(MUTED));
+                        for (name, address, lat, lon) in &self.results {
+                            if ui.add_sized([ui.available_width(), 38.0], egui::Button::new(
+                                RichText::new(address).size(12.0).color(Color32::WHITE)
+                            ).fill(CARD).stroke(Stroke::new(1.0, BORDER))).clicked() {
+                                self.chosen = Some((name.clone(), *lat, *lon));
+                            }
+                        }
+                        if self.chosen.is_some() { self.results.clear(); }
                     }
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
