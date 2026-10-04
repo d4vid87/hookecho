@@ -142,11 +142,16 @@ fn dashboard(
     };
     let history = history.filter(|h| h.site == station.station_id);
     let age = cur.time.map(|t| (Utc::now() - t).num_minutes().max(0));
+    // ScrollArea's available width can grow to its contents. Keep the atlas within the
+    // drawer instead of letting its chart and cards request the full browser viewport.
+    let content_width = (ui.ctx().content_rect().width() - 40.0).min(780.0).max(250.0);
     egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.set_width(ui.available_width());
+        ui.set_width(content_width);
+        ui.set_max_width(content_width);
         egui::Frame::new().fill(BG).corner_radius(12.0)
             .inner_margin(egui::Margin::same(18)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_width(content_width - 36.0);
+            ui.set_max_width(content_width - 36.0);
             ui.label(egui::RichText::new(format!("{} / {}", station.station_id, station.name.to_uppercase()))
                 .monospace().size(10.0).color(BLUE));
             ui.label(egui::RichText::new("Temperature & trend").size(24.0).strong().color(egui::Color32::WHITE));
