@@ -236,7 +236,7 @@ impl HookEchoApp {
             self.mobile_occlusion.push(beacon.response.rect);
         }
 
-        if radar_focus || self.analyst_open {
+        if radar_focus || !cfg!(target_os = "android") || self.analyst_open {
             let bottom = self.chrome_rect.bottom() - 4.0;
             let destinations = egui::Area::new("mobile_destinations".into())
                 .order(egui::Order::Foreground)
