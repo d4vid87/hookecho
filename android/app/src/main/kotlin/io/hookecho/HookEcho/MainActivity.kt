@@ -9,6 +9,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Build
 import android.view.WindowInsets
+import android.view.View
+import android.view.ViewGroup
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import java.io.File
@@ -48,8 +53,16 @@ class MainActivity : GameActivity() {
     }
     private var overlayBackCallback: Any? = null
     private var overlayBackRegistered = false
+    private var rustBackConsumed = false
+    private var shelfView: ComposeView? = null
+    private val shelfSection = mutableStateOf("More")
+    private val shelfSite = mutableStateOf("")
+    private val shelfProduct = mutableStateOf("")
+    private val shelfAlerts = mutableIntStateOf(0)
+    private var shelfVisible = false
 
     private fun handleBack() {
+        if (shelfVisible) { closeQuietShelf(); return }
         if (Build.VERSION.SDK_INT >= 30 &&
             window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true) {
             window.insetsController?.hide(WindowInsets.Type.ime())
@@ -70,6 +83,19 @@ class MainActivity : GameActivity() {
         writeGoto(intent)
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, backCallback)
+        shelfView = ComposeView(this).apply {
+            visibility = View.GONE
+            setContent {
+                QuietShelf(
+                    shelfSection.value, shelfSite.value, shelfProduct.value, shelfAlerts.intValue,
+                    onSection = { shelfSection.value = it },
+                    onClose = { closeQuietShelf() },
+                    onAction = { command -> nativeOnQuietShelfAction(command); closeQuietShelf() }
+                )
+            }
+        }
+        addContentView(shelfView, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     /**
@@ -102,29 +128,59 @@ class MainActivity : GameActivity() {
         File(filesDir, "import.txt").writeText("$pendingImport\t${dest.absolutePath}")
     }
 
+    /** Native Radar Focus menu. The ComposeView is gone when closed, so the map keeps touch input. */
+    @Suppress("unused")
+    fun showQuietShelf(section: String, site: String, product: String, alerts: Int) {
+        runOnUiThread {
+            shelfSection.value = section
+            shelfSite.value = site
+            shelfProduct.value = product
+            shelfAlerts.intValue = alerts
+            shelfVisible = true
+            shelfView?.visibility = View.VISIBLE
+            updateBackCallback()
+        }
+    }
+
+    private fun closeQuietShelf() {
+        shelfVisible = false
+        shelfView?.visibility = View.GONE
+        nativeOnQuietShelfClosed()
+        updateBackCallback()
+    }
+
     /** Called from Rust when what back would do changes. */
     @Suppress("unused")
     fun setBackConsumed(consumed: Boolean) {
         runOnUiThread {
-            if (Build.VERSION.SDK_INT >= 33) {
-                if (consumed && !overlayBackRegistered) {
-                    val callback = OnBackInvokedCallback { handleBack() }
-                    onBackInvokedDispatcher.registerOnBackInvokedCallback(
-                        OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)
-                    overlayBackCallback = callback
-                    overlayBackRegistered = true
-                } else if (!consumed && overlayBackRegistered) {
-                    (overlayBackCallback as? OnBackInvokedCallback)?.let {
-                        onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it)
-                    }
-                    overlayBackCallback = null
-                    overlayBackRegistered = false
-                }
-            } else {
-                backCallback.isEnabled = consumed
-            }
+            rustBackConsumed = consumed
+            updateBackCallback()
         }
     }
+
+    private fun updateBackCallback() {
+        val consumed = rustBackConsumed || shelfVisible
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (consumed && !overlayBackRegistered) {
+                val callback = OnBackInvokedCallback { handleBack() }
+                onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)
+                overlayBackCallback = callback
+                overlayBackRegistered = true
+            } else if (!consumed && overlayBackRegistered) {
+                (overlayBackCallback as? OnBackInvokedCallback)?.let {
+                    onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it)
+                }
+                overlayBackCallback = null
+                overlayBackRegistered = false
+            }
+        } else {
+            backCallback.isEnabled = consumed
+        }
+    }
+
+    private external fun nativeOnQuietShelfAction(action: String)
+    private external fun nativeOnQuietShelfClosed()
 
     private external fun nativeOnBack()
 

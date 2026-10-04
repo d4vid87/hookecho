@@ -9,6 +9,10 @@ use crate::ui::a11y::Named as _;
 impl HookEchoApp {
     pub(crate) fn mobile_navigation(&mut self, ctx: &egui::Context) {
         let radar_focus = cfg!(target_os = "android") && !self.analyst_open;
+        #[cfg(target_os = "android")]
+        if let Some(command) = crate::platform::quiet_shelf::take_action() {
+            self.quiet_shelf_action(&command, ctx);
+        }
         // The keyboard leaves little vertical room; search uses the whole remaining viewport.
         if (self.panel_open && self.sidebar_focus_search)
             || self.settings_window.open
@@ -25,6 +29,8 @@ impl HookEchoApp {
             .clone()
             .unwrap_or_else(|| "Choose radar".into());
         let product = self.views[self.active].moment.short_name();
+        #[cfg(target_os = "android")]
+        let (alert_count, _) = self.alert_badge();
         let (freshness, freshness_color) =
             crate::ui::layers_panel::health_look(self.radar_health().state());
         let age = self.views[self.active].volume.as_ref().map(|scan| {
@@ -55,6 +61,8 @@ impl HookEchoApp {
                         .named("Open radar controls");
                     product_anchor = Some(radar.rect);
                     if radar.clicked() {
+                        #[cfg(target_os = "android")]
+                        if radar_focus && crate::platform::quiet_shelf::show("Radar", &site, product, alert_count as i32) { return; }
                         self.panel_section = PanelSection::Radar;
                         self.show_alert_panel = false;
                         self.panel_open = true;
@@ -75,6 +83,8 @@ impl HookEchoApp {
                     menu_anchor = Some(menu.rect);
                     if menu.clicked() {
                         if radar_focus {
+                            #[cfg(target_os = "android")]
+                            if crate::platform::quiet_shelf::show("More", &site, product, alert_count as i32) { return; }
                             self.panel_section = PanelSection::Tools;
                             self.show_alert_panel = false;
                             self.panel_open = true;
@@ -125,7 +135,7 @@ impl HookEchoApp {
         self.tour_anchors.product = product_anchor;
         self.tour_anchors.menu = menu_anchor;
 
-        if radar_focus && !self.panel_open {
+        if radar_focus && !self.panel_open && !crate::platform::quiet_shelf_open() {
             let forecast = egui::Area::new("mobile_forecast_focus".into())
                 .order(egui::Order::Foreground)
                 .fixed_pos(egui::pos2(
@@ -213,6 +223,31 @@ impl HookEchoApp {
         }
         if let Some(mode) = mode {
             self.switch_mode(mode, ctx);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn quiet_shelf_action(&mut self, command: &str, ctx: &egui::Context) {
+        match command {
+            "radar" | "layers" | "alerts" => {
+                self.panel_section = match command {
+                    "layers" => PanelSection::Overlays,
+                    "alerts" => PanelSection::Alerts,
+                    _ => PanelSection::Radar,
+                };
+                self.show_alert_panel = command == "alerts";
+                self.sidebar_focus_search = false;
+                self.panel_open = true;
+            }
+            "markers" => self.apply_palette(PaletteAction::OpenWindow(AppWindow::Markers), ctx),
+            "forecast" => self.apply_palette(PaletteAction::Tool(MapTool::Forecast), ctx),
+            "storms" => self.apply_palette(PaletteAction::OpenWindow(AppWindow::StormTable), ctx),
+            "settings" => self.apply_palette(PaletteAction::OpenWindow(AppWindow::Settings), ctx),
+            "help" => self.apply_palette(PaletteAction::OpenWindow(AppWindow::Help), ctx),
+            "alert_rules" => self.apply_palette(PaletteAction::OpenWindow(AppWindow::AlertRules), ctx),
+            "sensors" => self.show_sensors = true,
+            "analyst" => self.switch_mode(ViewMode::Analyst, ctx),
+            _ => log::warn!("unknown Quiet Shelf action: {command}"),
         }
     }
 
