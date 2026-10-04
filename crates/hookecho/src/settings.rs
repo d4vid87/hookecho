@@ -32,14 +32,29 @@ pub struct PriorityRules {
     pub minimum: u8,
     pub radii_mi: [f64; 4],
     pub track_age_min: u16,
+    #[serde(default)]
+    pub track_age_default_version: u8,
     pub track_error_nm: f32,
     pub track_horizon_min: u16,
     pub track_min_dbz: f32,
 }
 impl Default for PriorityRules {
     fn default() -> Self {
-        Self { minimum: 0, radii_mi: [25.0, 75.0, 100.0, 150.0], track_age_min: 5,
+        Self { minimum: 0, radii_mi: [25.0, 75.0, 100.0, 150.0], track_age_min: 30,
+            track_age_default_version: 1,
             track_error_nm: 5.0, track_horizon_min: 30, track_min_dbz: 50.0 }
+    }
+}
+impl PriorityRules {
+    fn migrate_track_age_default(&mut self) -> bool {
+        if self.track_age_default_version != 0 {
+            return false;
+        }
+        if self.track_age_min == 5 {
+            self.track_age_min = 30;
+        }
+        self.track_age_default_version = 1;
+        true
     }
 }
 
@@ -1476,6 +1491,11 @@ impl Settings {
             Some(s) => Self::from_json_lossy(&s),
             None => Self::default(),
         };
+        // Older installs saved the five-minute default, which hid tracks between source scans.
+        // Migrate that value once; a user who later chooses five minutes keeps their choice.
+        if loaded.priority_rules.migrate_track_age_default() {
+            loaded.save();
+        }
         // One-shot repair: early Android builds persisted ui_scale 1.3 as the default, which
         // multiplied on top of display density and left a ~277-pt-wide canvas. A saved exact 1.3
         // on Android is that bug, not a choice — the slider steps land there for almost no one.
@@ -2219,5 +2239,16 @@ mod tests {
     fn unknown_keys_are_still_ignored() {
         let s = Settings::from_json_lossy(r#"{"mapbox_key":"x","a_field_from_the_future":42}"#);
         assert_eq!(s.mapbox_key, "x");
+    }
+
+    #[test]
+    fn old_track_age_default_migrates_once() {
+        let mut old = Settings::from_json_lossy(r#"{"priority_rules":{"track_age_min":5}}"#);
+        assert_eq!(old.priority_rules.track_age_default_version, 0);
+        assert!(old.priority_rules.migrate_track_age_default());
+        assert_eq!(old.priority_rules.track_age_min, 30);
+        old.priority_rules.track_age_min = 5;
+        assert!(!old.priority_rules.migrate_track_age_default());
+        assert_eq!(old.priority_rules.track_age_min, 5);
     }
 }

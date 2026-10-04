@@ -8,7 +8,11 @@ const KT_TO_MPH: f32 = 1.150_78;
 /// positive skew is still the same displayed scan. History can remain visible afterward.
 pub fn projection_valid(cell: &Cell, scan: chrono::DateTime<chrono::Utc>) -> bool {
     cell.time.is_some_and(|time| (-600..=900).contains(&(scan - time).num_seconds()))
-        && cell.lon.is_finite() && cell.lon.abs() <= 180.0
+        && projection_geometry_valid(cell)
+}
+
+pub fn projection_geometry_valid(cell: &Cell) -> bool {
+    cell.lon.is_finite() && cell.lon.abs() <= 180.0
         && cell.lat.is_finite() && cell.lat.abs() <= 90.0
         && cell.mvt_deg.is_some_and(|direction| direction.is_finite() && (0.0..360.0).contains(&direction))
         && cell.mvt_kt.is_some_and(|speed| speed.is_finite() && speed >= 0.0)
@@ -99,7 +103,7 @@ pub fn show(
             egui::CollapsingHeader::new(egui::RichText::new("Show all radar details").color(egui::Color32::from_rgb(169, 207, 255)))
                 .show(ui, |ui| {
                 if !projection_valid(cell, chrono::Utc::now()) {
-                    ui.weak("Stale or insufficient motion data — forward projection unavailable.");
+                    ui.weak("Too old for a current arrival forecast; any map track is relative to the radar scan.");
                 }
                 if error_km(cell).is_none() {
                     ui.weak("Unable to estimate arrival reliably: source error information unavailable.");

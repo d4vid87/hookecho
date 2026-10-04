@@ -89,9 +89,9 @@ pub fn track_strength_visible(cell: &Cell, rules: &PriorityRules) -> bool {
 }
 pub fn track_visible(cell: &Cell, rules: &PriorityRules, now: DateTime<Utc>) -> bool {
     track_strength_visible(cell, rules)
-        && super::cell_window::projection_valid(cell, now)
+        && super::cell_window::projection_geometry_valid(cell)
         && cell.time.is_some_and(|t| {
-            (now - t).num_seconds().max(0) <= i64::from(rules.track_age_min.clamp(1, 15)) * 60
+            (-600..=i64::from(rules.track_age_min.clamp(1, 60)) * 60).contains(&(now - t).num_seconds())
         })
         && super::cell_window::error_km(cell).is_some_and(|km| {
             rules.track_error_nm.is_finite()
@@ -128,7 +128,7 @@ pub fn dock_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
 pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
     ui.strong("Estimated storm tracks");
     ui.add(egui::Slider::new(&mut rules.track_min_dbz, 50.0..=70.0).text("Minimum cell reflectivity (dBZ)"));
-    ui.add(egui::Slider::new(&mut rules.track_age_min, 1..=15).text("Maximum age (min)"));
+    ui.add(egui::Slider::new(&mut rules.track_age_min, 1..=60).text("Maximum scan age (min)"));
     ui.add(
         egui::Slider::new(&mut rules.track_error_nm, 0.5..=20.0)
             .text("Maximum forecast error (nm)"),
@@ -140,7 +140,7 @@ pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
                 ui.selectable_value(&mut rules.track_horizon_min, n, format!("{n} minutes"));
             }
         });
-    ui.weak("Only cells meeting the reflectivity limit draw tracks. This is a display filter, not an official severe-weather threshold; missing age, motion, or error also keeps a projection off the map.");
+    ui.weak("Tracks are relative to the cell's radar scan, not a forecast from the current minute. Reflectivity is a display filter, not an official severe-weather threshold; missing age, motion, or error keeps a track off the map.");
 }
 
 #[cfg(test)]
@@ -226,6 +226,12 @@ mod tests {
         assert!(!track_visible(&c, &r, now));
         c.fcst_err_nm = Some(2.);
         c.time = Some(now - chrono::Duration::minutes(6));
+        assert!(track_visible(&c, &r, now));
+        c.time = Some(now - chrono::Duration::minutes(25));
+        assert!(track_visible(&c, &r, now));
+        c.time = Some(now - chrono::Duration::minutes(31));
+        assert!(!track_visible(&c, &r, now));
+        c.time = Some(now + chrono::Duration::minutes(11));
         assert!(!track_visible(&c, &r, now));
         c.time = Some(now);
         c.mvt_deg = Some(f32::NAN);
