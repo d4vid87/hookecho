@@ -119,20 +119,35 @@ if (root) {
     if (controller?.signal === signal) el('refresh').disabled = false;
   }
   let searchController;
+  const searchInput = root.querySelector('#weather-search');
+  const choices = el('place-results');
+  function clearChoices() { choices.replaceChildren(); choices.hidden = true; }
+  searchInput.addEventListener('input', () => { searchController?.abort(); clearChoices(); });
   el('location-form').addEventListener('submit',async event => {
-    event.preventDefault(); const value = root.querySelector('#weather-search').value.trim();
+    event.preventDefault(); const value = searchInput.value.trim();
     searchController?.abort(); searchController = new AbortController();
+    clearChoices();
     const exact = areas.find(s => `${s.city}, ${s.state} · ${s.id}`.toLowerCase() === value.toLowerCase() || s.id.toLowerCase() === value.toLowerCase());
     if (exact) { text('search-status',`Forecast for the ${exact.city} radar location.`); load(fromSite(exact)); return; }
     text('search-status','Finding your location…');
     try {
       const response = await fetch(`/api/place?q=${encodeURIComponent(value)}`, { signal: searchController.signal });
       if (!response.ok) throw new Error(response.status === 404 ? 'No U.S. location found. Try a city and state, ZIP code, or address.' : 'Place search is unavailable. Try a radar station code or Locate me.');
-      const result = await response.json();
-      if (!Number.isFinite(result.lat) || !Number.isFinite(result.lon)) throw new Error('Place search returned an invalid location.');
-      const closest = areas.reduce((best,s) => milesBetween(result,s) < milesBetween(result,best) ? s : best);
-      text('search-status',`Forecast for ${result.label}. Radar from ${closest.id}.`);
-      load({ ...fromSite(closest), ...result, site: closest.id });
+      const results = await response.json();
+      if (!Array.isArray(results) || !results.length) throw new Error('No matching addresses found.');
+      choices.replaceChildren(...results.map(result => {
+        const button = node('button', result.address || result.label); button.type = 'button';
+        button.addEventListener('click', () => {
+          const closest = areas.reduce((best,s) => milesBetween(result,s) < milesBetween(result,best) ? s : best);
+          searchInput.value = result.label;
+          clearChoices();
+          text('search-status',`Forecast for ${result.label}. Radar from ${closest.id}.`);
+          load({ ...fromSite(closest), ...result, site: closest.id });
+        });
+        return button;
+      }));
+      choices.hidden = false;
+      text('search-status','Choose the correct address from the matches above.');
     } catch (error) { if (error.name !== 'AbortError') text('search-status',error.message); }
   });
   el('locate').addEventListener('click',() => {

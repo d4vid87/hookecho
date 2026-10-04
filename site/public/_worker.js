@@ -72,20 +72,22 @@ export default {
       const q = url.searchParams.get("q")?.trim() ?? "";
       if (request.method !== "GET" || !q || q.length > 120) return new Response("Invalid place search", { status: 400 });
       const upstream = new URL("https://nominatim.openstreetmap.org/search");
-      upstream.search = new URLSearchParams({ q, format: "json", limit: "1", countrycodes: "us", addressdetails: "1" }).toString();
+      upstream.search = new URLSearchParams({ q, format: "json", limit: "5", countrycodes: "us", addressdetails: "1" }).toString();
       try {
         const result = await fetch(upstream, {
           headers: { "User-Agent": "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)" },
           cf: { cacheTtl: 3600, cacheEverything: true },
         });
         if (!result.ok) throw new Error(`Geocoder ${result.status}`);
-        const [match] = await result.json();
-        if (!match) return new Response("Place not found", { status: 404 });
-        const a = match.address ?? {};
-        const city = a.city ?? a.town ?? a.village ?? a.hamlet ?? a.municipality ?? a.county;
-        const street = [a.house_number, a.road].filter(Boolean).join(" ");
-        const label = [street, city, a.state, /^\d{5}$/.test(q) ? a.postcode : null].filter(Boolean).join(", ") || match.display_name;
-        return Response.json({ label, lat: Number(match.lat), lon: Number(match.lon) }, { headers: { "cache-control": "public, max-age=3600" } });
+        const matches = await result.json();
+        if (!matches.length) return new Response("Place not found", { status: 404 });
+        return Response.json(matches.map(match => {
+          const a = match.address ?? {};
+          const city = a.city ?? a.town ?? a.village ?? a.hamlet ?? a.municipality ?? a.county;
+          const street = [a.house_number, a.road].filter(Boolean).join(" ");
+          const label = [street, city, a.state, a.postcode].filter(Boolean).join(", ") || match.display_name;
+          return { label, address: match.display_name || label, lat: Number(match.lat), lon: Number(match.lon) };
+        }).filter(match => Number.isFinite(match.lat) && Number.isFinite(match.lon)), { headers: { "cache-control": "public, max-age=3600" } });
       } catch {
         return new Response("Place search unavailable", { status: 502 });
       }

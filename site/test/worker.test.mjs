@@ -74,18 +74,19 @@ test("the retired product route redirects to StormDesk", async () => {
   assert.equal(response.headers.get("location"), "https://hookecho.io/stormdesk/");
 });
 
-test("city and ZIP searches return a forecast point while rejecting empty searches", async () => {
+test("city and ZIP searches return address choices while rejecting empty searches", async () => {
   const originalFetch = globalThis.fetch;
   try {
     let target;
     globalThis.fetch = async (url) => {
       target = url;
-      return Response.json([{ lat: "33.0983846", lon: "-96.1001322", address: { town: "Greenville", state: "Texas", postcode: "75402" } }]);
+      return Response.json([{ lat: "33.0983846", lon: "-96.1001322", display_name: "Greenville, Hunt County, Texas", address: { town: "Greenville", state: "Texas", postcode: "75402" } }, { lat: "33.12", lon: "-96.11", display_name: "Another Greenville address", address: { road: "Main St", house_number: "10", town: "Greenville", state: "Texas" } }]);
     };
     const result = await worker.fetch(new Request("https://hookecho.io/api/place?q=75402"), {});
     assert.equal(result.status, 200);
     assert.equal(target.searchParams.get("q"), "75402");
-    assert.deepEqual(await result.json(), { label: "Greenville, Texas, 75402", lat: 33.0983846, lon: -96.1001322 });
+    assert.equal(target.searchParams.get("limit"), "5");
+    assert.deepEqual(await result.json(), [{ label: "Greenville, Texas, 75402", address: "Greenville, Hunt County, Texas", lat: 33.0983846, lon: -96.1001322 }, { label: "10 Main St, Greenville, Texas", address: "Another Greenville address", lat: 33.12, lon: -96.11 }]);
     assert.equal((await worker.fetch(new Request("https://hookecho.io/api/place?q="), {})).status, 400);
   } finally { globalThis.fetch = originalFetch; }
 });
