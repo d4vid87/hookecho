@@ -3,11 +3,12 @@
 use egui::{vec2, Align2, Color32, RichText};
 use egui_phosphor::regular as ph;
 
-use super::super::{AppWindow, HookEchoApp, PaletteAction, PaletteEntry, PanelSection, ViewMode};
+use super::super::{AppWindow, HookEchoApp, MapTool, PaletteAction, PaletteEntry, PanelSection, ViewMode};
 use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
     pub(crate) fn mobile_navigation(&mut self, ctx: &egui::Context) {
+        let radar_focus = cfg!(target_os = "android") && !self.analyst_open;
         // The keyboard leaves little vertical room; search uses the whole remaining viewport.
         if (self.panel_open && self.sidebar_focus_search)
             || self.settings_window.open
@@ -31,6 +32,7 @@ impl HookEchoApp {
         let mut action = None;
         let mut mode = None;
         let mut product_anchor = None;
+        let mut menu_anchor = None;
         let header = egui::Area::new("mobile_header".into())
             .order(egui::Order::Foreground)
             .anchor(
@@ -66,12 +68,18 @@ impl HookEchoApp {
                         self.panel_open = true;
                         self.sidebar_focus_search = true;
                     }
-                    if ui
-                        .add_sized([48.0, 48.0], egui::Button::new(ph::MAP_PIN))
-                        .named("Custom locations")
-                        .clicked()
-                    {
-                        action = Some(PaletteAction::OpenWindow(AppWindow::Markers));
+                    let menu = ui
+                        .add_sized([48.0, 48.0], egui::Button::new(if radar_focus { ph::LIST } else { ph::MAP_PIN }))
+                        .named(if radar_focus { "Open map menu" } else { "Custom locations" });
+                    menu_anchor = Some(menu.rect);
+                    if menu.clicked() {
+                        if radar_focus {
+                            self.panel_section = PanelSection::Tools;
+                            self.show_alert_panel = false;
+                            self.panel_open = true;
+                        } else {
+                            action = Some(PaletteAction::OpenWindow(AppWindow::Markers));
+                        }
                     }
                 });
                 ui.colored_label(freshness_color, match age {
@@ -114,60 +122,86 @@ impl HookEchoApp {
             });
         self.mobile_occlusion.push(header.response.rect);
         self.tour_anchors.product = product_anchor;
+        self.tour_anchors.menu = menu_anchor;
 
-        let bottom = self.chrome_rect.bottom() - 4.0;
-        let destinations = egui::Area::new("mobile_destinations".into())
-            .order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(self.chrome_rect.left(), bottom - 68.0))
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(22, 28, 36))
-                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(53, 66, 80)))
-                    .show(ui, |ui| {
-                        ui.set_width(self.chrome_rect.width());
-                        ui.horizontal(|ui| {
-                            let (count, _) = self.alert_badge();
-                            for (label, icon, section) in [
-                                ("Radar".to_string(), ph::RADIO_BUTTON, PanelSection::Radar),
-                                ("Layers".to_string(), ph::STACK, PanelSection::Overlays),
-                                (format!("Alerts {count}"), ph::BELL, PanelSection::Alerts),
-                                ("More".to_string(), ph::DOTS_THREE, PanelSection::Tools),
-                            ] {
-                                let selected = self.panel_open
-                                    && self.panel_section == section
-                                    && !self.sidebar_focus_search;
-                                let button = egui::Button::new(
-                                    RichText::new(format!("{icon}\n{label}")).color(if selected {
-                                        Color32::WHITE
-                                    } else {
-                                        Color32::from_gray(205)
-                                    }),
-                                )
-                                .selected(selected)
-                                .min_size(vec2((self.chrome_rect.width() - 28.0) / 4.0, 56.0));
-                                let name = match section {
-                                    PanelSection::Radar => "Radar controls",
-                                    PanelSection::Overlays => "Layers",
-                                    PanelSection::Alerts => "Alerts",
-                                    PanelSection::Tools => "More",
-                                };
-                                if ui.add(button).named(name).clicked() {
-                                    if selected {
-                                        self.panel_open = false;
-                                    } else {
-                                        self.panel_section = section;
-                                        self.show_alert_panel = section == PanelSection::Alerts;
-                                        self.panel_open = true;
-                                        self.sidebar_focus_search = false;
-                                        ctx.data_mut(|data| data.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
+        if radar_focus && !self.panel_open {
+            let forecast = egui::Area::new("mobile_forecast_focus".into())
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(
+                    self.chrome_rect.right() - 66.0,
+                    self.chrome_rect.bottom() - 190.0,
+                ))
+                .show(ctx, |ui| {
+                    ui.add_sized(
+                        [48.0, 48.0],
+                        egui::Button::new(ph::CROSSHAIR)
+                            .fill(Color32::from_rgb(55, 130, 215))
+                            .corner_radius(24.0),
+                    )
+                    .named_toggle("Point forecast: tap the map", self.tool == MapTool::Forecast)
+                    .clicked()
+                });
+            self.mobile_occlusion.push(forecast.response.rect);
+            if forecast.inner {
+                self.apply_palette(PaletteAction::Tool(MapTool::Forecast), ctx);
+            }
+        }
+
+        if !radar_focus || self.panel_open {
+            let bottom = self.chrome_rect.bottom() - 4.0;
+            let destinations = egui::Area::new("mobile_destinations".into())
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(self.chrome_rect.left(), bottom - 68.0))
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(22, 28, 36))
+                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(53, 66, 80)))
+                        .show(ui, |ui| {
+                            ui.set_width(self.chrome_rect.width());
+                            ui.horizontal(|ui| {
+                                let (count, _) = self.alert_badge();
+                                for (label, icon, section) in [
+                                    ("Radar".to_string(), ph::RADIO_BUTTON, PanelSection::Radar),
+                                    ("Layers".to_string(), ph::STACK, PanelSection::Overlays),
+                                    (format!("Alerts {count}"), ph::BELL, PanelSection::Alerts),
+                                    ("More".to_string(), ph::DOTS_THREE, PanelSection::Tools),
+                                ] {
+                                    let selected = self.panel_open
+                                        && self.panel_section == section
+                                        && !self.sidebar_focus_search;
+                                    let button = egui::Button::new(
+                                        RichText::new(format!("{icon}\n{label}")).color(if selected {
+                                            Color32::WHITE
+                                        } else {
+                                            Color32::from_gray(205)
+                                        }),
+                                    )
+                                    .selected(selected)
+                                    .min_size(vec2((self.chrome_rect.width() - 28.0) / 4.0, 56.0));
+                                    let name = match section {
+                                        PanelSection::Radar => "Radar controls",
+                                        PanelSection::Overlays => "Layers",
+                                        PanelSection::Alerts => "Alerts",
+                                        PanelSection::Tools => "More",
+                                    };
+                                    if ui.add(button).named(name).clicked() {
+                                        if selected {
+                                            self.panel_open = false;
+                                        } else {
+                                            self.panel_section = section;
+                                            self.show_alert_panel = section == PanelSection::Alerts;
+                                            self.panel_open = true;
+                                            self.sidebar_focus_search = false;
+                                            ctx.data_mut(|data| data.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
+                                        }
                                     }
                                 }
-                            }
+                            });
                         });
-                    });
-            });
-        self.mobile_occlusion.push(destinations.response.rect);
-        self.tour_anchors.menu = Some(destinations.response.rect);
+                });
+            self.mobile_occlusion.push(destinations.response.rect);
+            self.tour_anchors.menu = Some(destinations.response.rect);
+        }
         if let Some(action) = action {
             self.apply_palette(action, ctx);
         }
