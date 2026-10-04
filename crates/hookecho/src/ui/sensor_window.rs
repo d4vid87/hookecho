@@ -1,9 +1,15 @@
 //! Sensor dashboard: current conditions + 24h trend sparklines from the nearest NWS/METAR
 //! station. Sparklines are hand-rolled on the painter (no egui_plot dependency).
 
-use crate::theme::stat_card;
 use chrono::{DateTime, Utc};
 use wxdata::obs::{Observation, StationObs};
+
+const BG: egui::Color32 = egui::Color32::from_rgb(16, 40, 61);
+const TILE: egui::Color32 = egui::Color32::from_rgb(27, 58, 82);
+const LINE: egui::Color32 = egui::Color32::from_rgb(66, 98, 122);
+const MUTED: egui::Color32 = egui::Color32::from_rgb(168, 193, 210);
+const BLUE: egui::Color32 = egui::Color32::from_rgb(104, 186, 255);
+const AMBER: egui::Color32 = egui::Color32::from_rgb(255, 209, 120);
 
 const KMH_TO_MPH: f32 = 0.621_371;
 
@@ -101,11 +107,12 @@ pub fn show(
     drawer: &mut crate::ui::drawer::Drawer,
 ) -> bool {
     let mut open = true;
-    let Some(window) = drawer.page(
+    let Some(window) = drawer.page_sized(
         ctx,
         "Sensors",
         &mut open,
         false,
+        820.0,
         egui::Window::new("Sensors"),
     ) else {
         return open;
@@ -129,129 +136,183 @@ fn dashboard(
     history: Option<&PointHistory>,
     tz: Option<wxdata::tz::Tz>,
 ) {
-    ui.horizontal(|ui| {
-        ui.strong(&station.station_id);
-        if !station.name.is_empty() {
-            ui.weak(&station.name);
-        }
-    });
     let Some(cur) = station.obs.first() else {
-        ui.weak("(no observations)");
+        ui.weak("No station observations available.");
         return;
     };
-    if let Some(t) = cur.time {
-        let age = (chrono::Utc::now() - t).num_minutes().max(0);
-        ui.weak(format!(
-            "Observed {} ({age} min ago)",
-            crate::timefmt::fmt_clock(t, tz, false)
-        ));
-    }
-    ui.separator();
-
+    let history = history.filter(|h| h.site == station.station_id);
+    let age = cur.time.map(|t| (Utc::now() - t).num_minutes().max(0));
     egui::ScrollArea::vertical().show(ui, |ui| {
-        // Big temperature.
-        let temp_f = cur.temp_c.map(c_to_f);
-        ui.label(
-            egui::RichText::new(
-                temp_f
-                    .map(|f| format!("{f:.0}°F"))
-                    .unwrap_or_else(|| "—".into()),
-            )
-            .size(34.0)
-            .strong(),
-        );
-
-        ui.horizontal_wrapped(|ui| {
-            stat_card(ui, "Humidity", &opt(cur.rh, "%", 0));
-            stat_card(ui, "Dewpoint", &opt(cur.dewpoint_c.map(c_to_f), "°F", 0));
-            let wind = match (cur.wind_kmh.map(|k| k * KMH_TO_MPH), cur.wind_dir_deg) {
-                (Some(s), Some(d)) => format!("{s:.0} mph {}", compass(d)),
-                (Some(s), None) => format!("{s:.0} mph"),
-                _ => "—".into(),
-            };
-            stat_card(ui, "Wind", &wind);
-            stat_card(
-                ui,
-                "Gust",
-                &opt(cur.gust_kmh.map(|k| k * KMH_TO_MPH), " mph", 0),
-            );
-            let pres = match cur.pressure_pa {
-                Some(pa) => format!("{:.0} mb / {:.2}\"", pa / 100.0, pa * 0.000_295_3),
-                None => "—".into(),
-            };
-            stat_card(ui, "Pressure", &pres);
-            stat_card(
-                ui,
-                "Sea-level",
-                &cur.slp_pa
-                    .map(|pa| format!("{:.0} mb", pa / 100.0))
-                    .unwrap_or_else(|| "—".into()),
-            );
-        });
-
-        ui.add_space(6.0);
-        // Trend sparklines (oldest -> newest, left to right).
-        let series = |f: fn(&Observation) -> Option<f32>| -> Vec<f32> {
-            station.obs.iter().rev().filter_map(f).collect()
-        };
-        trend(
-            ui,
-            "Temperature °F",
-            series(|o| o.temp_c.map(c_to_f)),
-            egui::Color32::from_rgb(255, 140, 90),
-        );
-        trend(
-            ui,
-            "Dewpoint °F",
-            series(|o| o.dewpoint_c.map(c_to_f)),
-            egui::Color32::from_rgb(120, 200, 140),
-        );
-        trend(
-            ui,
-            "Humidity %",
-            series(|o| o.rh),
-            egui::Color32::from_rgb(90, 170, 255),
-        );
-        trend(
-            ui,
-            "Wind mph",
-            series(|o| o.wind_kmh.map(|k| k * KMH_TO_MPH)),
-            egui::Color32::from_rgb(200, 200, 200),
-        );
-        if let Some(history) = history.filter(|history| history.site == station.station_id) {
+        ui.set_width(ui.available_width());
+        egui::Frame::new().fill(BG).corner_radius(12.0)
+            .inner_margin(egui::Margin::same(18)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(format!("{} / {}", station.station_id, station.name.to_uppercase()))
+                .monospace().size(10.0).color(BLUE));
+            ui.label(egui::RichText::new("Temperature & trend").size(24.0).strong().color(egui::Color32::WHITE));
+            ui.label(egui::RichText::new("Station observation and loaded model samples").size(11.0).color(MUTED));
+            ui.add_space(13.0);
             ui.separator();
-            ui.strong(format!("Loaded temperature history at {}", station.station_id));
-            ui.weak("RTMA: recent 6 hours · HRRR: current run · GFS: recent analyses and current forecast · Other global: viewed frames.");
-            temperature_comparison(ui, &station.obs, history);
-            if history.analysis.is_empty() && history.hrrr.is_empty() && history.forecast.is_empty() {
-                ui.weak("Waiting for station analysis and forecast samples.");
-            }
-            for (label, series) in [("RTMA / URMA", &history.analysis), ("HRRR analysis + forecast", &history.hrrr), ("Global forecast", &history.forecast)] {
-                if !series.is_empty() {
-                    ui.label(format!("{label} · {} valid times", series.len()));
-                    for reading in series.iter().rev().take(8) {
-                        let bias = nearest_temperature(&station.obs, reading.valid)
-                            .map(|(observed, time)| format!(" · vs observed {:+.1} °F ({} min apart)",
-                                c_to_f(reading.temp_k - 273.15) - c_to_f(observed),
-                                (time - reading.valid).num_minutes().abs()))
-                            .unwrap_or_default();
-                        let lead = reading.run.map(|run| if run == reading.valid { "analysis".to_string() }
-                            else { format!("f+{} h", (reading.valid - run).num_hours()) })
-                            .unwrap_or_default();
-                        ui.weak(format!("{} {lead} · {} UTC · {:.1} °F{bias}",
-                            source_label(&reading.source), reading.valid.format("%Y-%m-%d %H:%M"),
-                            c_to_f(reading.temp_k - 273.15)));
-                    }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(opt(cur.temp_c.map(c_to_f), "°F", 0))
+                    .size(62.0).strong().color(AMBER));
+                ui.vertical(|ui| {
+                    ui.add_space(7.0);
+                    ui.label(egui::RichText::new(match (cur.time, age) {
+                        (Some(time), Some(age)) => format!("Observed {} · {age} min ago", crate::timefmt::fmt_clock(time, tz, false)),
+                        _ => "Observation time unavailable".into(),
+                    }).size(11.0).color(MUTED));
+                    ui.label(egui::RichText::new(format!("Humidity {} · {}",
+                        opt(cur.rh, "%", 0), wind_label(cur))).size(11.0).color(MUTED));
+                });
+            });
+            ui.add_space(9.0);
+            ui.label(egui::RichText::new("COMPARE SOURCES ON THE SAME SCALE")
+                .size(10.0).strong().color(BLUE));
+            ui.add_space(6.0);
+            atlas_chart(ui, &station.obs, history);
+            ui.label(egui::RichText::new("Observed: station reading · RTMA/URMA: recent analysis · HRRR: current run · Global: loaded forecast frames. Model values are not station measurements.")
+                .size(10.0).color(MUTED));
+            ui.add_space(12.0);
+            let compact = ui.available_width() < 540.0;
+            let gap = 9.0;
+            let width = if compact { ui.available_width() } else { (ui.available_width() - gap) / 2.0 };
+            let cards = [
+                ("Dewpoint", opt(cur.dewpoint_c.map(c_to_f), "°F", 0),
+                    station.obs.iter().rev().filter_map(|o| o.dewpoint_c.map(c_to_f)).collect::<Vec<_>>(), egui::Color32::from_rgb(108, 224, 189)),
+                ("Humidity", opt(cur.rh, "%", 0),
+                    station.obs.iter().rev().filter_map(|o| o.rh).collect(), BLUE),
+                ("Wind", wind_label(cur),
+                    station.obs.iter().rev().filter_map(|o| o.wind_kmh.map(|v| v * KMH_TO_MPH)).collect(), egui::Color32::from_rgb(204, 214, 220)),
+                ("Pressure", cur.pressure_pa.map(|v| format!("{:.0} mb", v / 100.0)).unwrap_or_else(|| "—".into()),
+                    station.obs.iter().rev().filter_map(|o| o.pressure_pa.map(|v| v / 100.0)).collect(), AMBER),
+            ];
+            if compact {
+                for (label, value, points, color) in cards { atlas_card(ui, width, label, &value, &points, color); ui.add_space(gap); }
+            } else {
+                for row in cards.chunks(2) {
+                    ui.horizontal(|ui| {
+                        for (label, value, points, color) in row {
+                            atlas_card(ui, width, label, value, points, *color);
+                            ui.add_space(gap);
+                        }
+                    });
+                    ui.add_space(gap);
                 }
             }
-        } else {
-            ui.weak(if station.location.is_some() {
-                "No temperature field frames sampled at this station yet."
-            } else {
-                "Station coordinates unavailable; gridded comparison cannot be sampled here."
-            });
-        }
+            ui.label(egui::RichText::new(format!("Gust {} · Sea-level pressure {}",
+                opt(cur.gust_kmh.map(|v| v * KMH_TO_MPH), " mph", 0),
+                cur.slp_pa.map(|v| format!("{:.0} mb", v / 100.0)).unwrap_or_else(|| "—".into())))
+                .size(11.0).color(MUTED));
+            if let Some(history) = history {
+                ui.collapsing("Model sample details", |ui| {
+                    for (label, series) in [("RTMA / URMA", &history.analysis), ("HRRR", &history.hrrr), ("Global", &history.forecast)] {
+                        ui.label(format!("{label} · {} valid times", series.len()));
+                        for reading in series.iter().rev().take(8) {
+                            let bias = nearest_temperature(&station.obs, reading.valid)
+                                .map(|(observed, time)| format!(" · vs observed {:+.1} °F ({} min apart)",
+                                    c_to_f(reading.temp_k - 273.15) - c_to_f(observed),
+                                    (time - reading.valid).num_minutes().abs()))
+                                .unwrap_or_default();
+                            ui.label(egui::RichText::new(format!("{} · {} UTC · {:.1} °F{bias}",
+                                source_label(&reading.source), reading.valid.format("%Y-%m-%d %H:%M"),
+                                c_to_f(reading.temp_k - 273.15))).size(11.0).color(MUTED));
+                        }
+                    }
+                });
+            }
+        });
     });
+}
+
+fn wind_label(cur: &Observation) -> String {
+    match (cur.wind_kmh.map(|v| v * KMH_TO_MPH), cur.wind_dir_deg) {
+        (Some(speed), Some(direction)) => format!("{speed:.0} mph {}", compass(direction)),
+        (Some(speed), None) => format!("{speed:.0} mph"),
+        _ => "—".into(),
+    }
+}
+
+fn atlas_card(ui: &mut egui::Ui, width: f32, label: &str, value: &str, points: &[f32], color: egui::Color32) {
+    egui::Frame::new().fill(TILE).stroke(egui::Stroke::new(1.0, LINE))
+        .corner_radius(9.0).inner_margin(egui::Margin::same(11)).show(ui, |ui| {
+            ui.set_width(width - 22.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(label).size(11.0).color(egui::Color32::WHITE));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(value).size(17.0).strong().color(egui::Color32::WHITE));
+                });
+            });
+            ui.add_space(6.0);
+            let size = egui::vec2((width - 22.0).max(80.0), 45.0);
+            crate::theme::sparkline_sized(ui, points, color, size);
+            ui.label(egui::RichText::new("older  →  latest").size(9.0).color(MUTED));
+        });
+}
+
+fn atlas_chart(ui: &mut egui::Ui, observations: &[Observation], history: Option<&PointHistory>) {
+    let empty = PointHistory::default();
+    let history = history.unwrap_or(&empty);
+    let mut series = [
+        ("Observed", egui::Color32::from_rgb(255, 152, 113), observations.iter()
+            .filter_map(|o| Some((o.time?, c_to_f(o.temp_c?)))).collect::<Vec<_>>()),
+        ("RTMA / URMA", egui::Color32::from_rgb(104, 201, 237), history.analysis.iter()
+            .map(|p| (p.valid, c_to_f(p.temp_k - 273.15))).collect()),
+        ("HRRR", egui::Color32::from_rgb(182, 163, 255), history.hrrr.iter()
+            .map(|p| (p.valid, c_to_f(p.temp_k - 273.15))).collect()),
+        ("Global", egui::Color32::from_rgb(131, 216, 157), history.forecast.iter()
+            .map(|p| (p.valid, c_to_f(p.temp_k - 273.15))).collect()),
+    ];
+    for (_, _, points) in &mut series { points.sort_by_key(|(time, _)| *time); }
+    let id = ui.id().with("atlas_source");
+    let mut selected = ui.ctx().data_mut(|d| d.get_temp::<usize>(id).unwrap_or(0)).min(3);
+    let now = Utc::now();
+    let start = now - chrono::Duration::hours(24);
+    let end = now + chrono::Duration::hours(12);
+    let all: Vec<f32> = series.iter().flat_map(|(_, _, points)| points.iter())
+        .filter(|(time, value)| *time >= start && *time <= end && value.is_finite())
+        .map(|(_, value)| *value).collect();
+    let lo = all.iter().copied().reduce(f32::min).unwrap_or(32.0) - 2.0;
+    let hi = all.iter().copied().reduce(f32::max).unwrap_or(80.0) + 2.0;
+    egui::Frame::new().fill(egui::Color32::from_rgb(12, 27, 43))
+        .stroke(egui::Stroke::new(1.0, LINE)).corner_radius(9.0)
+        .inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 150.0), egui::Sense::hover());
+            let plot = rect.shrink2(egui::vec2(12.0, 14.0));
+            let painter = ui.painter();
+            painter.line_segment([egui::pos2(plot.left(), plot.bottom()), egui::pos2(plot.right(), plot.bottom())],
+                egui::Stroke::new(1.0, LINE));
+            let (_, color, points) = &series[selected];
+            let mut previous: Option<(DateTime<Utc>, egui::Pos2)> = None;
+            for &(time, value) in points {
+                let Some(pos) = temperature_plot_point(plot, start, end, lo, hi, time, value) else { continue };
+                if let Some((prior_time, prior_pos)) = previous {
+                    if (time - prior_time).num_minutes().abs() <= 90 {
+                        painter.line_segment([prior_pos, pos], egui::Stroke::new(2.5, *color));
+                    }
+                }
+                painter.circle_filled(pos, 3.0, *color);
+                previous = Some((time, pos));
+            }
+            let font = egui::FontId::proportional(10.0);
+            painter.text(egui::pos2(plot.left(), rect.bottom()-2.0), egui::Align2::LEFT_BOTTOM, "−24 h", font.clone(), MUTED);
+            painter.text(egui::pos2(plot.left()+plot.width()*2.0/3.0, rect.bottom()-2.0), egui::Align2::CENTER_BOTTOM, "now", font.clone(), MUTED);
+            painter.text(egui::pos2(plot.right(), rect.bottom()-2.0), egui::Align2::RIGHT_BOTTOM, "+12 h", font, MUTED);
+            ui.horizontal_wrapped(|ui| {
+                for (index, (label, color, _)) in series.iter().enumerate() {
+                    let button = egui::Button::new(egui::RichText::new(format!("● {label}")).size(10.0).color(*color))
+                        .fill(if selected == index { egui::Color32::from_rgb(38, 87, 131) } else { TILE })
+                        .stroke(egui::Stroke::new(1.0, LINE)).corner_radius(5.0);
+                    if ui.add(button).clicked() { selected = index; }
+                }
+            });
+            if series[selected].2.is_empty() {
+                ui.label(egui::RichText::new("No loaded samples for this source yet.").size(11.0).color(MUTED));
+            }
+        });
+    ui.ctx().data_mut(|d| d.insert_temp(id, selected));
 }
 
 /// Same time and temperature axes for observations and every loaded source. Dots are exact samples;
@@ -335,13 +396,6 @@ fn source_label(identity: &str) -> &'static str {
     else if identity.contains("noaa-hrrr") { "HRRR" }
     else if identity.contains("ecmwf") { "ECMWF" }
     else { "Other source" }
-}
-
-/// A labelled sparkline row: the series drawn as a min-max normalized polyline.
-fn trend(ui: &mut egui::Ui, label: &str, vals: Vec<f32>, color: egui::Color32) {
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new(label).small().weak());
-    crate::theme::sparkline(ui, &vals, color);
 }
 
 fn c_to_f(c: f32) -> f32 {
