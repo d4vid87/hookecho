@@ -28,14 +28,16 @@ pub fn show(
 ) -> bool {
     let (now, history) = comparison;
     let mut close = false;
+    let phone = cfg!(target_os = "android");
     popovers
         .card(ctx, "forecast", egui::Window::new("Forecast").title_bar(false))
         .frame(egui::Frame::new().fill(Color32::from_rgb(17, 34, 47))
             .stroke(Stroke::new(1.0, Color32::from_rgb(86, 115, 138)))
-            .corner_radius(16.0).inner_margin(20.0))
+            .corner_radius(if phone { 0.0 } else { 16.0 })
+            .inner_margin(if phone { 12.0 } else { 20.0 }))
         .default_size([440.0, 740.0])
         .show(ctx, |ui| {
-            ui.set_min_width(390.0);
+            if !phone { ui.set_min_width(390.0); }
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(RichText::new(format!("POINT FORECAST · {:.3}, {:.3}", at.1, at.0))

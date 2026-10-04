@@ -16,6 +16,7 @@ impl HookEchoApp {
             || self.help_hub.open
             || self.tour.open
             || self.site_dialog.is_some()
+            || self.forecast_open
         {
             return;
         }
@@ -129,7 +130,7 @@ impl HookEchoApp {
                 .order(egui::Order::Foreground)
                 .fixed_pos(egui::pos2(
                     self.chrome_rect.right() - 66.0,
-                    self.chrome_rect.bottom() - 190.0,
+                    self.chrome_rect.bottom() - 230.0,
                 ))
                 .show(ctx, |ui| {
                     ui.add_sized(
