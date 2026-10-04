@@ -140,14 +140,19 @@ fn atlas_body(
     ui.add_space(15.0);
     ui.horizontal(|ui| { ui.strong("Four-period outlook"); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(RichText::new(&f.office).small().color(MUTED)); }); });
     ui.add_space(7.0);
-    ui.columns(4, |cols| for (col, period) in cols.iter_mut().zip(f.daily.iter().take(4)) {
-        egui::Frame::new().fill(Color32::from_rgb(33, 56, 75)).corner_radius(9.0).inner_margin(7.0).show(col, |ui| {
-            ui.label(RichText::new(&period.name).size(10.0).color(MUTED));
-            ui.label(RichText::new(format!("{:.0}°", period.temp_f)).strong().size(18.0)
-                .color(if period.is_day { GOLD } else { BLUE }));
-            ui.label(RichText::new(period.precip_pct.map_or("—".into(), |p| format!("{p}% rain"))).size(10.0).color(BLUE));
+    if cfg!(target_os = "android") {
+        let periods: Vec<_> = f.daily.iter().take(4).collect();
+        for pair in periods.chunks(2) {
+            ui.columns(2, |cols| for (col, period) in cols.iter_mut().zip(pair) {
+                outlook_tile(col, period);
+            });
+            ui.add_space(6.0);
+        }
+    } else {
+        ui.columns(4, |cols| for (col, period) in cols.iter_mut().zip(f.daily.iter().take(4)) {
+            outlook_tile(col, period);
         });
-    });
+    }
     ui.add_space(15.0);
     ui.horizontal(|ui| { ui.strong("Guidance spread"); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(RichText::new("24h rainfall · model").small().color(MUTED)); }); });
     ui.add_space(6.0);
@@ -179,6 +184,15 @@ fn atlas_body(
         if !history.has_samples() { ui.weak("Waiting for analysis and forecast samples."); }
         for p in &f.daily { ui.label(format!("{} · {:.0}° · {} · {}", p.name, p.temp_f,
             p.precip_pct.map_or("—".into(), |v| format!("{v}% rain")), p.short)); }
+    });
+}
+
+fn outlook_tile(ui: &mut egui::Ui, period: &wxdata::forecast::Period) {
+    egui::Frame::new().fill(Color32::from_rgb(33, 56, 75)).corner_radius(9.0).inner_margin(7.0).show(ui, |ui| {
+        ui.label(RichText::new(&period.name).size(10.0).color(MUTED));
+        ui.label(RichText::new(format!("{:.0}°", period.temp_f)).strong().size(18.0)
+            .color(if period.is_day { GOLD } else { BLUE }));
+        ui.label(RichText::new(period.precip_pct.map_or("—".into(), |p| format!("{p}% rain"))).size(10.0).color(BLUE));
     });
 }
 

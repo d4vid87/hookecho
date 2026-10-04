@@ -21105,6 +21105,9 @@ impl eframe::App for HookEchoApp {
                 &mut self.popovers,
             ) {
                 self.forecast_open = false;
+                if cfg!(target_os = "android") && self.tool == MapTool::Forecast {
+                    self.tool = MapTool::Interrogate;
+                }
             }
         }
         // Tornado climatology: receive the loaded database, then run any queued query.

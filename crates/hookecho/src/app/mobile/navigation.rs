@@ -137,6 +137,11 @@ impl HookEchoApp {
                         [48.0, 48.0],
                         egui::Button::new(ph::CROSSHAIR)
                             .fill(Color32::from_rgb(55, 130, 215))
+                            .stroke(if self.tool == MapTool::Forecast {
+                                egui::Stroke::new(2.0, Color32::WHITE)
+                            } else {
+                                egui::Stroke::NONE
+                            })
                             .corner_radius(24.0),
                     )
                     .named_toggle("Point forecast: tap the map", self.tool == MapTool::Forecast)
