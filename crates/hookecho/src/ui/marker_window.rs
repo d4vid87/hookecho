@@ -64,8 +64,8 @@ impl MarkerWindow {
         self.removed = None;
         self.focus = None;
         self.chosen = None;
-        let Some(window) = drawer.page_sized(
-            ctx, "Location Markers", &mut open, false, 420.0,
+        let Some(window) = drawer.page_sized_fixed(
+            ctx, "Location Markers", &mut open, 420.0,
             egui::Window::new("Location Markers"),
         ) else {
             self.open = open;
