@@ -21,18 +21,18 @@ const products = [
 
   <div class="demo-surface">
     <div class="stage stage-single" data-stage="single">
-      <img data-src="/showcase/moore-2013-single.webp" alt="HookEcho single reflectivity map of the May 20, 2013 tornado near Moore, Oklahoma" width="1280" height="720" loading="lazy" />
-      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-single.mp4" type="video/mp4" /></video>
-      <noscript><style>.stage-single > img { display: none; }</style><img src="/showcase/moore-2013-single.webp" alt="HookEcho reflectivity map of the Moore tornado" width="1280" height="720" loading="lazy" /></noscript>
+      <img data-src="/showcase/moore-2013-single.webp?v=warning-halo" alt="HookEcho single reflectivity map of the May 20, 2013 tornado near Moore, Oklahoma" width="1280" height="720" loading="lazy" />
+      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-single.mp4?v=warning-halo" type="video/mp4" /></video>
+      <noscript><style>.stage-single > img { display: none; }</style><img src="/showcase/moore-2013-single.webp?v=warning-halo" alt="HookEcho reflectivity map of the Moore tornado" width="1280" height="720" loading="lazy" /></noscript>
     </div>
     <div class="stage stage-four" data-stage="four" hidden>
-      <img data-src="/showcase/moore-2013-four.webp" alt="HookEcho Analyst showing synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity from the same KTLX scan" width="1280" height="720" loading="lazy" />
-      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-four.mp4" type="video/mp4" /></video>
+      <img data-src="/showcase/moore-2013-four.webp?v=warning-halo" alt="HookEcho Analyst showing synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity from the same KTLX scan" width="1280" height="720" loading="lazy" />
+      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-four.mp4?v=warning-halo" type="video/mp4" /></video>
     </div>
     <div class="stage stage-mobile" data-stage="mobile" hidden>
       {products.map((product, index) => <div class="product-frame" data-product-frame={index} hidden={index !== 0}>
-        <img data-src={`/showcase/moore-2013-${product.id}.webp`} alt={`${product.name} view of the Moore tornado from the KTLX radar`} width="630" height="350" loading="lazy" />
-        <video muted loop playsinline preload="none" aria-hidden="true"><source data-src={`/showcase/moore-2013-${product.id}.mp4`} type="video/mp4" /></video>
+        <img data-src={`/showcase/moore-2013-${product.id}.webp?v=warning-halo`} alt={`${product.name} view of the Moore tornado from the KTLX radar`} width="630" height="350" loading="lazy" />
+        <video muted loop playsinline preload="none" aria-hidden="true"><source data-src={`/showcase/moore-2013-${product.id}.mp4?v=warning-halo`} type="video/mp4" /></video>
       </div>)}
     </div>
   </div>
