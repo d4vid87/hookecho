@@ -546,7 +546,7 @@ impl HookEchoApp {
             } else {
                 egui::Rect::from_min_max(
                     egui::pos2(if chrome.width() > chrome.height() { chrome.center().x } else { chrome.left() }, (phone_top(ctx) + 42.0).min(chrome.bottom() - 190.0)),
-                    egui::pos2(chrome.right(), chrome.bottom() - 76.0),
+                    egui::pos2(chrome.right(), chrome.bottom() - if cfg!(target_os = "android") && !analyst_dock { 4.0 } else { 76.0 }),
                 )
             };
             let rect = crate::app::mobile::sheet::modal_sheet(
@@ -789,7 +789,7 @@ impl HookEchoApp {
             let mut close = false;
             let sheet_area = egui::Rect::from_min_max(
                 egui::pos2(if chrome.width() > chrome.height() { chrome.center().x } else { chrome.left() }, (phone_top(ctx) + 42.0).min(chrome.bottom() - 190.0)),
-                egui::pos2(chrome.right(), chrome.bottom() - 76.0),
+                egui::pos2(chrome.right(), chrome.bottom() - if cfg!(target_os = "android") { 4.0 } else { 76.0 }),
             );
             let rect = crate::app::mobile::sheet::modal_sheet(
                 ctx,

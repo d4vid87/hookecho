@@ -119,6 +119,7 @@ impl Drawer {
         self.page_sized_with_header(ctx, title, open, false, width, true, w)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn page_sized_with_header<'a>(
         &mut self,
         ctx: &egui::Context,

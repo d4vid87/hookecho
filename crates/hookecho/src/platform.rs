@@ -686,6 +686,67 @@ mod android_alerts {
     }
 }
 
+/// The Compose Quiet Shelf owns Android menu presentation; Rust keeps the action registry.
+#[cfg(target_os = "android")]
+pub mod quiet_shelf {
+    use jni::objects::{JObject, JString, JValue};
+    use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
+
+    static OPEN: AtomicBool = AtomicBool::new(false);
+    static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_hookecho_HookEcho_MainActivity_nativeOnQuietShelfAction(
+        mut env: jni::JNIEnv, _this: JObject, action: JString,
+    ) {
+        if let Ok(value) = env.get_string(&action) {
+            if let Ok(mut pending) = PENDING.lock() { pending.push(value.into()); }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_io_hookecho_HookEcho_MainActivity_nativeOnQuietShelfClosed(
+        _env: jni::JNIEnv, _this: JObject,
+    ) {
+        OPEN.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_open() -> bool { OPEN.load(Ordering::Relaxed) }
+
+    pub fn take_action() -> Option<String> {
+        PENDING.lock().ok().and_then(|mut items| if items.is_empty() { None } else { Some(items.remove(0)) })
+    }
+
+    pub fn show(section: &str, site: &str, product: &str, alerts: i32) -> bool {
+        let result = (|| -> jni::errors::Result<()> {
+            let Some(app) = super::android::app() else { return Ok(()); };
+            let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
+            let mut env = vm.attach_current_thread()?;
+            let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+            let section = env.new_string(section)?;
+            let site = env.new_string(site)?;
+            let product = env.new_string(product)?;
+            let res = env.call_method(&activity, "showQuietShelf", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V", &[
+                JValue::Object(&section), JValue::Object(&site), JValue::Object(&product), JValue::Int(alerts),
+            ]);
+            if res.is_err() { let _ = env.exception_clear(); }
+            res.map(|_| ())
+        })();
+        if let Err(error) = result {
+            log::warn!("Quiet Shelf could not open: {error:?}");
+            return false;
+        }
+        OPEN.store(true, Ordering::Relaxed);
+        true
+    }
+}
+
+/// Whether Android's native Quiet Shelf covers the radar.
+#[cfg(target_os = "android")]
+pub fn quiet_shelf_open() -> bool { quiet_shelf::is_open() }
+#[cfg(not(target_os = "android"))]
+pub fn quiet_shelf_open() -> bool { false }
+
 /// Predictive back (Android 13+ gesture, mandatory from 16).
 ///
 /// Two directions cross the JNI boundary here — the first Kotlin→Rust call in the app:

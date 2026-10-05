@@ -225,9 +225,10 @@ impl super::HookEchoApp {
         // Back arrives two ways: as a `BrowserBack` key event (the legacy path, which Android 16
         // stops delivering) and from the predictive-back callback in MainActivity. Either one
         // runs the same dismissal chain.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack))
-            || crate::platform::take_back_pressed()
-        {
+        let browser_back = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack));
+        // Android also delivers this key to the native callback. Handling both closes the sheet
+        // before the OS dispatches back, which can send the user out of the app instead.
+        if (browser_back && !cfg!(target_os = "android")) || crate::platform::take_back_pressed() {
             self.mobile_back();
         }
         // Tell Android whether we would consume the next gesture. With nothing open the callback
@@ -266,7 +267,7 @@ impl super::HookEchoApp {
 
         // ---------- FULL-WIDTH COLOR SCALE (top edge, under the status bar) ----------
         let active = self.active;
-        if self.views[active].volume.is_some() {
+        if self.views[active].volume.is_some() && !(cfg!(target_os = "android") && !self.analyst_open) {
             let moment = self.views[active].moment;
             let table = self.palettes.table(moment);
             let strip = Rect::from_min_size(
@@ -289,7 +290,9 @@ impl super::HookEchoApp {
             }
         }
 
-        self.mobile_tool_hint(ctx, content);
+        if !self.forecast_open {
+            self.mobile_tool_hint(ctx, content);
+        }
         true
     }
 
@@ -303,12 +306,13 @@ impl super::HookEchoApp {
             crate::app::MapTool::CrossSection => "Tap two points for a cross-section",
             crate::app::MapTool::Sounding => "Tap a point for a sounding",
             crate::app::MapTool::Climatology => "Tap a point for tornado climatology",
+            crate::app::MapTool::Forecast => "Tap the map for a point forecast",
             crate::app::MapTool::Route => "Tap start, waypoints, and destination",
             _ => return,
         };
         let accent = crate::theme::accent(self.settings.theme);
         egui::Area::new(Id::new("m_toolhint"))
-            .anchor(Align2::CENTER_TOP, vec2(0.0, 92.0))
+            .anchor(Align2::CENTER_TOP, vec2(0.0, 140.0))
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(accent)

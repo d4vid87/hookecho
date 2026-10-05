@@ -13,6 +13,11 @@ dependencies {
     // Named explicitly rather than left to games-activity: the AAR marks its appcompat dependency
     // compile-only, so without this the Theme.AppCompat parent style doesn't resolve at all.
     implementation("androidx.appcompat:appcompat:1.7.0")
+    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
     // Survives process death and reboot: the alert foreground service can be killed, and only a
     // scheduled worker gets the poll going again (see AlertWorker.kt / BootReceiver.kt).
     implementation("androidx.work:work-runtime-ktx:2.9.1")
@@ -49,6 +54,9 @@ android {
         }
         externalNativeBuild.cmake.cppFlags += "-std=c++17"
     }
+
+    buildFeatures { compose = true }
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 
     kotlinOptions {
         jvmTarget = "17"
