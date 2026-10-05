@@ -75,7 +75,10 @@ impl HookEchoApp {
             })
             .show(ctx, |ui| {
                 ui.set_width((self.chrome_rect.width() - 20.0).max(200.0));
-                if radar_focus { ui.spacing_mut().item_spacing = vec2(5.0, 4.0); }
+                if radar_focus {
+                    ui.spacing_mut().item_spacing = vec2(5.0, 4.0);
+                    ui.spacing_mut().interact_size.y = 24.0;
+                }
                 ui.horizontal(|ui| {
                     let site_label = if radar_focus {
                         format!("{} HookEcho", ph::RADIO_BUTTON)
@@ -289,6 +292,7 @@ impl HookEchoApp {
                             ui.set_width(self.chrome_rect.width() - if radar_focus { 16.0 } else { 0.0 });
                             ui.horizontal(|ui| {
                                 if radar_focus { ui.spacing_mut().item_spacing.x = 4.0; }
+                                if radar_focus { ui.spacing_mut().interact_size.y = 30.0; }
                                 let (count, _) = self.alert_badge();
                                 let destinations = if radar_focus {
                                     [

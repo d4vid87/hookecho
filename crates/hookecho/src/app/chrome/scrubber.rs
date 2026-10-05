@@ -488,7 +488,8 @@ impl HookEchoApp {
                     .show(ui, |ui| {
                         ui.set_width(self.chrome_rect.width() - 40.0);
                         ui.spacing_mut().item_spacing = egui::vec2(5.0, 3.0);
-                        ui.label(egui::RichText::new("R A D A R  P L A Y B A C K")
+                        ui.spacing_mut().interact_size.y = 26.0;
+                        ui.label(egui::RichText::new("RADAR PLAYBACK")
                             .size(9.0).strong().color(egui::Color32::from_rgb(163, 209, 236)));
                         let t = &mut self.views[self.active].timeline;
                         if t.slot_count() > 0 {
