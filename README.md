@@ -80,7 +80,7 @@ accessible above and below the scrolling page.
 | --- | --- |
 | ![Official warning bulletin immediately visible in the glass warning reader](docs/shots/alerts.jpg) | ![Archived tornado warning over the Moore storm](docs/shots/warning-detail.jpg) |
 
-![Selected storm cell with all attributes visible](docs/shots/cellconsole.jpg)
+![Current Storm dock with a selected cell, reflectivity, motion, hail, position, and forecast error](docs/shots/cellconsole.jpg)
 
 [See the complete screenshot gallery](docs/technical-reference.md#screenshots).
 
