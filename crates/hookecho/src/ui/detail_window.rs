@@ -24,6 +24,7 @@ pub fn show(
     let mut open = true;
     let mut close = false;
     let mesoscale = detail.title.starts_with("Mesoscale Discussion");
+    let spotter = detail.body.starts_with("SPOTTER NETWORK");
     let max_height = (ctx.content_rect().height() - 154.0).max(220.0);
     popovers
         .card(ctx, "detail", egui::Window::new("Feature Details"))
@@ -32,7 +33,9 @@ pub fn show(
         .collapsible(false)
         .title_bar(false)
         // Preserve table width for non-outage products.
-        .default_size(if outage_summary(&detail.body).is_some() {
+        .default_size(if spotter {
+            [350.0, 210.0]
+        } else if outage_summary(&detail.body).is_some() {
             [420.0, 320.0]
         } else {
             [560.0, 420.0]
@@ -40,6 +43,14 @@ pub fn show(
         .max_size([560.0, max_height])
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                if spotter {
+                    ui.label(
+                        egui::RichText::new("SPOTTER NETWORK  /  SIGNAL BEACON")
+                            .size(10.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(119, 208, 255)),
+                    );
+                }
                 if mesoscale {
                     ui.weak("SPC MESOSCALE DISCUSSION");
                 }

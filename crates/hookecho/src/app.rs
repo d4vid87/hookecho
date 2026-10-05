@@ -118,14 +118,6 @@ fn point_in_ring_ll(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
     )
 }
 
-/// The first `http(s)://` URL in a free-text line, if there is one. Spotter reports and chase
-/// partners paste stream links into their status text; this is how we find them.
-fn first_url(text: &str) -> Option<String> {
-    text.split_whitespace()
-        .find(|w| w.starts_with("http://") || w.starts_with("https://"))
-        .map(|w| w.trim_end_matches(['.', ',', ')', '"', '\'']).to_string())
-}
-
 /// 3D volume grid size: `VOL3D_N` cells across each horizontal axis, `VOL3D_NZ` up. Big enough to
 /// resolve a hail core, small enough to resample in about a second.
 const VOL3D_N: usize = 192;
@@ -6379,22 +6371,24 @@ impl HookEchoApp {
         self.xsection = Some(xs);
     }
 
-    /// Detail card for a tapped Spotter Network dot. Their report text sometimes carries a
-    /// stream link; when it does, the card offers it as a link (which is also the Watch path).
+    /// Detail card for a tapped Spotter Network beacon.
     fn open_spotter(&mut self, sp: &wxdata::spotters::Spotter) {
+        let age = (Utc::now() - sp.time).num_minutes().max(0);
         let body = format!(
-            "{}\n{}",
-            crate::timefmt::fmt_date_clock(sp.time, self.active_tz()),
-            sp.status
+            "SPOTTER NETWORK  ·  {} min ago\n{}\n{:.4}°, {:.4}°\n{}\nLive video unavailable",
+            age,
+            sp.status,
+            sp.lat,
+            sp.lon,
+            crate::timefmt::fmt_date_clock(sp.time, self.active_tz())
         );
-        let link = first_url(&sp.status).map(|u| ("▶ Watch stream".to_string(), u));
         self.cell_popup = None;
         self.detail = Some(Detail {
             title: sp.name.clone(),
             body,
-            color: [0, 200, 80, 255],
+            color: [105, 203, 255, 255],
             image: None,
-            link,
+            link: None,
         });
     }
 
@@ -15111,46 +15105,53 @@ impl HookEchoApp {
                     if !prect.contains(p) {
                         continue;
                     }
-                    // Spotter Network green; faded when the report is stale (>30 min old).
+                    // A dark casing and white ring keep the beacon legible over every radar
+                    // reflectivity color. A stale report keeps its shape but loses the cyan fill.
                     let stale = (now - sp.time).num_minutes() > 30;
-                    let color = {
-                        let g = egui::Color32::from_rgb(0, 200, 80);
-                        if stale {
-                            g.gamma_multiply(0.35)
-                        } else {
-                            g
-                        }
+                    let selected = self.detail.as_ref().is_some_and(|d| d.title == sp.name);
+                    let accent = if selected {
+                        egui::Color32::from_rgb(255, 199, 100)
+                    } else if stale {
+                        egui::Color32::from_rgb(125, 151, 168)
+                    } else {
+                        egui::Color32::from_rgb(91, 201, 255)
                     };
-                    painter.circle_filled(p, 3.0, color);
-                    painter.circle_stroke(
-                        p,
-                        3.0,
-                        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
-                    );
+                    painter.circle_filled(p, 8.0, egui::Color32::from_rgb(7, 19, 32));
+                    painter.circle_stroke(p, 6.5, egui::Stroke::new(2.0, egui::Color32::WHITE));
+                    painter.circle_filled(p, 3.5, accent);
                     // Movement arrow tick, heading clockwise from north.
                     if let Some(h) = sp.heading {
                         let r = h.to_radians();
                         let dir = egui::vec2(r.sin(), -r.cos());
-                        painter.line_segment([p, p + dir * 8.0], egui::Stroke::new(1.5, color));
-                    }
-                    if show_labels {
-                        painter.text(
-                            p + egui::vec2(5.0, -5.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            &sp.name,
-                            egui::FontId::proportional(10.0),
-                            color,
+                        painter.line_segment(
+                            [p + dir * 8.0, p + dir * 14.0],
+                            egui::Stroke::new(2.0, egui::Color32::WHITE),
                         );
                     }
-                    let hit = egui::Rect::from_center_size(p, egui::vec2(14.0, 14.0));
-                    if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
-                        let hover = format!(
+                    let hit = egui::Rect::from_center_size(p, egui::vec2(24.0, 24.0));
+                    let hovered = response.hover_pos().is_some_and(|hp| hit.contains(hp));
+                    if show_labels || hovered || selected {
+                        let label = &sp.name;
+                        let galley = painter.layout_no_wrap(
+                            label.clone(),
+                            egui::FontId::proportional(11.0),
+                            egui::Color32::WHITE,
+                        );
+                        let label_pos = p + egui::vec2(12.0, -galley.size().y / 2.0);
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(label_pos, galley.size()).expand2(egui::vec2(5.0, 3.0)),
+                            4.0,
+                            egui::Color32::from_black_alpha(225),
+                        );
+                        painter.galley(label_pos, galley, egui::Color32::WHITE);
+                    }
+                    if hovered {
+                        response.clone().show_tooltip_text(format!(
                             "{}\n{}\n{}",
                             sp.name,
                             crate::timefmt::fmt_date_clock(sp.time, self.active_tz()),
                             sp.status
-                        );
-                        response.clone().show_tooltip_text(hover);
+                        ));
                     }
                     if response.clicked()
                         && response
