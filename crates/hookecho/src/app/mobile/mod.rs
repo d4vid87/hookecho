@@ -267,7 +267,7 @@ impl super::HookEchoApp {
 
         // ---------- FULL-WIDTH COLOR SCALE (top edge, under the status bar) ----------
         let active = self.active;
-        if self.views[active].volume.is_some() {
+        if self.views[active].volume.is_some() && !(cfg!(target_os = "android") && !self.analyst_open) {
             let moment = self.views[active].moment;
             let table = self.palettes.table(moment);
             let strip = Rect::from_min_size(

@@ -12,6 +12,10 @@ impl HookEchoApp {
     pub(crate) fn scrubber(&mut self, ctx: &egui::Context) {
         crate::prof_scope!("scrubber");
         use egui_phosphor::regular as ph;
+        if cfg!(target_os = "android") && !self.analyst_open {
+            self.signal_scrubber(ctx);
+            return;
+        }
         let accent = egui::Color32::WHITE;
         let tz = self.active_tz();
         let latest_cut = self.views[self.active].volume.as_ref().and_then(|volume| {
@@ -457,6 +461,78 @@ impl HookEchoApp {
             self.mobile_occlusion.push(r);
         }
         self.tour_anchors.timeline = scrub_rect;
+        if go_head {
+            self.views[self.active].timeline.go_head();
+            self.views[self.active].pin_low_cut();
+        }
+    }
+
+    /// The compact transport used by the Android Signal Deck. It controls the same timeline as
+    /// the desktop transport; only its presentation changes.
+    fn signal_scrubber(&mut self, ctx: &egui::Context) {
+        use egui_phosphor::regular as ph;
+        let tz = self.active_tz();
+        let volume = self.views[self.active].volume.as_ref();
+        let fresh = volume.is_some_and(|v| (Utc::now() - v.time).num_seconds() < 900);
+        let mut go_head = false;
+        let area = egui::Area::new(egui::Id::new("signal_scrubber"))
+            .order(egui::Order::Foreground)
+            .constrain_to(self.chrome_rect)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -46.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(14, 38, 60))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(83, 125, 157)))
+                    .corner_radius(13.0)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(self.chrome_rect.width() - 40.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(5.0, 3.0);
+                        ui.label(egui::RichText::new("R A D A R  P L A Y B A C K")
+                            .size(9.0).strong().color(egui::Color32::from_rgb(163, 209, 236)));
+                        let t = &mut self.views[self.active].timeline;
+                        if t.slot_count() > 0 {
+                            let live_window = t.live_window;
+                            track(ui, t, tz, egui::Color32::from_rgb(103, 185, 255), live_window, true);
+                        }
+                        let short_time = |id: Option<&wxdata::level2::Identifier>| -> String {
+                            id.and_then(|id| id.date_time())
+                                .map(|dt| match tz {
+                                    Some(zone) => dt.with_timezone(&zone).format("%-I:%M %p").to_string(),
+                                    None => dt.format("%-I:%M %p").to_string(),
+                                })
+                                .unwrap_or_else(|| "—".into())
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(short_time(t.frames.first())).size(9.0).color(egui::Color32::from_rgb(169, 193, 210)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(short_time(t.frames.last())).size(9.0).color(egui::Color32::from_rgb(169, 193, 210)));
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            let transport = |ui: &mut egui::Ui, glyph: &str, name: &str, primary: bool| {
+                                ui.add_sized([30.0, 30.0], egui::Button::new(egui::RichText::new(glyph).size(15.0)
+                                    .color(if primary { egui::Color32::from_rgb(8, 31, 48) } else { egui::Color32::WHITE }))
+                                    .fill(if primary { egui::Color32::from_rgb(103, 185, 255) } else { egui::Color32::from_rgb(23, 52, 76) })
+                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(82, 126, 157)))
+                                    .corner_radius(7.0)).named(name).clicked()
+                            };
+                            if transport(ui, ph::SKIP_BACK, "Previous frame", false) { t.step_cut(-1); }
+                            let playing = t.playing;
+                            if transport(ui, if playing { ph::PAUSE } else { ph::PLAY }, if playing { "Pause" } else { "Play" }, true) { t.toggle_play(); }
+                            if transport(ui, ph::SKIP_FORWARD, "Next frame", false) { t.step_cut(1); }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let status = if !t.following { "Archive radar" } else if fresh { "Live radar" } else { "Radar stale" };
+                                if ui.add(egui::Button::new(egui::RichText::new(status).size(13.0).strong().color(egui::Color32::WHITE))
+                                    .fill(egui::Color32::TRANSPARENT).stroke(egui::Stroke::NONE)).named("Jump to latest radar").clicked() {
+                                    go_head = true;
+                                }
+                            });
+                        });
+                    });
+            });
+        self.mobile_occlusion.push(area.response.rect);
+        self.tour_anchors.timeline = Some(area.response.rect);
         if go_head {
             self.views[self.active].timeline.go_head();
             self.views[self.active].pin_low_cut();

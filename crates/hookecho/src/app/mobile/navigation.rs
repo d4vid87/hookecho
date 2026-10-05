@@ -1,6 +1,6 @@
 //! Phone navigation. Data and actions stay in the shared app; this is its own presentation.
 
-use egui::{vec2, Align2, Color32, RichText};
+use egui::{vec2, Color32, RichText};
 use egui_phosphor::regular as ph;
 
 use super::super::{
@@ -32,6 +32,29 @@ impl HookEchoApp {
             .unwrap_or_else(|| "Choose radar".into());
         let product = self.views[self.active].moment.short_name();
         let (alert_count, _) = self.alert_badge();
+        let signal_alert = if radar_focus {
+            let (point, reference) = self.priority_reference();
+            crate::ui::priority::rows(
+                self.active_alert_features(),
+                &self.settings.priority_rules,
+                point,
+                self.priority_time(),
+            ).first().and_then(|feature| {
+                let alert = feature.alert.as_ref()?;
+                let place = if feature.contains(point.0, point.1) {
+                    format!("Over {reference}")
+                } else {
+                    format!("{} from {reference}", crate::geo::fmt_distance(feature.distance_km(point.0, point.1), self.metric(), 0))
+                };
+                let expiry = alert.expires.map(|time| {
+                    match self.active_tz() {
+                        Some(zone) => time.with_timezone(&zone).format("%-I:%M %p").to_string(),
+                        None => time.format("%-I:%M %p").to_string(),
+                    }
+                });
+                Some((alert.event.clone(), format!("{place}{}", expiry.map_or(String::new(), |time| format!(" · expires {time}")))))
+            })
+        } else { None };
         let (freshness, freshness_color) =
             crate::ui::layers_panel::health_look(self.radar_health().state());
         let age = self.views[self.active]
@@ -45,15 +68,14 @@ impl HookEchoApp {
         let mut menu_anchor = None;
         let header = egui::Area::new("mobile_header".into())
             .order(egui::Order::Foreground)
-            .anchor(
-                Align2::LEFT_TOP,
-                vec2(
-                    self.chrome_rect.left() + 10.0,
-                    self.chrome_rect.top() + 30.0,
-                ),
-            )
+            .fixed_pos(if radar_focus {
+                egui::pos2(ctx.content_rect().left() + 10.0, ctx.content_rect().top() + 12.0)
+            } else {
+                egui::pos2(self.chrome_rect.left() + 10.0, self.chrome_rect.top() + 30.0)
+            })
             .show(ctx, |ui| {
                 ui.set_width((self.chrome_rect.width() - 20.0).max(200.0));
+                if radar_focus { ui.spacing_mut().item_spacing = vec2(5.0, 4.0); }
                 ui.horizontal(|ui| {
                     let site_label = if radar_focus {
                         format!("{} HookEcho", ph::RADIO_BUTTON)
@@ -63,13 +85,20 @@ impl HookEchoApp {
                     let radar = ui
                         .add_sized(
                             [
-                                ui.available_width() - 112.0,
-                                if radar_focus { 38.0 } else { 48.0 },
+                                if radar_focus { 108.0 } else { ui.available_width() - 112.0 },
+                                if radar_focus { 30.0 } else { 48.0 },
                             ],
-                            egui::Button::new(site_label),
+                            egui::Button::new(if radar_focus {
+                                RichText::new(site_label).size(14.0).strong().color(Color32::WHITE)
+                            } else {
+                                RichText::new(site_label)
+                            })
+                            .fill(if radar_focus { Color32::TRANSPARENT } else { ui.visuals().widgets.inactive.bg_fill })
+                            .stroke(if radar_focus { egui::Stroke::NONE } else { ui.visuals().widgets.inactive.bg_stroke }),
                         )
                         .named("Open radar controls");
                     product_anchor = Some(radar.rect);
+                    if radar_focus { ui.add_space((ui.available_width() - 73.0).max(0.0)); }
                     if radar.clicked() {
                         #[cfg(target_os = "android")]
                         if radar_focus
@@ -88,8 +117,11 @@ impl HookEchoApp {
                     }
                     if ui
                         .add_sized(
-                            [48.0, if radar_focus { 38.0 } else { 48.0 }],
-                            egui::Button::new(ph::MAGNIFYING_GLASS),
+                            [if radar_focus { 34.0 } else { 48.0 }, if radar_focus { 34.0 } else { 48.0 }],
+                            egui::Button::new(ph::MAGNIFYING_GLASS)
+                                .fill(if radar_focus { Color32::from_rgb(15, 43, 67) } else { ui.visuals().widgets.inactive.bg_fill })
+                                .stroke(if radar_focus { egui::Stroke::new(1.0, Color32::from_rgb(75, 117, 150)) } else { ui.visuals().widgets.inactive.bg_stroke })
+                                .corner_radius(9.0),
                         )
                         .named("Search places, sites, products, and tools")
                         .clicked()
@@ -101,8 +133,11 @@ impl HookEchoApp {
                     }
                     let menu = ui
                         .add_sized(
-                            [48.0, if radar_focus { 38.0 } else { 48.0 }],
-                            egui::Button::new(if radar_focus { ph::LIST } else { ph::MAP_PIN }),
+                            [if radar_focus { 34.0 } else { 48.0 }, if radar_focus { 34.0 } else { 48.0 }],
+                            egui::Button::new(if radar_focus { ph::LIST } else { ph::MAP_PIN })
+                                .fill(if radar_focus { Color32::from_rgb(15, 43, 67) } else { ui.visuals().widgets.inactive.bg_fill })
+                                .stroke(if radar_focus { egui::Stroke::new(1.0, Color32::from_rgb(75, 117, 150)) } else { ui.visuals().widgets.inactive.bg_stroke })
+                                .corner_radius(9.0),
                         )
                         .named(if radar_focus {
                             "Open map menu"
@@ -134,16 +169,16 @@ impl HookEchoApp {
                         let badge = || egui::Frame::new()
                             .fill(Color32::from_rgb(14, 38, 60))
                             .stroke(egui::Stroke::new(1.0, Color32::from_rgb(78, 137, 179)))
-                            .corner_radius(8.0)
-                            .inner_margin(egui::Margin::symmetric(6, 3));
+                            .corner_radius(12.0)
+                            .inner_margin(egui::Margin::symmetric(6, 2));
                         badge().show(ui, |ui| {
                             ui.label(RichText::new(format!("● {site} · {freshness}"))
-                                .color(freshness_color).strong());
+                                .size(10.0).color(freshness_color).strong());
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             badge().show(ui, |ui| {
-                                ui.label(format!("{product} · {}",
-                                    age.map_or("waiting".to_owned(), |m| format!("{m}m ago"))));
+                                ui.label(RichText::new(format!("{product} · {}",
+                                    age.map_or("waiting".to_owned(), |m| format!("{m}m ago")))).size(10.0));
                             });
                         });
                     });
@@ -200,13 +235,13 @@ impl HookEchoApp {
         if radar_focus
             && !self.panel_open
             && !crate::platform::quiet_shelf_open()
-            && alert_count > 0
+            && (alert_count > 0 || signal_alert.is_some())
         {
             let beacon = egui::Area::new("mobile_signal_alert".into())
                 .order(egui::Order::Foreground)
                 .fixed_pos(egui::pos2(
                     self.chrome_rect.left() + 10.0,
-                    self.chrome_rect.bottom() - 244.0,
+                    self.chrome_rect.bottom() - 210.0,
                 ))
                 .show(ctx, |ui| {
                     egui::Frame::new()
@@ -217,14 +252,15 @@ impl HookEchoApp {
                         .show(ui, |ui| {
                             ui.set_width(self.chrome_rect.width() - 36.0);
                             ui.horizontal(|ui| {
-                                ui.colored_label(
-                                    Color32::from_rgb(255, 171, 140),
-                                    format!(
-                                        "{} {alert_count} nearby alert{}",
-                                        ph::WARNING,
-                                        if alert_count == 1 { "" } else { "s" }
-                                    ),
-                                );
+                                ui.vertical(|ui| {
+                                    ui.colored_label(Color32::from_rgb(255, 171, 140),
+                                        RichText::new(format!("{} {}", ph::WARNING,
+                                            signal_alert.as_ref().map_or_else(|| format!("{alert_count} nearby alerts"), |(event, _)| event.clone())))
+                                            .size(14.0).strong());
+                                    if let Some((_, detail)) = &signal_alert {
+                                        ui.label(RichText::new(detail).size(10.0).color(Color32::from_rgb(169, 193, 210)));
+                                    }
+                                });
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -244,14 +280,15 @@ impl HookEchoApp {
             let bottom = self.chrome_rect.bottom() - 4.0;
             let destinations = egui::Area::new("mobile_destinations".into())
                 .order(egui::Order::Foreground)
-                .fixed_pos(egui::pos2(self.chrome_rect.left(), bottom - 68.0))
+                .fixed_pos(egui::pos2(self.chrome_rect.left() + if radar_focus { 8.0 } else { 0.0 }, bottom - if radar_focus { 38.0 } else { 68.0 }))
                 .show(ctx, |ui| {
                     egui::Frame::new()
-                        .fill(Color32::from_rgb(22, 28, 36))
-                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(53, 66, 80)))
+                        .fill(if radar_focus { Color32::TRANSPARENT } else { Color32::from_rgb(22, 28, 36) })
+                        .stroke(if radar_focus { egui::Stroke::NONE } else { egui::Stroke::new(1.0, Color32::from_rgb(53, 66, 80)) })
                         .show(ui, |ui| {
-                            ui.set_width(self.chrome_rect.width());
+                            ui.set_width(self.chrome_rect.width() - if radar_focus { 16.0 } else { 0.0 });
                             ui.horizontal(|ui| {
+                                if radar_focus { ui.spacing_mut().item_spacing.x = 4.0; }
                                 let (count, _) = self.alert_badge();
                                 let destinations = if radar_focus {
                                     [
@@ -292,21 +329,25 @@ impl HookEchoApp {
                                             && !self.sidebar_focus_search
                                     };
                                     let button = egui::Button::new(
-                                        RichText::new(format!("{icon}\n{label}")).color(
+                                        RichText::new(if radar_focus { label.clone() } else { format!("{icon}\n{label}") }).size(if radar_focus { 11.0 } else { 14.0 }).color(
                                             if selected {
-                                                Color32::WHITE
+                                                if radar_focus { Color32::from_rgb(7, 26, 41) } else { Color32::WHITE }
                                             } else {
                                                 Color32::from_gray(205)
                                             },
                                         ),
                                     )
-                                    .selected(selected)
+                                    .selected(!radar_focus && selected)
                                     .fill(if radar_focus && selected {
-                                        Color32::from_rgb(38, 105, 185)
+                                        Color32::from_rgb(106, 188, 249)
+                                    } else if radar_focus {
+                                        Color32::from_rgb(21, 48, 70)
                                     } else {
                                         Color32::from_rgb(40, 49, 58)
                                     })
-                                    .min_size(vec2((self.chrome_rect.width() - 28.0) / 4.0, 56.0));
+                                    .stroke(if radar_focus { egui::Stroke::new(1.0, Color32::from_rgb(75, 117, 150)) } else { egui::Stroke::NONE })
+                                    .corner_radius(8.0)
+                                    .min_size(vec2((self.chrome_rect.width() - if radar_focus { 42.0 } else { 28.0 }) / 4.0, if radar_focus { 34.0 } else { 56.0 }));
                                     let name = match section {
                                         PanelSection::Radar => "Radar controls",
                                         PanelSection::Overlays => "Layers",
