@@ -16,21 +16,21 @@ No account. No ads. No API key. Free and open source.
 [Visit the website](https://hookecho.io/) ·
 [Get help](https://github.com/d4vid87/hookecho/issues)
 
-![HookEcho Radar mode with a short product panel over an archived Oklahoma storm](docs/shots/radar-mode.gif)
+![Current HookEcho Radar view stepping through an archived Oklahoma storm](docs/shots/radar-mode.gif)
 
-*Current interface, KTLX archive replay · May 20, 2013.*
+*Current interface recaptured October 4, 2026; KTLX archive replay · May 20, 2013.*
 
 ## On a phone
 
-<img src="docs/shots/mobile/radar-mode.jpg" alt="The current short Radar sheet on a phone-sized browser" width="320">
+<img src="docs/shots/android/map.jpg" alt="Current Signal Deck radar UI on Android" width="320">
 
-Browser capture of the current interface. [Phone instructions](https://hookecho.io/docs/on-your-phone/) include the Android build.
+Captured from the latest signed Android build on a Galaxy S24 Ultra. [Phone instructions](https://hookecho.io/docs/on-your-phone/) cover the Android build and mobile browser.
 
 ## Radar and Analyst
 
-**Radar** opens with one map and a timeline. Its short menu separates Radar,
-Overlays, Alerts, and Tools. The fixed header keeps Radar, Analyst, search, and
-Settings within reach even when the menu is closed.
+**Radar** opens with one map and a timeline. The desktop menu groups Views,
+Layers, and Your Map. On Android, Signal Deck keeps playback and warnings over
+the map; the Quiet Shelf opens Radar, Layers, Alerts, and More controls.
 
 **Analyst** adds linked panes, presets, an active-pane label, and an optional
 inspector. Choose Radar again to restore the single map you left; return to
@@ -40,20 +40,21 @@ Analyst to resume its arrangement. Save a workspace to keep it across restarts.
 | --- | --- |
 | ![Single radar view with the Radar section open](docs/shots/radar-mode.jpg) | ![Four radar products and the analyst inspector](docs/shots/analyst-mode.jpg) |
 
-![Switching into Analyst and back to Radar](docs/shots/analyst-mode.gif)
+![Four synchronized Analyst radar products advancing through archived scans](docs/shots/analyst-mode.gif)
 
 [Follow the mode and menu guide](docs/INTERFACE.md) · [Read it on hookecho.io](https://hookecho.io/docs/radar-and-analyst/)
 
 ## More weather views
 
-The Clearview desktop layout uses a compact Context bar for Radar, Layers, Alerts,
-Tools, Search and Settings. Focused menus open below it; All controls retains the full
-catalog and advanced options. Priority dock and playback share a 330-point width
-in the bottom-right corner, keeping the radar center clear. It shows the most relevant
-nearby bulletin, with the full alert list, storm tracks, and display rules one click away.
+The desktop layout groups Views, Layers, and Your Map in a compact menu beside search
+and Settings. The radar lens identifies the site at the top right; the warning dock
+and playback stay near the bottom right, keeping the storm visible. The full layer
+and tool catalog is searchable.
 Graphite Silver is the default;
 choose Midnight Blue, Deep Pine, Smoked Plum, or Warm Ember in Settings → Appearance.
 Advanced radar tools remain in the Layers panel.
+
+![Search results for hail products and weather layers](docs/shots/products.jpg)
 
 Priority display rules use separate advisory, watch, warning, and high-impact distance
 limits around your saved home (or selected radar site). Warnings containing that point
@@ -75,9 +76,9 @@ accessible above and below the scrolling page.
 | --- | --- |
 | ![Floating layers and labeled map controls](docs/shots/layers.jpg) | ![Storm list with selected cell attributes](docs/shots/stormtable.jpg) |
 
-| Warning bulletin | Tornado emergency |
+| Warning bulletin | Archived tornado warning |
 | --- | --- |
-| ![Official warning bulletin immediately visible in the glass warning reader](docs/shots/alerts.jpg) | ![Emergency-severity tornado warning highlighted over archived radar](docs/shots/emergency.jpg) |
+| ![Official warning bulletin immediately visible in the glass warning reader](docs/shots/alerts.jpg) | ![Archived tornado warning over the Moore storm](docs/shots/warning-detail.jpg) |
 
 ![Selected storm cell with all attributes visible](docs/shots/cellconsole.jpg)
 

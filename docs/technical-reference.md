@@ -20,11 +20,11 @@ If HookEcho is useful to you, please [give the project a star](https://github.co
 
 <a id="screenshots"></a>
 
-![Radar mode with the short product panel over a KTLX archive replay](shots/radar-mode.gif)
+![Current Radar view stepping through a KTLX archive replay](shots/radar-mode.gif)
 
 <sub>**Radar mode — KTLX, May 20, 2013.** Actual current interface over an archived storm; not live weather.</sub>
 
-![Analyst Workstation switching between linked radar products and a single map](shots/analyst-mode.gif)
+![Analyst Workstation advancing four linked radar products](shots/analyst-mode.gif)
 
 <sub>**Analyst mode.** Linked four-pane comparison with an inspector. Radar restores the earlier single-map view.</sub>
 
@@ -137,10 +137,10 @@ trick with four tilts instead, so you can see how a storm leans with height.
 Cross-sections slice it vertically in any product — click two points and you get
 the storm in profile, core and overhang and all.
 
-| Four products at once | Cross-section |
+| Four products at once | Derived hail signal |
 |---|---|
-| ![The same storm in reflectivity, velocity, correlation coefficient and differential reflectivity](shots/alltilts.jpg) | ![A vertical slice through the storm core](shots/xsection.jpg) |
-| <sub>KTLX — Moore, OK, 20 May 2013</sub> | <sub>KTLX — Moore, OK, 20 May 2013</sub> |
+| ![The same storm in reflectivity, velocity, correlation coefficient and differential reflectivity](shots/alltilts.jpg) | ![VIL density derived from an archived storm volume](shots/derived.jpg) |
+| <sub>KTLX — Moore, OK, 20 May 2013</sub> | <sub>KPAH — Mayfield, KY, 11 December 2021</sub> |
 
 Every screenshot in this section is a replay. The timeline reaches back to June
 1991, so any archived storm loads the same way the live one does — a supercell
@@ -174,7 +174,7 @@ force at that moment.
 | ![The storm attributes table listing tracked cells](shots/stormtable.jpg) | ![The glass warning reader with the official bulletin immediately visible](shots/alerts.jpg) |
 | <sub>KTBW — live</sub> | <sub>Actual NWS warning captured in the app</sub> |
 
-![An emergency-severity tornado warning over archived Moore radar](shots/emergency.jpg)
+![An archived tornado warning over the Moore storm](shots/warning-detail.jpg)
 
 <sub>**Emergency-severity warning presentation.** KTLX — 20 May 2013 archive replay.</sub>
 
@@ -450,26 +450,22 @@ clearing a cache costs the next fetch and nothing else.
 
 ### On your phone
 
-These refreshed compact-layout captures show the current browser app. Native Android store images
-are maintained separately and require a connected Android device to recapture.
+These captures show the current Signal Deck UI from the signed Android build on a Galaxy S24 Ultra.
+They were recaptured on October 4, 2026. The store images use the same device captures.
 
-![HookEcho mobile browser replaying the Moore, Oklahoma tornado of 20 May 2013](shots/mobile/hero.gif)
+![HookEcho Android replaying the Moore, Oklahoma tornado of 20 May 2013](shots/android/hero.gif)
 
-<sub>**Earlier Android capture.** KTLX 0.5° reflectivity, 20 May 2013, stepped
+<sub>**Android Signal Deck.** KTLX 0.5° reflectivity, 20 May 2013, stepped
 through the archive. The current compact controls are shown below.</sub>
 
-Android is not the desktop squeezed onto a smaller screen — and it is no longer
-an app of its own either. The phone had its own chrome once: a persistent sheet
-with three snap points and a docked five-slot toolbar, both of them duplicating
-surfaces the shared action registry already fed. They are gone. What is here is
-the same floating chrome the desktop draws, over the same renderer and the same
-data paths, laid out for a thumb:
+Android uses the same radar data and renderer with a thumb-sized presentation.
+The Signal Deck keeps playback and warnings over the map; the Quiet Shelf opens
+Radar, Layers, Alerts, and More controls when needed:
 
-![The current Radar section in a phone-sized browser sheet](shots/mobile/radar-mode.jpg)
+![The current Radar section in the Android Quiet Shelf](shots/mobile/radar-mode.jpg)
 
-**Current compact layout.** The fixed Radar | Analyst switch and four task
-sections stay above the sheet. This is a browser capture at phone width; Android
-system controls differ. The site picker still sorts nearby radar sites first.
+**Current compact layout.** The sheet offers large targets while leaving the radar
+visible. The site picker still sorts nearby radar sites first.
 
 - Every tool window — soundings, cross-sections, settings, the site picker — is
   a full-screen surface, because that is what the compact width class is for.

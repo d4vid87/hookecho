@@ -9,14 +9,14 @@ Start with one storm and a question. Use **Analyst** to compare products, check 
 ## Build the workspace
 
 1. In **Radar**, select the radar site nearest the storm and let the scan load. Choose a live or archive time deliberately.
-2. Select **Compare 4** below Quick Launch, then choose each pane’s product.
+2. Select **Analysis** under Views, then choose each pane’s product.
 3. Compare **reflectivity**, **velocity**, **correlation coefficient (CC)**, and **differential reflectivity (ZDR)**. Select a pane before changing its product or tilt.
 4. Use **Options** to link maps and time. Open **Inspector** for values and the actual source time.
 5. Keep the same geographic feature in view as you inspect each pane. Select **Back to radar** for a single-map overview.
 
-![Actual HookEcho four-pane Analyst workspace](/shots/analyst-mode-20260927.webp)
+![Actual HookEcho four-pane Analyst workspace](/shots/analyst-mode-20261004.webp)
 
-*KABR capture from September 27, 2026; not current weather. Reflectivity, velocity, spectrum width, and ZDR provide different measurements.*
+*KTLX archive replay from May 20, 2013, recaptured October 4, 2026; not current weather. Reflectivity, velocity, CC, and ZDR provide different measurements.*
 
 For pane selection, workspace persistence, and phone behavior, see [Radar and Analyst modes](/docs/radar-and-analyst/).
 
@@ -48,7 +48,7 @@ Compare reflectivity with ZDR and CC. These products describe different properti
 
 Move through the available tilts and keep the feature geographically aligned. Remember that beam height increases with distance from the radar. Differences across tilts can reflect sampling geometry as well as storm structure.
 
-Open **Overlays → Storm attributes** for the available tracked-cell measurements. Compare those indicators with the radar panes and source times. Read [Reading the radar](/docs/reading-the-radar/) for product definitions and interpretation limits.
+Open **Your Map → Storm attributes** for the available tracked-cell measurements. Compare those indicators with the radar panes and source times. Read [Reading the radar](/docs/reading-the-radar/) for product definitions and interpretation limits.
 
 ## Add context and preserve the view
 
