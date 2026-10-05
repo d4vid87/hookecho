@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await page.goto('http://127.0.0.1:8095/');
-    assert.equal(await page.locator('.guided-media').count(), 6);
+    assert.equal(await page.locator('.guided-media').count(), 1);
     for (const image of await page.locator('.guided-media img').all()) {
       await image.scrollIntoViewIfNeeded();
       await image.evaluate(element => element.decode());

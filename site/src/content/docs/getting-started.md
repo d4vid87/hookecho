@@ -19,17 +19,17 @@ You should now see the map, a radar timestamp, and the colour scale. An empty
 map can mean dry weather; check the timestamp before assuming data is missing.
 If the first scan never appears, use [Troubleshooting](/docs/troubleshooting/).
 
-![HookEcho Radar mode showing reflectivity and the playback timeline during a South Dakota storm](/shots/radar-mode-20260927.webp)
+![HookEcho Radar mode showing reflectivity and playback during the archived Moore storm](/shots/radar-mode-20261004.webp)
 
-*Captured near KABR on September 27, 2026; this is a recorded screenshot, not live weather.*
+*KTLX archive replay from May 20, 2013, recaptured October 4, 2026; this is not live weather.*
 
 ## What you're looking at
 
 The app is a full-bleed map with three main controls over it:
 
-- **Quick Launch**, top-left. Use **Single radar** or **Compare 4** to change
-  views. The Menu opens radar products, layers, alerts, and tools; search
-  and Settings sit beside it.
+- **Menu**, top-left. Choose Radar or Analysis under Views. Layers and Your Map
+  hold weather overlays, places, forecasts, and storm attributes; search and
+  Settings sit beside the menu.
 - **The colour scale**, on the map edge, shows what the selected product means.
 - **The scrubber**, along the bottom: the radar's clock, a play button, a LIVE
   badge, and a time track with one tick per scan.

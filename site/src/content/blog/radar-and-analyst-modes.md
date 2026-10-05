@@ -1,19 +1,21 @@
 ---
 title: "Radar first, Analyst when you need it"
-description: "The new fixed mode switch, four short menu sections, and a reliable way back to your original radar view."
+description: "One radar map, four linked Analyst products, and a reliable way back to your original view."
 date: 2026-09-23
-image: /shots/analyst-mode-20260923.webp
+image: /shots/analyst-mode-20261004.webp
 ---
 
-The newest HookEcho build starts with one radar map. The controls for that map are now in a short **Radar** section; storm tracks, MRMS and SPC outlook live together in **Overlays**; warnings are in **Alerts**; and the searchable product catalog and workspaces are in **Tools**. Nothing should require scrolling past an alert list to find the radar product again.
+*Updated October 4, 2026 with the current interface captures.*
 
-The **Radar | Analyst** switch, search and Settings stay at the top even when the menu closes. **Ctrl+S** focuses search, **Escape** closes it, and the gear opens Settings directly.
+HookEcho starts with one radar map. The main menu groups **Views**, **Layers**, and **Your Map**; the search opens the full product and tool catalog. Point forecast, storm attributes, and sensor dashboard sit together under Your Map.
 
-![Radar mode with the Radar section open](/shots/radar-mode-20260923.webp)
+Choose **Analysis** under Views to compare four products. **Ctrl+S** focuses search, **Escape** dismisses open menus, and the control beside search opens Settings.
 
-When a storm calls for comparison, choose **Analyst**. Its fixed toolbar holds the presets, pane count, map and time links, active-pane label and Inspector. The Tornado preset opens four views: reflectivity, velocity, correlation coefficient and differential reflectivity. The inspector shows the selected data and its actual time.
+![Radar mode with the Radar section open](/shots/radar-mode-20261004.webp)
 
-![Four-pane Analyst Workstation](/shots/analyst-mode-20260923.webp)
+When a storm calls for comparison, choose **Analysis**. Its toolbar holds the presets, pane count, map and time links, active-pane label and Inspector. The four views in this capture show reflectivity, velocity, correlation coefficient and differential reflectivity. The inspector shows the selected data and its actual time.
+
+![Four-pane Analyst Workstation](/shots/analyst-mode-20261004.webp)
 
 The return trip matters just as much. Choose **Radar** and the single map you left comes back with its site, position, product, threshold, overlays and selected time. Choose **Analyst** again and its pane layout resumes. Both arrangements live for the session; save a workspace in Tools to keep one across restarts.
 

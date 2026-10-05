@@ -55,12 +55,19 @@ impl HookEchoApp {
                 Some((alert.event.clone(), format!("{place}{}", expiry.map_or(String::new(), |time| format!(" · expires {time}")))))
             })
         } else { None };
-        let (freshness, freshness_color) =
-            crate::ui::layers_panel::health_look(self.radar_health().state());
-        let age = self.views[self.active]
-            .volume
-            .as_ref()
-            .map(|scan| (chrono::Utc::now() - scan.time).num_minutes().max(0));
+        let archive = self.archive_bucket().is_some();
+        let (freshness, freshness_color) = if archive {
+            ("Archive", Color32::from_rgb(111, 194, 255))
+        } else {
+            crate::ui::layers_panel::health_look(self.radar_health().state())
+        };
+        let age = self.views[self.active].volume.as_ref().map(|scan| {
+            if archive {
+                scan.time.format("%b %-d, %Y").to_string()
+            } else {
+                format!("{}m ago", (chrono::Utc::now() - scan.time).num_minutes().max(0))
+            }
+        });
         let mut action = None;
         let mut open_alerts = false;
         let mut mode = None;
@@ -181,7 +188,7 @@ impl HookEchoApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             badge().show(ui, |ui| {
                                 ui.label(RichText::new(format!("{product} · {}",
-                                    age.map_or("waiting".to_owned(), |m| format!("{m}m ago")))).size(10.0));
+                                    age.clone().unwrap_or_else(|| "waiting".to_owned()))).size(10.0));
                             });
                         });
                     });
@@ -189,7 +196,7 @@ impl HookEchoApp {
                     ui.colored_label(
                         freshness_color,
                         match age {
-                            Some(minutes) => format!("● {freshness} · scan {minutes} min ago"),
+                            Some(ref age) => format!("● {freshness} · scan {age}"),
                             None => format!("● {freshness} · waiting for scan"),
                         },
                     );

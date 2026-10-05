@@ -6,9 +6,9 @@ import GuidedMedia from "../components/GuidedMedia.astro";
 import { DISCORD_INVITE } from "../data/community";
 
 const features = [
-  { title: "Follow a storm", label: "Storm tracks", body: "Select a detected storm to see where its projected track may lead. Arrival ranges appear only when the data supports them.", src: "/showcase/tracks-20260916", poster: "/shots/stormtable.jpg?v=20260916", alt: "Selected storm and projected track near St. Louis", source: "KLSX capture · September 16, 2026" },
-  { title: "Inspect the details", label: "Storm attributes", body: "Open the measurements behind a detected storm: motion, height, and available hail indicators.", src: "/showcase/attributes-20260916", poster: "/shots/stormtable.jpg?v=20260916", alt: "Storm attributes in HookEcho", source: "KLSX Level 3 capture · September 16, 2026" },
-  { title: "See the whole country", label: "National radar", body: "Switch to the MRMS mosaic for a continuous view of rain and storms across the United States.", src: "/showcase/mrms-20260916", poster: "/shots/mrms.jpg?v=20260916", alt: "National MRMS radar mosaic in HookEcho", source: "MRMS capture · September 16, 2026" },
+  { title: "Follow a storm", label: "Radar playback", body: "Step through real radar scans to follow a storm as it changes. The source time stays visible.", src: "/showcase/radar-playback-20261004", poster: "/showcase/moore-2013-single.webp", alt: "Archived Moore storm advancing through HookEcho radar scans", source: "KTLX archive · May 20, 2013 · recaptured October 4, 2026" },
+  { title: "Inspect the details", label: "Storm attributes", body: "Open the measurements behind a detected storm: motion, height, and available hail indicators.", src: "/showcase/attributes-20261004", poster: "/shots/stormtable.jpg?v=20261004", alt: "Current storm attributes dock over Alabama radar", source: "KBMX live radar · captured October 4, 2026" },
+  { title: "See the whole country", label: "National radar", body: "Switch to the MRMS mosaic for a continuous view of rain and storms across the United States.", src: "/showcase/mrms-20261004", poster: "/shots/mrms.jpg?v=20261004", alt: "National MRMS radar mosaic in HookEcho", source: "MRMS live capture · October 4, 2026" },
 ];
 const jsonld = { "@context": "https://schema.org", "@type": "SoftwareApplication", name: "HookEcho", applicationCategory: "WeatherApplication", operatingSystem: "Windows, macOS, Linux, Android, Web", url: "https://hookecho.io", downloadUrl: "https://hookecho.io/download/", license: "https://www.gnu.org/licenses/gpl-3.0.html", isAccessibleForFree: true, offers: { "@type": "Offer", price: "0", priceCurrency: "USD" }, description: "Free, open-source weather radar with four-product Analyst views and storm tools." };
 ---
@@ -34,7 +34,7 @@ const jsonld = { "@context": "https://schema.org", "@type": "SoftwareApplication
 
   <section class="anywhere"><div class="wrap anywhere-grid">
     <div class="anywhere-copy"><p class="eyebrow">On your screen</p><h2>Take the radar with you.</h2><p>Keep the map in view on your phone, then open the controls when you need them. Use HookEcho in a browser or install it on Android, Windows, macOS, or Linux.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/download/">Download HookEcho</a></div></div>
-    <div class="phone-capture"><GuidedMedia phone src="/showcase/phone-current" poster="/showcase/phone-current-poster.webp" alt="Current HookEcho Android app on a Galaxy S24 Ultra switching from reflectivity to velocity, opening Layers, and configuring Analyst panes" cues={[{ at: 0, text: "Start with the radar map." }, { at: 4, text: "Switch from Reflectivity to Velocity." }, { at: 8, text: "Open Layers for weather overlays." }, { at: 12, text: "Choose an Analyst pane layout." }]} /><p>Recorded on a Samsung Galaxy S24 Ultra · September 23, 2026 · Archived KTLX radar</p></div>
+    <div class="phone-capture"><GuidedMedia phone src="/showcase/phone-current" poster="/showcase/phone-current-poster.webp" alt="Current HookEcho Android Signal Deck UI following the archived Moore storm" cues={[{ at: 0, text: "Signal Deck keeps radar in focus." }, { at: 2, text: "Step through archived scans." }, { at: 4, text: "Warnings remain visible over the map." }]} /><p>Recorded on a Samsung Galaxy S24 Ultra · October 4, 2026 · Archived KTLX radar</p></div>
   </div></section>
 
   <section class="closing"><div class="wrap closing-inner"><p class="eyebrow">Built in the open</p><h2>The data is public.<br /><span>The radar is yours.</span></h2><p>Free and open source. NOAA and NWS public data. No account, ads, or app telemetry.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar <span aria-hidden="true">↗</span></a><a href="https://github.com/d4vid87/hookecho">View on GitHub</a><a href={DISCORD_INVITE}>Join Discord</a></div></div></section>
@@ -42,9 +42,9 @@ const jsonld = { "@context": "https://schema.org", "@type": "SoftwareApplication
 
 <script>
   const features = [
-    { poster: "/shots/stormtable.jpg?v=20260916", src: "/showcase/tracks-20260916.mp4", alt: "Selected storm and projected track near St. Louis", source: "KLSX capture · September 16, 2026" },
-    { poster: "/shots/stormtable.jpg?v=20260916", src: "/showcase/attributes-20260916.mp4", alt: "Storm attributes in HookEcho", source: "KLSX Level 3 capture · September 16, 2026" },
-    { poster: "/shots/mrms.jpg?v=20260916", src: "/showcase/mrms-20260916.mp4", alt: "National MRMS radar mosaic in HookEcho", source: "MRMS capture · September 16, 2026" },
+    { poster: "/showcase/moore-2013-single.webp", src: "/showcase/radar-playback-20261004.mp4", alt: "Archived Moore storm advancing through HookEcho radar scans", source: "KTLX archive · May 20, 2013 · recaptured October 4, 2026" },
+    { poster: "/shots/stormtable.jpg?v=20261004", src: "/showcase/attributes-20261004.mp4", alt: "Current storm attributes dock over Alabama radar", source: "KBMX live radar · captured October 4, 2026" },
+    { poster: "/shots/mrms.jpg?v=20261004", src: "/showcase/mrms-20261004.mp4", alt: "National MRMS radar mosaic in HookEcho", source: "MRMS live capture · October 4, 2026" },
   ];
   const box = document.querySelector<HTMLElement>("[data-feature-showcase]");
   if (box) {
