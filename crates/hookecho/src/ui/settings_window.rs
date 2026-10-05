@@ -214,11 +214,10 @@ impl SettingsWindow {
         self.prev_open = self.open;
 
         let mut open = self.open;
-        let Some(window) = drawer.page_sized(
+        let Some(window) = drawer.page_sized_fixed(
             ctx,
             "Settings",
             &mut open,
-            false,
             960.0,
             egui::Window::new("Settings"),
         ) else {
