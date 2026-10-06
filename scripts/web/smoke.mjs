@@ -39,6 +39,9 @@ if (familyHub) {
   await page.setUserAgent("Mozilla/5.0 (Linux; Tizen; SAMSUNG Family Hub 11) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/1.0 Chrome/130.0.6723.116 Mobile Safari/537.36");
   await page.evaluateOnNewDocument(() => {
     globalThis.__testWakeRequests = 0;
+    // Family Hub must still boot when these newer browser conveniences are absent.
+    Object.defineProperty(AbortSignal, "timeout", { configurable: true, value: undefined });
+    Object.defineProperty(WebAssembly, "compileStreaming", { configurable: true, value: undefined });
     let release;
     Object.defineProperty(navigator, "wakeLock", {
       configurable: true,
