@@ -14,6 +14,7 @@ const args = process.argv.slice(2);
 // Only meaningful against a deployed origin, where `/proxy/` is real and volumes actually arrive.
 const expectLoop = args.includes("--expect-loop");
 const webgl = args.includes("--webgl");
+const familyHub = args.includes("--family-hub");
 const url = args.find((a) => !a.startsWith("--")) ?? "http://127.0.0.1:8080/";
 const errors = [];
 
@@ -34,6 +35,12 @@ const browser = await puppeteer.launch({
   ],
 });
 const page = await browser.newPage();
+if (familyHub) {
+  await page.setUserAgent("Mozilla/5.0 (Linux; Tizen; SAMSUNG Family Hub 11) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/1.0 Chrome/130.0.6723.116 Mobile Safari/537.36");
+  page.on("request", (request) => {
+    if (request.url().includes("/voice/amy-medium")) errors.push("Family Hub fetched the voice model during radar startup");
+  });
+}
 if (webgl) {
   // Exercise the fallback used by browsers without WebGPU, including uniform alignment rules.
   await page.evaluateOnNewDocument(() => {
@@ -42,8 +49,10 @@ if (webgl) {
 }
 page.on("pageerror", (e) => errors.push(`page error: ${e.message}`));
 let loopStarted = false;
+let gpuBackend = "";
 page.on("console", (m) => {
   const text = m.text();
+  if (text.includes("gpu: ")) gpuBackend = text;
   // A Rust panic reaches the console as a warning or a log depending on the panic hook.
   if (/panicked at|RuntimeError: unreachable/.test(text)) errors.push(`panic: ${text}`);
   // A feed whose body does not parse is either a shape change upstream or a bug here, and both
@@ -93,6 +102,9 @@ try {
   const size = await page.$eval("#hookecho", (c) => [c.width, c.height]);
   if (!size[0] || !size[1]) {
     errors.push(`canvas has no backing store: ${size.join("x")}`);
+  }
+  if (familyHub && !gpuBackend.includes("Gl")) {
+    errors.push(`Family Hub did not select WebGL2: ${gpuBackend || "no GPU log"}`);
   }
 
   if (expectLoop) {
