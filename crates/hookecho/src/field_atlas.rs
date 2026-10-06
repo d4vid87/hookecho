@@ -13,6 +13,7 @@ pub struct Style {
     pub dash: Option<(f32, f32)>,
     pub emergency: bool,
     pub warning: bool,
+    pub mesoscale: bool,
 }
 impl Style {
     pub fn color(self) -> Color32 {
@@ -75,7 +76,7 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
             ([255, 228, 181], 6, Some((1.5, 5.0)))
         }
         FeatureKind::Advisory | FeatureKind::Statement => ([114, 186, 255], 6, Some((1.5, 5.0))),
-        FeatureKind::MesoDiscussion => ([58, 96, 245], 8, None),
+        FeatureKind::MesoDiscussion => ([189, 104, 255], 48, None),
         // Wind radii and surge share this kind; keep their source intensity colors and fills.
         FeatureKind::TropicalCone if f.title.ends_with(" cone") => {
             ([119, 221, 255], 10, Some((5.0, 7.0)))
@@ -88,6 +89,7 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         dash,
         emergency,
         warning: f.kind == FeatureKind::Warning,
+        mesoscale: f.kind == FeatureKind::MesoDiscussion,
     })
 }
 
@@ -155,6 +157,12 @@ fn boundary_shapes(shapes: &mut Vec<Shape>, points: &[Pos2], clip: Rect, style: 
             } else {
                 draw(3.2, style.color());
             }
+        } else if style.mesoscale {
+            // Aurora rim: violet halo, dark separation, and a crisp pale centerline.
+            draw(12.0, Color32::from_rgba_unmultiplied(149, 47, 241, 85));
+            draw(7.0, INK);
+            draw(4.0, style.color());
+            draw(1.5, Color32::from_rgb(227, 170, 255));
         } else {
             draw(6.0, INK);
             draw(1.8, style.color());
@@ -928,7 +936,9 @@ mod tests {
             tornado.title = "Severe Thunderstorm Watch 0639".into();
             assert_eq!(style(&tornado).unwrap().rgb, [255, 226, 108]);
         }
-        assert_eq!(md.rgb, [58, 96, 245]);
+        assert_eq!(md.rgb, [189, 104, 255]);
+        assert_eq!(md.fill, 48);
+        assert!(md.mesoscale);
         assert!(md.dash.is_none());
         assert!(watch.fill < warning.fill);
         assert!(style(&feature(FeatureKind::Outlook)).is_none());
