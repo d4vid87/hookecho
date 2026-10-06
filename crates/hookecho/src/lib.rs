@@ -252,6 +252,17 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
         .ok_or_else(|| wasm_bindgen::JsValue::from_str("no such canvas"))?;
 
     let mut web_options = eframe::WebOptions::default();
+    // Family Hub is a separate embedded GPU target. Prefer the full app's existing WebGL2
+    // backend there while avoiding the browser WebGPU path reported as a render failure.
+    if web_sys::window()
+        .and_then(|w| w.navigator().user_agent().ok())
+        .is_some_and(|ua| ua.contains("Family Hub"))
+    {
+        if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut web_options.wgpu_options.wgpu_setup {
+            setup.instance_descriptor.backends = wgpu::Backends::GL;
+            setup.power_preference = wgpu::PowerPreference::LowPower;
+        }
+    }
     cap_texture_limit_to_adapter(&mut web_options.wgpu_options);
 
     eframe::WebRunner::new()

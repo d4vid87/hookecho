@@ -79,7 +79,18 @@ fn set_status(message: impl Into<String>) {
 pub fn enable() {
     set_status("");
     #[cfg(target_arch = "wasm32")]
-    WEB_ENABLED.with(|enabled| enabled.set(true));
+    {
+        WEB_ENABLED.with(|enabled| enabled.set(true));
+        // Family Hub defers the large model until speech is requested; other browsers may also
+        // reach this button before their startup preparation begins.
+        if js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStatus".into())
+            .ok()
+            .and_then(|value| value.as_string())
+            .is_none()
+        {
+            retry();
+        }
+    }
 }
 
 pub fn automatic_ready() -> bool {
