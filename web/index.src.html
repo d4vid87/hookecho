@@ -103,8 +103,33 @@
       // See web/decode-worker.js and crates/wxdata/src/wasm_worker.rs.
       const glueUrl = new URL("./dist/hookecho.js?boot=2", import.meta.url).href;
       const wasmUrl = new URL("./dist/hookecho_bg.wasm", import.meta.url).href;
-      const module = await WebAssembly.compileStreaming(fetch(wasmUrl, { signal: AbortSignal.timeout(60000) }));
       const familyHub = /Family Hub/i.test(navigator.userAgent);
+      if (familyHub) {
+        let wakeLock;
+        let requestingWakeLock = false;
+        const keepScreenAwake = async () => {
+          if (document.visibilityState !== "visible" || wakeLock || requestingWakeLock) return;
+          if (!navigator.wakeLock?.request) {
+            console.warn("Family Hub browser does not support screen wake lock");
+            return;
+          }
+          requestingWakeLock = true;
+          try {
+            const lock = await navigator.wakeLock.request("screen");
+            wakeLock = lock;
+            lock.addEventListener("release", () => {
+              if (wakeLock === lock) wakeLock = null;
+            });
+          } catch (error) {
+            console.warn("Family Hub screen wake lock was denied", error);
+          } finally {
+            requestingWakeLock = false;
+          }
+        };
+        document.addEventListener("visibilitychange", keepScreenAwake);
+        void keepScreenAwake();
+      }
+      const module = await WebAssembly.compileStreaming(fetch(wasmUrl, { signal: AbortSignal.timeout(60000) }));
 
       // Job ids, transfers and worker-death handling all live in decode-bridge.js, which takes
       // the spawn as a callback so its failure path can be tested without a browser.

@@ -37,6 +37,19 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 if (familyHub) {
   await page.setUserAgent("Mozilla/5.0 (Linux; Tizen; SAMSUNG Family Hub 11) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/1.0 Chrome/130.0.6723.116 Mobile Safari/537.36");
+  await page.evaluateOnNewDocument(() => {
+    globalThis.__testWakeRequests = 0;
+    let release;
+    Object.defineProperty(navigator, "wakeLock", {
+      configurable: true,
+      value: { request: async (type) => {
+        if (type !== "screen") throw new Error(`Unexpected wake lock: ${type}`);
+        globalThis.__testWakeRequests++;
+        return { addEventListener: (event, callback) => { if (event === "release") release = callback; } };
+      } },
+    });
+    globalThis.__testReleaseWakeLock = () => release?.();
+  });
   page.on("request", (request) => {
     if (request.url().includes("/voice/amy-medium")) errors.push("Family Hub fetched the voice model during radar startup");
   });
@@ -105,6 +118,16 @@ try {
   }
   if (familyHub && !gpuBackend.includes("Gl")) {
     errors.push(`Family Hub did not select WebGL2: ${gpuBackend || "no GPU log"}`);
+  }
+  if (familyHub) {
+    const firstWakeRequest = await page.evaluate(() => globalThis.__testWakeRequests);
+    if (firstWakeRequest !== 1) errors.push(`Family Hub wake lock requests at boot: ${firstWakeRequest}`);
+    await page.evaluate(() => {
+      globalThis.__testReleaseWakeLock();
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const resumedWakeRequests = await page.evaluate(() => globalThis.__testWakeRequests);
+    if (resumedWakeRequests !== 2) errors.push(`Family Hub wake lock requests after resume: ${resumedWakeRequests}`);
   }
 
   if (expectLoop) {
