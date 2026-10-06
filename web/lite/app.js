@@ -390,9 +390,13 @@ function drawWarnings() {
   }
   const counts = new Map();
   for (const wrn of state.warnings) counts.set(wrn.event, (counts.get(wrn.event) ?? 0) + 1);
-  el("warns").innerHTML = [...counts]
-    .map(([event, n]) => `<b style="color:${WARN_COLOR[event] ?? "#fff"}">${n}</b> ${event.replace(" Warning", "")}`)
-    .join(" · ");
+  const labels = [...counts].flatMap(([event, n], i) => {
+    const count = document.createElement("b");
+    count.style.color = WARN_COLOR[event] ?? "#fff";
+    count.textContent = n;
+    return [document.createTextNode(i ? " · " : ""), count, document.createTextNode(` ${event.replace(" Warning", "")}`)];
+  });
+  el("warns").replaceChildren(...labels);
 }
 
 // --- The loop ---------------------------------------------------------------------------------

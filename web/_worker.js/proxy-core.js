@@ -244,6 +244,8 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
     upstream = await fetch(target, {
       headers: { "user-agent": USER_AGENT, ...(range ? { range } : {}) },
       ...fetchInit(host, url.search, !!range),
+      // An allowed upstream must not redirect this proxy to a host outside the allowlist.
+      redirect: "manual",
     });
   } catch {
     return badGateway();

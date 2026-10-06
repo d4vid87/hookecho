@@ -53,6 +53,16 @@ test("the client's conditional headers are never forwarded upstream", async () =
   assert.deepEqual(Object.keys(calls[0].init.headers), ["user-agent"]);
 });
 
+test("upstream redirects cannot escape the host allowlist", async () => {
+  const calls = stubFetch(new Response(null, {
+    status: 302,
+    headers: { location: "https://evil.example/secret" },
+  }));
+  const res = await proxy(ask("api.weather.gov/alerts/active"));
+  assert.equal(calls[0].init.redirect, "manual");
+  assert.equal(res.status, 502);
+});
+
 test("a stale validator still gets the body", async () => {
   stubFetch(upstream({ etag: '"new"' }));
   const res = await proxy(ask("api.weather.gov/alerts/active", { "if-none-match": '"old"' }));
