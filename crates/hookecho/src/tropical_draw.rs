@@ -32,7 +32,7 @@ pub fn draw(
     for feature in data.wind_radii.iter().chain(data.surge.iter()) {
         let style = crate::field_atlas::Style {
             rgb: [feature.stroke[0], feature.stroke[1], feature.stroke[2]],
-            fill: 0, dash: None, emergency: false, warning: false,
+            fill: 0, dash: None, emergency: false, warning: false, mesoscale: false,
         };
         for ring in &feature.rings {
             if ring.len() < 3 { continue; }
@@ -63,7 +63,7 @@ fn draw_storm(
 
     // Solid center track; the forecast cone remains dashed.
     let track_style = crate::field_atlas::Style {
-        rgb: [119, 221, 255], fill: 0, dash: None, emergency: false, warning: false,
+        rgb: [119, 221, 255], fill: 0, dash: None, emergency: false, warning: false, mesoscale: false,
     };
     // A forecast crossing the date line has a discontinuity in map coordinates. Never
     // connect the two sides with a line spanning the whole map.
