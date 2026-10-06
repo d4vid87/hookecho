@@ -51,6 +51,7 @@ struct Server {
     web_root: Option<std::path::PathBuf>,
     rt: tokio::runtime::Runtime,
     http: reqwest::Client,
+    proxy_http: reqwest::Client,
     /// path (plus query, for the snapshot) -> when it was fetched and what it was.
     cache: Mutex<lru::LruCache<String, (Instant, Vec<u8>)>>,
     /// Proxied upstream responses, so one visitor's volume download is the next visitor's cache
@@ -82,6 +83,7 @@ pub fn run(
             .enable_all()
             .build()?,
         http: reqwest::Client::new(),
+        proxy_http: proxy_client(),
         cache: Mutex::new(lru::LruCache::new(
             std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
         )),
@@ -1547,6 +1549,13 @@ static PROXY_MISSES: AtomicU64 = AtomicU64::new(0);
 const PROXY_MAX_BYTES: usize = 64 * 1024 * 1024;
 const GOES_PROXY_MAX_BYTES: usize = 96 * 1024 * 1024;
 
+fn proxy_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("proxy HTTP client")
+}
+
 fn proxy_max_bytes(host: &str) -> usize {
     if host.starts_with("noaa-goes") { GOES_PROXY_MAX_BYTES } else { PROXY_MAX_BYTES }
 }
@@ -1578,7 +1587,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
             return forbidden("invalid model byte range");
         }
         let url = if query.is_empty() { format!("https://{host}/{rest}") } else { format!("https://{host}/{rest}?{query}") };
-        return match server.rt.block_on(fetch_capped_range(&server.http, &url, range)) {
+        return match server.rt.block_on(fetch_capped_range(&server.proxy_http, &url, range)) {
             Ok((ctype, body, content_range)) => Reply {
                 status: "206 Partial Content",
                 ctype,
@@ -1614,7 +1623,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
     }
 
     PROXY_MISSES.fetch_add(1, Ordering::Relaxed);
-    match server.rt.block_on(fetch_capped(&server.http, &url, proxy_max_bytes(host))) {
+    match server.rt.block_on(fetch_capped(&server.proxy_http, &url, proxy_max_bytes(host))) {
         Ok((ctype, body)) => {
             let body = std::sync::Arc::new(body);
             let etag = etag_of(&body);
@@ -1687,8 +1696,8 @@ async fn fetch_capped_range(
         .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT)
         .header(reqwest::header::RANGE, range)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
+    anyhow::ensure!(resp.status().is_success(), "upstream returned {}", resp.status());
     anyhow::ensure!(
         resp.status() == reqwest::StatusCode::PARTIAL_CONTENT,
         "upstream ignored byte range"
@@ -1758,8 +1767,8 @@ async fn fetch_capped(
         .get(url)
         .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
+    anyhow::ensure!(resp.status().is_success(), "upstream returned {}", resp.status());
     let ctype = proxy_content_type(
         resp.headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -1928,6 +1937,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn proxy_does_not_follow_upstream_redirects() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let destination = url.clone();
+        let upstream = std::thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            assert!(connection.read(&mut request).unwrap() > 0);
+            write!(
+                connection,
+                "HTTP/1.1 302 Found\r\nLocation: {destination}/next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let until = Instant::now() + Duration::from_millis(200);
+            while Instant::now() < until {
+                if listener.accept().is_ok() { return true; }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            false
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(runtime.block_on(fetch_capped(&proxy_client(), &url, 1024)).is_err());
+        assert!(!upstream.join().unwrap(), "proxy followed the redirect");
+    }
+
+    #[test]
     fn the_token_check_is_exact_and_length_safe() {
         assert!(constant_time_eq("hunter2", "hunter2"));
         assert!(!constant_time_eq("hunter2", "hunter3"));
@@ -2055,6 +2095,7 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
+            proxy_http: proxy_client(),
             cache: Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
             )),
@@ -2084,6 +2125,7 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
+            proxy_http: proxy_client(),
             cache: Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
             )),
@@ -2117,6 +2159,7 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
+            proxy_http: proxy_client(),
             cache: Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
             )),
@@ -2166,6 +2209,7 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
+            proxy_http: proxy_client(),
             cache: Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
             )),
@@ -2269,6 +2313,7 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
+            proxy_http: proxy_client(),
             cache: Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
             )),
@@ -2311,6 +2356,7 @@ mod tests {
                 .build()
                 .unwrap(),
             http: reqwest::Client::new(),
+            proxy_http: proxy_client(),
             cache: Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(ANSWER_CACHE).unwrap(),
             )),
