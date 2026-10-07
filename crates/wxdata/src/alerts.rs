@@ -13,7 +13,7 @@ const ALERTS_URL: &str = "https://api.weather.gov/alerts/active";
 pub const USER_AGENT: &str = "hookecho (github.com/d4vid87/hookecho, davidmay87@gmail.com)";
 
 /// Opt-in alert products. Other event types remain enabled.
-pub const OPTIONAL_EVENTS: [&str; 13] = [
+pub const OPTIONAL_EVENTS: [&str; 14] = [
     "Small Craft Advisory",
     "Gale Warning",
     "Gale Watch",
@@ -27,6 +27,7 @@ pub const OPTIONAL_EVENTS: [&str; 13] = [
     "Coastal Flood Statement",
     "High Surf Advisory",
     "Flood Watch",
+    "Lake Wind Advisory",
 ];
 
 pub fn event_enabled(event: &str, enabled_optional: &[String]) -> bool {
@@ -601,6 +602,8 @@ mod tests {
     #[test]
     fn optional_events_are_filtered_before_inline_and_zone_geometry() {
         use serde_json::json;
+        assert!(!event_enabled("Lake Wind Advisory", &[]));
+        assert!(event_enabled("Lake Wind Advisory", &["Lake Wind Advisory".to_owned()]));
         let retained = ["Tornado Warning", "Severe Thunderstorm Warning", "Flood Warning",
             "Flash Flood Warning", "High Surf Warning",
             "Special Weather Statement", "Tornado Watch"];
