@@ -45,10 +45,11 @@ pub fn draw_vertical(
     rect: Rect,
     moment: Moment,
     table: &ColorTable,
-    threshold: Option<f32>,
+    bounds: (Option<f32>, Option<f32>),
     disp_factor: f32,
     disp_label: &str,
 ) {
+    let (threshold, maximum) = bounds;
     const W: f32 = 14.0;
     const HEAD_H: f32 = 18.0;
     let (vmin, vmax) = match (table.stops.first(), table.stops.last()) {
@@ -105,6 +106,16 @@ pub fn draw_vertical(
         if yr < bar.bottom() {
             painter.rect_filled(
                 Rect::from_min_max(egui::pos2(bar.left(), yr), bar.right_bottom()),
+                0.0,
+                Color32::from_black_alpha(150),
+            );
+        }
+    }
+    if let Some(t) = maximum {
+        let yr = y_of(t);
+        if yr > bar.top() {
+            painter.rect_filled(
+                Rect::from_min_max(bar.left_top(), egui::pos2(bar.right(), yr)),
                 0.0,
                 Color32::from_black_alpha(150),
             );

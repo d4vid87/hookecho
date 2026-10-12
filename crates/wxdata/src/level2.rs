@@ -111,6 +111,12 @@ impl Moment {
     }
 }
 
+/// Encode native physical data without first quantizing to the 8-bit display band.
+pub fn encode_display16(value: f32, min: f32, max: f32) -> u16 {
+    if !value.is_finite() || !min.is_finite() || !max.is_finite() || max <= min { return 0; }
+    2 + (((value - min) / (max - min)).clamp(0.0, 1.0) * 65533.0).round() as u16
+}
+
 /// A sweep resampled onto a fixed azimuth grid, ready for GPU upload.
 ///
 /// `data` is row-major `[az_bin][gate]`, one `u8` per gate:
@@ -122,6 +128,8 @@ pub struct BinnedSweep {
     pub az_bins: usize,
     pub gate_count: usize,
     pub data: Vec<u8>,
+    /// Optional display encoding from native physical values: 0 missing, 1 folded.
+    pub data16: Option<Vec<u16>>,
     pub first_gate_km: f32,
     pub gate_interval_km: f32,
     pub radar_lat: f32,
@@ -922,6 +930,10 @@ pub fn bin_scan_opts_at(
     dealias: bool,
     cut_end_ms: Option<i64>,
 ) -> anyhow::Result<BinnedSweep> {
+    bin_scan_display_at(scan, moment, tilt, dealias, cut_end_ms, false)
+}
+
+pub fn bin_scan_display_at(scan: &Scan, moment: Moment, tilt: usize, dealias: bool, cut_end_ms: Option<i64>, precision: bool) -> anyhow::Result<BinnedSweep> {
     crate::stats::bump(crate::stats::Counter::SweepsBinned);
     let sweep = selected_sweep_at(scan, moment, tilt, cut_end_ms)
         .ok_or_else(|| anyhow::anyhow!("no sweep carries requested moment at this tilt"))?;
@@ -931,7 +943,7 @@ pub fn bin_scan_opts_at(
         .map(|s| (s.latitude(), s.longitude()))
         .ok_or_else(|| anyhow::anyhow!("scan has no site metadata"))?;
 
-    bin_sweep_opts(sweep, moment, lat, lon, dealias)
+    bin_sweep_display(sweep, moment, lat, lon, dealias, precision)
 }
 
 /// Bin the lowest-elevation sweep of `scan` for `moment`.
@@ -1000,6 +1012,10 @@ pub fn bin_sweep_opts(
     radar_lon: f32,
     dealias: bool,
 ) -> anyhow::Result<BinnedSweep> {
+    bin_sweep_display(sweep, moment, radar_lat, radar_lon, dealias, false)
+}
+
+pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lon: f32, dealias: bool, precision: bool) -> anyhow::Result<BinnedSweep> {
     let radials = sweep.radials();
     // Azimuth resolution: 0.5-degree (720 bins) covers both super-res and legacy;
     // legacy 1-degree radials fill the two adjacent bins they span.
@@ -1069,6 +1085,7 @@ pub fn bin_sweep_opts(
     };
 
     let mut data = vec![0u8; AZ_BINS * gate_count];
+    let mut data16 = precision.then(|| vec![0u16; AZ_BINS * gate_count]);
     if moment == Moment::SpecificDifferentialPhase {
         // KDP is the range derivative of ΦDP, so it has to be taken on the physical field:
         // the u8 band quantizes 0..360 deg into 253 steps (~1.4 deg), which is the same order
@@ -1090,6 +1107,7 @@ pub fn bin_sweep_opts(
         for (i, v) in kdp.iter().enumerate() {
             if let Some(v) = v {
                 data[i] = normalize(*v);
+                if let Some(precise) = &mut data16 { precise[i] = encode_display16(*v, value_min, value_max); }
             }
         }
     } else if dealias && moment == Moment::Velocity {
@@ -1135,6 +1153,7 @@ pub fn bin_sweep_opts(
         for (i, v) in unfolded.iter().enumerate() {
             if let Some(v) = v {
                 data[i] = normalize(*v);
+                if let Some(precise) = &mut data16 { precise[i] = encode_display16(*v, value_min, value_max); }
             }
         }
     } else {
@@ -1165,7 +1184,25 @@ pub fn bin_sweep_opts(
         }
     }
 
+    if moment != Moment::SpecificDifferentialPhase && !(dealias && moment == Moment::Velocity) {
+        if let Some(precise) = &mut data16 {
+            for (bin, row) in precise.chunks_mut(gate_count).enumerate() {
+                for radial in &by_bin[bin] {
+                    if let Some(m) = moment.select(radial) {
+                        for (g, value) in m.iter().enumerate().take(gate_count) {
+                            row[g] = match value {
+                                MomentValue::BelowThreshold => 0,
+                                MomentValue::RangeFolded => 1,
+                                MomentValue::Value(v) => encode_display16(v, value_min, value_max),
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
     Ok(BinnedSweep {
+        data16,
         moment,
         az_bins: AZ_BINS,
         gate_count,
@@ -1194,6 +1231,7 @@ mod tests {
     fn sampling_a_gate_inverts_the_binning() {
         let (az_bins, gate_count) = (720, 200);
         let mut sweep = BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins,
             gate_count,
@@ -1333,6 +1371,7 @@ mod tests {
     #[test]
     fn below_threshold_and_range_folded_are_not_values() {
         let mut sweep = BinnedSweep {
+            data16: None,
             moment: Moment::Velocity,
             az_bins: 720,
             gate_count: 10,
@@ -1362,6 +1401,7 @@ mod tests {
     #[test]
     fn a_point_beyond_the_last_gate_has_no_sample() {
         let sweep = BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins: 720,
             gate_count: 10,
@@ -1437,6 +1477,30 @@ mod tests {
         assert!(decode_volume(Vec::new()).is_err());
         assert!(decode_volume(vec![0u8; 23]).is_err());
         assert!(decode_volume(b"AR2V0006.".to_vec()).is_err());
+    }
+
+    #[test]
+    fn precise_display_preserves_sub_byte_values_and_classifications() {
+        let raw = vec![0, 1, 107, 108];
+        let moment = MomentData::from_fixed_point(4, 2125, 250, 8, 4.0, 66.0, raw);
+        let radial = Radial::new(0, 90, 90.0, 0.5,
+            nexrad_model::data::RadialStatus::ScanStart, 1, 0.5,
+            Some(moment), None, None, None, None, None, None);
+        let sweep = Sweep::new(1, vec![radial]);
+        let legacy = bin_sweep(&sweep, Moment::Reflectivity, 35.33, -97.28).unwrap();
+        let precise = bin_sweep_display(&sweep, Moment::Reflectivity, 35.33, -97.28, false, true).unwrap();
+        let row = 180 * 4;
+        assert!(legacy.data16.is_none());
+        assert_eq!(legacy.data, precise.data);
+        assert_eq!(legacy.data[row + 2], legacy.data[row + 3]);
+        let values = precise.data16.unwrap();
+        assert_eq!(&values[row..row + 2], &[0, 1]);
+        assert_ne!(values[row + 2], values[row + 3]);
+        for (code, value) in [(values[row + 2], 10.25), (values[row + 3], 10.5)] {
+            let recovered = -32.0 + (code as f32 - 2.0) / 65533.0 * 127.0;
+            assert!((recovered - value).abs() < 0.001);
+        }
+        assert_eq!(encode_display16(f32::NAN, -32.0, 95.0), 0);
     }
 
     // Build a one-radial sweep with a known reflectivity ramp and confirm binning

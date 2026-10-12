@@ -220,6 +220,7 @@ impl Product {
             data.push(encoded);
         }
         Ok(BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             data,
             value_min: self.definition.min,
@@ -717,6 +718,7 @@ mod tests {
     fn gate_product_builds_a_renderable_sweep() {
         let product = Product::compile(definition("REF * CC")).unwrap();
         let sweep = |moment, raw, min, max| BinnedSweep {
+            data16: None,
             moment, az_bins: 1, gate_count: 1, data: vec![raw], first_gate_km: 1.0,
             gate_interval_km: 0.25, radar_lat: 35.0, radar_lon: -97.0, elevation_deg: 0.5,
             value_min: min, value_max: max,

@@ -918,17 +918,23 @@ pub fn tile_cover(
     max_z: u8,
     zoom_bias: f64,
 ) -> Vec<VisibleTile> {
-    let z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
+    let mut z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
+    let ((west, north), (east, south)) = cam.visible_bounds(viewport_px);
+    if cam.globe {
+        while z > 2 {
+            let n = (1u32 << z) as f64;
+            let count = ((east * n).ceil() - (west * n).floor())
+                * ((south * n).ceil() - (north * n).floor());
+            if count <= 512.0 { break; }
+            z -= 1;
+        }
+    }
     let n = 1u32 << z;
     let nf = n as f64;
-    let wpp = cam.world_per_pixel();
-    let half_w = viewport_px.0 as f64 / 2.0 * wpp;
-    let half_h = viewport_px.1 as f64 / 2.0 * wpp;
-    let (cx, cy) = cam.center;
-    let x0 = ((cx - half_w) * nf).floor() as i64;
-    let x1 = ((cx + half_w) * nf).ceil() as i64;
-    let y0 = (((cy - half_h) * nf).floor() as i64).max(0);
-    let y1 = (((cy + half_h) * nf).ceil() as i64).min(n as i64);
+    let x0 = (west * nf).floor() as i64;
+    let x1 = (east * nf).ceil() as i64;
+    let y0 = ((north * nf).floor() as i64).max(0);
+    let y1 = ((south * nf).ceil() as i64).min(n as i64);
 
     let mut out = Vec::new();
     for ty in y0..y1 {

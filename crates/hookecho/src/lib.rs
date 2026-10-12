@@ -24,6 +24,7 @@ pub mod chaselog;
 pub mod chrome;
 pub mod cloud;
 pub mod colormap;
+pub mod radar_appearance;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod crash;
 pub mod dialog;

@@ -278,6 +278,23 @@ pub fn show(
 /// Recenter a view's camera on a site by id, keeping zoom.
 pub fn center_on_site(camera: &mut Camera, site: &str) {
     if let Some(s) = wxdata::sites::site_by_id(site) {
+        let globe = camera.globe;
         *camera = Camera::at_lonlat(s.longitude as f64, s.latitude as f64, camera.zoom);
+        camera.globe = globe;
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    #[test]
+    fn recentering_preserves_the_pane_projection_and_zoom() {
+        let mut camera = Camera::at_lonlat(0.0,0.0,1.0);
+        camera.globe = true;
+        center_on_site(&mut camera,"KDMX");
+        assert!(camera.globe);
+        assert_eq!(camera.zoom,1.0);
+        let site = wxdata::sites::site_by_id("KDMX").unwrap();
+        assert_eq!(camera.center, crate::render::mercator::lonlat_to_world(site.longitude as f64, site.latitude as f64));
     }
 }

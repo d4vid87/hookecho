@@ -143,6 +143,73 @@ pub fn compass(deg: f32) -> &'static str {
     D[((deg.rem_euclid(360.0) / 22.5).round() as usize) % 16]
 }
 
+/// Paint geographic paths with hemisphere clipping in globe mode.
+pub fn paint_path(painter: &egui::Painter, camera: &crate::render::mercator::Camera, rect: egui::Rect, points: &[[f64; 2]], stroke: egui::Stroke) {
+    let vp = (rect.width(), rect.height());
+    let world = |ll: [f64; 2]| crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+    if !camera.globe {
+        let points = points.iter().map(|&ll| {
+            let p = camera.world_to_screen(world(ll), vp);
+            rect.min + egui::vec2(p.0, p.1)
+        }).collect();
+        painter.add(egui::Shape::line(points, stroke));
+        return;
+    }
+    for pair in points.windows(2) {
+        if let Some((a,b)) = camera.project_segment(world(pair[0]), world(pair[1]), vp) {
+            painter.line_segment([rect.min + egui::vec2(a.0,a.1), rect.min + egui::vec2(b.0,b.1)], stroke);
+        }
+    }
+}
+
+/// Project a small convex geographic ring, clipping its edges at the horizon.
+pub fn project_ring(camera: &crate::render::mercator::Camera, rect: egui::Rect, points: &[[f64; 2]]) -> Vec<egui::Pos2> {
+    if points.len() < 3 { return Vec::new(); }
+    let vp = (rect.width(), rect.height());
+    if !camera.globe {
+        return points.iter().map(|p| {
+            let world = crate::render::mercator::lonlat_to_world(p[0],p[1]);
+            let p = camera.world_to_screen(world,vp);
+            rect.min + egui::vec2(p.0,p.1)
+        }).collect();
+    }
+    let mut out = Vec::new();
+    for i in 0..points.len() {
+        let a = crate::render::mercator::lonlat_to_world(points[i][0], points[i][1]);
+        let b = crate::render::mercator::lonlat_to_world(points[(i+1)%points.len()][0], points[(i+1)%points.len()][1]);
+        if let Some((a,b)) = camera.project_segment(a,b,vp) {
+            for p in [a,b] {
+                let p = rect.min + egui::vec2(p.0,p.1);
+                if out.last().is_none_or(|last: &egui::Pos2| last.distance_sq(p) > 0.001) { out.push(p); }
+            }
+        }
+    }
+    if out.len() > 1 && out.first() == out.last() { out.pop(); }
+    out
+}
+
+/// Project an egui raster annotation as a curved mesh instead of a flat image.
+pub fn paint_image(painter: &egui::Painter, camera: &crate::render::mercator::Camera, rect: egui::Rect, texture: egui::TextureId, bounds: [f64; 4]) {
+    let vp = (rect.width(), rect.height());
+    let mut mesh = egui::Mesh::with_texture(texture);
+    for y in 0..16 { for x in 0..16 {
+        for triangle in [[(0,0),(1,0),(1,1)], [(0,0),(1,1),(0,1)]] {
+            let vertices = triangle.map(|(dx,dy)| {
+                let uv = egui::vec2((x+dx) as f32/16.0,(y+dy) as f32/16.0);
+                let world = (bounds[0] + uv.x as f64 * (bounds[2]-bounds[0]), bounds[1] + uv.y as f64 * (bounds[3]-bounds[1]));
+                let screen = camera.world_to_screen(world,vp);
+                (world, egui::epaint::Vertex { pos: rect.min + egui::vec2(screen.0,screen.1), uv: egui::pos2(uv.x,uv.y), color: egui::Color32::WHITE })
+            });
+            if vertices.iter().all(|(world,_)| camera.world_visible(*world)) {
+                let base = mesh.vertices.len() as u32;
+                mesh.vertices.extend(vertices.map(|(_,vertex)| vertex));
+                mesh.add_triangle(base,base+1,base+2);
+            }
+        }
+    } }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

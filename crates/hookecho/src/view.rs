@@ -76,7 +76,7 @@ pub struct Volume {
     pub cuts: Vec<level2::CutTime>,
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
     pub moments: [bool; Moment::ALL.len()],
-    binned: LruCache<(Moment, usize, bool, Option<i64>), BinnedSweep>,
+    binned: LruCache<(Moment, usize, bool, Option<i64>, bool), BinnedSweep>,
     /// Set once a live chunk has been merged in. Such a volume is still being written — half its
     /// tilts may not have arrived — so it must never be kept and shown again later in place of
     /// the complete archived volume of the same name.
@@ -133,7 +133,7 @@ impl Volume {
                         .binned
                         .iter()
                         .map(|(k, _)| *k)
-                        .filter(|(_, t, _, _)| *t == idx)
+                        .filter(|(_, t, _, _, _)| *t == idx)
                         .collect();
                     for k in stale {
                         self.binned.pop(&k);
@@ -173,10 +173,22 @@ impl Volume {
         dealias: bool,
         cut_end_ms: Option<i64>,
     ) -> anyhow::Result<&BinnedSweep> {
-        let scan = Arc::clone(&self.scan);
-        self.binned.try_get_or_insert((moment, tilt, dealias, cut_end_ms), || {
-            level2::bin_scan_opts_at(&scan, moment, tilt, dealias, cut_end_ms)
-        })
+        self.binned_display_at(moment, tilt, dealias, cut_end_ms, false)
+    }
+
+    pub fn binned_display_at(&mut self, moment: Moment, tilt: usize, dealias: bool, cut_end_ms: Option<i64>, precision: bool) -> anyhow::Result<&BinnedSweep> {
+        let key = (moment, tilt, dealias, cut_end_ms, precision);
+        if !self.binned.contains(&key) {
+            let sweep = level2::bin_scan_display_at(&self.scan, moment, tilt, dealias, cut_end_ms, precision)?;
+            let bytes = |s: &BinnedSweep| s.data.len() + s.data16.as_ref().map_or(0, |d| d.len() * 2);
+            let budget = BINNED_CACHE * 720 * 1840;
+            let mut retained: usize = self.binned.iter().map(|(_, s)| bytes(s)).sum();
+            while !self.binned.is_empty() && retained + bytes(&sweep) > budget {
+                if let Some((_, old)) = self.binned.pop_lru() { retained -= bytes(&old); }
+            }
+            self.binned.put(key, sweep);
+        }
+        Ok(self.binned.get(&key).expect("inserted display sweep"))
     }
 
     /// All reflectivity tilts as owned sweeps (lowest→highest), for vertical cross-sections.
@@ -210,6 +222,8 @@ pub struct MapView {
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
     pub thresholds: [Option<f32>; Moment::ALL.len()],
     pub threshold_enabled: [bool; Moment::ALL.len()],
+    /// Pane-local display controls; never alter native gate measurements.
+    pub appearance: crate::radar_appearance::RadarAppearance,
     pub volume: Option<Volume>,
     /// Volumes the playhead has moved off, with their binned sweeps intact. See
     /// [`RECENT_VOLUMES`]; use [`MapView::show_volume`] rather than touching this.
@@ -267,6 +281,7 @@ impl MapView {
             follow_low_cut: false,
             thresholds,
             threshold_enabled,
+            appearance: Default::default(),
             volume: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,

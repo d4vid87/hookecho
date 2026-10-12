@@ -149,7 +149,7 @@ impl Particles {
     /// band within one lifetime instead of leaving it bare.
     fn respawn(&mut self, i: usize, cam: &Camera, vp: (f32, f32)) {
         let (rx, ry) = (self.unit(), self.unit());
-        let w = cam.screen_to_world((rx as f32 * vp.0, ry as f32 * vp.1), vp);
+        let w = cam.pick_world((rx as f32 * vp.0, ry as f32 * vp.1), vp).unwrap_or(cam.center);
         let max_age = 30 + (self.next_rand() % 60) as u32;
         let p = &mut self.p[i];
         p.trail[0] = w;
@@ -183,8 +183,7 @@ impl Particles {
         let max_step = MAX_STEP_PX * wpp;
         // Off-pane by this much in world units, i.e. ~20 px of slack so a trail can leave cleanly.
         let margin = 20.0 * wpp;
-        let (w0, h0) = cam.screen_to_world((0.0, 0.0), vp);
-        let (w1, h1) = cam.screen_to_world((vp.0, vp.1), vp);
+        let ((w0, h0), (w1, h1)) = cam.visible_bounds(vp);
         let dt = dt as f64;
 
         for i in 0..self.p.len() {
@@ -244,7 +243,7 @@ impl Particles {
                 let (a, b) = (pts[k], pts[k + 1]);
                 let seg = b - a;
                 let len = seg.length();
-                if len < 0.01 {
+                if len < 0.01 || (cam.globe && (a.x < origin.x - 1.0e6 || b.x < origin.x - 1.0e6)) {
                     continue;
                 }
                 // Taper and fade from head to tail; the fade IS the motion blur, which is why this

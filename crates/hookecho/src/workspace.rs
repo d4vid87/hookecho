@@ -115,6 +115,13 @@ pub struct PaneSnap {
     /// stored: a threshold that was set but switched off is not part of the arrangement.
     #[serde(default)]
     pub thresholds: Vec<(wxdata::level2::Moment, f32)>,
+    #[serde(default)]
+    pub appearance: crate::radar_appearance::RadarAppearance,
+    /// Older layouts inherit the app default. New layouts retain the pane choice.
+    #[serde(default)]
+    pub smooth: Option<bool>,
+    #[serde(default)]
+    pub globe: bool,
 }
 
 impl PaneSnap {
@@ -138,6 +145,9 @@ impl PaneSnap {
                     .map(|l| l.stable_id().to_string())
                     .collect(),
             ),
+            appearance: v.appearance.clone(),
+            smooth: Some(v.smooth),
+            globe: v.camera.globe,
             thresholds: wxdata::level2::Moment::ALL
                 .iter()
                 .enumerate()
@@ -156,8 +166,12 @@ impl PaneSnap {
         v.tilt = self.tilt;
         v.follow_low_cut = false; // a saved tilt takes precedence over this session-only live mode
         v.srv = self.srv;
+        v.appearance = self.appearance.clone();
+        v.appearance.sanitize();
+        if let Some(smooth) = self.smooth { v.smooth = smooth; }
         v.basemap = crate::tiles::BasemapStyle::from_slug(&self.basemap);
         v.camera = crate::render::mercator::Camera::at_lonlat(self.lon, self.lat, self.zoom);
+        v.camera.globe = self.globe;
         // The camera came from the saved layout, not from a site recenter — hold it through the
         // site change the restore just triggered.
         v.camera_placed = true;
@@ -191,6 +205,9 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
         // workspace-wide layers rather than asserting that every pane is bare.
         fields_on: None,
         thresholds: vec![(wxdata::level2::Moment::Reflectivity, 16.0)],
+        appearance: Default::default(),
+        smooth: None,
+        globe: false,
     }
 }
 
@@ -237,6 +254,9 @@ pub fn starters() -> Vec<Workspace> {
                 zoom: 4.0,
                 fields_on: Some(vec!["mrms".into()]),
                 thresholds: vec![(Moment::Reflectivity, 16.0)],
+                appearance: Default::default(),
+                smooth: None,
+        globe: false,
             }],
             active: 0,
             link_cameras: false,
@@ -335,6 +355,13 @@ mod tests {
         v.fields_on.insert(crate::render::FieldLayer::Mrms);
         v.thresholds[Moment::Reflectivity.index()] = Some(35.0);
         v.threshold_enabled[Moment::Reflectivity.index()] = true;
+        v.appearance.upper_bounds[Moment::Reflectivity.index()] = Some(65.0);
+        v.appearance.blend_width = 0.8;
+        v.appearance.precision = true;
+        v.appearance.multipass = true;
+        v.camera.globe = true;
+        v.appearance.palettes.insert("REF".into(), crate::colormap::default_table(Moment::Reflectivity).clone());
+        v.smooth = false;
         // Set but switched off: part of the session, not part of the arrangement.
         v.thresholds[Moment::Velocity.index()] = Some(20.0);
 
@@ -357,6 +384,9 @@ mod tests {
         assert!(fresh.threshold_enabled[Moment::Reflectivity.index()]);
         assert!(!fresh.threshold_enabled[Moment::SpectrumWidth.index()]);
         assert_eq!(fresh.thresholds[Moment::Velocity.index()], None);
+        assert_eq!(fresh.appearance, v.appearance);
+        assert!(!fresh.smooth);
+        assert!(fresh.camera.globe);
     }
 
     #[test]
@@ -400,6 +430,9 @@ mod tests {
                 zoom: 7.25,
                 fields_on: None,
                 thresholds: Vec::new(),
+                appearance: Default::default(),
+                smooth: None,
+        globe: false,
             }],
             active: 0,
             link_cameras: true,

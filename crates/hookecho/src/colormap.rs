@@ -80,14 +80,19 @@ impl ColorTable {
 /// (internal units) forces sub-cutoff entries transparent. Index 0 stays transparent, index
 /// 1 is the range-fold color.
 pub fn bake_lut(table: &ColorTable, range: (f32, f32), threshold: Option<f32>) -> [u8; 1024] {
+    bake_lut_width(table, range, threshold, 256).try_into().expect("256 RGBA colors")
+}
+
+pub fn bake_lut_width(table: &ColorTable, range: (f32, f32), threshold: Option<f32>, width: usize) -> Vec<u8> {
+    let width = width.clamp(4, 4096);
     let (vmin, vmax) = range;
     let span = (vmax - vmin).max(f32::EPSILON);
     let cutoff = threshold.unwrap_or(f32::NEG_INFINITY);
 
-    let mut lut = [0u8; 1024];
+    let mut lut = vec![0u8; width * 4];
     lut[4..8].copy_from_slice(&[table.rf[0], table.rf[1], table.rf[2], FOLD_ALPHA]);
-    for raw in 2u32..=255 {
-        let t = (raw as f32 - 2.0) / 253.0;
+    for raw in 2..width {
+        let t = (raw as f32 - 2.0) / (width - 3) as f32;
         let value = vmin + t * span;
         let Some(rgba) = table.sample(value) else {
             continue;
@@ -97,7 +102,7 @@ pub fn bake_lut(table: &ColorTable, range: (f32, f32), threshold: Option<f32>) -
         } else {
             (rgba[3] as u16 * VALUE_ALPHA as u16 / 255) as u8
         };
-        let base = (raw * 4) as usize;
+        let base = raw * 4;
         lut[base..base + 4].copy_from_slice(&[rgba[0], rgba[1], rgba[2], alpha]);
     }
     lut
@@ -117,25 +122,19 @@ pub fn to_pal_string(t: &ColorTable) -> String {
         out.push_str(&format!("Step: {s}\n"));
     }
     out.push_str(&format!("RF: {} {} {}\n", t.rf[0], t.rf[1], t.rf[2]));
-    let rgba = |c: [u8; 4]| {
-        if c[3] == 255 {
-            format!("{} {} {}", c[0], c[1], c[2])
-        } else {
-            format!("{} {} {} {}", c[0], c[1], c[2], c[3])
-        }
+    let rgba = |c: [u8; 4], alpha: bool| {
+        if alpha { format!("{} {} {} {}", c[0], c[1], c[2], c[3]) }
+        else { format!("{} {} {}", c[0], c[1], c[2]) }
     };
     for s in &t.stops {
+        let alpha = s.rgba[3] != 255 || s.end.is_some_and(|c| c[3] != 255);
+        let suffix = if alpha { "4" } else { "" };
         if s.solid {
-            out.push_str(&format!("SolidColor: {} {}\n", s.value, rgba(s.rgba)));
+            out.push_str(&format!("SolidColor{suffix}: {} {}\n", s.value, rgba(s.rgba, alpha)));
         } else if let Some(end) = s.end {
-            out.push_str(&format!(
-                "Color: {} {} {}\n",
-                s.value,
-                rgba(s.rgba),
-                rgba(end)
-            ));
+            out.push_str(&format!("Color{suffix}: {} {} {}\n", s.value, rgba(s.rgba, alpha), rgba(end, alpha)));
         } else {
-            out.push_str(&format!("Color: {} {}\n", s.value, rgba(s.rgba)));
+            out.push_str(&format!("Color{suffix}: {} {}\n", s.value, rgba(s.rgba, alpha)));
         }
     }
     out
@@ -644,12 +643,14 @@ pub enum PrecipTint {
 /// ponytail: two fixed destination hues. A user-supplied snow `.pal` is the upgrade path if
 /// anyone asks for one.
 pub fn tint_lut(lut: &[u8; 1024], tint: PrecipTint) -> [u8; 1024] {
-    if tint == PrecipTint::Rain {
-        return *lut;
-    }
-    let mut out = *lut;
+    tint_lut_width(lut, tint).try_into().expect("256 RGBA colors")
+}
+
+pub fn tint_lut_width(lut: &[u8], tint: PrecipTint) -> Vec<u8> {
+    if tint == PrecipTint::Rain { return lut.to_vec(); }
+    let mut out = lut.to_vec();
     // Index 0 (transparent) and 1 (range fold) are not values and are left alone.
-    for raw in 2usize..=255 {
+    for raw in 2..lut.len() / 4 {
         let b = raw * 4;
         let (r, g, bl, a) = (lut[b], lut[b + 1], lut[b + 2], lut[b + 3]);
         if a == 0 {

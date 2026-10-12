@@ -269,7 +269,7 @@ impl super::HookEchoApp {
         let active = self.active;
         if self.views[active].volume.is_some() && !(cfg!(target_os = "android") && !self.analyst_open) {
             let moment = self.views[active].moment;
-            let table = self.palettes.table(moment);
+            let table = self.views[active].appearance.table(&self.palettes, moment, self.settings.theme);
             let strip = Rect::from_min_size(
                 pos2(content.left(), content.top()),
                 vec2(content.width(), 9.0),
@@ -278,7 +278,7 @@ impl super::HookEchoApp {
                 egui::Order::Background,
                 Id::new("m_colorbar"),
             ));
-            paint_colorbar(&painter, strip, moment, table);
+            paint_colorbar(&painter, strip, moment, &table);
 
             // Second strip for the topmost gridded layer — the phone has no room for the desktop
             // legend box, but an unlabeled MESH/QPE wash is just as cryptic here.

@@ -255,6 +255,7 @@ mod tests {
     #[test]
     fn cross_section_retains_each_tilts_beam_path() {
         let sweep = |elevation_deg| BinnedSweep {
+            data16: None,
             moment: crate::level2::Moment::Reflectivity,
             az_bins: 360,
             gate_count: 800,

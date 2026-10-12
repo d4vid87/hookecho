@@ -1055,6 +1055,14 @@ impl HookEchoApp {
             Some(self.filters.outlook_day != 0),
         );
         push(
+            "Map settings",
+            "Reference",
+            "Active pane palettes, display smoothing, precision and globe projection",
+            true,
+            PaletteAction::OpenMapSettings,
+            None,
+        );
+        push(
             "Cycle basemap",
             "Reference",
             "Switch the map underneath the radar",

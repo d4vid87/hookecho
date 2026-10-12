@@ -1936,6 +1936,8 @@ pub(crate) enum PaletteAction {
     ToggleOverlay(OverlayToggle),
     /// Open the SPC outlook day and hazard controls.
     OpenOutlooks,
+    /// Open display and projection controls for the active pane.
+    OpenMapSettings,
     /// Show Day 1 SPC outlook, or hide the selected outlook.
     ToggleOutlook,
     SetOutlookDay(u8),
@@ -2464,6 +2466,7 @@ type ShownKey = (
     Option<u32>,
     Option<i64>,
     Option<u64>,
+    bool,
 );
 
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
@@ -3949,6 +3952,7 @@ impl HookEchoApp {
                 Camera {
                     center: (sv.x, sv.y),
                     zoom: sv.zoom,
+                    globe: false,
                 },
             ),
             _ => {
@@ -4749,8 +4753,7 @@ impl HookEchoApp {
         };
         let cam = &view.camera;
         let vp = self.last_viewport;
-        let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
-        let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+        let ((wx0, wy0), (wx1, wy1)) = cam.visible_bounds(vp);
         let world = [wx0, wy0, wx1, wy1];
         let key = BlockageKey {
             site: site.id.to_string(),
@@ -8115,8 +8118,7 @@ impl HookEchoApp {
         use crate::render::mercator::world_to_lonlat;
         let cam = &self.views[self.active].camera;
         let vp = self.last_viewport;
-        let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
-        let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+        let ((wx0, wy0), (wx1, wy1)) = cam.visible_bounds(vp);
         let (lon0, lat0) = world_to_lonlat(wx0, wy0);
         let (lon1, lat1) = world_to_lonlat(wx1, wy1);
         (
@@ -8525,7 +8527,7 @@ impl HookEchoApp {
         ui.add_space(4.0);
         ui.separator();
         ui.label(egui::RichText::new("Radar appearance").strong());
-        let mut smooth = self.settings.smooth_radar;
+        let mut smooth = self.views[self.active].smooth;
         ui.horizontal(|ui| {
             let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
             for (label, value, hint) in [
@@ -8546,12 +8548,37 @@ impl HookEchoApp {
                 }
             }
         });
-        if smooth != self.settings.smooth_radar {
-            self.settings.smooth_radar = smooth;
-            for view in &mut self.views {
-                view.smooth = smooth;
-            }
+        self.views[self.active].smooth = smooth;
+        let pane = &mut self.views[self.active];
+        let palette_moment = pane.custom_product.as_ref()
+            .and_then(|name| self.settings.radar_products.iter().find(|p| &p.name == name))
+            .and_then(|p| Moment::from_code(&p.palette))
+            .unwrap_or(pane.moment);
+        if ui.checkbox(&mut pane.camera.globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() && !pane.camera.globe { pane.camera.zoom = pane.camera.zoom.max(2.0); }
+        ui.add_enabled(pane.custom_product.is_none(), egui::Checkbox::new(&mut pane.appearance.precision, "Higher-precision radar display")).on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments and KDP. Native probes remain unchanged.");
+        if smooth {
+            ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Uses more GPU samples.");
+            ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
+                .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
         }
+        let moment = palette_moment;
+        let key = moment.short_name().to_string();
+        let current = if pane.appearance.palettes.contains_key(&key) { "Pane palette" } else { "App palette" };
+        ui.menu_button(format!("{current} · Change…"), |ui| {
+            if ui.button("Follow app palette").clicked() { pane.appearance.palettes.remove(&key); ui.close(); }
+            if ui.button("Keep current app palette in this pane").clicked() {
+                pane.appearance.palettes.insert(key.clone(), crate::colormap::effective_table(&self.palettes, moment, self.settings.theme));
+                ui.close();
+            }
+            if ui.button("Built-in default").clicked() { pane.appearance.palettes.insert(key.clone(), crate::colormap::default_table(moment).clone()); ui.close(); }
+            for name in crate::colormap::alt_names(moment) {
+                if ui.button(name).clicked() {
+                    if let Some(table) = crate::colormap::builtin_alt(name) { pane.appearance.palettes.insert(key.clone(), table); }
+                    ui.close();
+                }
+            }
+        });
+        ui.label("Appearance applies to the active pane and is saved with its workspace.");
         let (view, settings) = (&mut self.views[self.active], &mut self.settings);
 
         // A download in flight stays above the disclosure — progress you can't find reads as a hang.
@@ -8748,6 +8775,8 @@ impl HookEchoApp {
         };
         let mut thr_on = self.views[self.active].threshold_enabled[mi];
         let mut thr = self.views[self.active].thresholds[mi];
+        let mut upper = self.views[self.active].appearance.upper_bounds[mi];
+        let mut upper_on = upper.is_some();
         let (vmin, vmax) = moment.value_range();
         let (unit_factor, unit_label) = display_units(moment, &self.settings);
         let health = self.radar_health();
@@ -8909,6 +8938,19 @@ impl HookEchoApp {
                         }
                         // Threshold for the active moment. The slider value stays internal (m/s
                         // for velocity); display honors the Units setting.
+                        ui.add_enabled_ui(custom_product.is_none(), |ui| { ui.horizontal(|ui| {
+                            ui.checkbox(&mut upper_on, "Maximum value");
+                            if upper_on {
+                                let ceiling = upper.get_or_insert(vmax);
+                                let floor = if thr_on { thr.unwrap_or(vmin) } else { vmin };
+                                *ceiling = ceiling.clamp(floor, vmax);
+                                let f = unit_factor as f64;
+                                ui.add(egui::Slider::new(ceiling, floor..=vmax)
+                                    .custom_formatter(move |v, _| format!("{:.2}", v * f))
+                                    .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
+                                    .suffix(unit_label));
+                            }
+                        }); });
                         if moment != Moment::Reflectivity {
                             let f = unit_factor as f64;
                             ui.horizontal(|ui| {
@@ -8950,6 +8992,7 @@ impl HookEchoApp {
             v.storm_speed_kt = speed_kt;
             v.threshold_enabled[mi] = thr_on;
             v.thresholds[mi] = thr;
+            v.appearance.upper_bounds[mi] = upper.filter(|_| upper_on).map(|u| u.max(if thr_on { thr.unwrap_or(vmin) } else { vmin }));
         }
         if let Some((moment, relative)) = pick {
             self.apply_palette(PaletteAction::SetMoment(moment, relative), ui.ctx());
@@ -9229,6 +9272,18 @@ impl HookEchoApp {
                 ) {
                     self.rebuild_overlays();
                 }
+            }
+            PaletteAction::OpenMapSettings => {
+                self.panel_open = true;
+                self.show_alert_panel = false;
+                self.sidebar_focus_search = false;
+                self.layers_query.clear();
+                self.panel_section = PanelSection::Tools;
+                self.drawer.show_search();
+                ctx.data_mut(|d| {
+                    d.insert_temp(egui::Id::new("panel_settings_page"), Some("Map settings"));
+                    d.insert_temp(egui::Id::new("context_all_controls"), false);
+                });
             }
             PaletteAction::OpenOutlooks => {
                 self.panel_open = true;
@@ -12209,6 +12264,7 @@ impl HookEchoApp {
             return self.pane_custom_radar(idx, data, &name);
         }
         self.pane_custom_sweep.remove(&idx);
+        let precision = self.views[idx].appearance.precision;
         let (moment, tilt, threshold, smooth, storm_uv, cut_end_ms) = {
             let v = &self.views[idx];
             (
@@ -12264,8 +12320,9 @@ impl HookEchoApp {
             self.settings.precip_tint.then_some(self.precip_flag_gen),
             cut_end_ms,
             None,
+            precision,
         );
-        let lut_gen = self.palettes.gen.wrapping_add(
+        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
                 0x9e37_79b9_7f4a_7c15
             } else {
@@ -12278,8 +12335,7 @@ impl HookEchoApp {
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             return (None, true);
         }
-        let table_owned =
-            crate::colormap::effective_table(&self.palettes, moment, self.settings.theme);
+        let table_owned = self.views[idx].appearance.table(&self.palettes, moment, self.settings.theme);
         let table = &table_owned;
         // Cheap handle taken before the volume is borrowed mutably below.
         let precip = self
@@ -12296,7 +12352,7 @@ impl HookEchoApp {
             if vol.elevations.is_empty() {
                 return (None, true);
             }
-            vol.binned_at(moment, tilt, dealias, cut_end_ms).map(|s| {
+            vol.binned_display_at(moment, tilt, dealias, cut_end_ms, precision).map(|s| {
                 to_upload(
                     s,
                     table,
@@ -12309,7 +12365,8 @@ impl HookEchoApp {
             })
         };
         match upload {
-            Ok(up) => {
+            Ok(mut up) => {
+                self.views[idx].appearance.apply_upload(&mut up, moment);
                 self.pane_shown.insert(idx, key);
                 self.pane_lut.insert(idx, lut_gen);
                 (Some(up), true)
@@ -12397,19 +12454,18 @@ impl HookEchoApp {
             None,
             None,
             Some(product_hash),
+            false,
         );
-        let lut_gen = self.palettes.gen.wrapping_add(product_hash);
+        let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
+        let lut_gen = self.palettes.gen.wrapping_add(product_hash).wrapping_add(self.views[idx].appearance.fingerprint(palette_moment));
         let lut_only = self.pane_shown.get(&idx) == Some(&key);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             return (None, true);
         }
-        let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
-        let table = crate::colormap::effective_table(
-            &self.palettes,
-            palette_moment,
-            self.settings.theme,
-        );
-        let upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
+        let table = self.views[idx].appearance.table(&self.palettes, palette_moment, self.settings.theme);
+        let mut upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
+        upload.uniform[17] = self.views[idx].appearance.blend_width;
+        upload.uniform[19] = f32::from(self.views[idx].appearance.multipass);
         self.pane_custom_sweep.insert(idx, sweep);
         self.pane_shown.insert(idx, key);
         self.pane_lut.insert(idx, lut_gen);
@@ -12791,7 +12847,7 @@ impl HookEchoApp {
         if self.tool == MapTool::Draw && quiet {
             if response.dragged() {
                 self.active = idx;
-                if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(pos) = response.interact_pointer_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()) {
                     let cam = self.views[idx].camera;
                     let px = (pos.x - prect.left(), pos.y - prect.top());
                     let w = cam.screen_to_world(px, vp);
@@ -12845,7 +12901,7 @@ impl HookEchoApp {
         // scroll pans: on a trackpad a two-finger swipe is the obvious way to move the map, and on
         // a mouse it is a tilt wheel nobody was using.
         let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
-        if let Some(pos) = response.hover_pos().filter(|p| prect.contains(*p) && map_input) {
+        if let Some(pos) = response.hover_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()).filter(|p| prect.contains(*p) && map_input) {
             let cursor = (pos.x - prect.left(), pos.y - prect.top());
             // `zoom_delta()` reports a live touchscreen pinch too, which the gesture block below
             // already owns (and it is the one that knows about the mobile chrome) — skip it here
@@ -12924,7 +12980,7 @@ impl HookEchoApp {
             } else {
                 self.tool
             };
-            if let Some(pos) = response.interact_pointer_pos() {
+            if let Some(pos) = response.interact_pointer_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()) {
                 // Remember the tap for the double-tap-drag zoom below.
                 self.last_tap = Some((ui.input(|i| i.time), pos));
                 let cam = self.views[idx].camera;
@@ -13597,13 +13653,18 @@ impl HookEchoApp {
             .collect();
 
         let cam = self.views[idx].camera;
+        let map_hover = response.hover_pos().filter(|pos| cam.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some());
         let (center, scale) = cam.world_to_clip_uniform(vp);
+        if cam.globe {
+            ui.painter().with_clip_rect(prect).circle_filled(prect.center(), cam.globe_radius() as f32, egui::Color32::from_rgb(20, 35, 48));
+        }
         let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
         let cb = MapCallback {
             pane: idx as u32,
             retain_only_pane: (chrome::compact(ctx) && self.views.len() > 1).then_some(idx as u32),
             camera_center: center,
             camera_scale: scale,
+            globe: cam.globe_uniform(vp),
             world_per_pixel: cam.world_per_pixel() as f32,
             new_tiles,
             visible,
@@ -13667,7 +13728,7 @@ impl HookEchoApp {
             && prect.width() > 700.0
             && !chrome::compact(ctx)
         {
-            let focused = response.hover_pos().and_then(|pos| {
+            let focused = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
@@ -13770,8 +13831,8 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let radar_probe = response.hover_pos().and_then(|pos| {
-            let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
+        let radar_probe = map_hover.and_then(|pos| {
+            let w = cam.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp)?;
             let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
             self.field_probe_at(idx, lon, lat)
                 .or_else(|| self.radar_probe_at(idx, lon, lat))
@@ -14105,11 +14166,8 @@ impl HookEchoApp {
                 let now = chrono::Utc::now();
                 // Reject off-screen flashes in lon/lat before projecting each one: a GLM feed can
                 // carry tens of thousands of flashes while the pane shows a corner of one state.
-                let corner = |px: (f32, f32)| {
-                    let w = cam.screen_to_world(px, vp);
-                    crate::render::mercator::world_to_lonlat(w.0, w.1)
-                };
-                let (c0, c1) = (corner((0.0, 0.0)), corner((vp.0, vp.1)));
+                let (w0, w1) = cam.visible_bounds(vp);
+                let (c0, c1) = (crate::render::mercator::world_to_lonlat(w0.0, w0.1), crate::render::mercator::world_to_lonlat(w1.0, w1.1));
                 let (lon_lo, lon_hi) = (c0.0.min(c1.0), c0.0.max(c1.0));
                 let (lat_lo, lat_hi) = (c0.1.min(c1.1), c0.1.max(c1.1));
                 for f in feed.flashes() {
@@ -14133,11 +14191,8 @@ impl HookEchoApp {
         // lon/lat prefilter, because the deque is just as long and the pane just as small.
         if self.show_strikes && !self.strikes.is_empty() {
             let now = chrono::Utc::now();
-            let corner = |px: (f32, f32)| {
-                let w = cam.screen_to_world(px, vp);
-                crate::render::mercator::world_to_lonlat(w.0, w.1)
-            };
-            let (c0, c1) = (corner((0.0, 0.0)), corner((vp.0, vp.1)));
+            let (w0, w1) = cam.visible_bounds(vp);
+            let (c0, c1) = (crate::render::mercator::world_to_lonlat(w0.0, w0.1), crate::render::mercator::world_to_lonlat(w1.0, w1.1));
             let (lon_lo, lon_hi) = (c0.0.min(c1.0), c0.0.max(c1.0));
             let (lat_lo, lat_hi) = (c0.1.min(c1.1), c0.1.max(c1.1));
             for &(lon, lat, time) in &self.strikes {
@@ -14159,7 +14214,7 @@ impl HookEchoApp {
         // Animated wind particles, when they are being drawn on the CPU. The GPU path draws
         // inside the map callback instead (see `wind_gpu_frame`), which is also what puts it
         // under the warning polygons rather than over them.
-        if self.show_wind && !self.wind_on_gpu {
+        if self.show_wind && (!self.wind_on_gpu || cam.globe) {
             let alpha = self.wind_alpha(idx, cam.zoom);
             // Split borrow: the grids and the per-pane particle sets are disjoint fields, and the
             // advection needs both at once.
@@ -14203,8 +14258,7 @@ impl HookEchoApp {
             // projecting any points — CAPE/SRH carry thousands of small rings.
             let (vmin_lon, vmin_lat, vmax_lon, vmax_lat) = {
                 use crate::render::mercator::world_to_lonlat;
-                let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
-                let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+                let ((wx0, wy0), (wx1, wy1)) = cam.visible_bounds(vp);
                 let (lon0, lat0) = world_to_lonlat(wx0, wy0);
                 let (lon1, lat1) = world_to_lonlat(wx1, wy1);
                 (
@@ -14783,7 +14837,7 @@ impl HookEchoApp {
                 let (_, c) = wxdata::tropical::saffir_simpson(kt);
                 painter.circle_filled(p, 2.5, egui::Color32::from_rgb(c[0], c[1], c[2]));
                 let hit = egui::Rect::from_center_size(p, egui::vec2(10.0, 10.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     let fl = o
                         .wspd_kt
                         .map_or_else(|| "\u{2014}".into(), |v| format!("{v:.0} kt"));
@@ -14830,7 +14884,7 @@ impl HookEchoApp {
                 ));
                 // Hover → altitude, aircraft and the raw report, which is what pilots read.
                 let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     let alt = r
                         .alt_ft
                         .map_or_else(|| "—".to_string(), |a| format!("{a} ft"));
@@ -14864,7 +14918,7 @@ impl HookEchoApp {
                     egui::Color32::BLACK,
                 );
                 let hit = egui::Rect::from_center_size(p, egui::vec2(14.0, 14.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     let tz = self.settings.tz_for(self.views[idx].site.as_deref());
                     response.clone().show_tooltip_text(format!(
                         "{}\n{}",
@@ -15129,7 +15183,7 @@ impl HookEchoApp {
                         );
                     }
                     let hit = egui::Rect::from_center_size(p, egui::vec2(24.0, 24.0));
-                    let hovered = response.hover_pos().is_some_and(|hp| hit.contains(hp));
+                    let hovered = map_hover.is_some_and(|hp| hit.contains(hp));
                     if show_labels || hovered || selected {
                         let label = &sp.name;
                         let galley = painter.layout_no_wrap(
@@ -15391,7 +15445,7 @@ impl HookEchoApp {
                 }
                 // Hover → the raw METAR text.
                 let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) && !ob.raw.is_empty() {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) && !ob.raw.is_empty() {
                     // Observation first, then the terminal forecast where the station files one:
                     // what it is doing, then what it is expected to do.
                     let text = match self.tafs.get(&ob.icao) {
@@ -15464,7 +15518,7 @@ impl HookEchoApp {
                         egui::Stroke::new(1.2, egui::Color32::from_gray(20)),
                     ));
                     let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
-                    if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                    if map_hover.is_some_and(|hp| hit.contains(hp)) {
                         let stage = g
                             .stage_ft
                             .map_or_else(|| "n/a".to_string(), |v| format!("{v:.1} ft"));
@@ -15568,7 +15622,7 @@ impl HookEchoApp {
             }
             if !label.hover.is_empty() {
                 let hit = egui::Rect::from_center_size(p, hit_size);
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     response.clone().show_tooltip_text(&label.hover);
                 }
             }
@@ -15580,7 +15634,7 @@ impl HookEchoApp {
             .fields_on
             .contains(&crate::render::FieldLayer::ModelDiff)
         {
-            if let (Some(grid), Some(hp)) = (self.diff_grid.as_ref(), response.hover_pos()) {
+            if let (Some(grid), Some(hp)) = (self.diff_grid.as_ref(), map_hover) {
                 let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
                 if let Some(v) = grid.sample_bilinear(lon, lat) {
@@ -15594,7 +15648,7 @@ impl HookEchoApp {
                     ));
                 }
             }
-        } else if let Some(hp) = response.hover_pos() {
+        } else if let Some(hp) = map_hover {
             // Sample the same native values the inspector exposes. The GPU texture may be
             // decimated or palette-indexed for display, so reading it back would be scientifically
             // wrong even when it looks identical.
@@ -15635,6 +15689,9 @@ impl HookEchoApp {
         // a rebuild is in flight the previous rect keeps it registered to the ground.
         if self.show_blockage {
             if let Some((_, tex, world)) = &self.blockage_tex {
+                if cam.globe {
+                    crate::geo::paint_image(&painter, &cam, prect, tex.id(), *world);
+                } else {
                 let a = cam.world_to_screen((world[0], world[1]), vp);
                 let b = cam.world_to_screen((world[2], world[3]), vp);
                 let rect = egui::Rect::from_two_pos(
@@ -15647,6 +15704,7 @@ impl HookEchoApp {
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+                }
             }
         }
 
@@ -15661,13 +15719,8 @@ impl HookEchoApp {
                     egui::pos2(prect.left() + sx, prect.top() + sy)
                 };
                 for km in [50.0, 100.0, 150.0, 200.0] {
-                    let pts: Vec<egui::Pos2> = (0..=72)
-                        .map(|i| {
-                            let p = crate::geo::destination_point(origin, i as f64 * 5.0, km);
-                            to_screen(p[0], p[1])
-                        })
-                        .collect();
-                    painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, col)));
+                    let pts: Vec<_> = (0..=72).map(|i| crate::geo::destination_point(origin, i as f64 * 5.0, km)).collect();
+                    crate::geo::paint_path(&painter, &cam, prect, &pts, egui::Stroke::new(1.0, col));
                     if cam.zoom >= 6.0 {
                         let top = crate::geo::destination_point(origin, 0.0, km);
                         painter.text(
@@ -15681,10 +15734,7 @@ impl HookEchoApp {
                 }
                 for az in (0..360).step_by(45) {
                     let far = crate::geo::destination_point(origin, az as f64, 200.0);
-                    painter.line_segment(
-                        [to_screen(origin[0], origin[1]), to_screen(far[0], far[1])],
-                        egui::Stroke::new(0.6, col.gamma_multiply(0.7)),
-                    );
+                    crate::geo::paint_path(&painter, &cam, prect, &[origin, far], egui::Stroke::new(0.6, col.gamma_multiply(0.7)));
                 }
             }
         }
@@ -15712,7 +15762,7 @@ impl HookEchoApp {
         // Radar lens: spaced bright pins keep the network legible; every site remains clickable.
         if self.show_radar_sites {
             let current = self.views[idx].site.as_deref();
-            let hovered = response.hover_pos().and_then(|pos| {
+            let hovered = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
@@ -15928,24 +15978,12 @@ impl HookEchoApp {
         // Road alternatives, with the provider's preferred route emphasized. This is a route
         // display only; weather exposure is drawn independently and never labels a route safe.
         for (index, route) in self.routes.iter().enumerate().rev() {
-            let points = route
-                .points
-                .iter()
-                .map(|[lon, lat]| {
-                    let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
-                    let (x, y) = cam.world_to_screen(world, vp);
-                    egui::pos2(prect.left() + x, prect.top() + y)
-                })
-                .collect();
             let color = if index == 0 {
                 crate::theme::accent(self.settings.theme)
             } else {
                 egui::Color32::from_rgba_unmultiplied(180, 190, 205, 155)
             };
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(if index == 0 { 4.0 } else { 2.0 }, color),
-            ));
+            crate::geo::paint_path(&painter, &cam, prect, &route.points, egui::Stroke::new(if index == 0 { 4.0 } else { 2.0 }, color));
         }
         for (index, [lon, lat]) in self.route_waypoints.iter().enumerate() {
             let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
@@ -15988,16 +16026,7 @@ impl HookEchoApp {
             if st.points.len() < 2 {
                 continue;
             }
-            let pts: Vec<egui::Pos2> = st
-                .points
-                .iter()
-                .map(|ll| {
-                    let w = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
-                    let (sx, sy) = cam.world_to_screen(w, vp);
-                    egui::pos2(prect.left() + sx, prect.top() + sy)
-                })
-                .collect();
-            painter.add(egui::Shape::line(pts, egui::Stroke::new(2.5, st.color)));
+            crate::geo::paint_path(&painter, &cam, prect, &st.points, egui::Stroke::new(2.5, st.color));
         }
 
         // Saved watch zones, plus the one being clicked out right now.
@@ -16012,7 +16041,8 @@ impl HookEchoApp {
                 if z.ring.len() < 3 {
                     continue;
                 }
-                let pts: Vec<egui::Pos2> = z.ring.iter().map(|&p| screen(p)).collect();
+                let pts = crate::geo::project_ring(&cam, prect, &z.ring);
+                if pts.len() < 3 { continue; }
                 painter.add(egui::Shape::convex_polygon(
                     pts.clone(),
                     egui::Color32::from_rgba_unmultiplied(120, 200, 255, 26),
@@ -16035,12 +16065,9 @@ impl HookEchoApp {
                 }
                 if pts.len() >= 2 {
                     // Closing edge dashed in, so the shape being made is obvious before it is.
-                    let mut loop_pts = pts.clone();
-                    loop_pts.push(pts[0]);
-                    painter.add(egui::Shape::line(
-                        loop_pts,
-                        egui::Stroke::new(1.5, zone_col),
-                    ));
+                    let mut ring = self.zone_pts.clone();
+                    ring.push(ring[0]);
+                    crate::geo::paint_path(&painter, &cam, prect, &ring, egui::Stroke::new(1.5, zone_col));
                 }
             }
         }
@@ -16058,7 +16085,8 @@ impl HookEchoApp {
                     egui::pos2(prect.left() + sx, prect.top() + sy)
                 })
                 .collect();
-            painter.add(egui::Shape::line(pts.clone(), egui::Stroke::new(2.0, col)));
+            let locations: Vec<_> = self.chase_track.points.iter().map(|f| [f.lon, f.lat]).collect();
+            crate::geo::paint_path(&painter, &cam, prect, &locations, egui::Stroke::new(2.0, col));
             for (idx, label) in &self.chase_track.waypoints {
                 if let Some(p) = pts.get(*idx) {
                     painter.circle_filled(*p, 4.0, col);
@@ -16122,7 +16150,7 @@ impl HookEchoApp {
             }
             if self.measure.len() == 2 {
                 let (a, b) = (screen(self.measure[0]), screen(self.measure[1]));
-                painter.line_segment([a, b], egui::Stroke::new(2.0, col));
+                crate::geo::paint_path(&painter, &cam, prect, &self.measure, egui::Stroke::new(2.0, col));
                 let (km, brg) = crate::geo::great_circle(self.measure[0], self.measure[1]);
                 let mut txt = format!(
                     "{}  @ {brg:.0}°",
@@ -16317,8 +16345,8 @@ impl HookEchoApp {
                     &painter,
                     prect,
                     view.moment,
-                    self.palettes.table(view.moment),
-                    view.active_threshold(),
+                    &view.appearance.table(&self.palettes, view.moment, self.settings.theme),
+                    (view.active_threshold(), view.appearance.upper_bounds[view.moment.index()].filter(|_| view.custom_product.is_none())),
                     df,
                     dl,
                 );
@@ -16411,7 +16439,7 @@ impl HookEchoApp {
                     egui::pos2(prect.left() + x, prect.top() + y)
                 })
             } else if self.tool == MapTool::Forecast {
-                response.hover_pos()
+                map_hover
             } else {
                 None
             };
@@ -16588,7 +16616,7 @@ impl HookEchoApp {
         Option<crate::wind_gpu::Frame>,
     ) {
         let alpha = self.wind_alpha(idx, cam.zoom);
-        if !self.show_wind || !self.wind_on_gpu || alpha <= 0.01 {
+        if !self.show_wind || !self.wind_on_gpu || cam.globe || alpha <= 0.01 {
             return (None, None);
         }
         let Some(field) = self.wind.as_ref() else {
@@ -17535,6 +17563,7 @@ impl HookEchoApp {
         v.camera = crate::render::mercator::Camera {
             center: lonlat_to_world(lon, lat),
             zoom,
+            globe: v.camera.globe,
         };
         v.camera_placed = true;
         if let Some(t) = time {
@@ -18558,7 +18587,8 @@ pub(crate) fn to_upload(
     let (wx0, wy0) = lonlat_to_world(lon - dlon, lat + dlat);
     let (wx1, wy1) = lonlat_to_world(lon + dlon, lat - dlat);
     // Premultiply storm motion into raw-index units (raw = 2 + t*253, t over value_span).
-    let per_ms = 253.0 / (s.value_max - s.value_min).max(f32::EPSILON);
+    let code_max = if s.data16.is_some() { 65535.0 } else { 255.0 };
+    let per_ms = (code_max - 2.0) / (s.value_max - s.value_min).max(f32::EPSILON);
     let (srv, me, mn) = match storm_uv {
         Some((e, n)) => (1.0, e * per_ms, n * per_ms),
         None => (0.0, 0.0, 0.0),
@@ -18566,17 +18596,17 @@ pub(crate) fn to_upload(
     // Only reflectivity is tinted: the tint says what kind of precipitation an echo is, and
     // that is not a statement about a velocity or a correlation coefficient.
     let tint = precip.filter(|_| s.moment == Moment::Reflectivity);
-    let base = crate::colormap::bake_lut(table, (s.value_min, s.value_max), threshold);
+    let base = crate::colormap::bake_lut_width(table, (s.value_min, s.value_max), threshold, if s.data16.is_some() { 1024 } else { 256 });
     // Three rows, always. When the tint is off they are identical, which costs 2 KB and keeps
     // the shader and the bind group the same shape in both cases.
-    let mut lut = Vec::with_capacity(1024 * 3);
+    let mut lut = Vec::with_capacity(base.len() * 3);
     lut.extend_from_slice(&base);
     for kind in [
         crate::colormap::PrecipTint::Snow,
         crate::colormap::PrecipTint::Mix,
     ] {
         match tint {
-            Some(_) => lut.extend_from_slice(&crate::colormap::tint_lut(&base, kind)),
+            Some(_) => lut.extend_from_slice(&crate::colormap::tint_lut_width(&base, kind)),
             None => lut.extend_from_slice(&base),
         }
     }
@@ -18601,6 +18631,7 @@ pub(crate) fn to_upload(
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,
         data: if lut_only { Vec::new() } else { s.data.clone() },
+        data16: s.data16.as_ref().map(|d| if lut_only { Vec::new() } else { d.clone() }),
         uniform: [
             s.radar_lat,
             s.radar_lon,
@@ -18619,8 +18650,8 @@ pub(crate) fn to_upload(
             flag_n,
             flag_e,
             flag_s,
-            0.0,
-            0.0,
+            0.55,
+            code_max,
             0.0,
         ],
         lut,
@@ -21679,14 +21710,14 @@ impl eframe::App for HookEchoApp {
             self.linked_probe = if n > 1 && (self.link_cameras || self.link_times) {
                 ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
                     rects.iter().enumerate().find_map(|(i, rect)| {
-                        rect.contains(pos).then(|| {
-                            let world = self.views[i].camera.screen_to_world(
+                        if !rect.contains(pos) { return None; }
+                        self.views[i].camera.pick_world(
                                 (pos.x - rect.left(), pos.y - rect.top()),
                                 (rect.width(), rect.height()),
-                            );
-                            let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
-                            [lon, lat]
-                        })
+                            ).map(|world| {
+                                let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
+                                [lon, lat]
+                            })
                     })
                 })
             } else {
@@ -22442,6 +22473,7 @@ mod tests {
     #[test]
     fn a_palette_change_uploads_the_table_and_nothing_else() {
         let sweep = wxdata::level2::BinnedSweep {
+            data16: None,
             moment: wxdata::level2::Moment::Reflectivity,
             az_bins: 360,
             gate_count: 200,

@@ -20,6 +20,7 @@ fn sweeps(dbz: f32) -> Vec<BinnedSweep> {
     ELEVS
         .iter()
         .map(|&e| BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins: 720,
             gate_count: 400,

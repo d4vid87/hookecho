@@ -498,6 +498,7 @@ pub fn run(
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         new_tiles,
         visible,
@@ -555,6 +556,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             retain_only_pane: None,
             camera_center: center,
             camera_scale: scale,
+            globe: [0.0; 4],
             world_per_pixel: cam.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
@@ -1225,6 +1227,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1312,6 +1315,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1376,6 +1380,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1501,6 +1506,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1560,6 +1566,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1635,6 +1642,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1748,6 +1756,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1866,6 +1875,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2193,6 +2203,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2270,6 +2281,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2458,6 +2470,7 @@ pub fn run_hrrr_layer(
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2498,6 +2511,7 @@ fn render_field_png(
         retain_only_pane: None,
         camera_center: center,
         camera_scale: scale,
+            globe: [0.0; 4],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -3257,6 +3271,7 @@ mod golden_tests {
             }
         }
         BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins,
             gate_count,
@@ -3268,6 +3283,220 @@ mod golden_tests {
             elevation_deg: 0.5,
             value_min: -32.0,
             value_max: 95.0,
+        }
+    }
+
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_dirty_rows_match_a_fresh_filtered_render() {
+        let mut sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let camera = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 8.5);
+        let (center, scale) =
+            camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
+        let mut cb = MapCallback {
+            pane: 0,
+            retain_only_pane: None,
+            camera_center: center,
+            camera_scale: scale,
+            globe: [0.0; 4],
+            world_per_pixel: camera.world_per_pixel() as f32,
+            basemap_key: 0,
+            vector_over_raster: false,
+            new_tiles: Vec::new(),
+            visible: Vec::new(),
+            radar_upload: Some(crate::app::to_upload(
+                &sweep, &table, None, false, None, None, false,
+            )),
+            draw_radar: true,
+            overlay_upload: None,
+            draw_overlay: false,
+            field_uploads: Vec::new(),
+            field_draws: Vec::new(),
+            clear_tiles: false,
+            drop_tiles: Vec::new(),
+            drop_fields: Vec::new(),
+            new_vector_tiles: Vec::new(),
+            visible_vector: Vec::new(),
+            clear_vector: false,
+            drop_vector_tiles: Vec::new(),
+            wind_upload: None,
+            wind: None,
+        };
+
+
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).expect("no wgpu adapter");
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let mut retained = RenderResources::new(&device, format);
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        let before = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        // Clear a populated sector, insert at the seam, and change appearance together.
+        for row in 70..100 { sweep.data[row * sweep.gate_count..(row + 1) * sweep.gate_count].fill(0); }
+        sweep.data[..sweep.gate_count].fill(150);
+        let mut upload = crate::app::to_upload(&sweep, &table, Some(15.0), true, None, None, false);
+        let mut appearance = crate::radar_appearance::RadarAppearance { blend_width: 0.9, multipass: true, ..Default::default() };
+        appearance.upper_bounds[Moment::Reflectivity.index()] = Some(70.0);
+        appearance.apply_upload(&mut upload, Moment::Reflectivity);
+        cb.radar_upload = Some(upload);
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        let incremental = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let mut fresh = RenderResources::new(&device, format);
+        fresh.render_once(&device, &queue, &view, &cb, clear_color());
+        let reference = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        assert_ne!(before, reference, "fixture must visibly change");
+        assert_eq!(incremental, reference, "row uploads must equal full texture uploads");
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_precision_switch_and_partial_updates_match_full_render() {
+        let mut sweep = synthetic_sweep();
+        sweep.moment = Moment::Velocity;
+        (sweep.value_min, sweep.value_max) = Moment::Velocity.value_range();
+        let table = crate::colormap::default_table(Moment::Velocity).clone();
+        let camera = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 8.5);
+        let (center, scale) = camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
+        let mut cb = MapCallback {
+            pane: 0, retain_only_pane: None, camera_center: center, camera_scale: scale,
+            globe: [0.0; 4],
+            world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
+            new_tiles: Vec::new(), visible: Vec::new(),
+            radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None, None, false)),
+            draw_radar: true, overlay_upload: None, draw_overlay: false,
+            field_uploads: Vec::new(), field_draws: Vec::new(), clear_tiles: false, drop_tiles: Vec::new(),
+            drop_fields: Vec::new(), new_vector_tiles: Vec::new(), visible_vector: Vec::new(), clear_vector: false,
+            drop_vector_tiles: Vec::new(), wind_upload: None, wind: None,
+        };
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).expect("no wgpu adapter");
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let mut retained = RenderResources::new(&device, format);
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        cb.radar_upload = Some(crate::app::to_upload(&sweep, &table, None, true, None, None, false));
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        let single = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let mut two_stage = crate::app::to_upload(&sweep, &table, None, true, None, None, true);
+        two_stage.uniform[19] = 1.0;
+        cb.radar_upload = Some(two_stage);
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        assert_ne!(single, read_target(&device, &queue, &target, GOLDEN_SIZE), "optional stages must visibly smooth this fixture");
+        // Synthetic independently encoded physical values exercise the wider texture.
+        sweep.data16 = Some(sweep.data.iter().map(|v| match *v { 0 => 0, 1 => 1, _ => {
+            let value = sweep.value_min + (*v as f32 - 2.0) / 253.0 * (sweep.value_max - sweep.value_min) + 0.1;
+            wxdata::level2::encode_display16(value, sweep.value_min, sweep.value_max)
+        }}).collect());
+        for partial in [false, true] {
+            if partial { sweep.data16.as_mut().unwrap()[70 * sweep.gate_count..80 * sweep.gate_count].fill(0); }
+            cb.radar_upload = Some(crate::app::to_upload(&sweep, &table, Some(15.0), true, Some((2.0, 1.0)), None, false));
+            retained.render_once(&device, &queue, &view, &cb, clear_color());
+            let incremental = read_target(&device, &queue, &target, GOLDEN_SIZE);
+            let mut fresh = RenderResources::new(&device, format);
+            fresh.render_once(&device, &queue, &view, &cb, clear_color());
+            assert_eq!(incremental, read_target(&device, &queue, &target, GOLDEN_SIZE));
+        }
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_globe_field_matches_geographic_picking_and_clips_sky() {
+        let vp = (GOLDEN_SIZE as f32, GOLDEN_SIZE as f32);
+        let mut camera = Camera::at_lonlat(0.0, 0.0, 2.0);
+        camera.globe = true;
+        let (center, scale) = camera.world_to_clip_uniform(vp);
+        let mut cb = MapCallback {
+            pane: 0, retain_only_pane: None, camera_center: center, camera_scale: scale,
+            globe: camera.globe_uniform(vp),
+            world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
+            new_tiles: Vec::new(), visible: Vec::new(),
+            radar_upload: None,
+            draw_radar: false, overlay_upload: None, draw_overlay: false,
+            field_uploads: Vec::new(), field_draws: Vec::new(), clear_tiles: false, drop_tiles: Vec::new(),
+            drop_fields: Vec::new(), new_vector_tiles: Vec::new(), visible_vector: Vec::new(), clear_vector: false,
+            drop_vector_tiles: Vec::new(), wind_upload: None, wind: None,
+        };
+        cb.field_uploads.push((crate::render::FieldLayer::Mrms, crate::render::MrmsUpload {
+            data: vec![255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255],
+            rgba: true, nx: 2, ny: 2, world_min: [0.0,0.0], world_max: [1.0,1.0],
+            uniform: [-180.0,85.0,180.0,-85.0,2.0,2.0,1.0,1.0,0.0,0.0,0.0,0.0],
+            lut: vec![0; 1024],
+        }));
+        cb.field_draws.push((crate::render::FieldLayer::Mrms, 1.0));
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).expect("no wgpu adapter");
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let mut res = RenderResources::new(&device, format);
+        res.render_once(&device, &queue, &view, &cb, clear_color());
+        let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let palette = [[255,0,0,255], [0,255,0,255], [0,0,255,255], [255,255,0,255]];
+        let mut checked = 0;
+        for y in (4..GOLDEN_SIZE-4).step_by(11) { for x in (4..GOLDEN_SIZE-4).step_by(13) {
+            let pixel = &pixels[((y * GOLDEN_SIZE + x) * 4) as usize..][..4];
+            if let Some(world) = camera.pick_world((x as f32 + 0.5, y as f32 + 0.5), vp) {
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
+                if lat.abs() >= 84.9 { continue; }
+                let quadrant = usize::from(lon >= 0.0) + 2 * usize::from(lat < 0.0);
+                assert_eq!(pixel, palette[quadrant], "geographic color at {x},{y}");
+                checked += 1;
+            } else { assert_ne!(pixel, palette[0]); assert_ne!(pixel, palette[1]); }
+        } }
+        assert!(checked > 100);
+        // Raster tiles use the same geographic quadrants. Test the antimeridian
+        // with a rotated camera, where mirrored far-side tiles used to overlap.
+        camera = Camera::at_lonlat(179.0, 35.0, 2.0);
+        camera.globe = true;
+        (cb.camera_center, cb.camera_scale) = camera.world_to_clip_uniform(vp);
+        cb.globe = camera.globe_uniform(vp);
+        cb.field_uploads.clear();
+        cb.field_draws.clear();
+        cb.visible = crate::tiles::tile_cover(&camera, vp, 2, 0.0);
+        cb.new_tiles = cb.visible.iter().map(|tile| {
+            let quadrant = usize::from(tile.id.1 >= 2) + 2 * usize::from(tile.id.2 >= 2);
+            crate::render::PendingTile { id: tile.id, style: 0, rgba: palette[quadrant].repeat(4), width: 2, height: 2 }
+        }).collect();
+        res.render_once(&device, &queue, &view, &cb, clear_color());
+        let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        checked = 0;
+        for y in (4..GOLDEN_SIZE-4).step_by(11) { for x in (4..GOLDEN_SIZE-4).step_by(13) {
+            if let Some(world) = camera.pick_world((x as f32 + 0.5, y as f32 + 0.5), vp) {
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
+                // Leave the approximate tessellated limb and provider polar caps out.
+                let radius = camera.globe_radius();
+                let rho = ((x as f64 + 0.5 - vp.0 as f64 / 2.0).hypot(y as f64 + 0.5 - vp.1 as f64 / 2.0)) / radius;
+                if rho > 0.95 || lat.abs() > 80.0 { continue; }
+                let pixel = &pixels[((y * GOLDEN_SIZE + x) * 4) as usize..][..4];
+                let quadrant = usize::from(lon >= 0.0) + 2 * usize::from(lat < 0.0);
+                assert_eq!(pixel, palette[quadrant], "tile geographic color at {x},{y}: {lon},{lat}");
+                checked += 1;
+            }
+        } }
+        assert!(checked > 100);
+        // A front-side vector polygon remains visible; its far-side counterpart
+        // must not paint over it even though both project near the same screen point.
+        let mut vertices = Vec::new();
+        for (lon0, lat0, color) in [(179.0,35.0,[1.0,1.0,1.0,1.0]), (-1.0,-35.0,[1.0,0.0,1.0,1.0])] {
+            for (dx,dy) in [(0.0,10.0), (10.0,-10.0), (-10.0,-10.0)] {
+                let w = crate::render::mercator::lonlat_to_world(lon0+dx,lat0+dy);
+                vertices.push(crate::render::OverlayVertex { world: [w.0 as f32,w.1 as f32], color, offset: [0.0;3] });
+            }
+        }
+        cb.new_tiles.clear();
+        cb.overlay_upload = Some(crate::render::OverlayUpload { vertices, indices: vec![0,1,2,3,4,5] });
+        cb.draw_overlay = true;
+        res.render_once(&device, &queue, &view, &cb, clear_color());
+        let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let offset = (((GOLDEN_SIZE / 2) * GOLDEN_SIZE + GOLDEN_SIZE / 2) * 4) as usize;
+        assert_eq!(&pixels[offset..offset+4], &[255,255,255,255]);
+        if let Ok(dir) = std::env::var("HOOKECHO_TEST_CAPTURE_DIR") {
+            std::fs::create_dir_all(&dir).unwrap();
+            image::save_buffer(std::path::Path::new(&dir).join("globe-gpu-validation.png"), &pixels, GOLDEN_SIZE, GOLDEN_SIZE, image::ColorType::Rgba8).unwrap();
         }
     }
 
@@ -3318,6 +3547,7 @@ mod golden_tests {
                 retain_only_pane: None,
                 camera_center: center,
                 camera_scale: scale,
+            globe: [0.0; 4],
                 world_per_pixel: camera.world_per_pixel() as f32,
                 basemap_key: 0,
                 vector_over_raster: false,
@@ -3366,6 +3596,7 @@ mod golden_tests {
             retain_only_pane: None,
             camera_center: center,
             camera_scale: scale,
+            globe: [0.0; 4],
             world_per_pixel: camera.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
@@ -3430,6 +3661,7 @@ mod golden_tests {
             retain_only_pane: None,
             camera_center: center,
             camera_scale: scale,
+            globe: [0.0; 4],
             world_per_pixel: camera.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
