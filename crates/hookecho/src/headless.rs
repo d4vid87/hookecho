@@ -3353,6 +3353,43 @@ mod golden_tests {
     }
 
     #[test]
+    #[ignore = "gpu"]
+    fn gpu_vector_styles_with_the_same_tile_id_remain_pane_local() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let target = new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let mut callback = performance_callback(&sweep, &table, Camera::at_lonlat(0.0, 0.0, 0.0), false);
+        callback.draw_radar = false;
+        callback.radar_upload = None;
+        callback.visible_vector = vec![(0, 0, 0)];
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let center = ((GOLDEN_SIZE / 2 * GOLDEN_SIZE + GOLDEN_SIZE / 2) * 4) as usize;
+        for (pane, color, upload, clear) in [
+            (0, [255, 0, 0, 255], true, false),
+            (1, [0, 0, 255, 255], true, false),
+            (0, [0, 255, 0, 255], true, true),
+            (1, [0, 0, 255, 255], false, false),
+        ] {
+            callback.pane = pane;
+            callback.clear_vector = clear;
+            callback.new_vector_tiles = if upload {
+                let rgba = color.map(|v| v as f32 / 255.0);
+                vec![crate::render::PendingVectorTile {
+                    id: (0, 0, 0),
+                    vertices: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]].map(|world| crate::render::OverlayVertex { world, color: rgba, offset: [0.0; 3] }).to_vec(),
+                    indices: vec![0, 1, 2, 0, 2, 3], foreground_vertices: vec![], foreground_indices: vec![],
+                }]
+            } else { vec![] };
+            resources.render_once(&device, &queue, &view, &callback, clear_color());
+            let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
+            assert_eq!(&pixels[center..center + 4], &color);
+        }
+    }
+
+    #[test]
     #[ignore = "gpu benchmark"]
     fn gpu_performance_matrix() {
         let rt = tokio::runtime::Builder::new_multi_thread()

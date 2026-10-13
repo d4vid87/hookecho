@@ -2917,6 +2917,7 @@ pub struct HookEchoApp {
     spawner: crate::rt::Spawner,
     tiles: TileManager,
     vtiles: crate::vector_tiles::VectorTileManager,
+    pane_vtiles: Vec<crate::vector_tiles::VectorTileManager>,
     /// One shared label-occupancy pass for the whole frame — see [`crate::labelplace`].
     labels: crate::labelplace::Placer,
     settings: Settings,
@@ -2970,10 +2971,10 @@ pub struct HookEchoApp {
     palette_cache: Option<(u64, std::sync::Arc<[PaletteEntry]>)>,
     /// Visible city/town labels, keyed by the visible tile ids and the label-set generation.
     #[allow(clippy::type_complexity)]
-    vlabel_cache: Option<(
+    vlabel_cache: Vec<Option<(
         (Vec<crate::render::TileId>, u64),
         std::sync::Arc<[crate::vector_tiles::PlaceLabel]>,
-    )>,
+    )>>,
     /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
     #[allow(clippy::type_complexity)]
     nowcast_cache: Option<(
@@ -4034,6 +4035,11 @@ impl HookEchoApp {
         let settings_setup_done = settings.setup_done;
 
         let mut app = Self {
+            pane_vtiles: (0..crate::workspace::MAX_PANES).map(|_| {
+                let mut manager = crate::vector_tiles::VectorTileManager::new(spawner.clone());
+                manager.set_ctx(cc.egui_ctx.clone());
+                manager
+            }).collect(),
             vtiles,
             labels: crate::labelplace::Placer::default(),
             spawner,
@@ -4069,7 +4075,7 @@ impl HookEchoApp {
             settings_checked: None,
             frame_nr: 0,
             palette_cache: None,
-            vlabel_cache: None,
+            vlabel_cache: vec![None; crate::workspace::MAX_PANES],
             nowcast_cache: None,
             tds_cache: None,
             tbss_cache: None,
@@ -13171,6 +13177,12 @@ impl HookEchoApp {
         // Hybrid satellite is both: Esri imagery from the raster path, roads and boundaries from
         // the vector one drawn on top of it.
         let is_vector = pane_style.vector_palette().is_some();
+        let palette = pane_style.vector_palette().unwrap_or_default();
+        let clear_vector = clear_vector | self.pane_vtiles[idx].set_style(palette)
+            | self.pane_vtiles[idx].set_theme(self.settings.theme)
+            | self.pane_vtiles[idx].set_simplified(
+                self.settings.map_quality == crate::settings::MapQuality::Performance
+                || (self.settings.map_quality == crate::settings::MapQuality::Auto && self.adaptive.reduced));
         let is_raster = pane_style.is_raster();
         let vp = (prect.width(), prect.height());
         let map_input = ui.input(|i| i.pointer.interact_pos())
@@ -13903,64 +13915,50 @@ impl HookEchoApp {
         // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
         // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
         let (visible_vector, vlabels, visible_vector_tiles) = {
-            let vis = self.vtiles.request_view(&cam, vp, self.gesture_live, if self.adaptive.reduced && self.settings.map_quality == crate::settings::MapQuality::Auto { crate::settings::MapQuality::Performance } else { self.settings.map_quality });
+            let vis = self.pane_vtiles[idx].request_view(&cam, vp, self.gesture_live, if self.adaptive.reduced && self.settings.map_quality == crate::settings::MapQuality::Auto { crate::settings::MapQuality::Performance } else { self.settings.map_quality });
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             // Deep-copying every visible place name every frame (for every pane) showed up at the
             // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
             // a tile's labels finish tessellating — both bump the key below.
             // Compared before it is built: the key holds a `Vec` of every visible tile id, and
             // cloning it to ask "did this change" was itself a per-pane, per-frame allocation.
-            let gen = self.vtiles.label_generation();
+            let gen = self.pane_vtiles[idx].label_generation();
             let stale = self
-                .vlabel_cache
+                .vlabel_cache[idx]
                 .as_ref()
                 .is_none_or(|((k_ids, k_gen), _)| *k_gen != gen || *k_ids != ids);
             if stale {
                 let labels: std::sync::Arc<[crate::vector_tiles::PlaceLabel]> = self
-                    .vtiles
+                    .pane_vtiles[idx]
                     .labels_for(ids.iter())
                     .into_iter()
                     .cloned()
                     .collect();
-                self.vlabel_cache = Some(((ids.clone(), gen), labels));
+                self.vlabel_cache[idx] = Some(((ids.clone(), gen), labels));
             }
             // An `Arc` handle, not a deep copy of every visible place name — the cache existed to
             // stop the *lookup* running every frame, but the copy it returned survived it.
             let labels = self
-                .vlabel_cache
+                .vlabel_cache[idx]
                 .as_ref()
                 .map(|(_, l)| l.clone())
                 .unwrap_or_else(|| Vec::new().into());
             (if is_vector { ids } else { Vec::new() }, labels, vis)
         };
-        // Drain finished fetches once (on the first pane) — they upload into the shared cache.
-        // Eviction lives with the tile manager (it also owns `requested`/`uploaded`), and only
-        // the first pane runs it so a multi-pane frame doesn't evict what a later pane needs.
-        // Eviction runs once per frame, on the last pane — after every pane has promoted its own
-        // visible tiles, so a multi-pane frame can't evict what a pane it already drew still needs.
+        // Raster eviction waits for every pane. Styled vector caches belong to one pane,
+        // so their eviction and ready uploads can run independently.
         let drop_tiles = if last {
             self.tiles.evict_excess()
         } else {
             Vec::new()
         };
-        let drop_vector_tiles = if first {
-            self.vtiles.touch_visible(&visible_vector_tiles);
-            self.vtiles.take_evicted()
-        } else {
-            Vec::new()
+        let drop_vector_tiles = {
+            self.pane_vtiles[idx].touch_visible(&visible_vector_tiles);
+            self.pane_vtiles[idx].take_evicted()
         };
-        let (new_tiles, new_vector_tiles) = if first {
-            let nt = self.tiles.drain_ready();
-            // Drain vtiles regardless of basemap (it populates the label cache); only upload the
-            // geometry to the GPU when a vector basemap will actually draw it.
-            let nv = self.vtiles.drain_ready();
-            if !nt.is_empty() || !nv.is_empty() {
-                ctx.request_repaint();
-            }
-            (nt, if is_vector { nv } else { Vec::new() })
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        let new_tiles = if first { self.tiles.drain_ready() } else { Vec::new() };
+        let new_vector_tiles = self.pane_vtiles[idx].drain_ready();
+        if !new_tiles.is_empty() || !new_vector_tiles.is_empty() { ctx.request_repaint(); }
 
         // --- Radar (this pane's product, its own volume) ---
         let (radar_upload, mut draw_radar) = self.pane_radar(idx, idx);
@@ -22046,11 +22044,6 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
-            // Raster frame identities are pane-local; vector appearance still follows the active pane.
-            let style = self.views[self.active.min(n - 1)]
-                .basemap
-                .resolve(ctx.theme() == egui::Theme::Dark);
-            let is_vector = style.vector_palette().is_some();
             self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
             self.tiles
@@ -22066,17 +22059,6 @@ impl eframe::App for HookEchoApp {
                 let selection = self.views[self.active.min(n - 1)].satellite.clone();
                 for view in &mut self.views { view.satellite = selection.clone(); }
             }
-            let mut clear_vector = false;
-            if is_vector {
-                clear_vector |= self
-                    .vtiles
-                    .set_style(style.vector_palette().unwrap_or_default());
-                clear_vector |= self.vtiles.set_theme(self.settings.theme);
-            }
-            clear_vector |= self.vtiles.set_simplified(
-                self.settings.map_quality == crate::settings::MapQuality::Performance
-                    || (self.settings.map_quality == crate::settings::MapQuality::Auto && self.adaptive.reduced),
-            );
             self.last_viewport = rects
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
@@ -22112,7 +22094,7 @@ impl eframe::App for HookEchoApp {
                     i,
                     *prect,
                     clear_tiles && first,
-                    clear_vector && first,
+                    false,
                     first,
                     solo || i + 1 == n,
                     &placefile_labels,

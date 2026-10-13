@@ -704,6 +704,7 @@ struct MrmsGpu {
 type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool);
 
 struct PaneGpu {
+    id: u32,
     camera_buf: wgpu::Buffer,
     camera_bg: wgpu::BindGroup,
     tile_vbuf: wgpu::Buffer,
@@ -748,7 +749,7 @@ pub struct RenderResources {
     // believing an evicted tile was still uploaded and never re-sent it, so zooming back to an
     // area left black squares where those tiles used to be.
     tiles: HashMap<TileKey, TileGpu>,
-    vector_tiles: HashMap<TileId, VectorGpu>,
+    vector_tiles: HashMap<(u32, TileId), VectorGpu>,
     overlay: Option<OverlayGpu>,
     fields: HashMap<FieldLayer, MrmsGpu>,
     // One entry per live pane.
@@ -1102,6 +1103,7 @@ impl RenderResources {
                 mapped_at_creation: false,
             });
             PaneGpu {
+                id,
                 camera_buf,
                 camera_bg,
                 tile_vbuf,
@@ -1495,13 +1497,13 @@ impl RenderResources {
             self.tiles.clear();
         }
         if cb.clear_vector {
-            self.vector_tiles.clear();
+            self.vector_tiles.retain(|(pane, _), _| *pane != cb.pane);
         }
         for id in &cb.drop_vector_tiles {
-            self.vector_tiles.remove(id);
+            self.vector_tiles.remove(&(cb.pane, *id));
         }
         for t in &cb.new_vector_tiles {
-            self.upload_vector_tile(device, t);
+            self.upload_vector_tile(device, cb.pane, t);
         }
         for t in &cb.new_tiles {
             self.upload_tile(device, queue, t);
@@ -1563,7 +1565,7 @@ impl RenderResources {
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
-        let visible_vector = vector_draw_tiles(&cb.visible_vector, self.vector_tiles.keys().copied());
+        let visible_vector = vector_draw_tiles(&cb.visible_vector, self.vector_tiles.keys().filter_map(|(pane, id)| (*pane == cb.pane).then_some(*id)));
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
@@ -1764,9 +1766,9 @@ impl RenderResources {
         }
     }
 
-    fn upload_vector_tile(&mut self, device: &wgpu::Device, t: &PendingVectorTile) {
+    fn upload_vector_tile(&mut self, device: &wgpu::Device, pane: u32, t: &PendingVectorTile) {
         if t.indices.is_empty() {
-            self.vector_tiles.remove(&t.id);
+            self.vector_tiles.remove(&(pane, t.id));
             return;
         }
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1792,7 +1794,7 @@ impl RenderResources {
             }),
             index_count: t.foreground_indices.len() as u32,
         });
-        self.vector_tiles.insert(t.id, VectorGpu {
+        self.vector_tiles.insert((pane, t.id), VectorGpu {
             base: OverlayGpu { vbuf, ibuf, index_count: t.indices.len() as u32 },
             foreground,
         });
@@ -1888,7 +1890,7 @@ impl RenderResources {
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
         for tid in &pane.frame_visible_vector {
-            if let Some(t) = self.vector_tiles.get(tid) {
+            if let Some(t) = self.vector_tiles.get(&(pane.id, *tid)) {
                 pass.set_vertex_buffer(0, t.base.vbuf.slice(..));
                 pass.set_index_buffer(t.base.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..t.base.index_count, 0, 0..1);
@@ -1905,7 +1907,7 @@ impl RenderResources {
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
         for tid in &pane.frame_visible_vector {
-            let Some(t) = self.vector_tiles.get(tid).and_then(|t| t.foreground.as_ref()) else {
+            let Some(t) = self.vector_tiles.get(&(pane.id, *tid)).and_then(|t| t.foreground.as_ref()) else {
                 continue;
             };
             pass.set_vertex_buffer(0, t.vbuf.slice(..));
