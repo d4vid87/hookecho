@@ -652,6 +652,8 @@ pub struct Settings {
     pub appearance_presets: BTreeMap<String, crate::radar_appearance::AppearancePreset>,
     #[serde(default)]
     pub linked_time_limit_seconds: Option<u32>,
+    #[serde(default)]
+    pub link_satellite_times: bool,
 }
 
 /// Where the dual-pol signature detectors and the GLM flash-extent grid draw their lines.
@@ -1258,6 +1260,7 @@ impl Default for Settings {
             map_quality: MapQuality::Auto,
             appearance_presets: BTreeMap::new(),
             linked_time_limit_seconds: None,
+            link_satellite_times: false,
             share_card: true,
             broadcast_safe_margin: default_broadcast_margin(),
             broadcast_clock_source: true,
@@ -1883,6 +1886,7 @@ mod tests {
             map_quality: MapQuality::Auto,
             appearance_presets: BTreeMap::new(),
             linked_time_limit_seconds: None,
+            link_satellite_times: false,
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,

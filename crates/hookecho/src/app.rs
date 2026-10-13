@@ -1965,6 +1965,7 @@ pub(crate) enum PaletteAction {
     Explain(usize),
     /// Snapshot the current pane layout as a new workspace.
     SaveWorkspace,
+    SaveDiagnostics,
     ExportCase,
     ExportCaseReport,
     ImportCase,
@@ -2360,7 +2361,10 @@ fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) 
 const WEB_LOOP_WINDOW: usize = 4;
 
 enum DataMsg {
+    FramePhase { view: usize, site: String, name: String, generation: u64, phase: level2::LoadPhase },
+    FrameError { view: usize, site: String, name: String, generation: u64, err: String },
     Volume {
+        selected_frame: Option<u64>,
         view: usize,
         site: String,
         name: String,
@@ -2432,6 +2436,8 @@ impl DataMsg {
             | DataMsg::Frames { view, .. }
             | DataMsg::UpToDate { view, .. }
             | DataMsg::Prefetched { view, .. }
+            | DataMsg::FramePhase { view, .. }
+            | DataMsg::FrameError { view, .. }
             | DataMsg::Error { view, .. } => *view,
         }
     }
@@ -2443,6 +2449,8 @@ impl DataMsg {
             | DataMsg::Frames { site, .. }
             | DataMsg::UpToDate { site, .. }
             | DataMsg::Prefetched { site, .. }
+            | DataMsg::FramePhase { site, .. }
+            | DataMsg::FrameError { site, .. }
             | DataMsg::Error { site, .. } => site,
         }
     }
@@ -2880,6 +2888,12 @@ pub struct HookEchoApp {
     pane_shown: std::collections::HashMap<usize, ShownKey>,
     /// Palette generation currently baked into each pane's LUT (see [`ShownKey`]).
     pane_lut: std::collections::HashMap<usize, u64>,
+    /// Lazily measured shared scan payloads; weak identities do not retain volumes.
+    radar_memory: crate::radar_memory::Inventory,
+    /// Compiled recipe per pane; full definition comparison covers all dependencies.
+    pane_custom_recipe: std::collections::HashMap<usize, std::sync::Arc<wxdata::product_dsl::Product>>,
+    /// Weak scan identity avoids retaining decoded volumes or reusing an allocation address.
+    pane_custom_input: std::collections::HashMap<usize, crate::custom_cache::Input<Scan>>,
     /// Last evaluated custom sweep per pane, retained for cursor sampling.
     pane_custom_sweep: std::collections::HashMap<usize, BinnedSweep>,
     /// Last `(theme, system_dark, density, accent)` handed to `theme::apply`.
@@ -3185,18 +3199,8 @@ pub struct HookEchoApp {
     peers: std::collections::HashMap<String, crate::share::Peer>,
     /// When we last put our own fix on the wire (both transports share the cadence).
     share_sent: Option<wxdata::clock::Instant>,
-    /// GOES satellite frame times (for the sub-hourly scrub), the style they were fetched for,
-    /// and the selected index (`None` = latest).
-    goes_times: Vec<chrono::DateTime<chrono::Utc>>,
-    goes_times_style: Option<crate::tiles::BasemapStyle>,
-    goes_time_idx: Option<usize>,
-    /// Keep the GOES frame on the active pane's radar clock rather than on a hand-picked frame.
-    goes_follow_radar: bool,
-    goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
-    /// The archive hour the loaded frame times cover (`None` = the live window ending now).
-    /// Scrubbing far enough back to cross into another hour refetches; staying inside one does
-    /// not, which is what keeps an archive loop from asking GIBS a question per frame.
-    goes_hour: Option<i64>,
+    /// Independently fetched frame catalogs for each pane.
+    goes: Vec<crate::satellite_time::Catalog>,
     /// The previous flash-extent grid, kept only so the lightning jump has something to subtract.
     glm_fed_prev: Option<wxdata::mrms::MrmsField>,
     /// When the Android widget snapshot was last written.
@@ -3773,11 +3777,8 @@ impl HookEchoApp {
         // a JS context-loss event either (seen on NVIDIA + WebKitGTK: dies at first paint, the
         // page-level handler never fires). Reload is the only recovery on every backend.
         //
-        // The throttle lives in the URL, not sessionStorage — WebKit blocks storage in
-        // third-party iframes (the StormDesk embed), and a throttle that fails open there is a
-        // reload loop (the Ubuntu lockup). One reload per navigation: flag already present means
-        // this navigation was the retry, so stay on the dead canvas. index.src.html strips the
-        // flag after 60s of healthy running, earning a future retry.
+        // The page-level recovery handler owns the URL retry throttle for both device and
+        // context loss. On a second failure it presents an actionable reload instead of looping.
         #[cfg(target_arch = "wasm32")]
         render_state.device.set_device_lost_callback(|reason, msg| {
             // `Dropped`/`ReplacedCallback` are clean teardown, not failure.
@@ -3786,15 +3787,16 @@ impl HookEchoApp {
             }
             log::error!("wgpu device lost: {msg}");
             let Some(win) = web_sys::window() else { return };
-            let search = win.location().search().unwrap_or_default();
-            if search.contains("relaunched") {
-                return;
+            if let Ok(event) = web_sys::Event::new("hookecho-device-lost") { let _ = win.dispatch_event(&event); }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        render_state.device.set_device_lost_callback(|reason, message| {
+            if matches!(reason, wgpu::DeviceLostReason::Unknown) {
+                log::error!("graphics device lost: {message}");
+                if crate::gpu_metrics::report_device_loss() {
+                    std::thread::spawn(|| crate::notify::desktop("HookEcho graphics stopped", "Restart HookEcho to restore the graphics device."));
+                }
             }
-            let sep = if search.is_empty() { "?" } else { "&" };
-            // Setting `search` navigates; the spec keeps the fragment, so `#goto=…` survives.
-            let _ = win
-                .location()
-                .set_search(&format!("{search}{sep}relaunched"));
         });
         // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
         // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
@@ -4001,6 +4003,9 @@ impl HookEchoApp {
             pane_shown: std::collections::HashMap::new(),
             pane_lut: std::collections::HashMap::new(),
             pane_custom_sweep: std::collections::HashMap::new(),
+            radar_memory: Default::default(),
+            pane_custom_recipe: std::collections::HashMap::new(),
+            pane_custom_input: std::collections::HashMap::new(),
             theme_applied: None,
             settings_checked: None,
             frame_nr: 0,
@@ -4181,12 +4186,7 @@ impl HookEchoApp {
             share: None,
             peers: std::collections::HashMap::new(),
             share_sent: None,
-            goes_times: Vec::new(),
-            goes_times_style: None,
-            goes_time_idx: None,
-            goes_follow_radar: true,
-            goes_times_rx: None,
-            goes_hour: None,
+            goes: Vec::new(),
             glm_fed_prev: None,
             widget_shot_at: None,
             snapshot_push: None,
@@ -6635,86 +6635,129 @@ impl HookEchoApp {
     /// imagery, a WMS radar composite) and its frame times are loaded. Steps through the recent
     /// frames; "Latest" pins to the newest.
     fn goes_time_bar(&mut self, ctx: &egui::Context) {
-        let active_is_timed = self.views[self.active].basemap.timed();
-        if !active_is_timed || self.goes_times.is_empty() {
+        let idx = self.active;
+        if !self.views[idx].basemap.timed() || idx >= self.goes.len() {
             return;
         }
-        // While following, the readout is whichever frame the radar clock picked.
-        let followed = self.goes_follow_radar.then(|| {
-            self.views[self.active]
-                .volume
-                .as_ref()
-                .map(|v| v.time)
-                .and_then(|t| nearest_goes(&self.goes_times, t))
-        });
+        let times = self.goes[idx].times.clone();
+        let radar = self.views[idx].displayed_time();
+        let selected = self.views[idx].satellite.selected(&times, radar);
+        let tz = self.active_tz();
         egui::Area::new(egui::Id::new("goes_time_bar"))
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -34.0))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -120.0))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let n = self.goes_times.len();
-                        // Effective index (None = latest = n-1).
-                        let cur = match followed.flatten() {
-                            Some(t) => self
-                                .goes_times
-                                .iter()
-                                .position(|x| *x == t)
-                                .unwrap_or(n - 1),
-                            None => self.goes_time_idx.unwrap_or(n - 1),
-                        };
-                        ui.label("🛰 GOES:");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(if self.goes[idx].imagery_ready {
+                            "🛰 GOES displayed:"
+                        } else if self.goes[idx].imagery_incomplete {
+                            "🛰 GOES selected (incomplete):"
+                        } else {
+                            "🛰 GOES selected (loading):"
+                        });
+                        let selection = &mut self.views[idx].satellite;
                         if ui
-                            .selectable_label(self.goes_follow_radar, "⟲ radar time")
-                            .on_hover_text(
-                                "Keep the satellite on the radar's clock — scrub the timeline \
-                                 and the imagery follows",
-                            )
+                            .selectable_label(selection.follow_radar, "Follow radar")
                             .clicked()
                         {
-                            self.goes_follow_radar = !self.goes_follow_radar;
-                            self.goes_time_idx = None;
+                            selection.follow_radar = !selection.follow_radar;
+                            selection.time = None;
+                        }
+                        let cur =
+                            selected.and_then(|time| times.iter().position(|frame| *frame == time));
+                        if ui
+                            .add_enabled(cur.is_some_and(|i| i > 0), egui::Button::new("◀"))
+                            .clicked()
+                        {
+                            selection.follow_radar = false;
+                            selection.time = cur.map(|i| times[i - 1]);
+                        }
+                        if let Some(time) = selected {
+                            ui.monospace(crate::timefmt::fmt_clock(time, tz, false));
+                            if let Some(radar) = radar {
+                                ui.label(format!(
+                                    "Δ radar {:+.1}s",
+                                    (time - radar).num_milliseconds() as f64 / 1000.0
+                                ));
+                            }
+                        } else {
+                            ui.label(if self.goes[idx].rx.is_some() {
+                                "Loading frame catalog"
+                            } else {
+                                "Frame unavailable"
+                            });
                         }
                         if ui
                             .add_enabled(
-                                cur > 0,
-                                egui::Button::new(egui_phosphor::regular::CARET_LEFT),
+                                cur.is_some_and(|i| i + 1 < times.len()),
+                                egui::Button::new("▶"),
                             )
                             .clicked()
                         {
-                            self.goes_follow_radar = false;
-                            self.goes_time_idx = Some(cur.saturating_sub(1));
+                            selection.follow_radar = false;
+                            selection.time = cur.map(|i| times[i + 1]);
                         }
-                        let label = crate::timefmt::fmt_clock(
-                            self.goes_times[cur],
-                            self.active_tz(),
-                            false,
-                        );
-                        ui.monospace(label);
-                        if ui
-                            .add_enabled(
-                                cur + 1 < n,
-                                egui::Button::new(egui_phosphor::regular::CARET_RIGHT),
-                            )
-                            .clicked()
-                        {
-                            self.goes_follow_radar = false;
-                            let ni = cur + 1;
-                            self.goes_time_idx = if ni >= n - 1 { None } else { Some(ni) };
+                        if ui.button("Latest").clicked() {
+                            selection.follow_radar = false;
+                            selection.time = None;
                         }
                         if ui
-                            .add_enabled(
-                                self.goes_time_idx.is_some() || self.goes_follow_radar,
-                                egui::Button::new("Latest"),
+                            .checkbox(
+                                &mut self.settings.link_satellite_times,
+                                "Link satellite panes",
                             )
-                            .clicked()
+                            .changed()
                         {
-                            self.goes_follow_radar = false;
-                            self.goes_time_idx = None;
+                            self.settings.save();
                         }
                     });
                 });
             });
+    }
+
+    fn prepare_satellite_pane(
+        &mut self,
+        idx: usize,
+        style: crate::tiles::BasemapStyle,
+    ) -> Option<chrono::DateTime<Utc>> {
+        if !style.timed() {
+            return None;
+        }
+        if self.goes.len() <= idx {
+            self.goes.resize_with(idx + 1, Default::default);
+        }
+        let radar = self.views[idx].displayed_time();
+        let selection_clock = if self.settings.link_satellite_times { self.views[self.active].displayed_time() } else { radar };
+        // An explicit satellite selection must fetch its own archive window.
+        let clock = if self.views[idx].satellite.follow_radar {
+            selection_clock
+        } else {
+            self.views[idx].satellite.time
+        };
+        let (hour, from, to) = crate::tiles::goes_window(Utc::now(), clock);
+        let catalog = &mut self.goes[idx];
+        let changed = catalog.style != Some(style) || catalog.hour != hour;
+        let refresh = catalog.rx.is_none()
+            && catalog
+                .requested_at
+                .is_none_or(|time| time.elapsed() >= std::time::Duration::from_secs(60));
+        if changed || refresh {
+            catalog.style = Some(style);
+            catalog.hour = hour;
+            if changed {
+                catalog.times.clear();
+            }
+            catalog.requested_at = Some(wxdata::clock::Instant::now());
+            let (tx, rx) = std::sync::mpsc::channel();
+            catalog.rx = Some(rx);
+            let http = self.http.clone();
+            self.spawner.spawn(async move {
+                let times = crate::tiles::fetch_frame_times(&http, style, from, to, 48).await;
+                let _ = tx.send(times);
+            });
+        }
+        self.views[idx].satellite.selected(&catalog.times, selection_clock)
     }
 
     /// Open the gpsd stream and enter chase mode. Shared by the Chase tab's connect button,
@@ -8584,13 +8627,27 @@ impl HookEchoApp {
         });
         ui.label("Appearance applies to the active pane and is saved with its workspace.");
         let preset = crate::radar_appearance::AppearancePreset::capture(pane);
-        if let Some(ms) = self.adaptive.p95_ms() {
-            ui.add(egui::Label::new(format!("UI CPU p95: {ms:.1} ms · {}", if self.adaptive.reduced { "Reduced cost" } else { "Requested quality" })).truncate());
-        }
-        if let Some(ms) = self.adaptive.cadence_p95_ms() { ui.label(format!("Gesture frame cadence p95: {ms:.1} ms")); }
         let gate_bytes: usize = self.views.iter().map(|view| view.binned_cache_bytes()).sum();
+        let derived_bytes: usize = self.pane_custom_sweep.values().map(|sweep| {
+            sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2)
+        }).sum();
         ui.collapsing("Performance counters", |ui| {
+            let encoded_bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan).chain(self.views.iter().flat_map(|view| view.retained_scans())));
+            let (gpu_bytes, shadow_bytes) = crate::gpu_metrics::memory();
+            ui.label(format!("Encoded scan gates (shared once): {:.1} MiB", encoded_bytes as f64 / 1_048_576.0));
+            ui.label(format!("GPU resource estimate: {:.1} MiB · CPU upload shadows: {:.1} MiB", gpu_bytes as f64 / 1_048_576.0, shadow_bytes as f64 / 1_048_576.0));
+            ui.label(self.adaptive.p95_ms().map_or_else(|| "UI CPU p95: collecting".to_owned(), |ms| format!("UI CPU p95: {ms:.1} ms")));
+            ui.label(self.adaptive.cadence_p95_ms().map_or_else(|| "Gesture cadence p95: collecting".to_owned(), |ms| format!("Gesture cadence p95: {ms:.1} ms")));
+            ui.label(if self.adaptive.reduced { "Reduced cost" } else { "Requested quality" });
+            if crate::gpu_metrics::supported() {
+                if let Some((p50, p95)) = crate::gpu_metrics::percentiles(self.active as u32) {
+                    ui.label(format!("Map GPU draw p50/p95: {p50:.2}/{p95:.2} ms"));
+                } else { ui.label("Map GPU draw: collecting"); }
+            } else { ui.label("Map GPU timing: unsupported by this device/backend"); }
+            ui.label("GPU draw excludes uploads and wind advection; memory counts are retained buffers, not process memory.");
             ui.label(format!("Binned radar buffers: {:.1} MiB", gate_bytes as f64 / 1_048_576.0));
+            ui.label(format!("Unavailable playback frames skipped: {}", self.views[self.active].skipped_frames));
+            ui.label(format!("Derived radar buffers: {:.1} MiB", derived_bytes as f64 / 1_048_576.0));
             for (name, value) in wxdata::stats::snapshot() { ui.label(format!("{name}: {value}")); }
         });
         let mut limited = self.settings.linked_time_limit_seconds.is_some();
@@ -9441,6 +9498,7 @@ impl HookEchoApp {
                     self.banner("Link copied".to_string(), link);
                 }
             }
+            PaletteAction::SaveDiagnostics => self.export_diagnostics(),
             PaletteAction::SaveWorkspace => {
                 let ws = self.capture_workspace();
                 let name = ws.name.clone();
@@ -11341,6 +11399,7 @@ impl HookEchoApp {
                         }
                     }
                     Ok(Some((name, time, scan))) => DataMsg::Volume {
+                        selected_frame: None,
                         view: view_idx,
                         site,
                         name,
@@ -11400,6 +11459,7 @@ impl HookEchoApp {
                         };
                         match fetched {
                             Ok((name, time, scan)) => DataMsg::Volume {
+                        selected_frame: None,
                                 view: view_idx,
                                 site,
                                 name,
@@ -11458,16 +11518,34 @@ impl HookEchoApp {
                 continue; // view gone or its site changed since the fetch spawned
             }
             match msg {
+                DataMsg::FramePhase { view, name, generation, phase, .. } => {
+                    if self.views[view].frame_request.matches(&name, generation) && frame_result_is_current(&self.views[view].timeline, &name) { self.views[view].load_phase = Some(phase); }
+                }
+                DataMsg::FrameError { view, name, generation, err, .. } => {
+                    if self.views[view].frame_request.matches(&name, generation) && frame_result_is_current(&self.views[view].timeline, &name) {
+                        self.views[view].loading = false;
+                        self.views[view].load_phase = None;
+                        self.views[view].frame_request.cancel();
+                        self.views[view].failed_frame = Some(name);
+                        self.views[view].error = Some(err);
+                    }
+                }
                 DataMsg::Volume {
                     view,
                     name,
                     time,
                     scan,
+                    selected_frame,
                     ..
                 } => {
                     let scan = Arc::new(scan);
                     self.scan_cache.put(name.clone(), Arc::clone(&scan));
                     let v = &mut self.views[view];
+                    if let Some(generation) = selected_frame {
+                        if !v.frame_request.matches(&name, generation) || !frame_result_is_current(&v.timeline, &name) { continue; }
+                    } else if !v.timeline.following && v.timeline.current().is_some() && !frame_result_is_current(&v.timeline, &name) {
+                        continue;
+                    }
                     let looping = v.timeline.live_looping();
                     // A newly-arrived live head (following): roll the day at UTC midnight, or grow
                     // the frame list so the loop window slides forward. A frame-fetch result for a
@@ -11493,13 +11571,13 @@ impl HookEchoApp {
                     // only appended, not shown. Every other case updates the displayed volume.
                     if !(looping && new_head) {
                         v.show_volume(scan, name, time);
+                        v.loading = false;
+                        v.error = None;
+                        self.pane_shown.remove(&view);
                     }
-                    v.loading = false;
-                    v.error = None;
                     v.fetch_failures = 0;
                     v.clamp_tilt();
                     v.clamp_moment();
-                    self.pane_shown.remove(&view);
                     self.scan_chime(view, time);
                 }
                 DataMsg::Frames {
@@ -11564,7 +11642,9 @@ impl HookEchoApp {
                 }
                 DataMsg::Error { view, err, site } => {
                     let v = &mut self.views[view];
+                    if v.frame_request.pending_name().is_some() || (!v.timeline.following && v.timeline.current().is_some()) { continue; }
                     v.loading = false;
+                    v.load_phase = None;
                     // The newest archive volume is published while the radar is still writing it,
                     // so the head can briefly lack its VCP message. That is a "not finished yet",
                     // not a failure: the next poll gets a complete file a minute later. Showing a
@@ -11882,6 +11962,8 @@ impl HookEchoApp {
             // site changes, its result is dropped on arrival (site mismatch) without clearing
             // `loading`, which would then block the new site's fetch forever ("no volume").
             v.loading = false;
+            v.load_phase = None;
+            v.frame_request.cancel();
             // The old site's frame list is not this site's. Left in place it is both what the
             // scrub path displays and what it downloads until the new listing lands — i.e. the
             // wrong radar's volumes at an index that means nothing here. A scrubbed pane keeps
@@ -11985,8 +12067,17 @@ impl HookEchoApp {
         };
         // A frame switch bins and uploads a full sweep. Holding animation while the map is under
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
+        self.views[idx].buffering = next_pending;
         if should_advance_timeline(next_pending, self.gesture_live) {
-            self.views[idx].timeline.tick_cut();
+            let view = &mut self.views[idx];
+            let previous = view.timeline.playhead;
+            let unavailable = view.failed_frame.as_deref().is_some_and(|name| view.timeline.current().is_some_and(|frame| frame.name() == name));
+            view.timeline.tick_cut();
+            if unavailable && view.timeline.playhead != previous {
+                view.skipped_frames += 1;
+                view.last_skipped_at = Some(wxdata::clock::Instant::now());
+                view.failed_frame = None;
+            }
         }
         if self.views[idx].timeline.following {
             self.views[idx].cut_selection = None;
@@ -12086,7 +12177,7 @@ impl HookEchoApp {
                         v.clamp_tilt();
                         v.clamp_moment();
                         self.pane_shown.remove(&idx);
-                    } else if !self.views[idx].loading {
+                    } else if !self.views[idx].loading || self.views[idx].frame_request.pending_name() != Some(name.as_str()) {
                         wxdata::stats::bump(wxdata::stats::Counter::ScanCacheMisses);
                         let s = self.views[idx].site.clone().unwrap_or_default();
                         self.views[idx].loading = true;
@@ -12239,9 +12330,11 @@ impl HookEchoApp {
     }
 
     /// Download a specific archive volume (a scrubbed timeline frame), routed to `view_idx`.
-    fn spawn_frame_fetch(&self, view_idx: usize, site: String, id: Identifier, ctx: egui::Context) {
+    fn spawn_frame_fetch(&mut self, view_idx: usize, site: String, id: Identifier, ctx: egui::Context) {
+        let generation = self.views[view_idx].frame_request.start(id.name().to_string());
+        self.views[view_idx].load_phase = None;
         let tx = self.msg_tx.clone();
-        self.spawner.spawn(async move {
+        let handle = self.spawner.spawn_abortable(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
             // The `Err` arm is what matters here: it clears the pane's `loading` flag. Without a
@@ -12249,19 +12342,25 @@ impl HookEchoApp {
             // stops polling for the rest of the session.
             let fetched = wxdata::task::timeout(
                 VOLUME_TIMEOUT,
-                crate::volume::fetch(id, crate::paths::cache_dir()),
+                crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
+                    let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
+                    ctx.request_repaint();
+                }),
             )
             .await
             .unwrap_or_else(Err);
             let msg = match fetched {
                 Ok(scan) => DataMsg::Volume {
+                        selected_frame: Some(generation),
                     view: view_idx,
                     site,
                     name,
                     time,
                     scan,
                 },
-                Err(e) => DataMsg::Error {
+                Err(e) => DataMsg::FrameError {
+                    name,
+                    generation,
                     view: view_idx,
                     site,
                     err: e.to_string(),
@@ -12270,6 +12369,7 @@ impl HookEchoApp {
             let _ = tx.send(msg);
             ctx.request_repaint();
         });
+        self.views[view_idx].frame_request.attach(generation, handle);
     }
 
     /// List the archive volumes for `site` on `date` (timeline frames).
@@ -12310,6 +12410,8 @@ impl HookEchoApp {
             self.pane_shown.remove(&idx);
             self.pane_lut.remove(&idx);
             self.pane_custom_sweep.remove(&idx);
+            self.pane_custom_recipe.remove(&idx);
+            self.pane_custom_input.remove(&idx);
             return (None, false);
         }
         let count = self.views[data].elevation_count();
@@ -12318,6 +12420,8 @@ impl HookEchoApp {
             return self.pane_custom_radar(idx, data, &name);
         }
         self.pane_custom_sweep.remove(&idx);
+        self.pane_custom_recipe.remove(&idx);
+        self.pane_custom_input.remove(&idx);
         let precision = self.views[idx].appearance.precision;
         let (moment, tilt, threshold, smooth, storm_uv, cut_end_ms) = {
             let v = &self.views[idx];
@@ -12460,57 +12564,47 @@ impl HookEchoApp {
             .find(|definition| definition.name == product_name)
             .cloned()
         else {
+            self.pane_custom_sweep.remove(&idx);
             self.views[idx].error = Some(format!("radar product '{product_name}' was not found"));
             return (None, false);
         };
-        let product = match wxdata::product_dsl::Product::compile(definition.clone()) {
-            Ok(product) => product,
-            Err(error) => {
-                self.views[idx].error = Some(error.to_string());
-                return (None, false);
+        let product = if let Some(product) = self
+            .pane_custom_recipe
+            .get(&idx)
+            .filter(|product| product.definition() == &definition)
+        {
+            std::sync::Arc::clone(product)
+        } else {
+            match wxdata::product_dsl::Product::compile(definition.clone()) {
+                Ok(product) => {
+                    wxdata::stats::bump(wxdata::stats::Counter::CustomCompiles);
+                    let product = std::sync::Arc::new(product);
+                    self.pane_custom_recipe.insert(idx, product.clone());
+                    product
+                }
+                Err(error) => {
+                    self.pane_custom_sweep.remove(&idx);
+                    self.views[idx].error = Some(error.to_string());
+                    return (None, false);
+                }
             }
         };
         let tilt = self.views[idx].tilt;
         let smooth = self.views[idx].smooth;
         let precision = self.views[idx].appearance.precision;
-        let Some(volume_name) = self.views[data].volume.as_ref().map(|volume| volume.name.clone())
+        let cut_end_ms = self.views[idx].selected_cut_ms();
+        let Some(volume_name) = self.views[data]
+            .volume
+            .as_ref()
+            .map(|volume| volume.name.clone())
         else {
             return (None, true);
         };
-        let sweeps_result = {
-            let Some(volume) = self.views[data].volume.as_mut() else {
-                return (None, true);
-            };
-            product
-                .inputs()
-                .iter()
-                .map(|moment| {
-                    volume
-                        .binned_display_at(*moment, tilt, false, None, precision)
-                        .map(|sweep| (*moment, sweep.clone()))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()
-        };
-        let sweeps = match sweeps_result {
-            Ok(sweeps) => sweeps,
-            Err(error) => {
-                self.views[idx].error = Some(error.to_string());
-                return (None, false);
-            }
-        };
-        let refs: Vec<_> = sweeps.iter().map(|(moment, sweep)| (*moment, sweep)).collect();
-        let sweep = match product.sweep(&refs, Default::default()) {
-            Ok(sweep) => sweep,
-            Err(error) => {
-                self.views[idx].error = Some(error.to_string());
-                return (None, false);
-            }
-        };
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        definition.name.hash(&mut hash);
-        definition.expression.hash(&mut hash);
-        definition.min.to_bits().hash(&mut hash);
-        definition.max.to_bits().hash(&mut hash);
+        // Hash the complete definition, including input/environment declarations and encoding.
+        serde_json::to_vec(&definition)
+            .expect("product definition serializes")
+            .hash(&mut hash);
         let product_hash = hash.finish();
         let key: ShownKey = (
             volume_name,
@@ -12521,21 +12615,109 @@ impl HookEchoApp {
             None,
             false,
             None,
-            None,
+            cut_end_ms,
             Some(product_hash),
             precision,
         );
+        let scan = self.views[data]
+            .volume
+            .as_ref()
+            .map(|volume| volume.scan.clone())
+            .unwrap();
+        let reuse = self
+            .pane_custom_input
+            .get(&idx)
+            .is_some_and(|input| input.matches(&scan, tilt, cut_end_ms, precision, product_hash))
+            && self.pane_custom_sweep.contains_key(&idx);
+        if !reuse {
+            let sweeps_result = {
+                let Some(volume) = self.views[data].volume.as_mut() else {
+                    return (None, true);
+                };
+                product
+                    .inputs()
+                    .iter()
+                    .map(|moment| {
+                        volume
+                            .shared_binned_display_at(*moment, tilt, cut_end_ms, precision)
+                            .map(|sweep| (*moment, sweep))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()
+            };
+            let sweeps = match sweeps_result {
+                Ok(sweeps) => sweeps,
+                Err(error) => {
+                    self.pane_custom_sweep.remove(&idx);
+                    self.views[idx].error = Some(error.to_string());
+                    return (None, false);
+                }
+            };
+            let refs: Vec<_> = sweeps
+                .iter()
+                .map(|(moment, sweep)| (*moment, sweep.as_ref()))
+                .collect();
+            let sweep = match product.sweep(&refs, Default::default()) {
+                Ok(sweep) => sweep,
+                Err(error) => {
+                    self.pane_custom_sweep.remove(&idx);
+                    self.views[idx].error = Some(error.to_string());
+                    return (None, false);
+                }
+            };
+            wxdata::stats::bump(wxdata::stats::Counter::CustomEvaluations);
+            let bytes = sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2);
+            const DERIVED_BUDGET: usize = 32 * 1024 * 1024;
+            if bytes > DERIVED_BUDGET {
+                self.pane_custom_sweep.remove(&idx);
+                self.views[idx].error =
+                    Some("Custom product exceeds the 32 MiB display buffer budget".into());
+                return (None, false);
+            }
+            self.pane_custom_sweep.remove(&idx);
+            while self
+                .pane_custom_sweep
+                .values()
+                .map(|s| s.data.len() + s.data16.as_ref().map_or(0, |d| d.len() * 2))
+                .sum::<usize>()
+                + bytes
+                > DERIVED_BUDGET
+            {
+                let oldest = *self.pane_custom_sweep.keys().min().unwrap();
+                self.pane_custom_sweep.remove(&oldest);
+                self.pane_custom_input.remove(&oldest);
+            }
+            self.pane_custom_sweep.insert(idx, sweep);
+            self.pane_custom_input.insert(
+                idx,
+                crate::custom_cache::Input::new(&scan, tilt, cut_end_ms, precision, product_hash),
+            );
+        } else {
+            wxdata::stats::bump(wxdata::stats::Counter::CustomCacheHits);
+        }
+        let sweep = &self.pane_custom_sweep[&idx];
         let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
-        let lut_gen = self.palettes.gen.wrapping_add(product_hash).wrapping_add(self.views[idx].appearance.fingerprint(palette_moment)).wrapping_add(u64::from(self.adaptive.reduced));
-        let lut_only = self.pane_shown.get(&idx) == Some(&key);
+        let lut_gen = self
+            .palettes
+            .gen
+            .wrapping_add(product_hash)
+            .wrapping_add(self.views[idx].appearance.fingerprint(palette_moment))
+            .wrapping_add(u64::from(self.adaptive.reduced));
+        let lut_only = reuse && self.pane_shown.get(&idx) == Some(&key);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
+            self.views[idx].error = None;
             return (None, true);
         }
-        let table = self.views[idx].appearance.table(&self.palettes, palette_moment, self.settings.theme);
-        let mut upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
-        if self.views[idx].appearance.fade_old_sectors && self.views[idx].timeline.following {
+        let table =
+            self.views[idx]
+                .appearance
+                .table(&self.palettes, palette_moment, self.settings.theme);
+        let mut upload = to_upload(sweep, &table, None, smooth, None, None, lut_only);
+        if self.views[idx].appearance.fade_old_sectors && self.views[idx].timeline.following && cut_end_ms.is_none() {
             upload.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
-                let status = volume.live_status.as_ref().filter(|status| status.stream_active)?;
+                let status = volume
+                    .live_status
+                    .as_ref()
+                    .filter(|status| status.stream_active)?;
                 let start = status.volume_start_ms?;
                 let mut opacity = [1.0f32; 720];
                 for moment in product.inputs() {
@@ -12552,8 +12734,8 @@ impl HookEchoApp {
             });
         }
         upload.uniform[17] = self.views[idx].appearance.blend_width;
-        upload.uniform[19] = f32::from(self.views[idx].appearance.multipass && !self.adaptive.reduced);
-        self.pane_custom_sweep.insert(idx, sweep);
+        upload.uniform[19] =
+            f32::from(self.views[idx].appearance.multipass && !self.adaptive.reduced);
         self.pane_shown.insert(idx, key);
         self.pane_lut.insert(idx, lut_gen);
         self.views[idx].error = None;
@@ -12567,6 +12749,15 @@ impl HookEchoApp {
             .radar_products
             .iter()
             .find(|definition| definition.name == name)?;
+        let view = &self.views[idx];
+        let volume = view.volume.as_ref()?;
+        // A withheld pane or changed recipe must never expose a sweep from its prior inputs.
+        self.pane_custom_recipe.get(&idx).filter(|product| product.definition() == definition)?;
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_vec(definition).ok()?.hash(&mut hash);
+        let recipe = hash.finish();
+        if !self.pane_custom_input.get(&idx)?.matches(&volume.scan, view.tilt, view.selected_cut_ms(), view.appearance.precision, recipe) { return None; }
         let sweep = self.pane_custom_sweep.get(&idx)?;
         let sample = sweep.sample_at(lon, lat)?;
         let value = sample.value.map_or_else(
@@ -12671,8 +12862,8 @@ impl HookEchoApp {
     }
 
     fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
-        if let Some(probe) = self.custom_radar_probe(idx, lon, lat) {
-            return Some(probe);
+        if let Some(name) = self.views.get(idx).and_then(|view| view.custom_product.as_deref()) {
+            return self.custom_radar_probe(idx, lon, lat).or_else(|| Some(format!("{name}\nCustom sample unavailable")));
         }
         let (sample, site, vcp, moment, tilt) = {
             let view = &self.views[idx];
@@ -13603,6 +13794,9 @@ impl HookEchoApp {
                 .round()
                 .clamp(0.0, bias_cap) as f64
         };
+        let satellite_time = self.prepare_satellite_pane(idx, pane_style);
+        self.tiles.set_goes_time(satellite_time);
+        let is_raster = is_raster && (!pane_style.timed() || satellite_time.is_some());
         let visible = if is_raster {
             let vis = self.tiles.visible(pane_style, &cam, vp, raster_bias);
             self.tiles.request_missing(pane_style, &vis);
@@ -13611,6 +13805,16 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        let satellite_status = if pane_style.timed() {
+            let ready = self.tiles.visible_ready(pane_style, &visible);
+            self.goes[idx].imagery_ready = ready;
+            self.goes[idx].imagery_incomplete = self.tiles.visible_failed(pane_style, &visible);
+            let status = if let Some(time) = satellite_time {
+                let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
+                format!("{} satellite {}{}", if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" }, crate::timefmt::fmt_clock(time, self.active_tz(), false), offset)
+            } else { "Satellite frame unavailable".to_owned() };
+            Some(status)
+        } else { None };
         // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
         // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
         // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
@@ -13759,7 +13963,7 @@ impl HookEchoApp {
             world_per_pixel: cam.world_per_pixel() as f32,
             new_tiles,
             visible,
-            basemap_key: pane_style.key(),
+            basemap_key: self.tiles.frame_key(pane_style),
             vector_over_raster: pane_style == BasemapStyle::HybridSatellite,
             radar_upload,
             draw_radar,
@@ -13783,6 +13987,14 @@ impl HookEchoApp {
         };
         ui.painter()
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
+        if let Some(status) = satellite_status {
+            let painter = ui.painter().with_clip_rect(prect);
+            let text = painter.layout(status, egui::FontId::proportional(12.0), egui::Color32::WHITE, (prect.width() - 50.0).max(100.0));
+            let position = egui::pos2((prect.right() - 30.0 - text.size().x).max(prect.left() + 10.0), prect.top() + 52.0);
+            painter.rect_filled(egui::Rect::from_min_size(position - egui::vec2(3.0, 2.0), text.size() + egui::vec2(6.0, 4.0)), 2.0, egui::Color32::from_black_alpha(190));
+            painter.galley(position, text, egui::Color32::WHITE);
+        }
+
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
         // clicking to activate it first. Single-pane keeps using the product pill.
@@ -14305,7 +14517,7 @@ impl HookEchoApp {
         // Animated wind particles, when they are being drawn on the CPU. The GPU path draws
         // inside the map callback instead (see `wind_gpu_frame`), which is also what puts it
         // under the warning polygons rather than over them.
-        if self.show_wind && (!self.wind_on_gpu || cam.globe) {
+        if self.show_wind && !self.wind_on_gpu {
             let alpha = self.wind_alpha(idx, cam.zoom);
             // Split borrow: the grids and the per-pane particle sets are disjoint fields, and the
             // advection needs both at once.
@@ -16713,7 +16925,7 @@ impl HookEchoApp {
         Option<crate::wind_gpu::Frame>,
     ) {
         let alpha = self.wind_alpha(idx, cam.zoom);
-        if !self.show_wind || !self.wind_on_gpu || cam.globe || alpha <= 0.01 {
+        if !self.show_wind || !self.wind_on_gpu || alpha <= 0.01 {
             return (None, None);
         }
         let Some(field) = self.wind.as_ref() else {
@@ -16748,6 +16960,7 @@ impl HookEchoApp {
                 bbox_min,
                 bbox_max,
                 center,
+                globe: cam.globe_uniform(vp),
                 scale,
                 dt: self.wind_dt,
                 // Pixels per world unit is the camera's own scale factor; the particle step is
@@ -17964,6 +18177,12 @@ impl HookEchoApp {
             .into_iter()
             .map(|(name, value)| (name.to_string(), value.into()))
             .collect();
+        let encoded_scan_bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan).chain(self.views.iter().flat_map(|view| view.retained_scans())));
+        let (gpu_bytes, shadow_bytes) = crate::gpu_metrics::memory();
+        let pane_metrics: Vec<_> = self.views.iter().enumerate().map(|(idx, view)| serde_json::json!({
+            "pane":idx, "binned_bytes":view.binned_cache_bytes(), "map_gpu_p50_p95_ms":crate::gpu_metrics::percentiles(idx as u32), "skipped_unavailable_frames":view.skipped_frames,
+            "derived_bytes":self.pane_custom_sweep.get(&idx).map_or(0, |sweep| sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2)),
+        })).collect();
         let bytes = serde_json::to_vec_pretty(&serde_json::json!({
             "schema": "hookecho.diagnostics/v1",
             "version": env!("CARGO_PKG_VERSION"),
@@ -17979,6 +18198,10 @@ impl HookEchoApp {
                 "storage_error": storage_error.map(|_| "storage unavailable"),
             },
             "performance_counters": counters,
+            "render_metrics": {
+                "map_gpu_timestamps_supported":crate::gpu_metrics::supported(), "nominal_gpu_bytes":gpu_bytes, "cpu_upload_shadow_bytes":shadow_bytes, "encoded_scan_payload_bytes":encoded_scan_bytes, "panes":pane_metrics,
+                "scope":"Map draw timing excludes uploads and wind advection. Memory excludes metadata, allocator and driver overhead and framework resources.",
+            },
         }))
         .expect("diagnostics values are serializable");
         match crate::dialog::save_bytes("hookecho-diagnostics.json", "json", &bytes) {
@@ -18787,6 +19010,10 @@ fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: boo
     geometry_changed || (bucket_changed && !gesture_live)
 }
 
+fn frame_result_is_current(timeline: &crate::timeline::Timeline, name: &str) -> bool {
+    timeline.current().is_some_and(|frame| frame.name() == name)
+}
+
 fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
     !next_pending && !gesture_live
 }
@@ -19439,16 +19666,9 @@ pub(crate) fn display_units(moment: Moment, settings: &Settings) -> (f32, &'stat
 /// GIBS geostationary layers are 10-minute imagery; half an hour of tolerance covers a gap in the
 /// index or a radar volume from a slow VCP without ever pairing a scan with imagery from another
 /// part of the day. `None` means "leave it on the latest", which is the pre-existing behaviour.
-fn nearest_goes(
-    times: &[chrono::DateTime<chrono::Utc>],
-    t: chrono::DateTime<chrono::Utc>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    const TOLERANCE_MIN: i64 = 30;
-    times
-        .iter()
-        .copied()
-        .min_by_key(|x| (*x - t).num_seconds().abs())
-        .filter(|x| (*x - t).num_minutes().abs() <= TOLERANCE_MIN)
+#[cfg(test)]
+fn nearest_goes(times: &[chrono::DateTime<Utc>], t: chrono::DateTime<Utc>) -> Option<chrono::DateTime<Utc>> {
+    crate::satellite_time::nearest(times, t)
 }
 
 /// Compass point for a bearing in degrees from north (used in alarm text).
@@ -19702,6 +19922,11 @@ impl eframe::App for HookEchoApp {
         self.frame_nr = self.frame_nr.wrapping_add(1);
         wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
         self.gesture_live = map_gesture_on_map(ctx, &self.mobile_occlusion);
+        if crate::gpu_metrics::device_lost() {
+            egui::Window::new("Graphics device lost").collapsible(false).show(ctx, |ui| {
+                ui.label("Rendering has stopped. Restart HookEcho to restore the graphics device.");
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.perf.tick(ctx);
         #[cfg(debug_assertions)]
@@ -21274,11 +21499,16 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.show_climatology_window(ctx);
-        // GOES frame times arrived → keep the scrub at latest until the user moves it.
-        if let Some(rx) = &self.goes_times_rx {
-            if let Ok(times) = rx.try_recv() {
-                self.goes_times = times;
-                self.goes_times_rx = None;
+        self.goes.resize_with(self.views.len(), Default::default);
+        self.pane_custom_sweep.retain(|idx, _| *idx < self.views.len());
+        self.pane_custom_input.retain(|idx, _| *idx < self.views.len());
+        self.pane_custom_recipe.retain(|idx, _| *idx < self.views.len());
+        for catalog in &mut self.goes {
+            if let Some(rx) = &catalog.rx {
+                if let Ok(times) = rx.try_recv() {
+                    if !times.is_empty() || catalog.times.is_empty() { catalog.times = times; }
+                    catalog.rx = None;
+                }
             }
         }
         self.goes_time_bar(ctx);
@@ -21717,21 +21947,11 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
-            // Each pane fetches and draws its own `View::basemap` (see `render_pane`). Two things
-            // stay global for now: the GOES frame cursor and the vector palette, both driven by
-            // the active pane.
-            // ponytail: one GOES cursor + one vector palette for all panes; split them when
-            // someone actually wants two satellite times or two vector palettes side by side.
-            use crate::tiles::BasemapStyle;
+            // Raster frame identities are pane-local; vector appearance still follows the active pane.
             let style = self.views[self.active.min(n - 1)]
                 .basemap
                 .resolve(ctx.theme() == egui::Theme::Dark);
             let is_vector = style.vector_palette().is_some();
-            let raster_style = if style.is_raster() {
-                style
-            } else {
-                BasemapStyle::None
-            };
             self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
             self.tiles
@@ -21740,61 +21960,12 @@ impl eframe::App for HookEchoApp {
             // Ask for `@2x` tiles where the provider serves them: same tile count, twice the
             // pixels, labels drawn for the density instead of magnified. Off on a metered link —
             // a double-resolution tile is roughly double the bytes.
-            let mut clear_tiles = self
+            let clear_tiles = self
                 .tiles
                 .set_retina(ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered());
-            // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
-            // active, and apply the selected frame (None = latest).
-            if raster_style.timed() {
-                // Which hour of imagery to ask for: the pane's own clock when it is replaying an
-                // archive, otherwise the live window ending now. GIBS keeps GeoColor about two
-                // weeks and Band 13 several months, so a replayed event usually has satellite.
-                let radar_time = self.views[self.active.min(n - 1)]
-                    .volume
-                    .as_ref()
-                    .map(|v| v.time);
-                let (hour, from, to) = crate::tiles::goes_window(chrono::Utc::now(), radar_time);
-                if self.goes_times_style != Some(raster_style) || self.goes_hour != hour {
-                    self.goes_times_style = Some(raster_style);
-                    self.goes_hour = hour;
-                    self.goes_times.clear();
-                    self.goes_time_idx = None;
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    self.goes_times_rx = Some(rx);
-                    let http = self.http.clone();
-                    self.spawner.spawn(async move {
-                        let times =
-                            crate::tiles::fetch_frame_times(&http, raster_style, from, to, 48)
-                                .await;
-                        let _ = tx.send(times);
-                    });
-                }
-                // Following the radar is the default: scrubbing back through an event should
-                // take the satellite back with it, which is the whole reason to look at both.
-                // Stepping the GOES arrows by hand drops out of it.
-                let selected = if self.goes_follow_radar {
-                    self.views[self.active.min(n - 1)]
-                        .volume
-                        .as_ref()
-                        .map(|v| v.time)
-                        .and_then(|t| nearest_goes(&self.goes_times, t))
-                } else {
-                    self.goes_time_idx
-                        .and_then(|i| self.goes_times.get(i).copied())
-                };
-                // `None` means GIBS's own default, which is the newest imagery there is — right
-                // for a live pane, three days wrong for one replaying an archive. In an archive
-                // window, fall back to the newest frame *in that window* instead.
-                let selected = match (selected, self.goes_hour) {
-                    (None, Some(_)) => self.goes_times.last().copied(),
-                    (s, _) => s,
-                };
-                clear_tiles |= self.tiles.set_goes_time(selected);
-            } else if self.goes_times_style.is_some() {
-                self.goes_times_style = None;
-                self.goes_hour = None;
-                self.goes_times.clear();
-                clear_tiles |= self.tiles.set_goes_time(None);
+            if self.settings.link_satellite_times {
+                let selection = self.views[self.active.min(n - 1)].satellite.clone();
+                for view in &mut self.views { view.satellite = selection.clone(); }
             }
             let mut clear_vector = false;
             if is_vector {
@@ -23139,6 +23310,23 @@ mod request_book_tests {
         RequestLane, SourceHealth,
     };
     use crate::render::FieldLayer;
+
+    #[test]
+    fn late_frame_completion_and_phase_updates_follow_the_current_selection() {
+        let old = wxdata::level2::Identifier::new("KTLX20130520_000000_V06".into());
+        let newest = wxdata::level2::Identifier::new("KTLX20130520_001000_V06".into());
+        let mut timeline = crate::timeline::Timeline::default();
+        timeline.frames = vec![old.clone(), newest.clone()];
+        timeline.following = false;
+        assert!(super::frame_result_is_current(&timeline, old.name()));
+        timeline.playhead = 1;
+        assert!(!super::frame_result_is_current(&timeline, old.name()));
+        assert!(super::frame_result_is_current(&timeline, newest.name()));
+        timeline.playhead = 2; // forecast tail has no radar request to finish
+        assert!(!super::frame_result_is_current(&timeline, newest.name()));
+        timeline.frames.clear();
+        assert!(!super::frame_result_is_current(&timeline, old.name()));
+    }
 
     #[test]
     fn only_the_latest_request_in_each_lane_is_current() {

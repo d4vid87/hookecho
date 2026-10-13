@@ -60,6 +60,8 @@ const RECENT_VOLUMES: usize = if cfg!(target_os = "android") {
     12
 };
 
+type BinnedKey = (Moment, usize, bool, Option<i64>, bool);
+
 /// A decoded volume plus lazily-binned sweeps for the moments/tilts the user has viewed.
 pub struct Volume {
     /// Shared with the app's decoded-volume LRU: the cache and every pane showing this volume
@@ -76,7 +78,7 @@ pub struct Volume {
     pub cuts: Vec<level2::CutTime>,
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
     pub moments: [bool; Moment::ALL.len()],
-    binned: LruCache<(Moment, usize, bool, Option<i64>, bool), BinnedSweep>,
+    binned: LruCache<BinnedKey, Arc<BinnedSweep>>,
     /// Set once a live chunk has been merged in. Such a volume is still being written — half its
     /// tilts may not have arrived — so it must never be kept and shown again later in place of
     /// the complete archived volume of the same name.
@@ -190,9 +192,15 @@ impl Volume {
             while !self.binned.is_empty() && retained + bytes(&sweep) > budget {
                 if let Some((_, old)) = self.binned.pop_lru() { retained -= bytes(&old); }
             }
-            self.binned.put(key, sweep);
+            self.binned.put(key, Arc::new(sweep));
         }
         Ok(self.binned.get(&key).expect("inserted display sweep"))
+    }
+
+    /// Immutable shared input for custom products: retaining a moment never copies its gate arrays.
+    pub fn shared_binned_display_at(&mut self, moment: Moment, tilt: usize, cut_end_ms: Option<i64>, precision: bool) -> anyhow::Result<Arc<BinnedSweep>> {
+        self.binned_display_at(moment, tilt, false, cut_end_ms, precision)?;
+        Ok(self.binned.get(&(moment, tilt, false, cut_end_ms, precision)).expect("inserted shared display sweep").clone())
     }
 
     /// All reflectivity tilts as owned sweeps (lowest→highest), for vertical cross-sections.
@@ -228,6 +236,13 @@ pub struct MapView {
     pub threshold_enabled: [bool; Moment::ALL.len()],
     /// Pane-local display controls; never alter native gate measurements.
     pub appearance: crate::radar_appearance::RadarAppearance,
+    pub satellite: crate::satellite_time::Selection,
+    pub frame_request: crate::frame_request::Request,
+    pub load_phase: Option<level2::LoadPhase>,
+    pub buffering: bool,
+    pub failed_frame: Option<String>,
+    pub skipped_frames: u64,
+    pub last_skipped_at: Option<wxdata::clock::Instant>,
     pub volume: Option<Volume>,
     /// Volumes the playhead has moved off, with their binned sweeps intact. See
     /// [`RECENT_VOLUMES`]; use [`MapView::show_volume`] rather than touching this.
@@ -271,6 +286,10 @@ pub struct MapView {
 
 impl MapView {
     /// Resident display gate buffers, including this pane's recent-volume cache.
+    pub fn retained_scans(&self) -> impl Iterator<Item = &Arc<Scan>> {
+        self.volume.iter().chain(self.recent.iter().map(|(_, volume)| volume)).map(|volume| &volume.scan)
+    }
+
     pub fn binned_cache_bytes(&self) -> usize {
         self.volume.as_ref().map_or(0, Volume::binned_bytes)
             + self.recent.iter().map(|(_, volume)| volume.binned_bytes()).sum::<usize>()
@@ -315,6 +334,13 @@ impl MapView {
             thresholds,
             threshold_enabled,
             appearance: Default::default(),
+            satellite: Default::default(),
+            frame_request: Default::default(),
+            load_phase: None,
+            buffering: false,
+            failed_frame: None,
+            skipped_frames: 0,
+            last_skipped_at: None,
             volume: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,
@@ -368,6 +394,9 @@ impl MapView {
     /// `scan` is only used when this pane has never binned that volume; it is an `Arc` from the
     /// app's decoded-volume cache either way, so the two paths hold the same allocation.
     pub fn show_volume(&mut self, scan: Arc<Scan>, name: String, time: DateTime<Utc>) {
+        self.frame_request.cancel();
+        self.load_phase = None;
+        self.failed_frame = None;
         self.cut_selection = None;
         let vol = self
             .recent
@@ -597,6 +626,28 @@ mod tests {
         );
         let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
         Arc::new(Scan::with_site(site, vcp, sweeps))
+    }
+
+    #[test]
+    fn custom_product_inputs_share_gate_storage_and_survive_cache_eviction() {
+        let mut volume = Volume::new(scan_at(&[0.5]), "fixture".into(), Utc::now());
+        let first = volume.shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+        let second = volume.shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let bytes = first.data.clone();
+        volume.binned.clear();
+        assert_eq!(first.data, bytes);
+        assert_eq!(second.data, bytes);
+    }
+
+    #[test]
+    fn memory_inventory_counts_shared_scan_payloads_once() {
+        let first = scan_at(&[0.5, 1.5]);
+        let second = scan_at(&[0.5]);
+        let scans = [first.clone(), first.clone(), second.clone()];
+        let mut inventory = crate::radar_memory::Inventory::default();
+        assert_eq!(inventory.bytes(scans.iter()), 3);
+        assert_eq!(inventory.bytes([first].iter()), 2);
     }
 
     #[test]

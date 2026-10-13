@@ -11,6 +11,15 @@ use std::path::PathBuf;
 /// Re-exported so the app can name decoded volumes without depending on `nexrad-model`.
 pub use nexrad_model::data::Scan;
 
+/// Retained encoded gate payload bytes, excluding radial/sweep metadata and allocator overhead.
+pub fn scan_gate_bytes(scan: &Scan) -> usize {
+    scan.sweeps().iter().flat_map(|sweep| sweep.radials()).map(|radial| {
+        [radial.reflectivity(), radial.velocity(), radial.spectrum_width(), radial.differential_reflectivity(), radial.differential_phase(), radial.correlation_coefficient()]
+            .into_iter().flatten().map(|moment| moment.raw_values().len()).sum::<usize>()
+            + radial.clutter_filter_power().map_or(0, |moment| moment.raw_values().len())
+    }).sum()
+}
+
 /// Which radar moment to extract from a sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Moment {
@@ -667,8 +676,16 @@ pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Resul
 /// read instead of a download. Raw bytes rather than a decoded scan because they're smaller, need
 /// no serialization of their own, and go back through the same decode path either way. Pass `None`
 /// at the live head, where the newest object may still be mid-write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadPhase { Downloading, Decoding }
+
 pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow::Result<Scan> {
+    download_scan_with_progress(id, cache_dir, |_| {}).await
+}
+
+pub async fn download_scan_with_progress(id: Identifier, cache_dir: Option<PathBuf>, progress: impl Fn(LoadPhase) + Send) -> anyhow::Result<Scan> {
     use nexrad_data::aws::archive;
+    progress(LoadPhase::Downloading);
     let name = id.name().to_string();
     let cache_file = cache_dir.map(|d| d.join("volumes").join(&name));
     let cached = cache_file
@@ -691,6 +708,7 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
             f
         }
     };
+    progress(LoadPhase::Decoding);
     let _decode_timer = crate::stats::DecodeTimer::default();
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`

@@ -1126,6 +1126,7 @@ impl HookEchoApp {
             PaletteAction::ImportCase,
             None,
         );
+        push("Save diagnostics", "Reference", "Export performance and source-health measurements", true, PaletteAction::SaveDiagnostics, None);
         for (i, ws) in self.settings.workspaces.iter().enumerate() {
             push(
                 &format!("Workspace: {}", ws.name),

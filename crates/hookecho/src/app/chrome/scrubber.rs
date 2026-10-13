@@ -48,6 +48,15 @@ impl HookEchoApp {
             )
         });
         let loading = self.views[self.active].loading;
+        let loaded_time = self.views[self.active].volume.as_ref().map(|volume| volume.time);
+        let requested_time = self.views[self.active].timeline.selected_time();
+        let buffering = self.views[self.active].buffering;
+        let skipped_recently = self.views[self.active].last_skipped_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
+        let load_label = match self.views[self.active].load_phase {
+            Some(level2::LoadPhase::Downloading) => "Downloading radar…",
+            Some(level2::LoadPhase::Decoding) => "Decoding radar…",
+            None => "Loading radar…",
+        };
         // Which mechanism is actually feeding the pane: the sweep-by-sweep chunk stream, or the
         // interval poller it falls back to when the stream can't run.
         let streaming = self
@@ -201,7 +210,7 @@ impl HookEchoApp {
                             // zone is the one it is standing in.
                             None => selected_cut
                                 .or_else(|| latest_cut.filter(|_| t.following && !t.playing))
-                                .or_else(|| t.current().and_then(|id| id.date_time()))
+                                .or(loaded_time)
                                 .map(|d| match tz {
                                     Some(tz) if compact_live || ui.available_width() < 190.0 => {
                                         d.with_timezone(&tz).format("%-I:%M %p").to_string()
@@ -415,7 +424,7 @@ impl HookEchoApp {
                             );
                         } else if loading && !compact_live {
                             ui.label(
-                                egui::RichText::new("loading\u{2026}")
+                                egui::RichText::new(load_label)
                                     .size(crate::ui::style::FONT_SM)
                                     .color(egui::Color32::from_rgb(217, 231, 255)),
                             );
@@ -429,9 +438,14 @@ impl HookEchoApp {
                     let status = if !t.following {
                         t.date.format("%Y-%m-%d").to_string()
                     } else {
-                        age.clone().unwrap_or_else(|| if loading { "Loading radar…".into() } else { String::new() })
+                        age.clone().unwrap_or_else(|| if loading { load_label.into() } else { String::new() })
                     };
+                    let status = if buffering { "Buffering next radar frame…".to_owned() }
+                        else if loading { load_label.to_owned() }
+                        else if skipped_recently { "Skipped unavailable radar frame".to_owned() }
+                        else { status };
                     let response = ui.label(egui::RichText::new(status).small().color(egui::Color32::from_rgb(217, 231, 255)));
+                    response.clone().on_hover_text(format!("Displayed scan: {}\nRequested scan: {}", loaded_time.map_or_else(|| "unavailable".into(), |time| time.to_rfc3339()), requested_time.map_or_else(|| "unavailable".into(), |time| time.to_rfc3339())));
                     if let Some(rect) = &mut scrub_rect {
                         *rect = rect.union(response.rect);
                     }

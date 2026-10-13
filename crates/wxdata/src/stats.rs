@@ -43,13 +43,16 @@ pub enum Counter {
     RadarUploadBytes,
     DecodePathMicros,
     DecodePaths,
+    CustomCompiles,
+    CustomEvaluations,
+    CustomCacheHits,
 }
 
 impl Counter {
     const COUNT: usize = Self::LABELS.len();
 
     /// Prometheus/log names, in declaration order.
-    pub const LABELS: [&'static str; 15] = [
+    pub const LABELS: [&'static str; 18] = [
         "net_requests",
         "net_bytes",
         "net_not_modified",
@@ -65,6 +68,9 @@ impl Counter {
         "radar_upload_bytes",
         "decode_path_micros",
         "decode_paths",
+        "custom_compiles",
+        "custom_evaluations",
+        "custom_cache_hits",
     ];
 }
 

@@ -502,7 +502,7 @@ pub fn run(
         world_per_pixel: camera.world_per_pixel() as f32,
         new_tiles,
         visible,
-        basemap_key: basemap.key(),
+        basemap_key: u64::from(basemap.key()),
         vector_over_raster: false,
         radar_upload: Some(crate::app::to_upload(
             &sweep, &table, None, smooth, storm_uv, None, false,
@@ -2977,12 +2977,12 @@ fn init_gpu(
         compatible_surface: None,
     }))?;
     let (device, queue) =
-        rt.block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        rt.block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_features: adapter.features() & crate::gpu_metrics::FEATURES, ..Default::default() }))?;
     Ok((device, queue, adapter))
 }
 
 /// Read a `size×size` RGBA render target back to a tightly-packed byte vec.
-fn read_target(
+pub(crate) fn read_target(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     target: &wgpu::Texture,
@@ -3040,7 +3040,7 @@ fn read_target(
     rgba
 }
 
-fn new_target(device: &wgpu::Device, format: wgpu::TextureFormat, size: u32) -> wgpu::Texture {
+pub(crate) fn new_target(device: &wgpu::Device, format: wgpu::TextureFormat, size: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("headless_target"),
         size: wgpu::Extent3d {
@@ -3286,6 +3286,198 @@ mod golden_tests {
         }
     }
 
+
+    fn performance_callback(
+        sweep: &BinnedSweep,
+        table: &crate::colormap::ColorTable,
+        camera: Camera,
+        smooth: bool,
+    ) -> MapCallback {
+        let (center, scale) =
+            camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
+        MapCallback {
+            pane: 0,
+            retain_only_pane: None,
+            camera_center: center,
+            camera_scale: scale,
+            globe: camera.globe_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32)),
+            world_per_pixel: camera.world_per_pixel() as f32,
+            basemap_key: 0,
+            vector_over_raster: false,
+            new_tiles: Vec::new(),
+            visible: Vec::new(),
+            radar_upload: Some(crate::app::to_upload(
+                sweep, table, None, smooth, None, None, false,
+            )),
+            draw_radar: true,
+            overlay_upload: None,
+            draw_overlay: false,
+            field_uploads: Vec::new(),
+            field_draws: Vec::new(),
+            clear_tiles: false,
+            drop_tiles: Vec::new(),
+            drop_fields: Vec::new(),
+            new_vector_tiles: Vec::new(),
+            visible_vector: Vec::new(),
+            clear_vector: false,
+            drop_vector_tiles: Vec::new(),
+            wind_upload: None,
+            wind: None,
+        }
+    }
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_satellite_frames_with_the_same_tile_id_remain_independent() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let target = new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let camera = Camera::at_lonlat(0.0, 0.0, 0.0);
+        let mut callback = performance_callback(&sweep, &table, camera, false);
+        callback.draw_radar = false;
+        callback.radar_upload = None;
+        callback.visible = vec![crate::render::VisibleTile { id: (0, 0, 0), world_min: [0.0; 2], world_max: [1.0; 2] }];
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut first = None;
+        for (key, color) in [(0x1001, [255, 0, 0, 255]), (0x2001, [0, 0, 255, 255]), (0x1001, [255, 0, 0, 255])] {
+            callback.basemap_key = key;
+            callback.new_tiles = if first.is_some() && key == 0x1001 { Vec::new() } else { vec![crate::render::PendingTile { id: (0, 0, 0), style: key, rgba: color.repeat(4), width: 2, height: 2 }] };
+            resources.render_once(&device, &queue, &view, &callback, clear_color());
+            let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
+            let center = ((GOLDEN_SIZE / 2 * GOLDEN_SIZE + GOLDEN_SIZE / 2) * 4) as usize;
+            assert_eq!(&pixels[center..center + 4], &color);
+            if let Some(first) = &first { if key == 0x1001 { assert_eq!(&pixels, first); } } else { first = Some(pixels); }
+        }
+    }
+
+    #[test]
+    #[ignore = "gpu benchmark"]
+    fn gpu_performance_matrix() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (device, queue, adapter) = init_gpu(&rt).expect("no GPU adapter");
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let mut rows = Vec::new();
+        for globe in [false, true] {
+            for precision in [false, true] {
+                for smooth in [false, true] {
+                    for panes in [1_u32, 2, 4] {
+                        for partial in [false, true] {
+                            let mut sweep = synthetic_sweep();
+                            if precision {
+                                sweep.data16 = Some(
+                                    sweep
+                                        .data
+                                        .iter()
+                                        .map(|value| match value {
+                                            0 => 0,
+                                            1 => 1,
+                                            value => {
+                                                2 + ((*value as u32 - 2) * 65_533 / 253) as u16
+                                            }
+                                        })
+                                        .collect(),
+                                );
+                            }
+                            let mut camera = Camera::at_lonlat(-97.0, 35.0, 8.5);
+                            camera.globe = globe;
+                            let mut resources = RenderResources::new(&device, format);
+                            let mut enqueue = Vec::new();
+                            let mut completed = Vec::new();
+                            let mut peak = 0;
+                            let mut reference_pixels = None;
+                            for iteration in 0..15 {
+                                if iteration > 0 {
+                                    let changed = if partial {
+                                        sweep.gate_count
+                                    } else {
+                                        sweep.data.len()
+                                    };
+                                    for value in &mut sweep.data[..changed] {
+                                        if *value > 1 {
+                                            *value = if *value == 255 { 2 } else { *value + 1 };
+                                        }
+                                    }
+                                    if let Some(data) = &mut sweep.data16 {
+                                        for value in &mut data[..changed] {
+                                            if *value > 1 {
+                                                *value =
+                                                    if *value > 65_000 { 2 } else { *value + 257 };
+                                            }
+                                        }
+                                    }
+                                }
+                                let start = std::time::Instant::now();
+                                for pane in 0..panes {
+                                    let mut callback =
+                                        performance_callback(&sweep, &table, camera, smooth);
+                                    callback.pane = pane;
+                                    callback.radar_upload.as_mut().unwrap().uniform[19] =
+                                        f32::from(smooth);
+                                    resources.render_once(
+                                        &device,
+                                        &queue,
+                                        &view,
+                                        &callback,
+                                        clear_color(),
+                                    );
+                                }
+                                let submitted = start.elapsed().as_secs_f64() * 1000.0;
+                                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                                peak = peak.max(resources.memory_bytes().0);
+                                if iteration >= 5 {
+                                    enqueue.push(submitted);
+                                    completed.push(elapsed);
+                                }
+                                if iteration == 5 {
+                                    crate::gpu_metrics::reset_samples();
+                                }
+                                if iteration == 14 {
+                                    reference_pixels =
+                                        Some(read_target(&device, &queue, &target, GOLDEN_SIZE));
+                                }
+                            }
+                            // Resolve the last measured draw; the additional draw itself is not sampled.
+                            resources.draw_pane(&device, &queue, &view, panes - 1, clear_color());
+                            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                            // Incremental and fresh uploads must yield the same final image for every mode.
+                            let mut fresh = RenderResources::new(&device, format);
+                            let mut callback = performance_callback(&sweep, &table, camera, smooth);
+                            callback.radar_upload.as_mut().unwrap().uniform[19] = f32::from(smooth);
+                            fresh.render_once(&device, &queue, &view, &callback, clear_color());
+                            assert_eq!(
+                                reference_pixels.unwrap(),
+                                read_target(&device, &queue, &target, GOLDEN_SIZE)
+                            );
+                            let summarize = |mut values: Vec<f64>| {
+                                values.sort_by(f64::total_cmp);
+                                serde_json::json!({"p50_ms":values[(values.len()-1)/2], "p95_ms":values[((values.len()-1)*95).div_ceil(100)]})
+                            };
+                            rows.push(serde_json::json!({"globe":globe,"precision":precision,"smoothing":smooth,"panes":panes,"update":if partial {"one_row"} else {"full_sweep"},"enqueue":summarize(enqueue),"synchronized_frame":summarize(completed),"last_pane_map_gpu_p50_p95_ms":crate::gpu_metrics::percentiles(panes-1),"peak_nominal_gpu_bytes":peak,"image_equal":true}));
+                        }
+                    }
+                }
+            }
+        }
+        let info = adapter.get_info();
+        let report = serde_json::json!({"schema":"hookecho.performance-matrix/v1","fixture":"synthetic 90-degree wedge and range rings","build":"native test profile","adapter":info.name,"backend":format!("{:?}",info.backend),"driver":info.driver,"viewport":[GOLDEN_SIZE,GOLDEN_SIZE],"warmup_frames":5,"sample_frames":10,"limits":"Includes synchronous readback polling for completed-frame timings; no network, map tiles or live latency. GPU samples cover map draws only.","rows":rows});
+        if let Ok(path) = std::env::var("HOOKECHO_PERFORMANCE_REPORT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        }
+        println!(
+            "performance matrix: {} verified cases on {}",
+            report["rows"].as_array().unwrap().len(),
+            info.name
+        );
+    }
 
     #[test]
     #[ignore = "gpu"]

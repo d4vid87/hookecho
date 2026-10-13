@@ -947,6 +947,7 @@ pub fn tile_cover(
             let wy0 = ty as f32 / nf as f32;
             let wx1 = (tx + 1) as f32 / nf as f32;
             let wy1 = (ty + 1) as f32 / nf as f32;
+            if cam.globe && !globe_tile_may_be_visible(cam, [wx0, wy0], [wx1, wy1]) { continue; }
             out.push(VisibleTile {
                 id,
                 world_min: [wx0, wy0],
@@ -955,6 +956,21 @@ pub fn tile_cover(
         }
     }
     out
+}
+
+/// Conservative angular-cone test: never reject a tile that can cross the horizon.
+fn globe_tile_may_be_visible(cam: &Camera, min: [f32; 2], max: [f32; 2]) -> bool {
+    let (_, center_lat) = crate::render::mercator::world_to_lonlat(cam.center.0, cam.center.1);
+    let latitude = |y: f32| (std::f64::consts::PI * (1.0 - 2.0 * y as f64)).sinh().atan();
+    let south = latitude(max[1]);
+    let north = latitude(min[1]);
+    let lat = (south + north) / 2.0;
+    let dl = ((min[0] as f64 + max[0] as f64) / 2.0 - cam.center.0) * std::f64::consts::TAU;
+    let radius = (north - south).abs() / 2.0 + (max[0] - min[0]).abs() as f64 * std::f64::consts::PI;
+    if radius >= std::f64::consts::FRAC_PI_2 { return true; }
+    let center_lat = center_lat.to_radians();
+    let facing = center_lat.sin() * lat.sin() + center_lat.cos() * lat.cos() * dl.cos();
+    facing >= -radius.sin()
 }
 
 /// Parse the `<Domain>` time list from a GIBS DescribeDomains XML into sorted instants. The
@@ -1120,7 +1136,7 @@ pub async fn fetch_frame_times(
 
 struct FetchedTile {
     id: TileId,
-    style: u8,
+    style: u64,
     rgba: Vec<u8>,
     width: u32,
     height: u32,
@@ -1248,9 +1264,13 @@ impl TileManager {
             return false;
         }
         self.goes_time = t;
-        self.requested.clear();
-        self.uploaded.clear();
         true
+    }
+
+    /// Style and exact frame form one texture identity; switching panes does not flush peers.
+    pub fn frame_key(&self, style: BasemapStyle) -> u64 {
+        let time = if style.timed() { self.goes_time.map_or(0, |t| t.timestamp() as u64) } else { 0 };
+        (time << 8) | u64::from(style.key())
     }
 
     /// Turn `@2x` tiles on or off (high-DPI screen, and not on a metered link). Returns true if it
@@ -1353,7 +1373,7 @@ impl TileManager {
                         let (w, h) = rgba.dimensions();
                         FetchedTile {
                             id: (6, 14, 24),
-                            style: key,
+                            style: u64::from(key),
                             rgba: rgba.into_raw(),
                             width: w,
                             height: h,
@@ -1409,7 +1429,8 @@ impl TileManager {
     /// Kick off fetches for any visible tiles not yet requested.
     pub fn request_missing(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
         use std::sync::atomic::Ordering;
-        let skey = style.key();
+        let skey = self.frame_key(style);
+        self.failed.retain(|_, time| time.elapsed() < RETRY_AFTER);
         for v in visible {
             if self.requested.contains(&(skey, v.id)) {
                 continue;
@@ -1450,7 +1471,7 @@ impl TileManager {
                             &format!("/{iso}/GoogleMapsCompatible"),
                         );
                     }
-                    t.format("%Y%m%dT%H%M").to_string()
+                    t.format("%Y%m%dT%H%M%S").to_string()
                 }
                 _ => "default".to_string(),
             };
@@ -1645,11 +1666,21 @@ impl TileManager {
     /// Eviction itself runs once per frame in [`Self::evict_excess`], after every pane has been
     /// counted — evicting mid-frame would drop tiles a later pane still needs.
     pub fn promote_visible(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
-        let skey = style.key();
+        let skey = self.frame_key(style);
         for v in visible {
             self.uploaded.promote(&(skey, v.id));
         }
         self.frame_visible += visible.len();
+    }
+
+    pub fn visible_failed(&self, style: BasemapStyle, visible: &[VisibleTile]) -> bool {
+        let key = self.frame_key(style);
+        visible.iter().any(|tile| self.failed.contains_key(&(key, tile.id)))
+    }
+
+    pub fn visible_ready(&self, style: BasemapStyle, visible: &[VisibleTile]) -> bool {
+        let key = self.frame_key(style);
+        !visible.is_empty() && visible.iter().all(|tile| self.uploaded.contains(&(key, tile.id)))
     }
 
     /// Shrink the cache back to its resting size and return what fell out, so the renderer can
@@ -1718,7 +1749,7 @@ pub async fn fetch_visible(
                     let (w, h) = rgba.dimensions();
                     out.push(PendingTile {
                         id: v.id,
-                        style: style.key(),
+                        style: u64::from(style.key()),
                         rgba: rgba.into_raw(),
                         width: w,
                         height: h,
@@ -2073,6 +2104,44 @@ pub fn start_pack_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn globe_tile_culling_keeps_every_sample_that_can_face_the_viewer() {
+        for (lon, lat) in [(0.0, 0.0), (179.0, 70.0), (-97.0, 35.0), (40.0, -75.0)] {
+            let mut camera = Camera::at_lonlat(lon, lat, 1.0); camera.globe = true;
+            for x in 0..16 { for y in 0..16 {
+                let min = [x as f32 / 16.0, y as f32 / 16.0];
+                let max = [(x + 1) as f32 / 16.0, (y + 1) as f32 / 16.0];
+                if !globe_tile_may_be_visible(&camera, min, max) {
+                    for sx in 0..=8 { for sy in 0..=8 {
+                        let world = (min[0] as f64 + sx as f64 / 128.0, min[1] as f64 + sy as f64 / 128.0);
+                        assert!(!camera.world_visible(world), "culled a visible sample");
+                    } }
+                }
+            } }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn frame_switches_keep_separate_resident_and_inflight_identities() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut manager = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let style = BasemapStyle::GoesEast;
+        let first = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        manager.set_goes_time(Some(first));
+        let key = manager.frame_key(style);
+        let id = (4, 3, 5);
+        manager.requested.insert((key, id));
+        manager.uploaded.put((key, id), 16);
+        manager.set_goes_time(Some(first + chrono::Duration::minutes(10)));
+        assert_ne!(manager.frame_key(style), key);
+        assert!(manager.requested.contains(&(key, id)));
+        assert!(manager.uploaded.contains(&(key, id)));
+        assert!(!manager.uploaded.contains(&(manager.frame_key(style), id)));
+        manager.set_goes_time(Some(first));
+        assert_eq!(manager.frame_key(style), key);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

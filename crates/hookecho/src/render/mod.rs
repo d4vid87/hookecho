@@ -15,7 +15,7 @@ pub type TileId = (u8, u32, u32);
 /// A tile plus which basemap style it came from. Panes can show different basemaps at once, so
 /// the same `(z, x, y)` may be resident twice with different imagery; the style key keeps them
 /// apart in the GPU cache.
-pub type TileKey = (u8, TileId);
+pub type TileKey = (u64, TileId);
 
 const MAX_TILE_VERTS: u64 = 512 * 6 * 16 * 16; // up to 512 visible tiles per frame
 
@@ -23,7 +23,7 @@ const MAX_TILE_VERTS: u64 = 512 * 6 * 16 * 16; // up to 512 visible tiles per fr
 pub struct PendingTile {
     pub id: TileId,
     /// Basemap style this tile was fetched for ([`crate::tiles::BasemapStyle::key`]).
-    pub style: u8,
+    pub style: u64,
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
@@ -596,7 +596,7 @@ pub struct MapCallback {
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
     /// Which basemap style this pane draws ([`crate::tiles::BasemapStyle::key`]).
-    pub basemap_key: u8,
+    pub basemap_key: u64,
     /// Draw the vector basemap *after* the raster tiles instead of under them — the hybrid
     /// satellite style, where the vector geometry is roads over imagery.
     pub vector_over_raster: bool,
@@ -701,7 +701,7 @@ struct MrmsGpu {
 /// Per-pane GPU state: its own camera uniform, radar sweep, tile/radar quad buffers, and the
 /// draw lists staged during `prepare` and consumed during `paint`. (All `prepare`s run before
 /// any `paint`, so shared per-frame buffers would clobber across panes — hence per-pane.)
-type TileQuadsKey = (u64, u8, u32, u32, u32, u32, usize, bool);
+type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool);
 
 struct PaneGpu {
     camera_buf: wgpu::Buffer,
@@ -712,8 +712,7 @@ struct PaneGpu {
     radar: Option<RadarGpu>,
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
-    frame_visible: Vec<TileKey>,
-    tile_stride: u32,
+    frame_visible: Vec<(TileKey, std::ops::Range<u32>)>,
     /// What the tile quads in `tile_vbuf` were built from: tile-cache generation, basemap, camera
     /// and visible count. Unchanged means the quads are still the right ones, so a still map
     /// re-uploads nothing.
@@ -757,8 +756,10 @@ pub struct RenderResources {
     /// Bumped whenever the shared tile cache gains or loses a texture, so a pane can tell that
     /// its quad list is still current.
     tiles_gen: u64,
+    gpu_timers: HashMap<u32, crate::gpu_metrics::Timer>,
     /// GPU wind particles, built on first use. `None` when the CPU path is in charge.
-    wind: Option<crate::wind_gpu::WindGpu>,
+    wind: HashMap<u32, crate::wind_gpu::WindGpu>,
+    wind_grid: Option<Box<crate::wind_gpu::WindGrid>>,
     target_format: wgpu::TextureFormat,
 }
 
@@ -1063,7 +1064,9 @@ impl RenderResources {
             fields: HashMap::new(),
             panes: HashMap::new(),
             tiles_gen: 0,
-            wind: None,
+            gpu_timers: HashMap::new(),
+            wind: HashMap::new(),
+            wind_grid: None,
             target_format,
         }
     }
@@ -1106,7 +1109,6 @@ impl RenderResources {
                 radar_vbuf,
                 radar: None,
                 frame_visible: Vec::new(),
-                tile_stride: 6,
                 quads_key: None,
                 frame_visible_vector: Vec::new(),
                 vector_over_raster: false,
@@ -1129,7 +1131,7 @@ impl RenderResources {
     #[allow(clippy::type_complexity)] // one call site; a struct here would be ceremony
     fn tile_quads(
         &self,
-        style: u8,
+        style: u64,
         v: &VisibleTile,
     ) -> Vec<(TileKey, [f32; 2], [f32; 2], [f32; 2], [f32; 2])> {
         const FULL: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
@@ -1422,42 +1424,66 @@ impl RenderResources {
         if cb.wind.is_none() && cb.wind_upload.is_none() {
             return;
         }
-        let format = self.target_format;
-        let wind = self
-            .wind
-            .get_or_insert_with(|| crate::wind_gpu::WindGpu::new(device, queue, format));
         if let Some(up) = &cb.wind_upload {
-            wind.upload_grid(queue, up);
+            for wind in self.wind.values_mut() {
+                wind.upload_grid(queue, up);
+            }
+            self.wind_grid = Some(up.clone());
+        }
+        let format = self.target_format;
+        if !self.wind.contains_key(&cb.pane) {
+            let mut wind = crate::wind_gpu::WindGpu::new(device, queue, format);
+            if let Some(grid) = &self.wind_grid {
+                wind.upload_grid(queue, grid);
+            }
+            self.wind.insert(cb.pane, wind);
         }
         if let Some(frame) = &cb.wind {
-            wind.step(device, queue, encoder, cb.pane, frame);
+            self.wind
+                .get_mut(&cb.pane)
+                .unwrap()
+                .step(device, queue, encoder, cb.pane, frame);
         }
     }
 
     /// The tile quads for this frame, and the tile ids they draw in quad order.
-    fn tile_verts(&self, cb: &MapCallback) -> (Vec<TileVertex>, Vec<TileKey>) {
+    fn tile_verts(
+        &self,
+        cb: &MapCallback,
+    ) -> (Vec<TileVertex>, Vec<(TileKey, std::ops::Range<u32>)>) {
         wxdata::stats::bump(wxdata::stats::Counter::TileQuadsBuilt);
         let mut tverts: Vec<TileVertex> = Vec::new();
-        let mut visible: Vec<TileKey> = Vec::new();
+        let mut visible = Vec::new();
         for v in &cb.visible {
             for (id, wmin, wmax, uvmin, uvmax) in self.tile_quads(cb.basemap_key, v) {
-                let steps = tile_subdivisions(cb.globe);
-                if tverts.len() as u64 + 6 * steps * steps > MAX_TILE_VERTS { break; }
+                let steps = tile_subdivisions(cb.globe, cb.world_per_pixel, wmin, wmax);
+                let first = tverts.len() as u32;
+                if tverts.len() as u64 + 6 * steps * steps > MAX_TILE_VERTS {
+                    break;
+                }
                 let sx = (uvmax[0] - uvmin[0]) / (wmax[0] - wmin[0]);
                 let sy = (uvmax[1] - uvmin[1]) / (wmax[1] - wmin[1]);
                 let transform = [wmin[0] - uvmin[0] / sx, wmin[1] - uvmin[1] / sy, sx, sy];
-                for y in 0..steps { for x in 0..steps {
-                    for (dx, dy) in [(0,0), (1,0), (1,1), (0,0), (1,1), (0,1)] {
-                        let u = (x + dx) as f32 / steps as f32;
-                        let v = (y + dy) as f32 / steps as f32;
-                        tverts.push(TileVertex {
-                            world: [wmin[0] + u * (wmax[0] - wmin[0]), wmin[1] + v * (wmax[1] - wmin[1])],
-                            uv: [uvmin[0] + u * (uvmax[0] - uvmin[0]), uvmin[1] + v * (uvmax[1] - uvmin[1])],
-                            transform,
-                        });
+                for y in 0..steps {
+                    for x in 0..steps {
+                        for (dx, dy) in [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)] {
+                            let u = (x + dx) as f32 / steps as f32;
+                            let v = (y + dy) as f32 / steps as f32;
+                            tverts.push(TileVertex {
+                                world: [
+                                    wmin[0] + u * (wmax[0] - wmin[0]),
+                                    wmin[1] + v * (wmax[1] - wmin[1]),
+                                ],
+                                uv: [
+                                    uvmin[0] + u * (uvmax[0] - uvmin[0]),
+                                    uvmin[1] + v * (uvmax[1] - uvmin[1]),
+                                ],
+                                transform,
+                            });
+                        }
                     }
-                } }
-                visible.push(id);
+                }
+                visible.push((id, first..tverts.len() as u32));
             }
         }
         (tverts, visible)
@@ -1541,8 +1567,6 @@ impl RenderResources {
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
-        let steps = tile_subdivisions(cb.globe) as u32;
-        pane.tile_stride = 6 * steps * steps;
         queue.write_buffer(
             &pane.camera_buf,
             0,
@@ -1807,11 +1831,10 @@ impl RenderResources {
         pass.set_pipeline(&self.tile_pipeline);
         pass.set_bind_group(0, cam, &[]);
         pass.set_vertex_buffer(0, pane.tile_vbuf.slice(..));
-        for (i, id) in pane.frame_visible.iter().enumerate() {
+        for (id, vertices) in &pane.frame_visible {
             if let Some(tile) = self.tiles.get(id) {
                 pass.set_bind_group(1, &tile.bind_group, &[]);
-                let base = i as u32 * pane.tile_stride;
-                pass.draw(base..base + pane.tile_stride, 0..1);
+                pass.draw(vertices.clone(), 0..1);
             }
         }
         if pane.vector_over_raster {
@@ -1837,7 +1860,7 @@ impl RenderResources {
         // which is above everything, and a warning polygon disappearing under a particle trail
         // was the one complaint that layer ever attracted.
         if pane.frame_draw_wind {
-            if let Some(wind) = &self.wind { wind.draw(id, pass); }
+            if let Some(wind) = self.wind.get(&id) { wind.draw(id, pass); }
         }
         if pane.frame_draw_overlay {
             if let Some(overlay) = &self.overlay {
@@ -1894,8 +1917,66 @@ impl RenderResources {
     pub fn prepare_pane(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
         if let Some(visible) = cb.retain_only_pane {
             self.panes.retain(|id, _| *id == visible);
+            self.wind.retain(|id, _| *id == visible);
+            self.gpu_timers.retain(|id, _| *id == visible);
         }
         self.upload_frame(device, queue, cb);
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.gpu_timers.entry(cb.pane) {
+            if let Some(timer) = crate::gpu_metrics::Timer::new(device) { entry.insert(timer); }
+        }
+        let (gpu, shadows) = self.memory_bytes();
+        crate::gpu_metrics::set_memory(gpu, shadows);
+    }
+
+    /// Nominal resource sizes; excludes driver padding, framework targets and allocation overhead.
+    pub fn memory_bytes(&self) -> (u64, u64) {
+        let texture = |tex: &wgpu::Texture| {
+            let size = tex.size();
+            size.width as u64
+                * size.height as u64
+                * size.depth_or_array_layers as u64
+                * u64::from(tex.format().block_copy_size(None).unwrap_or(4))
+        };
+        let overlay = |geometry: &OverlayGpu| geometry.vbuf.size() + geometry.ibuf.size();
+        let mut gpu = self
+            .tiles
+            .values()
+            .map(|tile| texture(&tile._tex))
+            .sum::<u64>()
+            + self
+                .vector_tiles
+                .values()
+                .map(|tile| overlay(&tile.base) + tile.foreground.as_ref().map_or(0, overlay))
+                .sum::<u64>()
+            + self.overlay.as_ref().map_or(0, overlay)
+            + self
+                .fields
+                .values()
+                .map(|field| {
+                    texture(&field._tex)
+                        + texture(&field._lut)
+                        + field.uni.size()
+                        + field.vbuf.size()
+                })
+                .sum::<u64>()
+            + self
+                .wind
+                .values()
+                .map(|wind| wind.estimated_bytes())
+                .sum::<u64>();
+        gpu += self.gpu_timers.len() as u64 * 272;
+        let mut shadows = 0;
+        for pane in self.panes.values() {
+            gpu += pane.camera_buf.size() + pane.tile_vbuf.size() + pane.radar_vbuf.size();
+            if let Some(radar) = &pane.radar {
+                gpu += texture(&radar.tex)
+                    + texture(&radar.flag)
+                    + texture(&radar.lut)
+                    + radar.uni.size();
+                shadows += (radar.gate_bytes.len() + radar.flag_bytes.len()) as u64;
+            }
+        }
+        (gpu, shadows)
     }
 
     /// Draw a previously-prepared pane to `view` (mirrors the egui `paint` phase).
@@ -1910,6 +1991,7 @@ impl RenderResources {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("headless"),
         });
+        if let Some(timer) = self.gpu_timers.get(&pane) { timer.collect_into(&mut encoder, queue, pane); }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("headless_pass"),
@@ -1927,7 +2009,9 @@ impl RenderResources {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some(timer) = self.gpu_timers.get(&pane) { timer.begin(&mut pass); }
             self.record_pane(pane, &mut pass);
+            if let Some(timer) = self.gpu_timers.get(&pane) { timer.end(&mut pass); }
         }
         queue.submit(Some(encoder.finish()));
     }
@@ -1957,7 +2041,8 @@ impl egui_wgpu::CallbackTrait for MapCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         crate::prof_scope!("render prepare");
         let res: &mut RenderResources = resources.get_mut().unwrap();
-        res.upload_frame(device, queue, self);
+        res.prepare_pane(device, queue, self);
+        if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.collect_into(_encoder, queue, self.pane); }
         res.step_wind(device, queue, _encoder, self);
         Vec::new()
     }
@@ -1970,7 +2055,9 @@ impl egui_wgpu::CallbackTrait for MapCallback {
     ) {
         crate::prof_scope!("render paint");
         let res: &RenderResources = resources.get().unwrap();
+        if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.begin(pass); }
         res.record_pane(self.pane, pass);
+        if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.end(pass); }
     }
 }
 
@@ -2132,20 +2219,29 @@ fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, lut: &[u8]) {
     );
 }
 
-/// Global views need finer angular geometry near the horizon. Local views can use
-/// fewer subdivisions because each tile covers a smaller portion of the sphere.
-fn tile_subdivisions(globe: [f32; 4]) -> u64 {
-    if globe[2] == 0.0 { 1 } else if globe[2].abs() <= 4.0 { 16 } else { 8 }
+/// Bound projected chord error to about one pixel, quantized to prevent geometry churn.
+/// The hard 16 subdivision ceiling and MAX_TILE_VERTS keep global allocation bounded.
+fn tile_subdivisions(globe: [f32; 4], world_per_pixel: f32, min: [f32; 2], max: [f32; 2]) -> u64 {
+    if globe[2] == 0.0 { return 1; }
+    let latitude = |y: f32| (std::f32::consts::PI * (1.0 - 2.0 * y)).sinh().atan();
+    let angle = ((max[0] - min[0]).abs() * std::f32::consts::TAU).max((latitude(max[1]) - latitude(min[1])).abs());
+    let radius = 1.0 / (world_per_pixel.max(1e-12) * globe[1].abs().max(0.05) * std::f32::consts::TAU);
+    let needed = (radius * angle * angle / 8.0).sqrt().ceil() as u64;
+    needed.clamp(2, 16).next_power_of_two().min(16)
 }
 
 #[cfg(test)]
 mod dirty_radar_rows_tests {
     use super::changed_rows;
     #[test]
-    fn global_globe_uses_finer_geometry_with_a_bounded_local_cost() {
-        assert_eq!(super::tile_subdivisions([0.0; 4]), 1);
-        assert_eq!(super::tile_subdivisions([0.0, 1.0, 2.0, 2.0]), 16);
-        assert_eq!(super::tile_subdivisions([0.0, 1.0, 5.0, 5.0]), 8);
+    fn globe_geometry_tracks_screen_error_and_stays_bounded() {
+        let globe = [0.0, 1.0, 2.0, 2.0];
+        assert_eq!(super::tile_subdivisions([0.0; 4], 0.001, [0.0; 2], [1.0; 2]), 1);
+        let wide = super::tile_subdivisions(globe, 0.001, [0.0; 2], [0.5; 2]);
+        let narrow = super::tile_subdivisions(globe, 0.001, [0.0; 2], [0.01; 2]);
+        assert!(wide > narrow);
+        assert_eq!(super::tile_subdivisions(globe, 1e-12, [0.0; 2], [1.0; 2]), 16);
+        assert!(super::tile_subdivisions(globe, 0.0001, [0.0; 2], [0.1; 2]) >= super::tile_subdivisions(globe, 0.001, [0.0; 2], [0.1; 2]));
     }
 
     #[test]

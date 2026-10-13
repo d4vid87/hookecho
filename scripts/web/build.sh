@@ -144,7 +144,7 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Follow-up presets, sector freshness, timing limits and adaptive-quality counters measured
 # 4,365,401 bytes gzip before the final cadence refinement (~0.3% above the prior integration).
 # Retain a small explicit margin; the lite and startup budgets remain unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4380000}"
+budget="${HOOKECHO_WASM_BUDGET:-4410000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

@@ -117,6 +117,8 @@ pub struct PaneSnap {
     pub thresholds: Vec<(wxdata::level2::Moment, f32)>,
     #[serde(default)]
     pub appearance: crate::radar_appearance::RadarAppearance,
+    #[serde(default)]
+    pub satellite: crate::satellite_time::Selection,
     /// Older layouts inherit the app default. New layouts retain the pane choice.
     #[serde(default)]
     pub smooth: Option<bool>,
@@ -146,6 +148,7 @@ impl PaneSnap {
                     .collect(),
             ),
             appearance: v.appearance.clone(),
+            satellite: v.satellite.clone(),
             smooth: Some(v.smooth),
             globe: v.camera.globe,
             thresholds: wxdata::level2::Moment::ALL
@@ -166,6 +169,7 @@ impl PaneSnap {
         v.tilt = self.tilt;
         v.follow_low_cut = false; // a saved tilt takes precedence over this session-only live mode
         v.srv = self.srv;
+        v.satellite = self.satellite.clone();
         v.appearance = self.appearance.clone();
         v.appearance.sanitize();
         if let Some(smooth) = self.smooth { v.smooth = smooth; }
@@ -206,6 +210,7 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
         fields_on: None,
         thresholds: vec![(wxdata::level2::Moment::Reflectivity, 16.0)],
         appearance: Default::default(),
+        satellite: Default::default(),
         smooth: None,
         globe: false,
     }
@@ -255,6 +260,7 @@ pub fn starters() -> Vec<Workspace> {
                 fields_on: Some(vec!["mrms".into()]),
                 thresholds: vec![(Moment::Reflectivity, 16.0)],
                 appearance: Default::default(),
+                satellite: Default::default(),
                 smooth: None,
         globe: false,
             }],
@@ -297,6 +303,20 @@ pub fn starters() -> Vec<Workspace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_satellite_selections_survive_workspace_roundtrip() {
+        let mut view = MapView::new(Some("KTLX".into()), crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 7.0));
+        view.satellite = crate::satellite_time::Selection { follow_radar: false, time: chrono::DateTime::from_timestamp(1_700_000_000, 0) };
+        let snapshot = PaneSnap::capture(&view);
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        let decoded: PaneSnap = serde_json::from_str(&encoded).unwrap();
+        let mut second = MapView::new(None, view.camera);
+        decoded.apply(&mut second);
+        assert_eq!(second.satellite, view.satellite);
+        second.satellite.time = None;
+        assert_ne!(second.satellite, view.satellite);
+    }
 
     #[test]
     fn starters_can_always_reach_radar() {
@@ -431,6 +451,7 @@ mod tests {
                 fields_on: None,
                 thresholds: Vec::new(),
                 appearance: Default::default(),
+                satellite: Default::default(),
                 smooth: None,
         globe: false,
             }],
