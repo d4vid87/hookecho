@@ -151,7 +151,7 @@ impl HookEchoApp {
             let layer = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|layer| view.fields_on.contains(layer));
-            let field = layer.and_then(|layer| self.fields.get(&layer)?.frame.as_ref());
+            let field = layer.and_then(|layer| self.field_state(i, layer)?.frame.as_ref());
             let health = layer.and_then(|layer| self.palette_health(PaletteAction::ToggleField(layer)))
                 .map(|health| format!(" · {}", crate::ui::layers_panel::health_look(health.state()).0))
                 .unwrap_or_default();
@@ -189,7 +189,7 @@ impl HookEchoApp {
                     }
                     for layer in crate::render::FieldLayer::draw_order().filter(|layer| view.fields_on.contains(layer)) {
                         ui.separator();
-                        let state = self.fields.get(&layer);
+                        let state = self.field_state(i, layer);
                         let frame = state.and_then(|state| state.frame.as_ref());
                         let name = frame.map_or_else(|| format!("{layer:?}"), |frame| frame.descriptor.display_name.to_owned());
                         ui.strong(name);

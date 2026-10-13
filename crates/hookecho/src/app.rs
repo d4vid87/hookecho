@@ -257,7 +257,8 @@ enum OverlayMsg {
         Option<wxdata::mrms::MrmsField>,
     ),
     /// A direct RGBA satellite composite.
-    Rgb(crate::render::FieldLayer, wxdata::abi::RgbImage),
+    PaneAbi(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
+    PaneRgb(usize, crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
     GefsDistribution(wxdata::global::GefsPointPlume),
@@ -361,12 +362,13 @@ enum OverlaySource {
     Field(crate::render::FieldLayer, String),
     /// Native GOES ABI imagery for a registered band.
     GoesAbi(
+        usize,
         crate::render::FieldLayer,
         u8,
         wxdata::abi::Scene,
         Option<DateTime<Utc>>,
     ),
-    GoesRgb(wxdata::abi::Scene, Option<DateTime<Utc>>),
+    GoesRgb(usize, wxdata::abi::Scene, Option<DateTime<Utc>>),
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
@@ -491,6 +493,7 @@ enum OverlaySource {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RequestLane {
     Field(crate::render::FieldLayer),
+    PaneField(usize, crate::render::FieldLayer),
     Placefile(String),
     Feed(&'static str),
 }
@@ -499,6 +502,7 @@ impl RequestLane {
     fn label(&self) -> String {
         match self {
             Self::Field(layer) => format!("field {}", layer.slug()),
+            Self::PaneField(pane, layer) => format!("pane {} field {}", pane + 1, layer.slug()),
             Self::Placefile(source) => format!("Placefile {source}"),
             Self::Feed(label) => (*label).into(),
         }
@@ -506,7 +510,7 @@ impl RequestLane {
 
     fn cadence(&self) -> std::time::Duration {
         let secs = match self {
-            Self::Field(layer) => field_refresh_secs(*layer),
+            Self::Field(layer) | Self::PaneField(_, layer) => field_refresh_secs(*layer),
             Self::Placefile(_) => 120,
             Self::Feed(label) => match *label {
                 "Spotter Network" | "Live stations" | "Field mill" | "Derived radar fields" => 60,
@@ -649,8 +653,8 @@ impl OverlaySource {
             Self::Spotters => RequestLane::Feed("Spotter Network"),
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
-            Self::GoesAbi(layer, ..) => RequestLane::Field(*layer),
-            Self::GoesRgb(..) => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
+            Self::GoesAbi(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
+            Self::GoesRgb(pane, ..) => RequestLane::PaneField(*pane, crate::render::FieldLayer::GoesTrueColor),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
@@ -752,7 +756,7 @@ impl OverlaySource {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
             }
-            OverlaySource::GoesAbi(layer, band, scene, at) => {
+            OverlaySource::GoesAbi(pane, layer, band, scene, at) => {
                 let received = Utc::now();
                 let image = wxdata::abi::fetch_at(
                     http,
@@ -772,9 +776,12 @@ impl OverlaySource {
                 };
                 #[cfg(not(target_arch = "wasm32"))]
                 let frame = image.into_frame(received)?;
-                OverlayMsg::RegisteredField(layer, frame, None)
+                let mut frame = frame;
+                frame.stamp.received_time = Utc::now();
+                OverlayMsg::PaneAbi(pane, layer, frame, None)
             }
-            OverlaySource::GoesRgb(scene, at) => OverlayMsg::Rgb(
+            OverlaySource::GoesRgb(pane, scene, at) => OverlayMsg::PaneRgb(
+                pane,
                 crate::render::FieldLayer::GoesTrueColor,
                 wxdata::abi::fetch_rgb_at(
                     http,
@@ -2187,6 +2194,7 @@ pub(crate) struct FieldState {
     pub last_fetch: Option<Instant>,
     /// Analysis time used by the current native-satellite request (`None` inside = live).
     pub requested_time: Option<Option<DateTime<Utc>>>,
+    pub requested_scene: Option<wxdata::abi::Scene>,
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
     pub off_since: Option<Instant>,
@@ -3306,6 +3314,7 @@ pub struct HookEchoApp {
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
     /// its own toggle + pending GPU upload + refresh throttle. Keyed by [`crate::render::FieldLayer`].
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
+    pane_fields: std::collections::HashMap<(usize, crate::render::FieldLayer), FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
     reflectivity_trail: wxdata::trail::ExtremaTrail,
@@ -4276,6 +4285,7 @@ impl HookEchoApp {
             crash_report: None,
             cells_site: None,
             cell_trends: std::collections::HashMap::new(),
+            pane_fields: Default::default(),
             fields: crate::render::FieldLayer::draw_order()
                 .map(|l| (l, FieldState::default()))
                 .collect(),
@@ -5058,6 +5068,10 @@ impl HookEchoApp {
                         OverlayMsg::RegisteredField(layer, frame, _) => {
                             let display = registered_display_field(&frame, cap);
                             OverlayMsg::RegisteredField(layer, frame, display)
+                        }
+                        OverlayMsg::PaneAbi(pane, layer, frame, _) => {
+                            let display = registered_display_field(&frame, cap);
+                            OverlayMsg::PaneAbi(pane, layer, frame, display)
                         }
                         other => other,
                     })
@@ -9725,7 +9739,7 @@ impl HookEchoApp {
                     result,
                 } => {
                     let data_time = match &result {
-                        Ok(OverlayMsg::RegisteredField(_, frame, _)) => {
+                        Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneAbi(_, _, frame, _)) => {
                             Some(frame.stamp.valid_time)
                         }
                         _ => None,
@@ -9914,34 +9928,28 @@ impl HookEchoApp {
                         s.frame = Some(frame);
                     }
                 }
-                OverlayMsg::Rgb(layer, image) => {
-                    let upload = rgb_upload(&image);
-                    if let Some(state) = self.fields.get_mut(&layer) {
-                        state.pending = Some(upload);
-                        state.metadata = Some((
-                            wxdata::field::GridSpec {
-                                nx: image.width,
-                                ny: image.height,
-                                projection: "GOES-R fixed grid",
-                                lon_west: image.lon_west,
-                                lon_east: image.lon_east,
-                                lat_north: image.lat_north,
-                                lat_south: image.lat_south,
-                                native_resolution_m: None,
-                                missing: wxdata::field::MissingData::Nan,
-                            },
-                            wxdata::field::DataStamp {
-                                source_identity: image.source_identity.clone(),
-                                issue_time: None,
-                                run_time: None,
-                                valid_time: image.valid_time,
-                                received_time: image.received_time.unwrap_or_else(Utc::now),
-                                class: wxdata::field::DataClass::Observed,
-                                quality: wxdata::field::QualitySummary::Unknown,
-                                available_members: None,
-                            },
-                        ));
-                    }
+                OverlayMsg::PaneAbi(pane, layer, frame, display) => {
+                    if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
+                    let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
+                    let state = self.pane_fields.entry((pane, layer)).or_default();
+                    state.pending = Some(upload);
+                    state.metadata = Some((frame.grid.clone(), frame.stamp.clone()));
+                    state.frame = Some(frame);
+                }
+                OverlayMsg::PaneRgb(pane, layer, image) => {
+                    if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
+                    let state = self.pane_fields.entry((pane, layer)).or_default();
+                    state.pending = Some(rgb_upload(&image));
+                    state.metadata = Some((wxdata::field::GridSpec {
+                        nx: image.width, ny: image.height, projection: "GOES-R fixed grid",
+                        lon_west: image.lon_west, lon_east: image.lon_east,
+                        lat_north: image.lat_north, lat_south: image.lat_south,
+                        native_resolution_m: None, missing: wxdata::field::MissingData::Nan,
+                    }, wxdata::field::DataStamp {
+                        source_identity: image.source_identity.clone(), issue_time: None, run_time: None,
+                        valid_time: image.valid_time, received_time: Utc::now(), class: wxdata::field::DataClass::Observed,
+                        quality: wxdata::field::QualitySummary::Unknown, available_members: None,
+                    }));
                 }
                 OverlayMsg::ModelDiff(frame, valid) => {
                     let layer = crate::render::FieldLayer::ModelDiff;
@@ -10161,7 +10169,7 @@ impl HookEchoApp {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(&layer))
+            .and_then(|layer| self.field_state(self.active, layer))
             .and_then(|state| state.frame.as_ref());
         let (label, units, product_id, valid, class, profile) = if let Some(frame) = frame {
             (
@@ -12865,12 +12873,16 @@ impl HookEchoApp {
         ))
     }
 
+    fn field_state(&self, pane: usize, layer: crate::render::FieldLayer) -> Option<&FieldState> {
+        if layer.is_native_abi() { self.pane_fields.get(&(pane, layer)) } else { self.fields.get(&layer) }
+    }
+
     fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
         let view = self.views.get(idx)?;
         let (layer, frame) = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| Some((layer, self.fields.get(&layer)?.frame.as_ref()?)))?;
+            .and_then(|layer| Some((layer, self.field_state(idx, layer)?.frame.as_ref()?)))?;
         let sample = frame.sample(lon, lat);
         sample.value.map(|value| {
             let display = self.settings.field_display_value(frame.descriptor, value);
@@ -13524,7 +13536,7 @@ impl HookEchoApp {
                             let frames = crate::render::FieldLayer::draw_order()
                                 .rev()
                                 .filter(|layer| self.views[idx].fields_on.contains(layer))
-                                .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
+                                .filter_map(|layer| self.field_state(idx, layer)?.frame.as_ref())
                                 .filter(|frame| {
                                     !matches!(
                                         frame.descriptor.value_kind,
@@ -13964,7 +13976,7 @@ impl HookEchoApp {
         // currently-enabled layers.
         // Field textures are evicted the way tiles are: decided here, where the state that knows
         // whether a re-upload will follow lives, and handed to the renderer to free.
-        let drop_fields: Vec<crate::render::FieldLayer> = if first {
+        let mut drop_fields: Vec<crate::render::FieldLayer> = if first {
             let now = Instant::now();
             let on: std::collections::HashSet<crate::render::FieldLayer> = self
                 .views
@@ -14002,7 +14014,18 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let field_uploads: Vec<(crate::render::FieldLayer, crate::render::MrmsUpload)> = if first {
+        let now = Instant::now();
+        for ((pane, layer), state) in self.pane_fields.iter_mut().filter(|((pane, _), _)| *pane == idx) {
+            if self.views[idx].fields_on.contains(layer) { state.off_since = None; }
+            else {
+                self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel(&RequestLane::PaneField(*pane, *layer));
+                if state.off_since.is_some_and(|since| now.duration_since(since) >= FIELD_EVICT) {
+                    state.frame = None; state.metadata = None; state.pending = None; state.last_fetch = None;
+                    drop_fields.push(*layer);
+                } else if state.off_since.is_none() { state.off_since = Some(now); }
+            }
+        }
+        let mut field_uploads: Vec<(crate::render::FieldLayer, crate::render::MrmsUpload)> = if first {
             self.fields
                 .iter_mut()
                 .filter_map(|(k, s)| s.pending.take().map(|u| (*k, u)))
@@ -14010,6 +14033,9 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        field_uploads.extend(self.pane_fields.iter_mut().filter_map(|((pane, layer), state)| {
+            (*pane == idx).then(|| state.pending.take().map(|upload| (*layer, upload))).flatten()
+        }));
         let field_draws: Vec<(crate::render::FieldLayer, f32)> = self.views[idx]
             .fields_on
             .iter()
@@ -16031,7 +16057,7 @@ impl HookEchoApp {
             let frame = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|layer| view.fields_on.contains(layer))
-                .and_then(|layer| self.fields.get(&layer))
+                .and_then(|layer| self.field_state(idx, layer))
                 .and_then(|state| state.frame.as_ref());
             if let Some(frame) = frame {
                 let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
@@ -16851,6 +16877,11 @@ impl HookEchoApp {
     /// Whether a registry-backed observed field answers the instant this pane is showing.
     /// Unmigrated fields retain their existing behavior until they carry a `DataStamp`.
     fn field_aligned(&self, pane: usize, layer: crate::render::FieldLayer) -> bool {
+        if layer.is_native_abi() {
+            let selection = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
+            if !selection.satellite.follow_radar && selection.satellite.time.is_none() { return false; }
+            if self.field_state(pane, layer).is_none_or(|state| state.metadata.is_none()) { return false; }
+        }
         self.field_time_status(pane, layer)
             .is_none_or(|(_, _, _, aligned)| aligned)
     }
@@ -16867,14 +16898,15 @@ impl HookEchoApp {
         bool,
     )> {
         let stamp = self
-            .fields
-            .get(&layer)
+            .field_state(pane, layer)
             .and_then(|state| state.metadata.as_ref())
             .map(|(_, stamp)| stamp)?;
-        let selected_time = self.views[pane]
-            .timeline
-            .selected_time()
-            .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time));
+        let selected_time = if layer.is_native_abi() {
+            let view = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
+            if view.satellite.follow_radar { view.displayed_time().or(view.timeline.selected_time()) } else { view.satellite.time }
+        } else {
+            self.views[pane].displayed_time().or(self.views[pane].timeline.selected_time())
+        };
         // A live MRMS mosaic is independent of the site's last completed scan. That scan can
         // lag by ten minutes even while the national field is fresh; archive scrubs still use
         // their selected instant.
@@ -17376,12 +17408,14 @@ impl HookEchoApp {
         let n = crate::workspace::bounded_pane_count(n);
         while self.views.len() < n {
             let src = &self.views[self.active];
-            let (site, camera, basemap, tilt, date) = (
+            let (site, camera, basemap, tilt, date, abi_scene, satellite) = (
                 src.site.clone(),
                 src.camera,
                 src.basemap,
                 src.tilt,
                 src.timeline.date,
+                src.abi_scene,
+                src.satellite.clone(),
             );
             // Split a scrubbed view and the new panes have to land on the same instant, not on
             // live. Without this, splitting an archive view gave one populated pane and three
@@ -17392,6 +17426,8 @@ impl HookEchoApp {
             let mut v = MapView::new(site, camera);
             v.smooth = self.settings.smooth_radar;
             v.basemap = basemap;
+            v.abi_scene = abi_scene;
+            v.satellite = satellite;
             v.tilt = tilt;
             v.timeline.date = date;
             v.timeline.following = seek.is_none();
@@ -17400,6 +17436,12 @@ impl HookEchoApp {
             self.views.push(v);
         }
         self.views.truncate(n);
+        self.pane_fields.retain(|(pane, layer), _| {
+            if *pane >= n {
+                self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel(&RequestLane::PaneField(*pane, *layer));
+                false
+            } else { true }
+        });
         if self.active >= n {
             self.active = n - 1;
         }
@@ -18002,7 +18044,7 @@ impl HookEchoApp {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .filter(|layer| self.views[self.active].fields_on.contains(layer))
-            .find_map(|layer| self.fields.get(&layer).and_then(|state| state.frame.clone()));
+            .find_map(|layer| self.field_state(self.active, layer).and_then(|state| state.frame.clone()));
         let Some(frame) = frame else {
             self.toast(ToastKind::Info, "No scalar field is active");
             return;
@@ -18150,7 +18192,7 @@ impl HookEchoApp {
         let active = &self.views[self.active].fields_on;
         let frames: Vec<_> = crate::render::FieldLayer::draw_order()
             .filter(|layer| active.contains(layer))
-            .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
+            .filter_map(|layer| self.field_state(self.active, layer)?.frame.as_ref())
             .collect();
         let forecast = frames
             .iter()
@@ -20299,85 +20341,38 @@ impl eframe::App for HookEchoApp {
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
         }
-        // GOES ABI imagery has its own source adapter and arrives every five minutes.
-        let satellite_time = (!self.views[self.active].timeline.following)
-            .then(|| {
-                self.views[self.active]
-                    .timeline
-                    .current()
-                    .and_then(|frame| frame.date_time())
-            })
-            .flatten();
-        for (layer, band) in [
-            (FL::GoesC13, 13),
-            (FL::GoesWaterVapor, 8),
-            (FL::GoesMidWaterVapor, 9),
-            (FL::GoesLongwaveIr, 14),
-            (FL::GoesVisible, 2),
-        ] {
-            let stale = self.field_wanted(layer)
-                && self.fields.get(&layer).is_none_or(|state| {
-                    state.requested_time != Some(satellite_time)
-                        || state.last_fetch.is_none_or(|time| {
-                            time.elapsed().as_secs() >= field_refresh_secs(layer)
-                        })
-                });
-            if stale {
-                let state = self.fields.entry(layer).or_default();
+        // Each pane owns ABI scene, requested instant and request generations.
+        for pane in 0..self.views.len() {
+            let scene = self.views[pane].abi_scene.unwrap_or(self.settings.abi_scene);
+            let selection = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
+            let satellite_time = if selection.satellite.follow_radar {
+                (!selection.timeline.following).then(|| selection.displayed_time().or(selection.timeline.selected_time())).flatten()
+            } else { selection.satellite.time };
+            if !selection.satellite.follow_radar && satellite_time.is_none() { continue; }
+            let layers: Vec<_> = self.views[pane].fields_on.iter().copied().filter(|layer| layer.is_native_abi()).collect();
+            for layer in layers {
+                let state = self.pane_fields.entry((pane, layer)).or_default();
+                let stale = state.requested_time != Some(satellite_time) || state.requested_scene != Some(scene)
+                    || state.last_fetch.is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer));
+                if !stale { continue; }
+                if state.requested_time != Some(satellite_time) || state.requested_scene != Some(scene) {
+                    state.frame = None;
+                    state.metadata = None;
+                    state.pending = None;
+                }
                 state.last_fetch = Some(Instant::now());
                 state.requested_time = Some(satellite_time);
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::GoesAbi(
-                        layer,
-                        band,
-                        self.settings.abi_scene,
-                        satellite_time,
-                    ),
-                );
-            }
-        }
-        for (index, entry) in wxdata::abi::CATALOG.iter().enumerate() {
-            let layer = FL::GoesCatalog(index as u8);
-            let stale = self.field_wanted(layer)
-                && self.fields.get(&layer).is_none_or(|state| {
-                    state.requested_time != Some(satellite_time)
-                        || state.last_fetch.is_none_or(|time| {
-                            time.elapsed().as_secs() >= field_refresh_secs(layer)
-                        })
-                });
-            if stale {
-                let state = self.fields.entry(layer).or_default();
-                state.last_fetch = Some(Instant::now());
-                state.requested_time = Some(satellite_time);
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::GoesAbi(
-                        layer,
-                        entry.band,
-                        self.settings.abi_scene,
-                        satellite_time,
-                    ),
-                );
-            }
-        }
-        {
-            let layer = FL::GoesTrueColor;
-            let stale = self.field_wanted(layer)
-                && self.fields.get(&layer).is_none_or(|state| {
-                    state.requested_time != Some(satellite_time)
-                        || state.last_fetch.is_none_or(|time| {
-                            time.elapsed().as_secs() >= field_refresh_secs(layer)
-                        })
-                });
-            if stale {
-                let state = self.fields.entry(layer).or_default();
-                state.last_fetch = Some(Instant::now());
-                state.requested_time = Some(satellite_time);
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::GoesRgb(self.settings.abi_scene, satellite_time),
-                );
+                state.requested_scene = Some(scene);
+                let source = if layer == FL::GoesTrueColor { OverlaySource::GoesRgb(pane, scene, satellite_time) } else {
+                    let band = match layer {
+                        FL::GoesC13 => 13, FL::GoesWaterVapor => 8, FL::GoesMidWaterVapor => 9,
+                        FL::GoesLongwaveIr => 14, FL::GoesVisible => 2,
+                        FL::GoesCatalog(index) => wxdata::abi::CATALOG[index as usize].band,
+                        _ => unreachable!(),
+                    };
+                    OverlaySource::GoesAbi(pane, layer, band, scene, satellite_time)
+                };
+                self.spawn_overlay(ctx, source);
             }
         }
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
@@ -23394,6 +23389,19 @@ mod request_book_tests {
         assert!(!super::frame_result_is_current(&timeline, newest.name()));
         timeline.frames.clear();
         assert!(!super::frame_result_is_current(&timeline, old.name()));
+    }
+
+    #[test]
+    fn abi_request_generations_are_independent_between_panes() {
+        let mut book = RequestBook::default();
+        let a = RequestLane::PaneField(0, FieldLayer::GoesC13);
+        let b = RequestLane::PaneField(1, FieldLayer::GoesC13);
+        let old_a = book.start(a.clone(), 10).unwrap();
+        let current_b = book.start(b.clone(), 20).unwrap();
+        let current_a = book.start(a.clone(), 30).unwrap();
+        assert!(!book.finish(&a, old_a, None, None));
+        assert!(book.finish(&b, current_b, None, None));
+        assert!(book.is_current(&a, current_a));
     }
 
     #[test]

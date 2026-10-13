@@ -293,6 +293,10 @@ impl FieldLayer {
         FieldLayer::MrmsVil,
     ];
 
+    pub fn is_native_abi(self) -> bool {
+        matches!(self, Self::GoesC13 | Self::GoesWaterVapor | Self::GoesMidWaterVapor | Self::GoesLongwaveIr | Self::GoesVisible | Self::GoesTrueColor | Self::GoesCatalog(_))
+    }
+
     pub fn draw_order() -> impl DoubleEndedIterator<Item = FieldLayer> {
         Self::BASE_DRAW_ORDER
             .into_iter()
@@ -751,7 +755,7 @@ pub struct RenderResources {
     tiles: HashMap<TileKey, TileGpu>,
     vector_tiles: HashMap<(u32, TileId), VectorGpu>,
     overlay: Option<OverlayGpu>,
-    fields: HashMap<FieldLayer, MrmsGpu>,
+    fields: HashMap<(Option<u32>, FieldLayer), MrmsGpu>,
     // One entry per live pane.
     panes: HashMap<u32, PaneGpu>,
     /// Bumped whenever the shared tile cache gains or loses a texture, so a pane can tell that
@@ -1525,17 +1529,17 @@ impl RenderResources {
         // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
         // here, before any drawing.
         for layer in &cb.drop_fields {
-            self.fields.remove(layer);
+            self.fields.remove(&(layer.is_native_abi().then_some(cb.pane), *layer));
         }
         for (layer, up) in &cb.field_uploads {
             let gpu = self.build_field_layer(device, queue, up);
-            self.fields.insert(*layer, gpu);
+            self.fields.insert((layer.is_native_abi().then_some(cb.pane), *layer), gpu);
         }
         // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
         // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
         let mut field_draws = Vec::new();
         for (layer, opacity) in &cb.field_draws {
-            if let Some(f) = self.fields.get(layer) {
+            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(cb.pane), *layer)) {
                 queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
                 field_draws.push(*layer);
             }
@@ -1808,7 +1812,7 @@ impl RenderResources {
             if layer.below_radar() != below || !pane.field_draws.contains(&layer) {
                 continue;
             }
-            if let Some(f) = self.fields.get(&layer) {
+            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(pane.id), layer)) {
                 pass.set_pipeline(&self.mrms_pipeline);
                 pass.set_bind_group(0, cam, &[]);
                 pass.set_bind_group(1, &f.bind_group, &[]);

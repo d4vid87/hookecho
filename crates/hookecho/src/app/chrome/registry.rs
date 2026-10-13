@@ -45,6 +45,9 @@ impl HookEchoApp {
     pub(crate) fn palette_health(&self, action: PaletteAction) -> Option<SourceHealth> {
         use crate::render::FieldLayer as FL;
         use OverlayToggle as T;
+        if let PaletteAction::ToggleField(layer) = action {
+            if layer.is_native_abi() { return Some(self.request_health(RequestLane::PaneField(self.active, layer))); }
+        }
         let lane = match action {
             PaletteAction::SetMoment(..) => return Some(self.radar_health()),
             PaletteAction::SetContours(k) if k != ContourKind::Off => {

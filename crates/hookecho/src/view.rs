@@ -263,6 +263,7 @@ pub struct MapView {
     pub storm_speed_kt: f32,
     /// Basemap source under the radar (`None` = off).
     pub basemap: crate::tiles::BasemapStyle,
+    pub abi_scene: Option<wxdata::abi::Scene>,
     pub show_radar: bool,
     pub show_legend: bool,
     pub loading: bool,
@@ -351,6 +352,7 @@ impl MapView {
             storm_dir_deg: 240.0,
             storm_speed_kt: 25.0,
             basemap: crate::tiles::BasemapStyle::default(),
+            abi_scene: None,
             show_radar: true,
             show_legend: true,
             loading: false,

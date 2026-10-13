@@ -119,6 +119,8 @@ pub struct PaneSnap {
     pub appearance: crate::radar_appearance::RadarAppearance,
     #[serde(default)]
     pub satellite: crate::satellite_time::Selection,
+    #[serde(default)]
+    pub abi_scene: Option<wxdata::abi::Scene>,
     /// Older layouts inherit the app default. New layouts retain the pane choice.
     #[serde(default)]
     pub smooth: Option<bool>,
@@ -149,6 +151,7 @@ impl PaneSnap {
             ),
             appearance: v.appearance.clone(),
             satellite: v.satellite.clone(),
+            abi_scene: v.abi_scene,
             smooth: Some(v.smooth),
             globe: v.camera.globe,
             thresholds: wxdata::level2::Moment::ALL
@@ -170,6 +173,7 @@ impl PaneSnap {
         v.follow_low_cut = false; // a saved tilt takes precedence over this session-only live mode
         v.srv = self.srv;
         v.satellite = self.satellite.clone();
+        v.abi_scene = self.abi_scene;
         v.appearance = self.appearance.clone();
         v.appearance.sanitize();
         if let Some(smooth) = self.smooth { v.smooth = smooth; }
@@ -211,6 +215,7 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
         thresholds: vec![(wxdata::level2::Moment::Reflectivity, 16.0)],
         appearance: Default::default(),
         satellite: Default::default(),
+                abi_scene: None,
         smooth: None,
         globe: false,
     }
@@ -261,6 +266,7 @@ pub fn starters() -> Vec<Workspace> {
                 thresholds: vec![(Moment::Reflectivity, 16.0)],
                 appearance: Default::default(),
                 satellite: Default::default(),
+                abi_scene: None,
                 smooth: None,
         globe: false,
             }],
@@ -302,6 +308,17 @@ pub fn starters() -> Vec<Workspace> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn abi_scene_survives_workspace_without_becoming_global() {
+        let mut view = crate::view::MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 4.0));
+        view.abi_scene = Some(wxdata::abi::Scene::Mesoscale2);
+        let snapshot = super::PaneSnap::capture(&view);
+        let restored: super::PaneSnap = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        view.abi_scene = Some(wxdata::abi::Scene::Conus);
+        restored.apply(&mut view);
+        assert_eq!(view.abi_scene, Some(wxdata::abi::Scene::Mesoscale2));
+    }
+
     use super::*;
 
     #[test]
@@ -452,6 +469,7 @@ mod tests {
                 thresholds: Vec::new(),
                 appearance: Default::default(),
                 satellite: Default::default(),
+                abi_scene: None,
                 smooth: None,
         globe: false,
             }],

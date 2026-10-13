@@ -3390,6 +3390,38 @@ mod golden_tests {
     }
 
     #[test]
+    #[ignore = "gpu"]
+    fn gpu_abi_fields_remain_independent_between_panes() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let target = new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let mut cb = performance_callback(&sweep, &table, Camera::at_lonlat(0.0, 0.0, 0.0), false);
+        cb.draw_radar = false; cb.radar_upload = None;
+        let layer = crate::render::FieldLayer::GoesTrueColor;
+        cb.field_draws = vec![(layer, 1.0)];
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let center = ((GOLDEN_SIZE / 2 * GOLDEN_SIZE + GOLDEN_SIZE / 2) * 4) as usize;
+        for (pane, color, upload, drop) in [
+            (0, [255, 0, 0, 255], true, false), (1, [0, 0, 255, 255], true, false),
+            (0, [0, 255, 0, 255], true, true), (1, [0, 0, 255, 255], false, false),
+        ] {
+            cb.pane = pane;
+            cb.drop_fields = if drop { vec![layer] } else { vec![] };
+            cb.field_uploads = if upload { vec![(layer, crate::render::MrmsUpload {
+                data: color.repeat(4), rgba: true, nx: 2, ny: 2,
+                world_min: [0.0; 2], world_max: [1.0; 2],
+                uniform: [-180.0,85.0,180.0,-85.0,2.0,2.0,1.0,1.0,0.0,0.0,0.0,0.0], lut: vec![0; 1024],
+            })] } else { vec![] };
+            resources.render_once(&device, &queue, &view, &cb, clear_color());
+            let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
+            assert_eq!(&pixels[center..center + 4], &color);
+        }
+    }
+
+    #[test]
     #[ignore = "gpu benchmark"]
     fn gpu_performance_matrix() {
         let rt = tokio::runtime::Builder::new_multi_thread()
