@@ -179,6 +179,38 @@ impl HookEchoApp {
                     ui.weak(&site);
                 });
                 ui.label(source);
+                ui.collapsing("Layer sources and times", |ui| {
+                    let view = &self.views[i];
+                    let radar = view.displayed_time();
+                    if let Some(time) = radar {
+                        ui.label(format!("Radar observed {} UTC", time.format("%Y-%m-%d %H:%M:%S")));
+                    } else {
+                        ui.weak("Radar displayed time unavailable");
+                    }
+                    for layer in crate::render::FieldLayer::draw_order().filter(|layer| view.fields_on.contains(layer)) {
+                        ui.separator();
+                        let state = self.fields.get(&layer);
+                        let frame = state.and_then(|state| state.frame.as_ref());
+                        let name = frame.map_or_else(|| format!("{layer:?}"), |frame| frame.descriptor.display_name.to_owned());
+                        ui.strong(name);
+                        let stamp = frame.map(|frame| &frame.stamp)
+                            .or_else(|| state.and_then(|state| state.metadata.as_ref().map(|(_, stamp)| stamp)));
+                        if let Some(stamp) = stamp {
+                            for line in provenance_lines(stamp, radar, chrono::Utc::now()) { ui.label(line); }
+                            if !self.field_aligned(i, layer) {
+                                ui.colored_label(egui::Color32::from_rgb(255, 186, 86), "Withheld: outside this pane's time tolerance");
+                            }
+                        } else {
+                            ui.weak("Source time unavailable · waiting for metadata");
+                        }
+                    }
+                    if let Some(time) = view.satellite.time {
+                        ui.separator();
+                        ui.label(format!("Raster satellite selected {} UTC", time.format("%Y-%m-%d %H:%M:%S")));
+                        if let Some(radar) = radar { ui.weak(format!("Selected satellite − radar {:+.1}s", (time - radar).num_milliseconds() as f64 / 1000.0)); }
+                        ui.weak("Image residency and displayed time are shown on the map");
+                    }
+                });
                 if let Some(probe) = probe {
                     ui.separator();
                     ui.label(probe);
@@ -186,5 +218,39 @@ impl HookEchoApp {
             });
             ui.add_space(6.0);
         }
+    }
+}
+
+/// Source times retain their meaning: forecast lead is measured from run, never receipt.
+fn provenance_lines(stamp: &wxdata::field::DataStamp, radar: Option<chrono::DateTime<chrono::Utc>>, now: chrono::DateTime<chrono::Utc>) -> Vec<String> {
+    let mut lines = vec![
+        format!("Source: {}", stamp.source_identity),
+        format!("{} valid {} UTC · {}", stamp.class.label(), stamp.valid_time.format("%Y-%m-%d %H:%M:%S"), stamp.quality.label()),
+        format!("Valid age {:+.1} min · received {:.1} min ago", (now - stamp.valid_time).num_milliseconds() as f64 / 60_000.0, (now - stamp.received_time).num_milliseconds().max(0) as f64 / 60_000.0),
+    ];
+    if let Some(run) = stamp.run_time {
+        lines.push(format!("Run {} UTC · lead {:+.1} h", run.format("%Y-%m-%d %H:%M"), (stamp.valid_time - run).num_milliseconds() as f64 / 3_600_000.0));
+    }
+    if let Some(issue) = stamp.issue_time { lines.push(format!("Issued {} UTC", issue.format("%Y-%m-%d %H:%M:%S"))); }
+    if let Some(radar) = radar { lines.push(format!("Layer − displayed radar {:+.1}s", (stamp.valid_time - radar).num_milliseconds() as f64 / 1000.0)); }
+    lines
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    #[test]
+    fn forecast_lead_uses_run_and_offset_uses_displayed_radar() {
+        use chrono::{TimeZone, Utc};
+        let run = Utc.with_ymd_and_hms(2026, 10, 12, 12, 0, 0).unwrap();
+        let stamp = wxdata::field::DataStamp {
+            source_identity: "fixture model".into(), issue_time: None, run_time: Some(run),
+            valid_time: run + chrono::Duration::hours(3), received_time: run + chrono::Duration::hours(1),
+            class: wxdata::field::DataClass::Forecast, quality: wxdata::field::QualitySummary::Good, available_members: None,
+        };
+        let lines = super::provenance_lines(&stamp, Some(stamp.valid_time - chrono::Duration::milliseconds(1500)), stamp.received_time);
+        assert!(lines.iter().any(|line| line.contains("Forecast valid")));
+        assert!(lines.iter().any(|line| line.contains("lead +3.0 h")));
+        assert!(lines.iter().any(|line| line.contains("radar +1.5s")));
+        assert!(lines.iter().any(|line| line.contains("age -120.0 min")));
     }
 }
