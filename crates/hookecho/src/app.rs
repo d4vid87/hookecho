@@ -6434,9 +6434,7 @@ impl HookEchoApp {
 
         // Outbreak mode: past the threshold, one rolling summary goes out instead of one push per
         // warning. Escalated alerts are exempt — those are the ones worth a buzz each.
-        // ponytail: the summary is a fresh notification each refresh, not an in-place replace;
-        // desktop replace-by-tag and the Android fixed notification id can land with the rest of
-        // the Android delivery stack.
+        let mut summary = false;
         if !urgent && self.settings.alert_rollup_threshold > 0 {
             let window =
                 std::time::Duration::from_secs(self.settings.alert_rollup_window_min.max(1) * 60);
@@ -6451,6 +6449,7 @@ impl HookEchoApp {
             match decision {
                 Ok(crate::alert_rollup::Decision::Hold) => return,
                 Ok(crate::alert_rollup::Decision::Rollup(text)) => {
+                    summary = true;
                     title = "Multiple alerts".to_string();
                     body = text;
                 }
@@ -6460,7 +6459,11 @@ impl HookEchoApp {
         let (title, body) = (title, body);
 
         if self.settings.desktop_notify {
-            crate::notify::desktop(&title, &body);
+            if summary {
+                crate::notify::desktop_summary(&title, &body);
+            } else {
+                crate::notify::desktop(&title, &body);
+            }
         }
 
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
@@ -15757,8 +15760,6 @@ impl HookEchoApp {
                 }
             }
         }
-        // ponytail: the station plots follow the Units setting; the gridded contour labels
-        // (K → °F, `field_ramps`) still do not, and want the same treatment when asked.
 
         // River flood gauges (NWPS): category-colored inverted-triangle droplet + stage tooltip.
         // ponytail: hover tooltip carries name/stage/forecast; skipped a click→Detail popup — the
@@ -16674,13 +16675,13 @@ impl HookEchoApp {
                 y += if top == crate::render::FieldLayer::ModelDiff {
                     ui::legend::draw_diff(&painter, prect, self.diff_field, y)
                 } else {
-                    ui::legend::draw_field(&painter, prect, top, y)
+                    ui::legend::draw_field(&painter, prect, top, y, &self.settings)
                 };
             }
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
             // call rather than a slot in DRAW_ORDER.
             if self.show_wind && self.wind.is_some() {
-                ui::legend::draw_ramp(&painter, prect, &crate::render::field_ramps::WIND, y);
+                ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
             }
         }
 

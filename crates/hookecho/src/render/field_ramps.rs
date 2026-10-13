@@ -53,6 +53,15 @@ impl FieldRamp {
         v * self.input_scale
     }
 
+    /// Convert a scale label to the user's units without changing indices or colors.
+    pub fn label_value(&self, value: f32, settings: &crate::settings::Settings) -> (f32, &'static str) {
+        match self.units {
+            "K" => (settings.temp_unit.from_c(value - 273.15), settings.temp_unit.label()),
+            "kt" => (value / 1.943_844 * settings.velocity_unit.factor_from_ms(), settings.velocity_unit.label()),
+            _ => (value, self.units),
+        }
+    }
+
     /// Raw grid value → LUT index. Index 0 is "nothing here" (fully transparent).
     pub fn index(&self, v: f32) -> u8 {
         let v = self.display(v);
@@ -948,6 +957,24 @@ mod tests {
         assert!(ramp.index(-10.0) < ramp.index(0.0));
         assert!(ramp.index(0.0) < ramp.index(10.0));
         assert_eq!(ramp.display(10.0), 19.43844);
+    }
+
+    #[test]
+    fn legend_units_change_without_changing_native_palette_mapping() {
+        let mut settings = crate::settings::Settings::default();
+        let temperature = ramp_for(FieldLayer::GlobalTemp2m).unwrap();
+        let index = temperature.index(273.15);
+        let (value, unit) = temperature.label_value(273.15, &settings);
+        assert!((value - 32.0).abs() < 0.001);
+        assert_eq!(unit, "°F");
+        settings.temp_unit = crate::settings::TempUnit::Celsius;
+        assert_eq!(temperature.label_value(273.15, &settings), (0.0, "°C"));
+        assert_eq!(temperature.index(273.15), index);
+        settings.velocity_unit = crate::settings::VelocityUnit::MetersPerSecond;
+        let wind = ramp_for(FieldLayer::RtmaGust10m).unwrap();
+        let (value, unit) = wind.label_value(wind.display(10.0), &settings);
+        assert!((value - 10.0).abs() < 0.001);
+        assert_eq!(unit, "m/s");
     }
 
     #[test]

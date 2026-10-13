@@ -82,6 +82,30 @@ pub fn desktop(title: &str, body: &str) {
     }
 }
 
+/// Keep the outbreak summary in one OS card where replacement is supported.
+#[cfg(all(unix, not(any(target_os = "android", target_os = "macos", target_arch = "wasm32"))))]
+pub fn desktop_summary(title: &str, body: &str) {
+    static SUMMARY_ID: std::sync::Mutex<u32> = std::sync::Mutex::new(0);
+    let Ok(mut id) = SUMMARY_ID.lock() else { return };
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(title).body(body).appname("HookEcho");
+    if *id != 0 { notification.id(*id); }
+    match notification.show() {
+        Ok(handle) => *id = handle.id(),
+        Err(error) => log::warn!("desktop summary failed: {error}"),
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "macos", target_os = "windows"))]
+pub fn desktop_summary(title: &str, body: &str) {
+    desktop(title, body);
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn desktop_summary(title: &str, body: &str) {
+    browser_notification(title, body, Some("hookecho-outbreak-summary"));
+}
+
 /// No-op on Android — the alert service posts its own, through the system channel.
 #[cfg(target_os = "android")]
 pub fn desktop(_title: &str, _body: &str) {}
@@ -92,15 +116,18 @@ pub fn desktop(_title: &str, _body: &str) {}
 /// logs and carries on. The in-app banner and the alert list never depended on this.
 #[cfg(target_arch = "wasm32")]
 pub fn desktop(title: &str, body: &str) {
+    browser_notification(title, body, None);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_notification(title: &str, body: &str, tag: Option<&str>) {
     use web_sys::NotificationPermission as P;
     match web_sys::Notification::permission() {
         P::Granted => {
             let opts = web_sys::NotificationOptions::new();
             opts.set_body(body);
             opts.set_icon("/icon-192.png");
-            // One notification per event, replacing rather than stacking: an outbreak should not
-            // leave forty cards in the tray.
-            opts.set_tag("hookecho-alert");
+            if let Some(tag) = tag { opts.set_tag(tag); }
             if let Err(e) = web_sys::Notification::new_with_options(title, &opts) {
                 log::warn!("browser notification failed: {e:?}");
             }

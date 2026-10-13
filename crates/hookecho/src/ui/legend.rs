@@ -212,9 +212,10 @@ pub fn draw_field(
     map_rect: Rect,
     layer: crate::render::FieldLayer,
     y_offset: f32,
+    settings: &crate::settings::Settings,
 ) -> f32 {
     match crate::render::field_ramps::ramp_for(layer) {
-        Some(r) => draw_ramp(painter, map_rect, r, y_offset),
+        Some(r) => draw_ramp_units(painter, map_rect, r, y_offset, Some(settings)),
         None => 0.0,
     }
 }
@@ -293,6 +294,16 @@ pub fn draw_ramp(
     r: &crate::render::field_ramps::FieldRamp,
     y_offset: f32,
 ) -> f32 {
+    draw_ramp_units(painter, map_rect, r, y_offset, None)
+}
+
+pub(crate) fn draw_ramp_units(
+    painter: &egui::Painter,
+    map_rect: Rect,
+    r: &crate::render::field_ramps::FieldRamp,
+    y_offset: f32,
+    settings: Option<&crate::settings::Settings>,
+) -> f32 {
     use crate::render::field_ramps::FieldScale;
     let font = FontId::proportional(10.0);
     let origin = map_rect.left_top() + Vec2::new(INSET, INSET + y_offset);
@@ -350,15 +361,16 @@ pub fn draw_ramp(
                 painter.text(
                     egui::pos2(x, bar.bottom() + 2.0),
                     align,
-                    num(v),
+                    num(settings.map_or(v, |s| r.label_value(v, s).0)),
                     font.clone(),
                     Color32::from_gray(225),
                 );
             }
-            let head = if r.units.is_empty() {
+            let units = settings.map_or(r.units, |s| r.label_value(lo, s).1);
+            let head = if units.is_empty() {
                 r.label.to_string()
             } else {
-                format!("{} ({})", r.label, r.units)
+                format!("{} ({})", r.label, units)
             };
             painter.text(
                 panel.left_top() + Vec2::new(PAD_X, 3.0),

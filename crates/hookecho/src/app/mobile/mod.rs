@@ -20,7 +20,7 @@ use wxdata::level2::Moment;
 pub(crate) use crate::ui::style::{glass, square_btn, OMEGA_GREEN, OMEGA_ORANGE};
 
 /// A slim full-width strip for a gridded field layer, with its name and range inline.
-fn paint_field_strip(painter: &egui::Painter, rect: Rect, layer: crate::render::FieldLayer) {
+fn paint_field_strip(painter: &egui::Painter, rect: Rect, layer: crate::render::FieldLayer, settings: &crate::settings::Settings) {
     use crate::render::field_ramps::{ramp_for, FieldScale};
     let Some(r) = ramp_for(layer) else { return };
     let col = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
@@ -47,10 +47,12 @@ fn paint_field_strip(painter: &egui::Painter, rect: Rect, layer: crate::render::
                 mesh.add_triangle(i, i + 2, i + 3);
             }
             painter.add(Shape::mesh(mesh));
-            let label = if r.units.is_empty() {
+            let (lo, units) = r.label_value(lo, settings);
+            let (hi, _) = r.label_value(hi, settings);
+            let label = if units.is_empty() {
                 format!("{}  {lo:.0}\u{2013}{hi:.0}", r.label)
             } else {
-                format!("{}  {lo:.0}\u{2013}{hi:.0} {}", r.label, r.units)
+                format!("{}  {lo:.0}\u{2013}{hi:.0} {}", r.label, units)
             };
             painter.text(
                 pos2(rect.left() + 4.0, rect.bottom() + 1.0),
@@ -286,7 +288,7 @@ impl super::HookEchoApp {
                 .rev()
                 .find(|l| self.views[self.active].fields_on.contains(l))
             {
-                paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), top);
+                paint_field_strip(&painter, strip.translate(vec2(0.0, 11.0)), top, &self.settings);
             }
         }
 
