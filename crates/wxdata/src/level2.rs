@@ -430,10 +430,15 @@ impl BinnedSweep {
         let gate = gate as usize;
         let az = bearing.rem_euclid(360.0);
         let bin = ((az / 360.0 * self.az_bins as f64) as usize) % self.az_bins;
-        let code = *self.data.get(bin * self.gate_count + gate)?;
-        // 0 and 1 are the two sentinel codes the binner writes; 2..=255 is the value band.
+        let at = bin * self.gate_count + gate;
+        let (code, span) = if let Some(precise) = &self.data16 {
+            (*precise.get(at)?, 65533.0)
+        } else {
+            (*self.data.get(at)? as u16, 253.0)
+        };
+        // Both encodings reserve 0 and 1 for missing and folded data.
         let value = (code >= 2).then(|| {
-            let t = (code - 2) as f32 / 253.0;
+            let t = (code - 2) as f32 / span;
             self.value_min + t * (self.value_max - self.value_min)
         });
         Some(GateSample {

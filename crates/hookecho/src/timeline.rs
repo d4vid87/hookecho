@@ -12,6 +12,8 @@ use wxdata::level2::Identifier;
 pub struct Timeline {
     /// Selected UTC archive day.
     pub date: NaiveDate,
+    /// Comparison target, cleared whenever time linking is disabled.
+    pub alignment_target: Option<DateTime<Utc>>,
     /// Volumes for the current site+date, oldest first.
     pub frames: Vec<Identifier>,
     /// Index into `frames` of the displayed volume.
@@ -52,6 +54,7 @@ impl Default for Timeline {
     fn default() -> Self {
         Self {
             date: chrono::Utc::now().date_naive(),
+            alignment_target: None,
             frames: Vec::new(),
             playhead: 0,
             following: true,
@@ -228,6 +231,18 @@ impl Timeline {
             })
             .min_by_key(|(_, d)| *d)
             .map(|(i, _)| i)
+    }
+
+    /// Signed offset of the selected source from the linked comparison time.
+    pub fn alignment_offset_seconds(&self) -> Option<i64> {
+        Some((self.current()?.date_time()? - self.alignment_target?).num_seconds())
+    }
+
+    pub fn alignment_acceptable(&self, limit: Option<u32>) -> bool {
+        match (self.alignment_target, limit) {
+            (Some(_), Some(limit)) => self.alignment_offset_seconds().is_some_and(|s| s.unsigned_abs() <= u64::from(limit)),
+            _ => true,
+        }
     }
 
     /// Match another pane's valid time, using this radar's nearest available volume.
@@ -605,6 +620,26 @@ mod tests {
         t.playhead = 0;
         t.set_frames(day("KFWS", 280), ("KFWS".into(), today));
         assert_eq!(t.current().unwrap().date_time(), Some(want));
+    }
+
+    #[test]
+    fn linked_time_limit_is_inclusive_and_rejects_unknown_sources() {
+        let mut timeline = Timeline::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        timeline.set_frames(day("KTLX", 2), ("KTLX".into(), date));
+        let time = timeline.current().unwrap().date_time().unwrap();
+        timeline.alignment_target = Some(time - chrono::Duration::seconds(120));
+        assert_eq!(timeline.alignment_offset_seconds(), Some(120));
+        assert!(timeline.alignment_acceptable(Some(120)));
+        assert!(!timeline.alignment_acceptable(Some(119)));
+        timeline.alignment_target = Some(time + chrono::Duration::seconds(120));
+        assert_eq!(timeline.alignment_offset_seconds(), Some(-120));
+        assert!(timeline.alignment_acceptable(Some(120)));
+        timeline.frames.clear();
+        assert!(!timeline.alignment_acceptable(Some(120)));
+        assert!(timeline.alignment_acceptable(None));
+        timeline.alignment_target = None;
+        assert!(timeline.alignment_acceptable(Some(0)));
     }
 
     #[test]

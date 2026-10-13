@@ -8555,7 +8555,7 @@ impl HookEchoApp {
             .and_then(|p| Moment::from_code(&p.palette))
             .unwrap_or(pane.moment);
         if ui.checkbox(&mut pane.camera.globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() && !pane.camera.globe { pane.camera.zoom = pane.camera.zoom.max(2.0); }
-        ui.add_enabled(pane.custom_product.is_none(), egui::Checkbox::new(&mut pane.appearance.precision, "Higher-precision radar display")).on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments and KDP. Native probes remain unchanged.");
+        ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
         if smooth {
             ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Uses more GPU samples.");
             ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
@@ -8579,6 +8579,44 @@ impl HookEchoApp {
             }
         });
         ui.label("Appearance applies to the active pane and is saved with its workspace.");
+        let preset = crate::radar_appearance::AppearancePreset::capture(pane);
+        let mut limited = self.settings.linked_time_limit_seconds.is_some();
+        if ui.checkbox(&mut limited, "Limit linked radar time difference").changed() {
+            self.settings.linked_time_limit_seconds = limited.then_some(120);
+            self.settings.save();
+        }
+        if let Some(seconds) = &mut self.settings.linked_time_limit_seconds {
+            if ui.add(egui::Slider::new(seconds, 0..=1800).text("Maximum difference (seconds)")).changed() { self.settings.save(); }
+        }
+        let mut name = ui.ctx().data_mut(|d| d.get_temp::<String>(egui::Id::new("appearance_preset_name")).unwrap_or_default());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("Preset name").desired_width(150.0));
+            if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save preset")).clicked() {
+                self.settings.appearance_presets.insert(name.trim().to_string(), preset.clone());
+                self.settings.save();
+            }
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("appearance_preset_name"), name));
+        let mut load = None;
+        let mut remove = None;
+        ui.menu_button("Saved appearance presets", |ui| {
+            for (name, saved) in &self.settings.appearance_presets {
+                ui.horizontal(|ui| {
+                    if ui.button(name).clicked() { load = Some(saved.clone()); ui.close(); }
+                    if ui.small_button("Delete").clicked() { remove = Some(name.clone()); }
+                });
+            }
+            if self.settings.appearance_presets.is_empty() { ui.label("Save an appearance above to reuse it."); }
+        });
+        if let Some(saved) = load { saved.apply(&mut self.views[self.active]); }
+        if let Some(name) = remove { self.settings.appearance_presets.remove(&name); self.settings.save(); }
+        ui.menu_button("Copy appearance to pane", |ui| {
+            for (i, view) in self.views.iter_mut().enumerate() {
+                if i != self.active && ui.button(format!("Pane {}", i + 1)).clicked() {
+                    preset.apply(view); ui.close();
+                }
+            }
+        });
         let (view, settings) = (&mut self.views[self.active], &mut self.settings);
 
         // A download in flight stays above the disclosure — progress you can't find reads as a hang.
@@ -12251,6 +12289,9 @@ impl HookEchoApp {
     /// buffer persists, so `None` means "reuse what's uploaded". Caches per pane via `pane_shown`.
     fn pane_radar(&mut self, idx: usize, data: usize) -> (Option<RadarUpload>, bool) {
         crate::prof_scope!("pane_radar");
+        if !self.views[idx].alignment_acceptable(self.settings.linked_time_limit_seconds) {
+            return (None, false);
+        }
         let has_volume = self.views[data].volume.is_some();
         if !self.views[idx].show_radar || !has_volume {
             self.pane_shown.remove(&idx);
@@ -12404,6 +12445,7 @@ impl HookEchoApp {
         };
         let tilt = self.views[idx].tilt;
         let smooth = self.views[idx].smooth;
+        let precision = self.views[idx].appearance.precision;
         let Some(volume_name) = self.views[data].volume.as_ref().map(|volume| volume.name.clone())
         else {
             return (None, true);
@@ -12417,7 +12459,7 @@ impl HookEchoApp {
                 .iter()
                 .map(|moment| {
                     volume
-                        .binned(*moment, tilt, false)
+                        .binned_display_at(*moment, tilt, false, None, precision)
                         .map(|sweep| (*moment, sweep.clone()))
                 })
                 .collect::<anyhow::Result<Vec<_>>>()
@@ -12454,7 +12496,7 @@ impl HookEchoApp {
             None,
             None,
             Some(product_hash),
-            false,
+            precision,
         );
         let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
         let lut_gen = self.palettes.gen.wrapping_add(product_hash).wrapping_add(self.views[idx].appearance.fingerprint(palette_moment));
@@ -12638,8 +12680,12 @@ impl HookEchoApp {
         } else {
             ""
         };
+        let freshness = if self.views[idx].timeline.following {
+            let age = (chrono::Utc::now() - sample.collected_at).num_seconds().max(0);
+            format!(" · age {age}s")
+        } else { String::new() };
         Some(format!(
-            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
+            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}{freshness}",
             moment.short_name(),
             sample.elevation_deg,
             sample.azimuth_deg,
@@ -15739,6 +15785,12 @@ impl HookEchoApp {
             }
         }
 
+        if view.timeline.alignment_target.is_some() {
+            let acceptable = view.alignment_acceptable(self.settings.linked_time_limit_seconds);
+            let offset = view.alignment_offset_seconds().map_or_else(|| "Awaiting matching scan".into(), |s| format!("Linked scan offset {s:+}s{}", if acceptable { "" } else { " · outside time limit" }));
+            painter.text(prect.left_top() + egui::vec2(12.0, 54.0), egui::Align2::LEFT_TOP, offset,
+                egui::FontId::proportional(12.0), if acceptable { egui::Color32::WHITE } else { egui::Color32::from_rgb(255, 186, 86) });
+        }
         if self.show_scan_progress && view.show_radar {
             if let Some((volume, start)) = view.volume.as_ref().and_then(|volume| {
                 volume.live_status.as_ref()
@@ -21589,6 +21641,7 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
+            for view in &mut self.views { view.timeline.alignment_target = None; }
             if self.link_times {
                 let active = self.active.min(n - 1);
                 let leader = &self.views[active].timeline;
@@ -21600,6 +21653,7 @@ impl eframe::App for HookEchoApp {
                     {
                         let (following, playing) = (leader.following, leader.playing);
                         for (i, view) in self.views.iter_mut().enumerate() {
+                            if i != active { view.timeline.alignment_target = Some(time); }
                             if i != active
                                 && (selected_cut.is_some()
                                     || !self.lock_source_frame

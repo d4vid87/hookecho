@@ -266,6 +266,22 @@ pub struct MapView {
 }
 
 impl MapView {
+    /// Compare the scan actually loaded, including a selected cut, with the linked target.
+    /// A pending playhead fetch must not make the previously painted scan appear synchronized.
+    pub fn alignment_offset_seconds(&self) -> Option<i64> {
+        let target = self.timeline.alignment_target?;
+        let volume = self.volume.as_ref()?;
+        let time = self.selected_cut_ms().and_then(chrono::DateTime::from_timestamp_millis).unwrap_or(volume.time);
+        Some((time - target).num_seconds())
+    }
+
+    pub fn alignment_acceptable(&self, limit: Option<u32>) -> bool {
+        match (self.timeline.alignment_target, limit) {
+            (Some(_), Some(limit)) => self.alignment_offset_seconds().is_some_and(|s| s.unsigned_abs() <= u64::from(limit)),
+            _ => true,
+        }
+    }
+
     pub fn new(site: Option<String>, camera: crate::render::mercator::Camera) -> Self {
         let mut thresholds = [None; Moment::ALL.len()];
         let mut threshold_enabled = [false; Moment::ALL.len()];
@@ -585,6 +601,21 @@ mod tests {
         view.timeline.following = true;
         view.show_volume(scan_at(&[1.5, 2.5]), "other".into(), Utc::now());
         assert_eq!(view.tilt, 1, "a radar without a 0.5° cut keeps its tilt");
+    }
+
+    #[test]
+    fn linked_comparison_uses_loaded_scan_instead_of_pending_playhead() {
+        let mut view = MapView::new(None, Camera::at_lonlat(0.0, 0.0, 3.0));
+        let target = chrono::DateTime::from_timestamp_millis(600_000).unwrap();
+        view.timeline.alignment_target = Some(target);
+        assert!(!view.alignment_acceptable(Some(120)));
+        view.volume = Some(Volume::new(scan_at(&[0.5]), "old".into(), target - chrono::Duration::seconds(180)));
+        assert_eq!(view.alignment_offset_seconds(), Some(-180));
+        assert!(!view.alignment_acceptable(Some(120)));
+        view.volume.as_mut().unwrap().time = target - chrono::Duration::seconds(120);
+        assert!(view.alignment_acceptable(Some(120)));
+        view.timeline.alignment_target = None;
+        assert!(view.alignment_acceptable(Some(0)));
     }
 
     #[test]

@@ -24,6 +24,37 @@ pub struct RadarAppearance {
     pub palettes: BTreeMap<String, ColorTable>,
 }
 
+/// A portable display preset; station, product and playhead remain pane-local.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AppearancePreset {
+    pub appearance: RadarAppearance,
+    pub smooth: bool,
+    pub globe: bool,
+    pub thresholds: [Option<f32>; Moment::ALL.len()],
+    pub threshold_enabled: [bool; Moment::ALL.len()],
+}
+
+impl AppearancePreset {
+    pub fn capture(view: &crate::view::MapView) -> Self {
+        Self { appearance: view.appearance.clone(), smooth: view.smooth,
+            globe: view.camera.globe, thresholds: view.thresholds,
+            threshold_enabled: view.threshold_enabled }
+    }
+
+    pub fn apply(&self, view: &mut crate::view::MapView) {
+        view.appearance = self.appearance.clone();
+        view.appearance.sanitize();
+        view.smooth = self.smooth;
+        view.camera.globe = self.globe;
+        if !self.globe { view.camera.zoom = view.camera.zoom.max(2.0); }
+        for (i, moment) in Moment::ALL.iter().enumerate() {
+            let (lo, hi) = moment.value_range();
+            view.thresholds[i] = self.thresholds[i].filter(|v| v.is_finite()).map(|v| v.clamp(lo, hi));
+            view.threshold_enabled[i] = self.threshold_enabled[i] && view.thresholds[i].is_some();
+        }
+    }
+}
+
 // Reuse the app's existing portable palette format instead of a second JSON
 // schema for color stops. This also keeps serde code off the web critical path.
 mod portable_palettes {
@@ -148,6 +179,28 @@ fn mask_above(lut: &mut [u8], (lo, hi): (f32, f32), ceiling: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preset_roundtrip_copies_display_without_changing_station_or_product() {
+        use crate::render::mercator::Camera;
+        let mut source = crate::view::MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 5.0));
+        source.appearance.precision = true;
+        source.appearance.blend_width = 0.73;
+        source.appearance.palettes.insert("REF".into(), crate::colormap::default_table(Moment::Reflectivity).clone());
+        source.smooth = true;
+        source.camera.globe = true;
+        source.thresholds[0] = Some(20.0);
+        source.threshold_enabled[0] = true;
+        let preset = AppearancePreset::capture(&source);
+        let preset: AppearancePreset = serde_json::from_str(&serde_json::to_string(&preset).unwrap()).unwrap();
+        let mut destination = crate::view::MapView::new(Some("KFWS".into()), Camera::at_lonlat(-98.0, 32.0, 6.0));
+        destination.moment = Moment::Velocity;
+        preset.apply(&mut destination);
+        assert_eq!(AppearancePreset::capture(&destination), preset);
+        assert_eq!(destination.site.as_deref(), Some("KFWS"));
+        assert_eq!(destination.moment, Moment::Velocity);
+        assert_eq!(destination.camera.center, Camera::at_lonlat(-98.0, 32.0, 6.0).center);
+    }
 
     #[test]
     fn bound_clips_every_category_without_hiding_fold_or_changing_colors() {
