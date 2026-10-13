@@ -13324,6 +13324,7 @@ impl HookEchoApp {
         self.labels.begin_pane();
         let trace_started = crate::map_trace::enabled().then(Instant::now);
         let mut place_label_work = 0;
+        let mut place_label_budget = crate::map_work::LabelBudget::default();
         use crate::tiles::BasemapStyle;
         // This pane's own basemap: panes are independent, the tile caches are keyed by style.
         // `Auto` resolves here rather than where it is stored, so the stored choice keeps
@@ -14547,7 +14548,7 @@ impl HookEchoApp {
                     l.visible_stable(z, returning)
                         && (!(self.gesture_live
                             && self.settings.map_quality == crate::settings::MapQuality::Auto)
-                            || returning || l.priority() <= 1)
+                            || returning || l.city || l.priority() <= 1)
                         && (vp.0 >= 600.0 || l.priority() <= 2 || z >= 12.0)
                 }).collect();
             // Labels already on screen are offered their slot before newcomers of the same
@@ -14583,7 +14584,12 @@ impl HookEchoApp {
                 }
                 // Stable cap: returning labels are offered first and a gesture does not
                 // suddenly reduce their allowance. Weather warnings keep their separate pass.
-                if place_label_work == crate::map_work::PLACE_LABELS_PER_PANE { break; }
+                let is_shield = l.shield != crate::vector_tiles::RoadShield::None;
+                if is_shield && placed_shields.iter().any(|(name, shield, position)| {
+                    *name == l.name && *shield == l.shield && position.distance(p) < if z < 8.0 { 160.0 } else { 220.0 }
+                }) { continue; }
+                if place_label_budget.exhausted() { break; }
+                if !place_label_budget.take(is_shield) { continue; }
                 place_label_work += 1;
                 if l.shield != crate::vector_tiles::RoadShield::None {
                     use crate::vector_tiles::RoadShield;
@@ -14603,11 +14609,6 @@ impl HookEchoApp {
                         p,
                         egui::vec2((galley.size().x + pad).max(height), height),
                     );
-                    if placed_shields.iter().any(|(name, shield, position)| {
-                        *name == l.name && *shield == l.shield && position.distance(p) < if z < 8.0 { 160.0 } else { 220.0 }
-                    }) {
-                        continue;
-                    }
                     if !self.labels.place(
                         label_key(l),
                         r.expand(3.0),

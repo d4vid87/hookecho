@@ -1019,12 +1019,23 @@ impl VectorTileManager {
         tiles
     }
 
+    fn backdrop(cam: &Camera, viewport: (f32, f32), full: &[VisibleTile]) -> Vec<VisibleTile> {
+        let z = full.first().map_or(2, |tile| tile.id.0.saturating_sub(2).max(2));
+        Self::centered(tile_cover(cam, viewport, z, 0.0), cam)
+    }
+
     /// A low-detail geographic backdrop arrives before fine streets. Existing renderer parent
     /// fallback draws these tiles while requested children are still loading.
     pub fn request_view(&mut self, cam: &Camera, viewport: (f32, f32), moving: bool,
         _quality: crate::settings::MapQuality) -> Vec<VisibleTile> {
         let full = Self::centered(self.visible(cam, viewport), cam);
         let full_ready = full.iter().all(|tile| self.uploaded.contains(&tile.id));
+        if !full_ready {
+            // First fill a small backdrop instead of spending every request slot on streets.
+            // Coarse parents cover both the present view and nearby zoom-out positions.
+            let backdrop = Self::backdrop(cam, viewport, &full);
+            self.request_missing(&backdrop);
+        }
         self.request_missing(&full);
         if full_ready && !moving {
             let mut preload = Self::centered(tile_cover(cam, viewport, MAX_VECTOR_Z,
@@ -1408,6 +1419,20 @@ mod tests {
         m.set_simplified(true);
         assert!(m.drain_ready_budget(&mut crate::map_work::UploadBudget::frame(true)).is_empty());
         assert!(!m.uploaded.contains(&(4,1,5)));
+    }
+
+    #[test]
+    fn backdrop_parents_cover_the_requested_view_before_fine_tiles() {
+        let camera = Camera::at_lonlat(-93.72, 41.73, 7.4);
+        let full = tile_cover(&camera, (1440.0,1000.0), MAX_VECTOR_Z, 0.0);
+        let parents = VectorTileManager::backdrop(&camera,(1440.0,1000.0),&full);
+        assert!(parents.len()<full.len());
+        for tile in &full {
+            assert!(parents.iter().any(|parent| {
+                let shift=tile.id.0-parent.id.0;
+                (tile.id.1>>shift,tile.id.2>>shift)==(parent.id.1,parent.id.2)
+            }));
+        }
     }
 
     #[tokio::test]

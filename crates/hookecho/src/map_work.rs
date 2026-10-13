@@ -2,6 +2,31 @@
 
 /// Bound optional geography text work without changing the cap when a gesture starts.
 pub const PLACE_LABELS_PER_PANE: usize = 192;
+/// Route shields have many duplicate candidates. Reserve at least half the text work for
+/// names so an interstate cannot consume every layout slot before nearby towns are considered.
+#[derive(Default)]
+pub struct LabelBudget {
+    total: usize,
+    shields: usize,
+}
+impl LabelBudget {
+    pub fn take(&mut self, shield: bool) -> bool {
+        if self.total >= PLACE_LABELS_PER_PANE
+            || (shield && self.shields >= PLACE_LABELS_PER_PANE / 2)
+        {
+            return false;
+        }
+        self.total += 1;
+        if shield {
+            self.shields += 1;
+        }
+        true
+    }
+    pub fn exhausted(&self) -> bool {
+        self.total >= PLACE_LABELS_PER_PANE
+    }
+}
+
 #[derive(Debug)]
 pub struct UploadBudget {
     remaining: usize,
@@ -53,5 +78,18 @@ mod tests {
         assert!(b.take(1 << 20));
         assert!(!b.take(2 << 20));
         assert!(b.take(1 << 20));
+    }
+    #[test]
+    fn repeated_shields_cannot_starve_town_names() {
+        let mut b = LabelBudget::default();
+        for _ in 0..96 {
+            assert!(b.take(true));
+        }
+        assert!(!b.take(true));
+        for _ in 0..96 {
+            assert!(b.take(false));
+        }
+        assert!(b.exhausted());
+        assert!(!b.take(false));
     }
 }
