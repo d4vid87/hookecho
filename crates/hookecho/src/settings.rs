@@ -1205,6 +1205,11 @@ impl TempUnit {
         }
     }
 
+    /// Temperature differences have a scale but no freezing-point offset.
+    pub fn delta_from_c(self, delta: f32) -> f32 {
+        match self { Self::Fahrenheit => delta * 1.8, Self::Celsius => delta }
+    }
+
     /// Convert an observation's Celsius into this unit.
     pub fn from_c(self, c: f32) -> f32 {
         match self {
@@ -1397,6 +1402,8 @@ impl Settings {
     pub fn field_display_value(&self, descriptor: &wxdata::field::FieldDescriptor, value: f32) -> wxdata::field::DisplayValue {
         if descriptor.units == "m s-1" || descriptor.units == "m/s" {
             wxdata::field::DisplayValue { value: value * self.velocity_unit.factor_from_ms(), units: self.velocity_unit.label() }
+        } else if descriptor.units == "Pa" {
+            wxdata::field::DisplayValue { value: value / 100.0, units: "hPa" }
         } else {
             descriptor.display_value(value, if self.temp_unit == TempUnit::Fahrenheit { wxdata::field::UnitSystem::Us } else { wxdata::field::UnitSystem::Metric })
         }

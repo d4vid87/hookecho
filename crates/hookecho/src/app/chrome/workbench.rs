@@ -152,7 +152,7 @@ impl HookEchoApp {
                 .rev()
                 .find(|layer| view.fields_on.contains(layer));
             let field = layer.and_then(|layer| self.field_state(i, layer)?.frame.as_ref());
-            let health = layer.and_then(|layer| self.palette_health(PaletteAction::ToggleField(layer)))
+            let health = layer.and_then(|layer| if layer.is_native_abi() { Some(self.request_health(RequestLane::PaneField(i, layer))) } else { self.palette_health(PaletteAction::ToggleField(layer)) })
                 .map(|health| format!(" · {}", crate::ui::layers_panel::health_look(health.state()).0))
                 .unwrap_or_default();
             let source = field.map(|frame| format!(

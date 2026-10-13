@@ -3,7 +3,7 @@
 use super::*;
 
 impl HookEchoApp {
-    fn request_health(&self, lane: RequestLane) -> SourceHealth {
+    pub(in crate::app) fn request_health(&self, lane: RequestLane) -> SourceHealth {
         self.overlay_requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

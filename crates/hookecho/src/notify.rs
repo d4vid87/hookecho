@@ -335,3 +335,15 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(target_os = "linux", test))]
+mod desktop_delivery_tests {
+    #[test]
+    #[ignore = "requires isolated notification test bus"]
+    fn desktop_summary_reuses_id_and_individual_alert_does_not() {
+        assert_eq!(std::env::var("HOOKECHO_NOTIFICATION_TEST_BUS").as_deref(), Ok("1"));
+        super::desktop_summary("Summary one", "First batch");
+        super::desktop_summary("Summary two", "Updated batch");
+        super::desktop("Individual urgent alert", "Separate card");
+    }
+}
