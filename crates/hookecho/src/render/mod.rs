@@ -1269,6 +1269,7 @@ impl RenderResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, gate_data.len() as u64);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &tex,
@@ -1306,6 +1307,7 @@ impl RenderResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, r.lut.len() as u64);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &lut_tex,
@@ -1344,6 +1346,7 @@ impl RenderResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, flag_data.len() as u64);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &flag_tex,
@@ -2086,6 +2089,7 @@ fn write_texture_changes(queue: &wgpu::Queue, tex: &wgpu::Texture, dims: (u32, u
     if ranges.is_empty() { return; }
     for rows in ranges {
         let bytes = rows.start * row_bytes as usize..rows.end * row_bytes as usize;
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, bytes.len() as u64);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: rows.start as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
             &next[bytes],
@@ -2099,6 +2103,7 @@ fn write_texture_changes(queue: &wgpu::Queue, tex: &wgpu::Texture, dims: (u32, u
 
 /// Write the 256×3 RGBA color LUT.
 fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, lut: &[u8]) {
+    wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, lut.len() as u64);
     let width = (lut.len() / (3 * 4)) as u32;
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {

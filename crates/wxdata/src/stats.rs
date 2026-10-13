@@ -5,12 +5,8 @@
 //! counters are read by the app's Perf window, by `--serve`'s `/metrics`, and by a once-a-minute
 //! log line in headless runs.
 //!
-//! On wasm every function here is an empty inline body, so the browser build carries no counters
-//! and no bytes: the shared code paths are the same ones, and a native measurement of a shared
-//! path stands in for the wasm one.
-//!
-// ponytail: flat atomics, no labels, no histograms — the ceiling is "which wave moved which
-// number". A per-host or per-feed breakdown wants a real metrics crate, not more statics here.
+//! Browser counters use thread-local cells; native counters use relaxed atomics.
+//! Decode-path timings include worker scheduling and serialization, not just decoder CPU time.
 
 /// One counter each, in [`Snapshot`] order.
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,14 +39,17 @@ pub enum Counter {
     RadarTexturesBuilt,
     /// Tile-quad vertex lists rebuilt and re-uploaded.
     TileQuadsBuilt,
+    /// Radar gate, flag and palette bytes submitted to the GPU.
+    RadarUploadBytes,
+    DecodePathMicros,
+    DecodePaths,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Counter {
     const COUNT: usize = Self::LABELS.len();
 
     /// Prometheus/log names, in declaration order.
-    pub const LABELS: [&'static str; 12] = [
+    pub const LABELS: [&'static str; 15] = [
         "net_requests",
         "net_bytes",
         "net_not_modified",
@@ -63,6 +62,9 @@ impl Counter {
         "sweeps_binned",
         "radar_textures_built",
         "tile_quads_built",
+        "radar_upload_bytes",
+        "decode_path_micros",
+        "decode_paths",
     ];
 }
 
@@ -75,7 +77,30 @@ pub fn add(c: Counter, n: u64) {
 
 #[cfg(target_arch = "wasm32")]
 #[inline]
-pub fn add(_c: Counter, _n: u64) {}
+pub fn add(c: Counter, n: u64) {
+    BROWSER_COUNTERS.with(|counters| {
+        let mut values = counters.get();
+        values[c as usize] = values[c as usize].saturating_add(n);
+        counters.set(values);
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static BROWSER_COUNTERS: std::cell::Cell<[u64; Counter::COUNT]> = const { std::cell::Cell::new([0; Counter::COUNT]) };
+}
+
+/// A wall-time measurement of an asynchronous decode path, including failures.
+pub struct DecodeTimer(crate::clock::Instant);
+impl Default for DecodeTimer {
+    fn default() -> Self { Self(crate::clock::Instant::now()) }
+}
+impl Drop for DecodeTimer {
+    fn drop(&mut self) {
+        bump(Counter::DecodePaths);
+        add(Counter::DecodePathMicros, self.0.elapsed().as_micros().min(u64::MAX as u128) as u64);
+    }
+}
 
 /// Add one to `c`.
 #[inline]
@@ -102,7 +127,7 @@ pub fn snapshot() -> Vec<(&'static str, u64)> {
 
 #[cfg(target_arch = "wasm32")]
 pub fn snapshot() -> Vec<(&'static str, u64)> {
-    Vec::new()
+    BROWSER_COUNTERS.with(|counters| Counter::LABELS.iter().zip(counters.get()).map(|(label, value)| (*label, value)).collect())
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

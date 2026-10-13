@@ -3627,6 +3627,7 @@ pub struct HookEchoApp {
     /// Last settings-write failure already shown. Keeping the dirty snapshot means the next
     /// one-second save tick retries; remembering the text prevents a toast every second.
     settings_save_error: Option<String>,
+    adaptive: crate::adaptive::AdaptiveQuality,
     /// Auxiliary feeds already reported to the user; see [`HookEchoApp::drain_feed_errors`].
     feed_errors_told: std::collections::HashMap<String, Instant>,
     /// Right-dock active-alerts panel toggle.
@@ -4437,6 +4438,7 @@ impl HookEchoApp {
             warning_banners: Vec::new(),
             toasts: Vec::new(),
             settings_save_error: None,
+            adaptive: Default::default(),
             feed_errors_told: std::collections::HashMap::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
@@ -8580,6 +8582,12 @@ impl HookEchoApp {
         });
         ui.label("Appearance applies to the active pane and is saved with its workspace.");
         let preset = crate::radar_appearance::AppearancePreset::capture(pane);
+        if let Some(ms) = self.adaptive.p95_ms() {
+            ui.label(format!("UI CPU p95: {ms:.1} ms · {}", if self.adaptive.reduced { "Reduced smoothing cost" } else { "Requested quality" }));
+        }
+        ui.collapsing("Performance counters", |ui| {
+            for (name, value) in wxdata::stats::snapshot() { ui.label(format!("{name}: {value}")); }
+        });
         let mut limited = self.settings.linked_time_limit_seconds.is_some();
         if ui.checkbox(&mut limited, "Limit linked radar time difference").changed() {
             self.settings.linked_time_limit_seconds = limited.then_some(120);
@@ -12363,7 +12371,7 @@ impl HookEchoApp {
             None,
             precision,
         );
-        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(
+        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(u64::from(self.adaptive.reduced)).wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
                 0x9e37_79b9_7f4a_7c15
             } else {
@@ -12408,6 +12416,7 @@ impl HookEchoApp {
         match upload {
             Ok(mut up) => {
                 self.views[idx].appearance.apply_upload(&mut up, moment);
+                if self.adaptive.reduced { up.uniform[19] = 0.0; }
                 self.pane_shown.insert(idx, key);
                 self.pane_lut.insert(idx, lut_gen);
                 (Some(up), true)
@@ -12499,7 +12508,7 @@ impl HookEchoApp {
             precision,
         );
         let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
-        let lut_gen = self.palettes.gen.wrapping_add(product_hash).wrapping_add(self.views[idx].appearance.fingerprint(palette_moment));
+        let lut_gen = self.palettes.gen.wrapping_add(product_hash).wrapping_add(self.views[idx].appearance.fingerprint(palette_moment)).wrapping_add(u64::from(self.adaptive.reduced));
         let lut_only = self.pane_shown.get(&idx) == Some(&key);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             return (None, true);
@@ -12507,7 +12516,7 @@ impl HookEchoApp {
         let table = self.views[idx].appearance.table(&self.palettes, palette_moment, self.settings.theme);
         let mut upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
         upload.uniform[17] = self.views[idx].appearance.blend_width;
-        upload.uniform[19] = f32::from(self.views[idx].appearance.multipass);
+        upload.uniform[19] = f32::from(self.views[idx].appearance.multipass && !self.adaptive.reduced);
         self.pane_custom_sweep.insert(idx, sweep);
         self.pane_shown.insert(idx, key);
         self.pane_lut.insert(idx, lut_gen);
@@ -19644,6 +19653,7 @@ impl eframe::App for HookEchoApp {
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ui_started = Instant::now();
         crate::profiling::new_frame();
         crate::prof_scope!("ui");
         let ctx = root.ctx().clone();
@@ -21968,6 +21978,8 @@ impl eframe::App for HookEchoApp {
         {
             self.perf.idle_ms = idle;
         }
+        self.adaptive.observe(ui_started.elapsed().as_secs_f32() * 1000.0,
+            self.settings.map_quality == crate::settings::MapQuality::Auto);
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
     }
 }

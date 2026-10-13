@@ -644,6 +644,7 @@ pub async fn volume_bytes(id: Identifier) -> anyhow::Result<Vec<u8>> {
 /// Decode raw Archive II bytes that came from somewhere other than the bucket — a browser's
 /// offline pack, say. Same decode path (and the same Web Worker hop) `download_scan` uses.
 pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Result<Scan> {
+    let _decode_timer = crate::stats::DecodeTimer::default();
     let file = nexrad_data::volume::File::new(bytes);
     #[cfg(not(target_arch = "wasm32"))]
     let scan = crate::task::blocking(move || decode_file(file)).await??;
@@ -690,6 +691,7 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
             f
         }
     };
+    let _decode_timer = crate::stats::DecodeTimer::default();
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
     // feature of nexrad-data then spreads the decode itself across rayon.
