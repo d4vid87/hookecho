@@ -85,6 +85,10 @@ pub struct Volume {
 }
 
 impl Volume {
+    fn binned_bytes(&self) -> usize {
+        self.binned.iter().map(|(_, s)| s.data.len() + s.data16.as_ref().map_or(0, |v| v.len() * 2)).sum()
+    }
+
     pub fn new(scan: Arc<Scan>, name: String, time: DateTime<Utc>) -> Self {
         let vcp = scan.coverage_pattern_number().to_string();
         let elevations = level2::elevation_angles(&scan);
@@ -266,6 +270,12 @@ pub struct MapView {
 }
 
 impl MapView {
+    /// Resident display gate buffers, including this pane's recent-volume cache.
+    pub fn binned_cache_bytes(&self) -> usize {
+        self.volume.as_ref().map_or(0, Volume::binned_bytes)
+            + self.recent.iter().map(|(_, volume)| volume.binned_bytes()).sum::<usize>()
+    }
+
     /// Compare the scan actually loaded, including a selected cut, with the linked target.
     /// A pending playhead fetch must not make the previously painted scan appear synchronized.
     pub fn alignment_offset_seconds(&self) -> Option<i64> {

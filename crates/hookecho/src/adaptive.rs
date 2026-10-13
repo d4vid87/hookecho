@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 #[derive(Default)]
 pub struct AdaptiveQuality {
     samples: VecDeque<f32>,
+    cadence_samples: VecDeque<f32>,
     slow: u16,
     healthy: u16,
     pub reduced: bool,
@@ -32,6 +33,20 @@ impl AdaptiveQuality {
         }
     }
 
+    /// Frame cadence is meaningful during continuous gestures, not scheduled idle or playback.
+    pub fn observe_cadence(&mut self, ms: f32, continuous: bool) {
+        if !continuous || !ms.is_finite() || !(0.1..100.0).contains(&ms) { return; }
+        if self.cadence_samples.len() == 120 { self.cadence_samples.pop_front(); }
+        self.cadence_samples.push_back(ms);
+    }
+
+    pub fn cadence_p95_ms(&self) -> Option<f32> {
+        let mut values: Vec<_> = self.cadence_samples.iter().copied().collect();
+        if values.is_empty() { return None; }
+        values.sort_by(f32::total_cmp);
+        Some(values[(values.len() * 95).div_ceil(100).saturating_sub(1)])
+    }
+
     pub fn p95_ms(&self) -> Option<f32> {
         let mut values: Vec<_> = self.samples.iter().copied().collect();
         if values.is_empty() { return None; }
@@ -43,6 +58,16 @@ impl AdaptiveQuality {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scheduled_idle_intervals_are_excluded_from_gesture_cadence() {
+        let mut quality = AdaptiveQuality::default();
+        quality.observe_cadence(500.0, true);
+        quality.observe_cadence(16.0, false);
+        assert_eq!(quality.cadence_p95_ms(), None);
+        quality.observe_cadence(16.0, true);
+        assert_eq!(quality.cadence_p95_ms(), Some(16.0));
+    }
+
     #[test]
     fn reduction_requires_sustained_work_and_recovers_without_flapping() {
         let mut quality = AdaptiveQuality::default();

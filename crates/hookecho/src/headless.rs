@@ -3334,6 +3334,8 @@ mod golden_tests {
         let mut retained = RenderResources::new(&device, format);
         retained.render_once(&device, &queue, &view, &cb, clear_color());
         let before = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let uploaded_bytes = || wxdata::stats::snapshot().iter().find(|(name, _)| *name == "radar_upload_bytes").unwrap().1;
+        let prior_bytes = uploaded_bytes();
         // Clear a populated sector, insert at the seam, and change appearance together.
         for row in 70..100 { sweep.data[row * sweep.gate_count..(row + 1) * sweep.gate_count].fill(0); }
         sweep.data[..sweep.gate_count].fill(150);
@@ -3344,11 +3346,46 @@ mod golden_tests {
         cb.radar_upload = Some(upload);
         retained.render_once(&device, &queue, &view, &cb, clear_color());
         let incremental = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let incremental_bytes = uploaded_bytes() - prior_bytes;
+        let before_full_bytes = uploaded_bytes();
         let mut fresh = RenderResources::new(&device, format);
         fresh.render_once(&device, &queue, &view, &cb, clear_color());
         let reference = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let full_bytes = uploaded_bytes() - before_full_bytes;
+        assert!(incremental_bytes < full_bytes, "sparse changes should upload fewer bytes than a fresh sweep");
+        eprintln!("radar upload benchmark: incremental={incremental_bytes} bytes full={full_bytes} bytes");
         assert_ne!(before, reference, "fixture must visibly change");
         assert_eq!(incremental, reference, "row uploads must equal full texture uploads");
+        // A uniform-only opacity update must work on retained textures and be reversible.
+        let upload = cb.radar_upload.as_mut().unwrap();
+        upload.lut_only = true;
+        upload.sector_opacity = Some([0.0; 720]);
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        let hidden = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        assert_ne!(hidden, reference, "opacity must visibly affect the rendered radar");
+        cb.draw_radar = false;
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        assert_eq!(hidden, read_target(&device, &queue, &target, GOLDEN_SIZE));
+        cb.draw_radar = true;
+        let mut sectors = [1.0; 720];
+        sectors[360..].fill(0.0);
+        cb.radar_upload.as_mut().unwrap().sector_opacity = Some(sectors);
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        let mixed = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let mut visible = 0;
+        let mut faded = 0;
+        for ((mixed, full), empty) in mixed.as_chunks::<4>().0.iter().zip(reference.as_chunks::<4>().0).zip(hidden.as_chunks::<4>().0) {
+            if full != empty {
+                assert!(mixed == full || mixed == empty, "sector opacity must classify each azimuth independently");
+                visible += usize::from(mixed == full);
+                faded += usize::from(mixed == empty);
+            }
+        }
+        assert!(visible > 0 && faded > 0, "both sector classes must affect pixels");
+        cb.radar_upload.as_mut().unwrap().sector_opacity = None;
+        retained.render_once(&device, &queue, &view, &cb, clear_color());
+        assert_eq!(reference, read_target(&device, &queue, &target, GOLDEN_SIZE), "clearing opacity must restore the original pixels");
+
     }
 
     #[test]

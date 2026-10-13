@@ -8556,13 +8556,15 @@ impl HookEchoApp {
             .and_then(|name| self.settings.radar_products.iter().find(|p| &p.name == name))
             .and_then(|p| Moment::from_code(&p.palette))
             .unwrap_or(pane.moment);
-        if ui.checkbox(&mut pane.camera.globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() && !pane.camera.globe { pane.camera.zoom = pane.camera.zoom.max(2.0); }
+        let mut globe = pane.camera.globe;
+        if ui.checkbox(&mut globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() { pane.camera.set_globe(globe); }
         ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
         if smooth {
             ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Uses more GPU samples.");
             ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
                 .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
         }
+        ui.checkbox(&mut pane.appearance.fade_old_sectors, "Fade retained sectors from the previous scan").on_hover_text("Live radar only: older sectors remain visible at 35% opacity until replaced. Measurements and archive playback are unchanged.");
         let moment = palette_moment;
         let key = moment.short_name().to_string();
         let current = if pane.appearance.palettes.contains_key(&key) { "Pane palette" } else { "App palette" };
@@ -8585,7 +8587,10 @@ impl HookEchoApp {
         if let Some(ms) = self.adaptive.p95_ms() {
             ui.label(format!("UI CPU p95: {ms:.1} ms · {}", if self.adaptive.reduced { "Reduced smoothing cost" } else { "Requested quality" }));
         }
+        if let Some(ms) = self.adaptive.cadence_p95_ms() { ui.label(format!("Gesture frame cadence p95: {ms:.1} ms")); }
+        let gate_bytes: usize = self.views.iter().map(|view| view.binned_cache_bytes()).sum();
         ui.collapsing("Performance counters", |ui| {
+            ui.label(format!("Binned radar buffers: {:.1} MiB", gate_bytes as f64 / 1_048_576.0));
             for (name, value) in wxdata::stats::snapshot() { ui.label(format!("{name}: {value}")); }
         });
         let mut limited = self.settings.linked_time_limit_seconds.is_some();
@@ -12416,6 +12421,19 @@ impl HookEchoApp {
         match upload {
             Ok(mut up) => {
                 self.views[idx].appearance.apply_upload(&mut up, moment);
+                let view = &self.views[idx];
+                if view.appearance.fade_old_sectors && view.timeline.following && cut_end_ms.is_none() {
+                    up.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
+                        let status = volume.live_status.as_ref().filter(|status| status.stream_active)?;
+                        let ages = level2::azimuth_age(&volume.scan, moment, tilt, status.volume_start_ms?)?;
+                        Some(ages.map(|age| match age {
+                            level2::AzimuthAge::Current => 1.0,
+                            level2::AzimuthAge::Older => 0.35,
+                            level2::AzimuthAge::Missing => 0.0,
+                        }))
+                    });
+                }
+
                 if self.adaptive.reduced { up.uniform[19] = 0.0; }
                 self.pane_shown.insert(idx, key);
                 self.pane_lut.insert(idx, lut_gen);
@@ -12515,6 +12533,24 @@ impl HookEchoApp {
         }
         let table = self.views[idx].appearance.table(&self.palettes, palette_moment, self.settings.theme);
         let mut upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
+        if self.views[idx].appearance.fade_old_sectors && self.views[idx].timeline.following {
+            upload.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
+                let status = volume.live_status.as_ref().filter(|status| status.stream_active)?;
+                let start = status.volume_start_ms?;
+                let mut opacity = [1.0f32; 720];
+                for moment in product.inputs() {
+                    let ages = level2::azimuth_age(&volume.scan, *moment, tilt, start)?;
+                    for (alpha, age) in opacity.iter_mut().zip(ages) {
+                        *alpha = alpha.min(match age {
+                            level2::AzimuthAge::Current => 1.0,
+                            level2::AzimuthAge::Older => 0.35,
+                            level2::AzimuthAge::Missing => 0.0,
+                        });
+                    }
+                }
+                Some(opacity)
+            });
+        }
         upload.uniform[17] = self.views[idx].appearance.blend_width;
         upload.uniform[19] = f32::from(self.views[idx].appearance.multipass && !self.adaptive.reduced);
         self.pane_custom_sweep.insert(idx, sweep);
@@ -13579,7 +13615,7 @@ impl HookEchoApp {
         // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
         // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
         let (visible_vector, vlabels, visible_vector_tiles) = {
-            let vis = self.vtiles.request_view(&cam, vp, self.gesture_live, self.settings.map_quality);
+            let vis = self.vtiles.request_view(&cam, vp, self.gesture_live, if self.adaptive.reduced && self.settings.map_quality == crate::settings::MapQuality::Auto { crate::settings::MapQuality::Performance } else { self.settings.map_quality });
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             // Deep-copying every visible place name every frame (for every pane) showed up at the
             // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
@@ -18689,6 +18725,7 @@ pub(crate) fn to_upload(
     };
 
     RadarUpload {
+        sector_opacity: None,
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,
         data: if lut_only { Vec::new() } else { s.data.clone() },
@@ -21765,7 +21802,8 @@ impl eframe::App for HookEchoApp {
                 clear_vector |= self.vtiles.set_theme(self.settings.theme);
             }
             clear_vector |= self.vtiles.set_simplified(
-                self.settings.map_quality == crate::settings::MapQuality::Performance,
+                self.settings.map_quality == crate::settings::MapQuality::Performance
+                    || (self.settings.map_quality == crate::settings::MapQuality::Auto && self.adaptive.reduced),
             );
             self.last_viewport = rects
                 .get(self.active)
@@ -21978,6 +22016,7 @@ impl eframe::App for HookEchoApp {
         {
             self.perf.idle_ms = idle;
         }
+        self.adaptive.observe_cadence(ctx.input(|i| i.unstable_dt) * 1000.0, self.gesture_live);
         self.adaptive.observe(ui_started.elapsed().as_secs_f32() * 1000.0,
             self.settings.map_quality == crate::settings::MapQuality::Auto);
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));

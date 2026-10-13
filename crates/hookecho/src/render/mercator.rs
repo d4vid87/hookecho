@@ -48,6 +48,10 @@ impl Camera {
         }
     }
 
+    /// Switch projections without changing the center or central ground scale.
+    /// Both projections accept global zoom levels so returning from the globe does not jump.
+    pub fn set_globe(&mut self, globe: bool) { self.globe = globe; }
+
     /// World units covered by one screen pixel.
     pub fn world_per_pixel(&self) -> f64 {
         1.0 / (256.0 * 2f64.powf(self.zoom))
@@ -114,7 +118,7 @@ impl Camera {
         // 20 rather than the tile providers' 18: `tile_cover` clamps the tile z on its own, so the
         // last two levels overzoom the resident tiles instead of turning a spread-pinch into a
         // silent no-op — which is what it felt like at the old ceiling.
-        self.zoom = (self.zoom + delta).clamp(2.0, 20.0);
+        self.zoom = (self.zoom + delta).clamp(-2.0, 20.0);
         let after = self.screen_to_world(cursor_px, viewport_px);
         self.center.0 += before.0 - after.0;
         self.center.1 += before.1 - after.1;
@@ -242,6 +246,24 @@ impl Camera {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn projection_switch_preserves_global_zoom_and_local_ground_scale() {
+        let mut camera = Camera::at_lonlat(-97.0, 35.0, 0.0);
+        let center = camera.center;
+        camera.set_globe(true);
+        camera.set_globe(false);
+        assert_eq!(camera.center, center);
+        assert_eq!(camera.zoom, 0.0);
+        camera.zoom_at(0.1, (400.0, 300.0), (800.0, 600.0));
+        assert!((camera.zoom - 0.1).abs() < 1e-9);
+        camera = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let nearby = lonlat_to_world(-96.999, 35.0);
+        let flat = camera.world_to_screen(nearby, (800.0, 600.0)).0;
+        camera.set_globe(true);
+        let spherical = camera.world_to_screen(nearby, (800.0, 600.0)).0;
+        assert!((flat - spherical).abs() < 0.01);
+    }
 
     #[test]
     fn the_map_cannot_be_pushed_off_the_top_of_the_screen() {

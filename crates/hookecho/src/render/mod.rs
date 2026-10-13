@@ -17,7 +17,7 @@ pub type TileId = (u8, u32, u32);
 /// apart in the GPU cache.
 pub type TileKey = (u8, TileId);
 
-const MAX_TILE_VERTS: u64 = 512 * 6 * 8 * 8; // up to 512 visible tiles per frame
+const MAX_TILE_VERTS: u64 = 512 * 6 * 16 * 16; // up to 512 visible tiles per frame
 
 /// A decoded RGBA tile the app wants uploaded this frame.
 pub struct PendingTile {
@@ -47,6 +47,8 @@ pub struct RadarUpload {
     ///  smoothing, srv, motion_e, motion_n, tint, flag_nx, flag_ny, flag_west, flag_north,
     ///  flag_east, flag_south, blend_width, _pad, _pad] (see `shaders/radar.wgsl`).
     pub uniform: [f32; 20],
+    /// Half-degree azimuth opacity; absent means all sectors are fully opaque.
+    pub sector_opacity: Option<[f32; 720]>,
     /// 256×3 RGBA color LUT indexed by the sweep's `u8`: row 0 rain (the user's own table),
     /// row 1 snow, row 2 mix. Rows 1 and 2 are copies of row 0 unless the precipitation-type
     /// tint is on (see `colormap::tint_lut`).
@@ -815,7 +817,7 @@ impl RenderResources {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(80),
+                        min_binding_size: NonZeroU64::new(80 + 720 * 4),
                     },
                     count: None,
                 },
@@ -1246,6 +1248,7 @@ impl RenderResources {
                     write_texture_changes(queue, &g.flag, g.flag_dims, 1, &mut g.flag_bytes, &flag_bytes(r, g.flag_dims));
                 }
                 queue.write_buffer(&g.uni, 0, bytemuck::cast_slice(&r.uniform));
+                queue.write_buffer(&g.uni, 80, bytemuck::cast_slice(&r.sector_opacity.unwrap_or([1.0; 720])));
                 write_lut(queue, &g.lut, &r.lut);
                 return Some(g);
             }
@@ -1285,9 +1288,11 @@ impl RenderResources {
             },
             size,
         );
+        let mut uniform = r.uniform.to_vec();
+        uniform.extend_from_slice(&r.sector_opacity.unwrap_or([1.0; 720]));
         let uni = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("radar_uniform"),
-            contents: bytemuck::cast_slice(&r.uniform),
+            contents: bytemuck::cast_slice(&uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -1436,7 +1441,7 @@ impl RenderResources {
         let mut visible: Vec<TileKey> = Vec::new();
         for v in &cb.visible {
             for (id, wmin, wmax, uvmin, uvmax) in self.tile_quads(cb.basemap_key, v) {
-                let steps = if cb.globe[2] != 0.0 { 8 } else { 1 };
+                let steps = tile_subdivisions(cb.globe);
                 if tverts.len() as u64 + 6 * steps * steps > MAX_TILE_VERTS { break; }
                 let sx = (uvmax[0] - uvmin[0]) / (wmax[0] - wmin[0]);
                 let sy = (uvmax[1] - uvmin[1]) / (wmax[1] - wmin[1]);
@@ -1536,7 +1541,8 @@ impl RenderResources {
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
-        pane.tile_stride = if cb.globe[2] != 0.0 { 6 * 8 * 8 } else { 6 };
+        let steps = tile_subdivisions(cb.globe) as u32;
+        pane.tile_stride = 6 * steps * steps;
         queue.write_buffer(
             &pane.camera_buf,
             0,
@@ -2126,9 +2132,22 @@ fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, lut: &[u8]) {
     );
 }
 
+/// Global views need finer angular geometry near the horizon. Local views can use
+/// fewer subdivisions because each tile covers a smaller portion of the sphere.
+fn tile_subdivisions(globe: [f32; 4]) -> u64 {
+    if globe[2] == 0.0 { 1 } else if globe[2].abs() <= 4.0 { 16 } else { 8 }
+}
+
 #[cfg(test)]
 mod dirty_radar_rows_tests {
     use super::changed_rows;
+    #[test]
+    fn global_globe_uses_finer_geometry_with_a_bounded_local_cost() {
+        assert_eq!(super::tile_subdivisions([0.0; 4]), 1);
+        assert_eq!(super::tile_subdivisions([0.0, 1.0, 2.0, 2.0]), 16);
+        assert_eq!(super::tile_subdivisions([0.0, 1.0, 5.0, 5.0]), 8);
+    }
+
     #[test]
     fn sparse_changes_include_cleared_gates_and_coalesce_neighbors() {
         let previous = vec![7; 40];

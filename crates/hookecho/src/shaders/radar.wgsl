@@ -38,6 +38,7 @@ struct Radar {
     blend_width: f32,
     code_max: f32,
     multipass: f32,
+    sector_opacity: array<vec4<f32>, 180>,
 };
 
 
@@ -258,6 +259,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     } else {
         color = textureLoad(lut_tex, vec2<i32>(i32(round(palette_index)), row), 0);
     }
+    let sector = u32(az * 2.0) % 720u;
+    color.a *= radar.sector_opacity[sector / 4u][sector % 4u];
     if (color.a == 0.0) { discard; }
     return color;
 }

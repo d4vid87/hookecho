@@ -18,6 +18,8 @@ pub struct RadarAppearance {
     #[serde(default)]
     pub multipass: bool,
     #[serde(default)]
+    pub fade_old_sectors: bool,
+    #[serde(default)]
     pub upper_bounds: [Option<f32>; Moment::ALL.len()],
     /// Embedded tables keep saved panes portable when imported palettes move.
     #[serde(default, with = "portable_palettes")]
@@ -45,8 +47,7 @@ impl AppearancePreset {
         view.appearance = self.appearance.clone();
         view.appearance.sanitize();
         view.smooth = self.smooth;
-        view.camera.globe = self.globe;
-        if !self.globe { view.camera.zoom = view.camera.zoom.max(2.0); }
+        view.camera.set_globe(self.globe);
         for (i, moment) in Moment::ALL.iter().enumerate() {
             let (lo, hi) = moment.value_range();
             view.thresholds[i] = self.thresholds[i].filter(|v| v.is_finite()).map(|v| v.clamp(lo, hi));
@@ -91,6 +92,7 @@ impl Default for RadarAppearance {
             blend_width: default_blend_width(),
             precision: false,
             multipass: false,
+            fade_old_sectors: false,
             upper_bounds: Default::default(),
             palettes: Default::default(),
         }
@@ -138,6 +140,7 @@ impl RadarAppearance {
         self.blend_width.to_bits().hash(&mut h);
         self.precision.hash(&mut h);
         self.multipass.hash(&mut h);
+        self.fade_old_sectors.hash(&mut h);
         self.upper_bounds[moment.index()]
             .map(f32::to_bits)
             .hash(&mut h);
