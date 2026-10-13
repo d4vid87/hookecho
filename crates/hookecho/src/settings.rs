@@ -1820,9 +1820,7 @@ mod tests {
 
     #[test]
     fn field_probe_wind_units_are_independent_of_temperature_units() {
-        let mut settings = Settings::default();
-        settings.temp_unit = TempUnit::Celsius;
-        settings.velocity_unit = VelocityUnit::Knots;
+        let mut settings = Settings { temp_unit: TempUnit::Celsius, velocity_unit: VelocityUnit::Knots, ..Default::default() };
         let descriptor = crate::render::FieldLayer::RtmaGust10m.descriptor().unwrap();
         let value = settings.field_display_value(descriptor, 10.0);
         assert_eq!(value.units, "kt");
