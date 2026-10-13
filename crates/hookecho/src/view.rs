@@ -227,6 +227,8 @@ pub(crate) struct RecoveryCut {
 
 pub struct MapView {
     pub camera: crate::render::mercator::Camera,
+    pub camera_motion: crate::camera_motion::Motion,
+    pub tile_detail: crate::tiles::DetailLevel,
     /// Selected radar site (`None` = Supercell's cleared "None" state).
     pub site: Option<String>,
     pub moment: Moment,
@@ -410,6 +412,8 @@ impl MapView {
         threshold_enabled[Moment::Reflectivity.index()] = true;
         Self {
             camera,
+            camera_motion: crate::camera_motion::Motion::default(),
+            tile_detail: crate::tiles::DetailLevel::default(),
             site,
             moment: Moment::Reflectivity,
             custom_product: None,
