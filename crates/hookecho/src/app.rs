@@ -2828,7 +2828,7 @@ impl PaneSession {
             time: view.timeline.selected_time(),
             show_radar: view.show_radar,
             follow_low_cut: view.follow_low_cut,
-            cut: view.cut_selection,
+            cut: view.cut_selection.or_else(|| view.recovery_cut.as_ref().map(|pending| pending.selection)),
             forecast_hour: view.timeline.forecast_hour(),
             cut_volume_ms: view.volume.as_ref().map(|volume| volume.time.timestamp_millis())
                 .or_else(|| view.recovery_cut.as_ref().map(|pending| pending.volume_ms)),
@@ -2858,7 +2858,7 @@ impl PaneSession {
         view.timeline.playing = false;
         view.show_radar = self.show_radar;
         view.follow_low_cut = self.follow_low_cut;
-        view.cut_selection = self.cut;
+        view.cut_selection = None;
         view.recovery_cut = self.cut.zip(self.cut_volume_ms.or_else(|| self.time.map(|time| time.timestamp_millis())))
             .map(|(selection, volume_ms)| crate::view::RecoveryCut { site: view.site.clone(), volume_ms, selection });
     }
