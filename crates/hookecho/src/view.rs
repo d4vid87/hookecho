@@ -771,54 +771,19 @@ mod tests {
             Some("KTLX".into()),
             crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
         );
-        let binned = || {
-            wxdata::stats::snapshot()
-                .into_iter()
-                .find(|(l, _)| *l == "sweeps_binned")
-                .unwrap()
-                .1
-        };
-
+        let sample = |volume: &mut Volume| volume.shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
         view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
-        let before = binned();
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        assert_eq!(binned() - before, 1, "the first look has to do the work");
-
-        // The playhead moves on, then comes back round.
+        assert!(view.volume.as_ref().unwrap().binned.is_empty());
+        let first_a = sample(view.volume.as_mut().unwrap());
+        assert_eq!(view.volume.as_ref().unwrap().binned.len(), 1);
         view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        let after_b = binned();
+        let first_b = sample(view.volume.as_mut().unwrap());
         view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
         assert_eq!(view.volume.as_ref().unwrap().name, "a");
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        assert_eq!(
-            binned(),
-            after_b,
-            "the second lap re-binned a sweep it already had"
-        );
-
-        // A site change is a different piece of sky: nothing kept is worth keeping.
+        assert!(Arc::ptr_eq(&first_a, &sample(view.volume.as_mut().unwrap())), "second lap must retain the actual binned allocation");
         view.forget_recent();
         view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
-        let before = binned();
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        assert_eq!(binned() - before, 1);
+        assert!(!Arc::ptr_eq(&first_b, &sample(view.volume.as_mut().unwrap())), "site reset must discard the old allocation");
 
         // A volume still being written must never be kept: half its tilts may not have arrived,
         // and showing it again later in place of the complete archive volume loses them.
@@ -839,40 +804,29 @@ mod tests {
             "the half-written live volume was kept and shown again"
         );
 
-        // The size of it, both paths measured against each other: ten frames, three laps. The old
-        // path called `Volume::new` on every playhead move, so every frame of every lap re-ran
-        // `bin_scan_opts`. One test, not two: the counter is process-wide and the test threads
-        // share it, so a sibling reading it in parallel would see this one's work.
+        // Retain allocations so pointer reuse cannot hide a re-bin. These assertions are
+        // local to this test, unlike process-wide telemetry shared by parallel test threads.
         let names: Vec<String> = (0..10).map(|i| format!("frame-{i}")).collect();
-        let before = binned();
+        let mut fresh = Vec::new();
         for _ in 0..3 {
             for name in &names {
-                let mut vol = Volume::new(scan_at(&[0.5, 1.5]), name.clone(), now);
-                vol.binned(Moment::Reflectivity, 0, false).unwrap();
+                let mut volume = Volume::new(scan_at(&[0.5, 1.5]), name.clone(), now);
+                fresh.push(sample(&mut volume));
             }
         }
-        assert_eq!(
-            binned() - before,
-            30,
-            "the old path re-bins every frame, every lap"
-        );
-
-        let mut view = MapView::new(
-            Some("KTLX".into()),
-            crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
-        );
-        let before = binned();
+        let unique: std::collections::HashSet<_> = fresh.iter().map(Arc::as_ptr).collect();
+        assert_eq!(unique.len(), 30, "fresh volumes allocate on every lap");
+        let mut view = MapView::new(Some("KTLX".into()), crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0));
+        let mut retained = std::collections::HashMap::new();
         for _ in 0..3 {
             for name in &names {
                 view.show_volume(scan_at(&[0.5, 1.5]), name.clone(), now);
-                view.volume
-                    .as_mut()
-                    .unwrap()
-                    .binned(Moment::Reflectivity, 0, false)
-                    .unwrap();
+                let sweep = sample(view.volume.as_mut().unwrap());
+                if let Some(previous) = retained.get(name) { assert!(Arc::ptr_eq(previous, &sweep)); }
+                else { retained.insert(name.clone(), sweep); }
             }
         }
-        assert_eq!(binned() - before, 10, "one per volume, then two free laps");
+        assert_eq!(retained.len(), 10, "one allocation per volume, then two free laps");
     }
 
     /// A live volume that has only just started has no tilts in it yet. Applying it emptied the
