@@ -1392,6 +1392,16 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Probe presentation follows the same independent temperature and velocity preferences
+    /// as radar labels; scientific values and export units remain native.
+    pub fn field_display_value(&self, descriptor: &wxdata::field::FieldDescriptor, value: f32) -> wxdata::field::DisplayValue {
+        if descriptor.units == "m s-1" || descriptor.units == "m/s" {
+            wxdata::field::DisplayValue { value: value * self.velocity_unit.factor_from_ms(), units: self.velocity_unit.label() }
+        } else {
+            descriptor.display_value(value, if self.temp_unit == TempUnit::Fahrenheit { wxdata::field::UnitSystem::Us } else { wxdata::field::UnitSystem::Metric })
+        }
+    }
+
     /// Where settings.json lives. Web has no filesystem — it persists to `localStorage` instead.
     #[cfg(not(target_arch = "wasm32"))]
     fn path() -> Option<PathBuf> {
@@ -1799,6 +1809,22 @@ mod tests {
         assert!(ids.iter().all(|id| id.len() == 8));
         let unique: std::collections::HashSet<&String> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len());
+    }
+
+    #[test]
+    fn field_probe_wind_units_are_independent_of_temperature_units() {
+        let mut settings = Settings::default();
+        settings.temp_unit = TempUnit::Celsius;
+        settings.velocity_unit = VelocityUnit::Knots;
+        let descriptor = crate::render::FieldLayer::RtmaGust10m.descriptor().unwrap();
+        let value = settings.field_display_value(descriptor, 10.0);
+        assert_eq!(value.units, "kt");
+        assert!((value.value - 19.43844).abs() < 0.001);
+        settings.temp_unit = TempUnit::Fahrenheit;
+        settings.velocity_unit = VelocityUnit::MetersPerSecond;
+        let value = settings.field_display_value(descriptor, 10.0);
+        assert_eq!(value.units, "m/s");
+        assert_eq!(value.value, 10.0);
     }
 
     #[test]
