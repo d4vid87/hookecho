@@ -63,7 +63,7 @@ impl HookEchoApp {
         crate::prof_scope!("panel");
         self.hint(
             "info_links",
-            "Rows with an \u{24d8} explain themselves \u{2014} click it for what the \
+            "Open Details beside a row to learn what it does \u{2014} including what the \
              abbreviation means",
         );
         let accent = crate::theme::accent(self.settings.theme);
@@ -541,7 +541,7 @@ impl HookEchoApp {
                 PanelSection::Radar => "Radar".to_string(),
                 PanelSection::Overlays => "Layers".to_string(),
                 PanelSection::Alerts => format!("Alerts in view ({alert_count})"),
-                PanelSection::Tools => if search_page { "Search" } else { "More" }.to_string(),
+                PanelSection::Tools => if search_page { "Search" } else { "Tools" }.to_string(),
             };
             let sheet_area = if search_page {
                 egui::Rect::from_min_max(chrome.min + egui::vec2(0.0, 4.0), chrome.max - egui::vec2(0.0, 4.0))
@@ -722,7 +722,7 @@ impl HookEchoApp {
                             let (count, _) = self.alert_badge();
                             for (label, target) in [
                                 ("Radar".to_string(), PanelSection::Radar),
-                                ("Overlays".to_string(), PanelSection::Overlays),
+                                ("Layers".to_string(), PanelSection::Overlays),
                                 (format!("Alerts {count}"), PanelSection::Alerts),
                                 ("Tools".to_string(), PanelSection::Tools),
                             ] {
@@ -736,7 +736,7 @@ impl HookEchoApp {
                     }
                     if self.analyst_open && !self.drawer.is_open() {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(format!("Pane {}", self.active + 1));
+                            ui.label(format!("Editing {}", self.pane_identity(self.active)));
                             ui.menu_button("Preset", |ui| {
                                 for (i, label) in ["Tornado", "Hail", "Mesoscale", "Forecast"].iter().enumerate() {
                                     if ui.button(*label).clicked() {

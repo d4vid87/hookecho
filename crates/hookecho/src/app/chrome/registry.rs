@@ -210,6 +210,7 @@ impl HookEchoApp {
                     .map(|(_, k)| k.clone()),
                 health: None,
                 favorite: match action {
+                    PaletteAction::SetMoment(moment, relative) => favorite_fields.contains(&radar_favorite_id(moment, relative)),
                     PaletteAction::ToggleField(layer) => {
                         favorite_fields.contains(layer.stable_id())
                     }

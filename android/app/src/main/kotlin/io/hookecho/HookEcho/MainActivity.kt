@@ -55,7 +55,7 @@ class MainActivity : GameActivity() {
     private var overlayBackRegistered = false
     private var rustBackConsumed = false
     private var shelfView: ComposeView? = null
-    private val shelfSection = mutableStateOf("More")
+    private val shelfSection = mutableStateOf("Tools")
     private val shelfSite = mutableStateOf("")
     private val shelfProduct = mutableStateOf("")
     private val shelfAlerts = mutableIntStateOf(0)

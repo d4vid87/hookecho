@@ -1938,6 +1938,11 @@ pub(crate) enum AppWindow {
     About,
 }
 
+/// Stable radar keys share the existing persisted favorites collection with derived fields.
+pub(crate) fn radar_favorite_id(moment: Moment, relative: bool) -> String {
+    format!("radar.moment.{}.{}", moment.index(), u8::from(moment == Moment::Velocity && relative))
+}
+
 /// One thing the user can do, addressable from any surface (layers panel, command palette,
 /// mobile quick-layers sheet). The single registry keeps those surfaces in sync for free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1948,6 +1953,7 @@ pub(crate) enum PaletteAction {
     AllTilts,
     ToggleField(crate::render::FieldLayer),
     ToggleFavorite(crate::render::FieldLayer),
+    ToggleRadarFavorite(Moment, bool),
     ToggleOverlay(OverlayToggle),
     /// Open the SPC outlook day and hazard controls.
     OpenOutlooks,
@@ -3073,6 +3079,7 @@ pub struct HookEchoApp {
     firstrun: ui::firstrun::FirstRun,
     /// The optional spotlight tour, and where the chrome drew the things it points at this frame.
     tour: ui::tour::Tour,
+    quick_start_offer: bool,
     tour_anchors: ui::tour::TourAnchors,
     settings_window: ui::settings_window::SettingsWindow,
     /// Active color tables (one per moment); reloaded when the palette settings change.
@@ -3222,8 +3229,8 @@ pub struct HookEchoApp {
     follow_notice: Option<(String, Instant)>,
     /// Open "Active Warnings" window (clicked warning/watch polygons).
     warning_popup: Option<ui::warning_window::WarningPopup>,
-    /// Newest pane error and the time it appeared, for the auto-hiding bottom-center chip.
-    error_chip: Option<(String, f64)>,
+    /// Bounded, session-local history and unresolved radar errors across panes.
+    radar_issues: chrome::RadarIssueLog,
     /// Search text in the mobile navigation drawer's registry list.
     /// Forecast hour each HRRR-backed field layer was last fetched for, so scrubbing the tail
     /// refetches instead of showing a stale hour until the cadence expires.
@@ -4178,6 +4185,7 @@ impl HookEchoApp {
                 w
             },
             tour: Default::default(),
+            quick_start_offer: false,
             tour_anchors: Default::default(),
             settings_window: Default::default(),
             palettes: Palettes::default(),
@@ -4270,7 +4278,7 @@ impl HookEchoApp {
             follow_cell: None,
             follow_notice: None,
             warning_popup: None,
-            error_chip: None,
+            radar_issues: Default::default(),
             hrrr_layer_hour: std::collections::HashMap::new(),
             storm_cells: Vec::new(),
             ui_scale_applied: -1.0,
@@ -9546,6 +9554,10 @@ impl HookEchoApp {
                     self.settings.save();
                 }
                 self.set_field(layer, !on);
+            }
+            PaletteAction::ToggleRadarFavorite(moment, relative) => {
+                self.settings.toggle_favorite_field(&radar_favorite_id(moment, relative));
+                self.settings.save();
             }
             PaletteAction::ToggleFavorite(layer) => {
                 self.settings.toggle_favorite_field(layer.stable_id());
@@ -21247,15 +21259,16 @@ impl eframe::App for HookEchoApp {
             self.apply_action(BindableAction::CommandSearch, ctx);
         }
         if !self.capture_key {
-            // Space mirrors the transport button. A focused editor owns its spaces; Escape is
-            // the map-wide show/hide switch even when a menu currently has focus.
+            // Space mirrors the transport button. A focused editor owns its spaces. Escape
+            // closes a popup or panel before acting as the map-wide show/hide switch.
             if !ctx.memory(|m| m.focused().is_some())
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
             {
                 self.views[self.active].timeline.toggle_play();
                 self.record_interaction("toggle_playback");
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if !egui::Popup::is_any_open(ctx) && !self.panel_open
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 self.apply_action(BindableAction::ToggleObs, ctx);
             }
             let bindings = hotkeys::active(&self.settings).into_owned();
@@ -21319,7 +21332,7 @@ impl eframe::App for HookEchoApp {
         if !self.panel_open { self.drawer.resume(); }
         self.refresh_priority_overlays(ctx);
         self.drawer.begin_frame(ctx);
-        if self.panel_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self.panel_open && !egui::Popup::is_any_open(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.panel_open = false;
             self.sidebar_focus_search = false;
         }
@@ -21387,6 +21400,25 @@ impl eframe::App for HookEchoApp {
             self.tour.show(ctx, &anchors, sig, accent);
         }
 
+        if self.quick_start_offer && !self.firstrun.open && !self.tour.open && !self.show_cheatsheet {
+            let mut open = true;
+            let mut start = false;
+            let mut dismiss = false;
+            egui::Window::new("Radar selected")
+                .open(&mut open).collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 126.0])
+                .show(ctx, |ui| {
+                    ui.set_max_width((ctx.content_rect().width() - 48.0).min(320.0));
+                    ui.label("Learn to change products, play an animation, and return to live.");
+                    ui.horizontal(|ui| {
+                        start = ui.add_sized([140.0, 44.0], egui::Button::new("Start quick guide")).clicked();
+                        if ui.add_sized([100.0, 44.0], egui::Button::new("Not now")).clicked() { dismiss = true; }
+                    });
+                });
+            if start { self.tour.start(); }
+            self.quick_start_offer = open && !start && !dismiss;
+        }
+
         // One quiet check per session, once the app has settled — so a stale build tells you so
         // without anyone opening About.
         if ctx.input(|i| i.time) > 30.0 {
@@ -21418,6 +21450,7 @@ impl eframe::App for HookEchoApp {
             v.site = Some(fin.site.clone());
             ui::site_dialog::center_on_site(&mut v.camera, &fin.site);
             if fin.located {
+                self.quick_start_offer = !fin.take_tour;
                 // Nobody chose this site, so say which one it is and that it can be changed.
                 self.toast(
                     ToastKind::Info,

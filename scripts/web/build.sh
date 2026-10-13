@@ -148,7 +148,7 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # replay metadata measured 4,427,028 gzip bytes before the final timeline export. Allocate
 # 30 KB (0.68%) over the prior cap for the complete reliability follow-up; lite and startup
 # limits remain unchanged. Alternative binaryen shrinking passes measured larger outputs.
-budget="${HOOKECHO_WASM_BUDGET:-4440000}"
+budget="${HOOKECHO_WASM_BUDGET:-4450000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

@@ -87,47 +87,14 @@ impl HookEchoApp {
                     ui.spacing_mut().interact_size.y = 24.0;
                 }
                 ui.horizontal(|ui| {
-                    let site_label = if radar_focus {
-                        format!("{} HookEcho", ph::RADIO_BUTTON)
-                    } else {
-                        format!("{site} · {product}")
-                    };
-                    let radar = ui
-                        .add_sized(
-                            [
-                                if radar_focus { 108.0 } else { ui.available_width() - 112.0 },
-                                if radar_focus { 30.0 } else { 48.0 },
-                            ],
-                            egui::Button::new(if radar_focus {
-                                RichText::new(site_label).size(14.0).strong().color(Color32::WHITE)
-                            } else {
-                                RichText::new(site_label)
-                            })
-                            .fill(if radar_focus { Color32::TRANSPARENT } else { ui.visuals().widgets.inactive.bg_fill })
-                            .stroke(if radar_focus { egui::Stroke::NONE } else { ui.visuals().widgets.inactive.bg_stroke }),
-                        )
-                        .named("Open radar controls");
+                    let site_label = wxdata::sites::site_by_id(&site).map_or_else(|| site.clone(), |s| format!("{site} · {}", s.city));
+                    let radar = ui.add_sized([ui.available_width() - 112.0, 48.0], egui::Button::new(RichText::new(site_label).size(13.0)).wrap())
+                        .named("Choose radar station");
                     product_anchor = Some(radar.rect);
-                    if radar_focus { ui.add_space((ui.available_width() - 73.0).max(0.0)); }
-                    if radar.clicked() {
-                        #[cfg(target_os = "android")]
-                        if radar_focus
-                            && crate::platform::quiet_shelf::show(
-                                "Radar",
-                                &site,
-                                product,
-                                alert_count as i32,
-                            )
-                        {
-                            return;
-                        }
-                        self.panel_section = PanelSection::Radar;
-                        self.show_alert_panel = false;
-                        self.panel_open = true;
-                    }
+                    if radar.clicked() { self.apply_palette(PaletteAction::OpenWindow(AppWindow::Site), ctx); }
                     if ui
                         .add_sized(
-                            [if radar_focus { 34.0 } else { 48.0 }, if radar_focus { 34.0 } else { 48.0 }],
+                            [48.0, 48.0],
                             egui::Button::new(ph::MAGNIFYING_GLASS)
                                 .fill(if radar_focus { Color32::from_rgb(15, 43, 67) } else { ui.visuals().widgets.inactive.bg_fill })
                                 .stroke(if radar_focus { egui::Stroke::new(1.0, Color32::from_rgb(75, 117, 150)) } else { ui.visuals().widgets.inactive.bg_stroke })
@@ -143,7 +110,7 @@ impl HookEchoApp {
                     }
                     let menu = ui
                         .add_sized(
-                            [if radar_focus { 34.0 } else { 48.0 }, if radar_focus { 34.0 } else { 48.0 }],
+                            [48.0, 48.0],
                             egui::Button::new(if radar_focus { ph::LIST } else { ph::MAP_PIN })
                                 .fill(if radar_focus { Color32::from_rgb(15, 43, 67) } else { ui.visuals().widgets.inactive.bg_fill })
                                 .stroke(if radar_focus { egui::Stroke::new(1.0, Color32::from_rgb(75, 117, 150)) } else { ui.visuals().widgets.inactive.bg_stroke })
@@ -159,7 +126,7 @@ impl HookEchoApp {
                         if radar_focus {
                             #[cfg(target_os = "android")]
                             if crate::platform::quiet_shelf::show(
-                                "More",
+                                "Tools",
                                 &site,
                                 product,
                                 alert_count as i32,
@@ -174,6 +141,7 @@ impl HookEchoApp {
                         }
                     }
                 });
+                self.radar_identity_controls(ui);
                 if radar_focus {
                     ui.horizontal(|ui| {
                         let badge = || egui::Frame::new()
@@ -202,6 +170,7 @@ impl HookEchoApp {
                     );
                 }
                 if self.analyst_open {
+                    ui.label(format!("Editing {} · {} | Maps {} · Times {}", crate::products::name(self.views[self.active].moment, self.views[self.active].srv), site, if self.link_cameras { "linked" } else { "independent" }, if self.link_times { "linked" } else { "independent" }));
                     ui.horizontal(|ui| {
                         if ui
                             .add_sized([108.0, 48.0], egui::Button::new("← Radar"))
@@ -214,21 +183,11 @@ impl HookEchoApp {
                             for i in 0..self.views.len() {
                                 if ui
                                     .add_sized(
-                                        [76.0, 48.0],
-                                        egui::Button::new(format!("Pane {}", i + 1))
+                                        [156.0, 48.0],
+                                        egui::Button::new(self.pane_identity(i))
                                             .selected(i == self.active),
                                     )
-                                    .named(
-                                        [
-                                            "Show analyst pane 1",
-                                            "Show analyst pane 2",
-                                            "Show analyst pane 3",
-                                            "Show analyst pane 4",
-                                        ]
-                                        .get(i)
-                                        .copied()
-                                        .unwrap_or("Show analyst pane"),
-                                    )
+                                    .named(&format!("Show {}", self.pane_identity(i)))
                                     .clicked()
                                 {
                                     self.active = i;
@@ -325,7 +284,7 @@ impl HookEchoApp {
                                         ),
                                         ("Layers".to_string(), ph::STACK, PanelSection::Overlays),
                                         (format!("Alerts {count}"), ph::BELL, PanelSection::Alerts),
-                                        ("More".to_string(), ph::DOTS_THREE, PanelSection::Tools),
+                                        ("Tools".to_string(), ph::WRENCH, PanelSection::Tools),
                                     ]
                                 };
                                 for (label, icon, section) in destinations {
@@ -363,7 +322,7 @@ impl HookEchoApp {
                                         PanelSection::Radar => "Radar controls",
                                         PanelSection::Overlays => "Layers",
                                         PanelSection::Alerts => "Alerts",
-                                        PanelSection::Tools => "More",
+                                        PanelSection::Tools => "Tools",
                                     };
                                     if ui.add(button).named(name).clicked() {
                                         if radar_focus && label == "Forecast" {

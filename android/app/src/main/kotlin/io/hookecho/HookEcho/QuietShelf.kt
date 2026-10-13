@@ -32,7 +32,7 @@ private val rowColor = Color(0xFF1A3954)
 private val cobalt = Color(0xFF2C70C4)
 private val sky = Color(0xFF8FCDF9)
 private val muted = Color(0xFFAAC3D5)
-private val menus = listOf("Radar", "Layers", "Alerts", "More")
+private val menus = listOf("Radar", "Layers", "Alerts", "Tools")
 
 data class ShelfAction(val title: String, val detail: String, val glyph: String, val command: String)
 
