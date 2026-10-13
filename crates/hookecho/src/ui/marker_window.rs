@@ -313,3 +313,52 @@ mod tests {
         assert_eq!(builtin_icon(Some("photo.png"), false), None);
     }
 }
+
+#[cfg(test)]
+mod identity_ui_tests {
+    use super::*;
+
+    #[test]
+    fn editor_keeps_target_when_an_earlier_marker_is_deleted() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::base());
+        let mut settings = Settings { markers: serde_json::from_str(r#"[
+            {"id":"a","name":"Same","lat":40.0,"lon":-95.0},
+            {"id":"b","name":"Same","lat":41.0,"lon":-94.0}]
+        "#).unwrap(), ..Default::default() };
+        let mut window = MarkerWindow { open: true, selected: Some("b".into()), ..Default::default() };
+        let mut drawer = crate::ui::drawer::Drawer::default();
+        let textures = IconTextures::default();
+        settings.markers.remove(0);
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 1000.0))),
+                events,
+                ..Default::default()
+            }, |ui| {
+                let ctx = ui.ctx();
+                drawer.begin_frame(ctx);
+                let _ = window.show(ctx, &mut settings, &textures, &mut drawer, false);
+            })
+        };
+        let _ = frame(vec![]);
+        let output = frame(vec![]);
+        let text_position = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Same" => Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        }).next_back().expect("selected marker name is drawn");
+        let _ = frame(vec![
+            egui::Event::PointerMoved(text_position),
+            egui::Event::PointerButton { pos: text_position, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            egui::Event::PointerButton { pos: text_position, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        ]);
+        let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let _ = frame(vec![
+            egui::Event::Key { key: egui::Key::A, physical_key: Some(egui::Key::A), pressed: true, repeat: false, modifiers },
+            egui::Event::Text("Renamed target".into()),
+        ]);
+        assert_eq!(settings.markers.len(), 1);
+        assert_eq!(settings.markers[0].id, "b");
+        assert_eq!(settings.markers[0].name, "Renamed target");
+    }
+}
