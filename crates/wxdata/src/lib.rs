@@ -40,6 +40,7 @@ pub mod mping;
 pub mod mrms;
 pub mod ndbc;
 pub mod net;
+pub mod shared_read;
 pub mod nohrsc;
 pub mod object_cache;
 pub mod obs;

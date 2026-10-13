@@ -583,15 +583,27 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
         }
     }
     crate::stats::bump(crate::stats::Counter::DayListMisses);
-    let mut ids = archive::list_files(site, &date)
-        .await
-        .map_err(|e| anyhow::anyhow!("list_files({site}, {date}): {e}"))?;
+    // Catalog names use the same byte-flight machinery as object downloads. Keeping one
+    // shared payload type avoids a second async coordination implementation in the web bundle.
+    let owned_site = site.to_owned();
+    let body = crate::shared_read::bytes(format!("catalog:{site}:{date}"), async move {
+        let ids = archive::list_files(&owned_site, &date).await
+            .map_err(|e| anyhow::anyhow!("list_files({owned_site}, {date}): {e}"))?;
+        Ok(serde_json::to_vec(&ids.iter().map(Identifier::name).collect::<Vec<_>>())?)
+    }).await?;
+    let names: Vec<String> = serde_json::from_slice(&body)?;
+    let mut ids: Vec<Identifier> = names.into_iter().map(Identifier::new).collect();
     ids.retain(|id| is_volume(id.name()));
     ids.sort_by_key(|id| id.date_time());
     if let Ok(mut map) = cache.lock() {
         // Scrubbing a week of dates across a few sites left every one of those listings here for
         // the life of the process; an expired entry can never be read, so drop it as we pass.
         map.retain(|_, (at, _)| at.elapsed() < DAY_LIST_TTL);
+        while map.len() >= 64 {
+            let oldest = map.iter().max_by_key(|(_, (at, _))| at.elapsed()).map(|(key, _)| key.clone());
+            let Some(oldest) = oldest else { break; };
+            map.remove(&oldest);
+        }
         map.insert(key, (crate::clock::Instant::now(), ids.clone()));
     }
     Ok(ids)
@@ -643,11 +655,14 @@ pub fn scan_from_wire(bytes: &[u8]) -> anyhow::Result<Scan> {
 
 /// Raw Archive II bytes for one volume, straight from the bucket.
 pub async fn volume_bytes(id: Identifier) -> anyhow::Result<Vec<u8>> {
-    let f = nexrad_data::aws::archive::download_file(id)
-        .await
-        .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
-    crate::stats::net(f.data().len());
-    Ok(f.data().to_vec())
+    let key = format!("volume:{}", id.name());
+    let bytes = crate::shared_read::bytes(key, async move {
+        let f = nexrad_data::aws::archive::download_file(id).await
+            .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
+        crate::stats::net(f.data().len());
+        Ok(f.data().to_vec())
+    }).await?;
+    Ok(bytes.as_ref().clone())
 }
 
 /// Decode raw Archive II bytes that came from somewhere other than the bucket — a browser's
@@ -684,7 +699,6 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
 }
 
 pub async fn download_scan_with_progress(id: Identifier, cache_dir: Option<PathBuf>, progress: impl Fn(LoadPhase) + Send) -> anyhow::Result<Scan> {
-    use nexrad_data::aws::archive;
     progress(LoadPhase::Downloading);
     let name = id.name().to_string();
     let cache_file = cache_dir.map(|d| d.join("volumes").join(&name));
@@ -695,10 +709,7 @@ pub async fn download_scan_with_progress(id: Identifier, cache_dir: Option<PathB
     let file = match cached {
         Some(f) => f,
         None => {
-            let f = archive::download_file(id)
-                .await
-                .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
-            crate::stats::net(f.data().len());
+            let f = nexrad_data::volume::File::new(volume_bytes(id).await?);
             if let Some(p) = &cache_file {
                 if let Some(dir) = p.parent() {
                     let _ = std::fs::create_dir_all(dir);

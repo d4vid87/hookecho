@@ -495,7 +495,7 @@ pub fn run(
 
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -553,7 +553,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
         let (center, scale) = cam.world_to_clip_uniform(vp);
         MapCallback {
             pane,
-            retain_only_pane: None,
+            retain_only_pane: None, live_pane_count: None,
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],
@@ -1224,7 +1224,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
     let table = crate::colormap::default_table(moment).clone();
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -1312,7 +1312,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -1377,7 +1377,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -1503,7 +1503,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
     });
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -1563,7 +1563,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -1639,7 +1639,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -1753,7 +1753,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -1872,7 +1872,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -2200,7 +2200,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -2278,7 +2278,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -2467,7 +2467,7 @@ pub fn run_hrrr_layer(
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -2508,7 +2508,7 @@ fn render_field_png(
     let (center, scale) = camera.world_to_clip_uniform((size() as f32, size() as f32));
     let cb = MapCallback {
         pane: 0,
-        retain_only_pane: None,
+        retain_only_pane: None, live_pane_count: None,
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
@@ -3297,7 +3297,7 @@ mod golden_tests {
             camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
         MapCallback {
             pane: 0,
-            retain_only_pane: None,
+            retain_only_pane: None, live_pane_count: None,
             camera_center: center,
             camera_scale: scale,
             globe: camera.globe_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32)),
@@ -3418,6 +3418,40 @@ mod golden_tests {
             resources.render_once(&device, &queue, &view, &cb, clear_color());
             let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
             assert_eq!(&pixels[center..center + 4], &color);
+        }
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_closed_panes_release_allocations_and_reopen_without_growth() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let camera = Camera::at_lonlat(0.0, 0.0, 0.0);
+        let mut full = None;
+        for _ in 0..8 {
+            for pane in 0..4 {
+                let mut callback = performance_callback(&sweep, &table, camera, false);
+                callback.pane = pane;
+                callback.live_pane_count = Some(4);
+                callback.new_vector_tiles = vec![crate::render::PendingVectorTile {
+                    id: (0,0,0), vertices: [[0.0,0.0],[1.0,0.0],[0.0,1.0]].map(|world| crate::render::OverlayVertex { world, color: [1.0;4], offset:[0.0;3] }).to_vec(),
+                    indices: vec![0,1,2], foreground_vertices: vec![], foreground_indices: vec![],
+                }];
+                resources.prepare_pane(&device, &queue, &callback);
+            }
+            let bytes = resources.memory_bytes();
+            if let Some(full) = full { assert_eq!(bytes, full, "repeated reopen must not grow resources"); }
+            else { full = Some(bytes); }
+            let mut callback = performance_callback(&sweep, &table, camera, false);
+            callback.live_pane_count = Some(2);
+            callback.radar_upload = None;
+            resources.prepare_pane(&device, &queue, &callback);
+            let reduced = resources.memory_bytes();
+            assert!(reduced.0 < bytes.0, "closed radar and vector GPU allocations must be freed");
+            assert!(reduced.1 < bytes.1, "closed CPU upload shadows must be freed");
         }
     }
 
@@ -3558,7 +3592,7 @@ mod golden_tests {
             camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
         let mut cb = MapCallback {
             pane: 0,
-            retain_only_pane: None,
+            retain_only_pane: None, live_pane_count: None,
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],
@@ -3659,7 +3693,7 @@ mod golden_tests {
         let camera = Camera::at_lonlat(sweep.radar_lon as f64, sweep.radar_lat as f64, 8.5);
         let (center, scale) = camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
         let mut cb = MapCallback {
-            pane: 0, retain_only_pane: None, camera_center: center, camera_scale: scale,
+            pane: 0, retain_only_pane: None, live_pane_count: None, camera_center: center, camera_scale: scale,
             globe: [0.0; 4],
             world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
             new_tiles: Vec::new(), visible: Vec::new(),
@@ -3708,7 +3742,7 @@ mod golden_tests {
         camera.globe = true;
         let (center, scale) = camera.world_to_clip_uniform(vp);
         let mut cb = MapCallback {
-            pane: 0, retain_only_pane: None, camera_center: center, camera_scale: scale,
+            pane: 0, retain_only_pane: None, live_pane_count: None, camera_center: center, camera_scale: scale,
             globe: camera.globe_uniform(vp),
             world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
             new_tiles: Vec::new(), visible: Vec::new(),
@@ -3842,7 +3876,7 @@ mod golden_tests {
             let lut_only = i >= 10;
             let mut cb = MapCallback {
                 pane: 0,
-                retain_only_pane: None,
+                retain_only_pane: None, live_pane_count: None,
                 camera_center: center,
                 camera_scale: scale,
             globe: [0.0; 4],
@@ -3891,7 +3925,7 @@ mod golden_tests {
         let (center, scale) = camera.world_to_clip_uniform((200.0, 200.0));
         let mut cb = MapCallback {
             pane: 0,
-            retain_only_pane: None,
+            retain_only_pane: None, live_pane_count: None,
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],
@@ -3956,7 +3990,7 @@ mod golden_tests {
             camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
         let cb = MapCallback {
             pane: 0,
-            retain_only_pane: None,
+            retain_only_pane: None, live_pane_count: None,
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],

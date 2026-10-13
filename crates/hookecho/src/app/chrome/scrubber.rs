@@ -9,6 +9,20 @@ use super::*;
 use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
+    pub(crate) fn timeline_frame_statuses(&self) -> Vec<crate::timeline::FrameStatus> {
+        use crate::timeline::FrameStatus as State;
+        let view = &self.views[self.active];
+        let downloads = book(&self.prefetching);
+        view.timeline.frames.iter().map(|frame| {
+            let name = frame.name();
+            if view.has_decoded_frame(name) || self.scan_cache.contains(&name.to_owned()) { State::Ready }
+            else if view.frame_request.pending_name() == Some(name) {
+                if view.load_phase == Some(level2::LoadPhase::Decoding) { State::Decoding } else { State::Downloading }
+            } else if downloads.get(name).is_some_and(|at| at.elapsed() < VOLUME_TIMEOUT) { State::Downloading }
+            else { view.frame_history.iter().find(|(previous, _)| previous == name).map_or(State::Unloaded, |(_, state)| *state) }
+        }).collect()
+    }
+
     pub(crate) fn scrubber(&mut self, ctx: &egui::Context) {
         crate::prof_scope!("scrubber");
         use egui_phosphor::regular as ph;
@@ -16,6 +30,8 @@ impl HookEchoApp {
             self.signal_scrubber(ctx);
             return;
         }
+        let frame_statuses = self.timeline_frame_statuses();
+        let before_transport = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
         let accent = egui::Color32::WHITE;
         let tz = self.active_tz();
         let latest_cut = self.views[self.active].volume.as_ref().and_then(|volume| {
@@ -47,6 +63,8 @@ impl HookEchoApp {
                 humanize(secs)
             )
         });
+        let retained_station = self.views[self.active].retained_station.clone();
+        let station_failed = self.views[self.active].error.is_some();
         let loading = self.views[self.active].loading;
         let loaded_time = self.views[self.active].volume.as_ref().map(|volume| volume.time);
         let requested_time = self.views[self.active].timeline.selected_time();
@@ -134,7 +152,7 @@ impl HookEchoApp {
                 }
                 let t = &mut self.views[self.active].timeline;
                 if t.slot_count() > 0 {
-                    scrub_rect = Some(track(ui, t, tz, accent, live_window, compact_live));
+                    scrub_rect = Some(track(ui, t, tz, accent, live_window, compact_live, &frame_statuses));
                 }
                 if !narrow { ui.add_space(2.0); }
                 let row = ui.horizontal(|ui| {
@@ -232,7 +250,10 @@ impl HookEchoApp {
                     // Pinned to live but the newest volume is old means the site's feed has
                     // stopped, not that playback drifted — there is nothing newer to jump to.
                     // The colour said so already; saying "LIVE" over a volume hours old did not.
-                    let (col, text, hint) = if t.following && fresh {
+                    let (col, text, hint) = if retained_station.is_some() {
+                        (egui::Color32::from_rgb(255, 218, 140), if station_failed { "Unavailable" } else { "Loading" }.to_string(),
+                            "The selected station is not ready. The map retains the explicitly identified previous station's scan.")
+                    } else if t.following && fresh {
                         (
                             mobile::OMEGA_GREEN,
                             "Live".to_string(),
@@ -416,7 +437,9 @@ impl HookEchoApp {
                             (Some(_), false) if ui.available_width() < 150.0 => &None,
                             _ => &age,
                         };
-                        if let Some(age) = age {
+                        if let Some(previous) = &retained_station {
+                            ui.label(egui::RichText::new(format!("Showing {previous}")).small().color(egui::Color32::from_rgb(255, 218, 140)));
+                        } else if let Some(age) = age {
                             ui.label(
                                 egui::RichText::new(age)
                                     .size(crate::ui::style::FONT_SM)
@@ -440,7 +463,9 @@ impl HookEchoApp {
                     } else {
                         age.clone().unwrap_or_else(|| if loading { load_label.into() } else { String::new() })
                     };
-                    let status = if buffering { "Buffering next radar frame…".to_owned() }
+                    let status = if let Some(previous) = &retained_station {
+                        format!("Showing {previous} · {} {site}", if station_failed { "unavailable" } else { "loading" })
+                    } else if buffering { "Buffering next radar frame…".to_owned() }
                         else if loading { load_label.to_owned() }
                         else if skipped_recently { "Skipped unavailable radar frame".to_owned() }
                         else { status };
@@ -479,11 +504,16 @@ impl HookEchoApp {
             self.views[self.active].timeline.go_head();
             self.views[self.active].pin_low_cut();
         }
+        let after = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
+        if before_transport != after { self.record_interaction("timeline_transport"); }
     }
 
     /// The compact transport used by the Android Signal Deck. It controls the same timeline as
     /// the desktop transport; only its presentation changes.
     fn signal_scrubber(&mut self, ctx: &egui::Context) {
+        let retained_station = self.views[self.active].retained_station.clone();
+        let before_transport = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
+        let frame_statuses = self.timeline_frame_statuses();
         use egui_phosphor::regular as ph;
         let tz = self.active_tz();
         let volume = self.views[self.active].volume.as_ref();
@@ -508,7 +538,7 @@ impl HookEchoApp {
                         let t = &mut self.views[self.active].timeline;
                         if t.slot_count() > 0 {
                             let live_window = t.live_window;
-                            track(ui, t, tz, egui::Color32::from_rgb(103, 185, 255), live_window, true);
+                            track(ui, t, tz, egui::Color32::from_rgb(103, 185, 255), live_window, true, &frame_statuses);
                         }
                         let short_time = |id: Option<&wxdata::level2::Identifier>| -> String {
                             id.and_then(|id| id.date_time())
@@ -537,7 +567,8 @@ impl HookEchoApp {
                             if transport(ui, if playing { ph::PAUSE } else { ph::PLAY }, if playing { "Pause" } else { "Play" }, true) { t.toggle_play(); }
                             if transport(ui, ph::SKIP_FORWARD, "Next frame", false) { t.step_cut(1); }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let status = if !t.following { "Archive radar" } else if fresh { "Live radar" } else { "Radar stale" };
+                                let status = if let Some(previous) = &retained_station { format!("Showing {previous}") }
+                                    else if !t.following { "Archive radar".into() } else if fresh { "Live radar".into() } else { "Radar stale".into() };
                                 if ui.add(egui::Button::new(egui::RichText::new(status).size(13.0).strong().color(egui::Color32::WHITE))
                                     .fill(egui::Color32::TRANSPARENT).stroke(egui::Stroke::NONE)).named("Jump to latest radar").clicked() {
                                     go_head = true;
@@ -552,6 +583,8 @@ impl HookEchoApp {
             self.views[self.active].timeline.go_head();
             self.views[self.active].pin_low_cut();
         }
+        let after = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
+        if before_transport != after { self.record_interaction("timeline_transport"); }
     }
 }
 
@@ -564,6 +597,7 @@ fn track(
     accent: egui::Color32,
     live_window: usize,
     compact: bool,
+    frame_statuses: &[crate::timeline::FrameStatus],
 ) -> egui::Rect {
     let slots = t.slot_count();
     let (rect, resp) = ui.allocate_exact_size(
@@ -672,6 +706,27 @@ fn track(
             last_label_x = x;
         }
     }
+    // Thin availability strip remains visible under the playhead fill on every screen size.
+    for (index, state) in frame_statuses.iter().enumerate() {
+        use crate::timeline::FrameStatus as State;
+        let color = match state {
+            State::Ready => egui::Color32::from_rgb(115, 230, 169),
+            State::Downloading | State::Decoding => egui::Color32::from_rgb(255, 213, 116),
+            State::Unavailable => egui::Color32::from_rgb(255, 128, 128),
+            State::Skipped => egui::Color32::from_rgb(218, 155, 255),
+            State::Unloaded => egui::Color32::from_gray(125),
+        };
+        let left = bar.left() + index as f32 / slots as f32 * bar.width();
+        let right = bar.left() + (index + 1) as f32 / slots as f32 * bar.width();
+        p.rect_filled(egui::Rect::from_min_max(egui::pos2(left, bar.bottom() - 2.0), egui::pos2(right, bar.bottom())), 0.0, color);
+    }
+    if let Some(pos) = resp.hover_pos() {
+        let index = (((pos.x - bar.left()) / bar.width()).clamp(0.0, 1.0) * slots as f32) as usize;
+        if let Some(state) = frame_statuses.get(index.min(slots.saturating_sub(1))) {
+            let time = t.frames.get(index.min(slots.saturating_sub(1))).and_then(|frame| frame.date_time()).map_or_else(|| "Unknown time".into(), |time| time.to_rfc3339());
+            resp.clone().on_hover_text(format!("{time} · {}\nGreen: ready · Yellow: downloading/decoding\nRed: unavailable · Purple: skipped · Gray: not downloaded", state.label()));
+        }
+    }
     let knob = egui::pos2(x_playhead, bar.center().y);
     let knob_radius = if compact { 4.0 } else { 7.0 };
     p.circle_filled(knob, knob_radius, accent);
@@ -712,6 +767,8 @@ fn track(
     } else {
         format!("Timeline, frame {at} of {of}")
     };
+    let status = frame_statuses.get(t.playhead).map_or("Forecast", |state| state.label());
+    let label = format!("{label}, {status}");
     resp.widget_info(|| egui::WidgetInfo::slider(true, at as f64, label.clone()));
     rect
 }

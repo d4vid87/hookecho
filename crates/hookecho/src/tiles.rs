@@ -1784,20 +1784,17 @@ pub(crate) async fn load_tile_bytes(
     // tile is the next visitor's edge-cache hit. `fetch_url` leaves the keyed providers alone:
     // api.mapbox.com and api.maptiler.com answer CORS themselves, and proxying them would put a
     // user's API key in a shared cache. Native builds get the URL back unchanged.
-    let resp = client
-        .get(wxdata::net::fetch_url(url))
-        // Aborts the fetch, which dropping the future does not: an un-aborted request keeps one
-        // of the browser's six connections to this origin until the tab closes.
-        .timeout(TILE_TIMEOUT)
-        .send()
-        .await?
-        .error_for_status()?;
-    let bytes = resp.bytes().await?.to_vec();
+    let http = client.clone();
+    let request_url = wxdata::net::fetch_url(url);
+    let bytes = wxdata::shared_read::bytes(format!("tile:{request_url}"), async move {
+        Ok(http.get(request_url).timeout(TILE_TIMEOUT).send().await?
+            .error_for_status()?.bytes().await?.to_vec())
+    }).await?;
     if let Some(p) = path {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(p, &bytes);
+        let _ = std::fs::write(p, bytes.as_slice());
         if let Some(root) = crate::paths::cache_dir() {
             for sub in ["tiles", "vector"] {
                 let cache = root.join(sub);
@@ -1807,7 +1804,7 @@ pub(crate) async fn load_tile_bytes(
             }
         }
     }
-    Ok(bytes)
+    Ok(bytes.as_ref().clone())
 }
 
 /// How much GPU memory the uploaded raster tiles may rest at. This is the budget the entry cap

@@ -9,6 +9,19 @@ use chrono::{DateTime, NaiveDate, Utc};
 use wxdata::clock::Instant;
 use wxdata::level2::Identifier;
 
+/// Availability refers to decoded radar frames, never merely a successful network response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum FrameStatus { Unloaded, Downloading, Decoding, Ready, Unavailable, Skipped }
+impl FrameStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unloaded => "Not downloaded", Self::Downloading => "Downloading",
+            Self::Decoding => "Decoding", Self::Ready => "Ready",
+            Self::Unavailable => "Unavailable", Self::Skipped => "Skipped unavailable frame",
+        }
+    }
+}
+
 pub struct Timeline {
     /// Selected UTC archive day.
     pub date: NaiveDate,

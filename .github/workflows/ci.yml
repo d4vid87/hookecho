@@ -151,6 +151,14 @@ jobs:
           node scripts/web/smoke.mjs http://127.0.0.1:8080/
           node scripts/web/smoke.mjs http://127.0.0.1:8080/ --webgl
           node scripts/web/smoke.mjs http://127.0.0.1:8080/ --family-hub
+          HOOKECHO_BASE_URL=http://127.0.0.1:8080/ HOOKECHO_RELIABILITY_OUTPUT=outputs/reliability node scripts/web/reliability.mjs
+
+      - name: Upload reliability evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-reliability
+          path: outputs/reliability
 
   # Golden-image test for the wgpu radar pipeline. Runs on the software rasterizer
   # (mesa lavapipe) via HOOKECHO_GPU_FALLBACK=1 so the render is deterministic across

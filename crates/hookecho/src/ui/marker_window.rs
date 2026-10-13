@@ -35,6 +35,7 @@ pub struct MarkerWindow {
     pub searching: bool,
     pub status: Option<String>,
     pub removed: Option<usize>,
+    pub deleted: Option<(usize, crate::settings::Marker)>,
     pub focus: Option<usize>,
     pub pending_name: Option<String>,
     pub pending_icon: Option<String>,
@@ -213,7 +214,7 @@ impl MarkerWindow {
             }
         }
         if let Some(i) = self.removed {
-            settings.markers.remove(i);
+            self.deleted = Some((i, settings.markers.remove(i)));
             self.selected = None;
         }
         self.open = open;
@@ -317,6 +318,43 @@ mod tests {
 #[cfg(test)]
 mod identity_ui_tests {
     use super::*;
+
+    #[test]
+    fn remove_place_emits_the_exact_marker_for_undo() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::base());
+        let mut settings = Settings { markers: serde_json::from_str(r#"[
+            {"id":"a","name":"First","lat":40.0,"lon":-95.0},
+            {"id":"b","name":"Target","lat":41.0,"lon":-94.0}]
+        "#).unwrap(), ..Default::default() };
+        let original = settings.markers.clone();
+        let mut window = MarkerWindow { open: true, selected: Some("b".into()), ..Default::default() };
+        let mut drawer = crate::ui::drawer::Drawer::default();
+        let textures = IconTextures::default();
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 1000.0))), events, ..Default::default()
+            }, |ui| {
+                drawer.begin_frame(ui.ctx());
+                let _ = window.show(ui.ctx(), &mut settings, &textures, &mut drawer, false);
+            })
+        };
+        let _ = frame(vec![]);
+        let output = frame(vec![]);
+        let position = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text.contains("Remove place") => Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        }).expect("remove control is drawn");
+        let _ = frame(vec![egui::Event::PointerMoved(position),
+            egui::Event::PointerButton { pos: position, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            egui::Event::PointerButton { pos: position, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]);
+        assert_eq!(settings.markers.len(), 1);
+        let (index, deleted) = window.deleted.take().expect("UI retains deletion for Undo");
+        assert_eq!(index, 1);
+        assert_eq!(deleted, original[1]);
+        assert!(crate::settings::restore_deleted_marker(&mut settings.markers, index, deleted));
+        assert_eq!(settings.markers, original);
+    }
 
     #[test]
     fn editor_keeps_target_when_an_earlier_marker_is_deleted() {

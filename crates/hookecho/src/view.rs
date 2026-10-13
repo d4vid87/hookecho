@@ -245,9 +245,13 @@ pub struct MapView {
     pub appearance: crate::radar_appearance::RadarAppearance,
     pub satellite: crate::satellite_time::Selection,
     pub frame_request: crate::frame_request::Request,
+    pub head_request: crate::frame_request::Request,
+    pub list_request: crate::frame_request::Request,
+    pub last_list_failure: Option<Instant>,
     pub load_phase: Option<level2::LoadPhase>,
     pub buffering: bool,
     pub failed_frame: Option<String>,
+    pub frame_history: std::collections::VecDeque<(String, crate::timeline::FrameStatus)>,
     pub skipped_frames: u64,
     pub last_skipped_at: Option<wxdata::clock::Instant>,
     pub volume: Option<Volume>,
@@ -256,6 +260,9 @@ pub struct MapView {
     recent: LruCache<String, Volume>,
     /// The site the current volume/fetch belongs to; drives site-change detection.
     pub loaded_site: Option<String>,
+    /// Source of the previous scan kept visible while the selected station loads.
+    pub retained_station: Option<String>,
+    pub recenter_on_ready: bool,
     /// Set when the camera was aimed deliberately (Event Library, a bookmark, `HOOKECHO_GOTO`)
     /// rather than by panning. Switching site normally recenters on the radar, which would throw
     /// away the framing the deep link just asked for; this survives exactly one such recenter.
@@ -293,6 +300,50 @@ pub struct MapView {
 }
 
 impl MapView {
+    /// Public radar state for reproducible reports. Omit camera, user product names, paths,
+    /// error messages and provider selectors: those can contain private locations or keys.
+    pub(crate) fn diagnostic_state(&self) -> serde_json::Value {
+        let public_site = |site: &Option<String>| {
+            site.as_deref().filter(|id| wxdata::sites::site_by_id(id).is_some())
+                .map(str::to_owned)
+        };
+        serde_json::json!({
+            "selected_station": public_site(&self.site),
+            "loaded_station": public_site(&self.loaded_site),
+            "displayed_station": public_site(&self.retained_station.as_ref().cloned().or_else(|| self.loaded_site.clone())),
+            "station_transition": self.retained_station.is_some(),
+            "moment": self.moment,
+            "custom_product_selected": self.custom_product.is_some(),
+            "tilt_index": self.tilt,
+            "appearance": {
+                "blend_width": self.appearance.blend_width,
+                "precision": self.appearance.precision,
+                "multipass": self.appearance.multipass,
+                "fade_old_sectors": self.appearance.fade_old_sectors,
+                "upper_bounds": self.appearance.upper_bounds,
+                "pane_palette_count": self.appearance.palettes.len(),
+                "smooth": self.smooth,
+                "globe": self.camera.globe,
+            },
+            "thresholds": self.thresholds,
+            "threshold_enabled": self.threshold_enabled,
+            "volume_time": self.volume.as_ref().map(|volume| volume.time),
+            "archive_date": self.timeline.date,
+            "playhead": self.timeline.playhead,
+            "frame_count": self.timeline.frames.len(),
+            "playing": self.timeline.playing,
+            "following_live": self.timeline.following,
+            "speed": self.timeline.speed,
+            "loop_enabled": self.timeline.loop_enabled,
+            "cut_playback": self.timeline.cut_playback,
+            "cut_index": self.timeline.cut_index,
+            "listing": self.timeline.listing,
+            "loading": self.loading,
+            "buffering": self.buffering,
+            "skipped_frames": self.skipped_frames,
+            "load_failed": self.error.is_some(),
+        })
+    }
     /// Resident display gate buffers, including this pane's recent-volume cache.
     pub fn retained_scans(&self) -> impl Iterator<Item = &Arc<Scan>> {
         self.volume.iter().chain(self.recent.iter().map(|(_, volume)| volume)).map(|volume| &volume.scan)
@@ -301,6 +352,26 @@ impl MapView {
     pub fn binned_cache_bytes(&self) -> usize {
         self.volume.as_ref().map_or(0, Volume::binned_bytes)
             + self.recent.iter().map(|(_, volume)| volume.binned_bytes()).sum::<usize>()
+    }
+
+    /// Bound binned retention across the displayed and recent volumes, preserving the newest
+    /// display bin. GPU upload shadows are accounted separately by the renderer.
+    pub fn trim_binned_memory(&mut self, cap: usize) {
+        let mut bytes = self.binned_cache_bytes();
+        if bytes <= cap { return; }
+        for (_, volume) in self.recent.iter_mut().rev() {
+            while bytes > cap {
+                let Some((_, sweep)) = volume.binned.pop_lru() else { break; };
+                bytes = bytes.saturating_sub(sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2));
+            }
+        }
+        if let Some(volume) = &mut self.volume {
+            while bytes > cap && volume.binned.len() > 1 {
+                if let Some((_, sweep)) = volume.binned.pop_lru() {
+                    bytes = bytes.saturating_sub(sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2));
+                }
+            }
+        }
     }
 
     pub fn displayed_time(&self) -> Option<DateTime<Utc>> {
@@ -345,14 +416,20 @@ impl MapView {
             appearance: Default::default(),
             satellite: Default::default(),
             frame_request: Default::default(),
+            head_request: Default::default(),
+            list_request: Default::default(),
+            last_list_failure: None,
             load_phase: None,
             buffering: false,
             failed_frame: None,
+            frame_history: Default::default(),
             skipped_frames: 0,
             last_skipped_at: None,
             volume: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,
+            retained_station: None,
+            recenter_on_ready: false,
             camera_placed: false,
             timeline: crate::timeline::Timeline::default(),
             smooth: true,
@@ -403,7 +480,54 @@ impl MapView {
     ///
     /// `scan` is only used when this pane has never binned that volume; it is an `Arc` from the
     /// app's decoded-volume cache either way, so the two paths hold the same allocation.
+    pub fn note_frame_status(&mut self, name: String, state: crate::timeline::FrameStatus) {
+        self.frame_history.retain(|(previous, _)| previous != &name);
+        if self.frame_history.len() == 64 { self.frame_history.pop_front(); }
+        self.frame_history.push_back((name, state));
+    }
+
+    pub fn has_decoded_frame(&self, name: &str) -> bool {
+        self.volume.as_ref().is_some_and(|volume| volume.name == name) || self.recent.contains(&name.to_owned())
+    }
+
+    pub fn station_ready(&mut self) {
+        self.retained_station = None;
+        if std::mem::take(&mut self.recenter_on_ready) {
+            if let Some(site) = self.site.as_deref() {
+                crate::ui::site_dialog::center_on_site(&mut self.camera, site);
+            }
+        }
+    }
+
+    /// Retain at most one previous scan, with its original station identity. Never use that
+    /// volume as a live-merge base for the new station or put it in the new station's recent LRU.
+    pub fn begin_station_switch(&mut self) {
+        if self.site.is_none() {
+            self.volume = None;
+            self.retained_station = None;
+        } else if self.volume.is_some() && self.retained_station.is_none() {
+            self.retained_station = self.loaded_site.clone();
+        }
+        self.loaded_site = self.site.clone();
+        self.head_request.cancel();
+        self.list_request.cancel();
+        self.timeline.listing = false;
+        self.last_list_failure = None;
+        self.recenter_on_ready = false;
+        self.timeline.frames_key = None;
+        self.frame_history.clear();
+        self.forget_recent();
+        self.cut_selection = None;
+        self.frame_request.cancel();
+        self.load_phase = None;
+        self.failed_frame = None;
+        self.buffering = false;
+    }
+
     pub fn show_volume(&mut self, scan: Arc<Scan>, name: String, time: DateTime<Utc>) {
+        self.frame_history.retain(|(previous, _)| previous != &name);
+        let was_retained = self.retained_station.is_some();
+        self.station_ready();
         self.frame_request.cancel();
         self.load_phase = None;
         self.failed_frame = None;
@@ -415,7 +539,7 @@ impl MapView {
             .unwrap_or_else(|| Volume::new(scan, name, time));
         if let Some(old) = self.volume.replace(vol) {
             // Not a volume still being written, and not a stale copy of the one just shown.
-            if !old.live && old.name != self.volume.as_ref().expect("just set").name {
+            if !was_retained && !old.live && old.name != self.volume.as_ref().expect("just set").name {
                 self.recent.put(old.name.clone(), old);
             }
         }
@@ -901,8 +1025,73 @@ mod tests {
     }
 
     #[test]
+    fn station_switch_retains_one_identified_scan_and_replacement_discards_old_site_cache() {
+        let old = scan_at(&[0.5]);
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.loaded_site = view.site.clone();
+        view.show_volume(Arc::clone(&old), "old".into(), Utc::now());
+        view.site = Some("KDMX".into());
+        view.begin_station_switch();
+        assert!(Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &old));
+        assert_eq!(view.retained_station.as_deref(), Some("KTLX"));
+        view.site = Some("KOUN".into());
+        view.begin_station_switch();
+        assert_eq!(view.retained_station.as_deref(), Some("KTLX"));
+        view.show_volume(scan_at(&[0.5]), "replacement".into(), Utc::now());
+        assert!(view.retained_station.is_none());
+        assert!(!view.has_decoded_frame("old"), "old station must not enter new station's recent LRU");
+        view.site = None;
+        view.begin_station_switch();
+        assert!(view.volume.is_none());
+    }
+
+    #[test]
+    fn binned_budget_evicts_old_tilts_but_preserves_the_newest_display_bin() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.show_volume(scan_at(&[0.5, 1.5]), "fixture".into(), Utc::now());
+        let volume = view.volume.as_mut().unwrap();
+        volume.binned_display_at(Moment::Reflectivity, 0, false, None, false).unwrap();
+        volume.binned_display_at(Moment::Reflectivity, 1, false, None, false).unwrap();
+        let bytes = view.binned_cache_bytes();
+        view.trim_binned_memory(1);
+        let volume = view.volume.as_ref().unwrap();
+        assert_eq!(volume.binned.len(), 1);
+        assert_eq!(volume.binned.iter().next().unwrap().0.1, 1);
+        assert!(view.binned_cache_bytes() < bytes);
+    }
+
+    #[test]
+    fn unavailable_frame_history_is_bounded_and_success_removes_failure() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        for frame in 0..100 { view.note_frame_status(frame.to_string(), crate::timeline::FrameStatus::Unavailable); }
+        assert_eq!(view.frame_history.len(), 64);
+        view.note_frame_status("99".into(), crate::timeline::FrameStatus::Skipped);
+        assert_eq!(view.frame_history.len(), 64);
+        view.show_volume(scan_at(&[0.5]), "99".into(), Utc::now());
+        assert!(!view.frame_history.iter().any(|(name, _)| name == "99"));
+    }
+
+    #[test]
     fn new_views_ship_with_the_reflectivity_floor() {
         let v = MapView::new(None, Camera::at_lonlat(-97.0, 35.0, 8.0));
         assert_eq!(v.active_threshold(), Some(16.0));
+    }
+
+    #[test]
+    fn diagnostic_state_preserves_public_reproduction_without_private_selectors() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.123456, 35.654321, 8.0));
+        view.loaded_site = Some("private-provider-token".into());
+        view.custom_product = Some("private-product-name".into());
+        view.error = Some("https://private.example/?key=secret".into());
+        view.timeline.playing = true;
+        let report = view.diagnostic_state();
+        assert_eq!(report["selected_station"], "KTLX");
+        assert!(report["loaded_station"].is_null());
+        assert_eq!(report["playing"], true);
+        assert_eq!(report["custom_product_selected"], true);
+        let text = report.to_string();
+        for private in ["private-provider-token", "private-product-name", "private.example", "secret", "97.123456", "35.654321"] {
+            assert!(!text.contains(private), "diagnostic leaked {private}");
+        }
     }
 }

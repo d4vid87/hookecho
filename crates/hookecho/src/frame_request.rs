@@ -8,7 +8,8 @@ pub struct Request {
 impl Request {
     pub fn start(&mut self, name: String) -> u64 {
         self.cancel();
-        self.generation = self.generation.wrapping_add(1);
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        self.generation = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.name = Some(name);
         self.generation
     }
@@ -32,6 +33,9 @@ impl Request {
         }
     }
 }
+impl Drop for Request {
+    fn drop(&mut self) { self.cancel(); }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,6 +51,20 @@ mod tests {
         request.attach(second, current.clone());
         request.cancel();
         assert!(current.is_aborted());
+    }
+
+    #[test]
+    fn reopened_pane_does_not_accept_previous_panes_response_and_drop_aborts_work() {
+        let mut closed = Request::default();
+        let old = closed.start("KTLX".into());
+        let (handle, _registration) = futures_util::future::AbortHandle::new_pair();
+        closed.attach(old, handle.clone());
+        drop(closed);
+        assert!(handle.is_aborted());
+        let mut reopened = Request::default();
+        let new = reopened.start("KTLX".into());
+        assert!(!reopened.matches("KTLX", old));
+        assert!(reopened.matches("KTLX", new));
     }
 
     #[test]

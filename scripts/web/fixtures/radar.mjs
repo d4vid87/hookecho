@@ -47,6 +47,8 @@ export async function fixtureRadar(page, options = {}) {
     await request.respond({status:200,contentType:'application/xml',body:`<ListBucketResult><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`});
     counts.radarResponses.push(url.href);
    } else {
+    if(options.networkState?.failFrame && url.href.includes(`_${options.networkState.failFrame}_`)) { counts.aborted.push(url.href); await request.abort('failed'); return; }
+    if(options.networkState?.delayMs) await new Promise(resolve=>setTimeout(resolve,options.networkState.delayMs));
     counts.volume++;
     await request.respond({status:200,contentType:'application/octet-stream',body:fixture});
     counts.radarResponses.push(url.href);

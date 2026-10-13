@@ -593,6 +593,8 @@ pub struct MapCallback {
     pub pane: u32,
     /// On a phone, free GPU allocations belonging to hidden analyst panes.
     pub retain_only_pane: Option<u32>,
+    /// Drop resources for panes closed by the current layout.
+    pub live_pane_count: Option<u32>,
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
     pub globe: [f32; 4],
@@ -1921,6 +1923,13 @@ impl RenderResources {
     }
 
     pub fn prepare_pane(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
+        if let Some(count) = cb.live_pane_count {
+            self.panes.retain(|id, _| *id < count);
+            self.wind.retain(|id, _| *id < count);
+            self.gpu_timers.retain(|id, _| *id < count);
+            self.vector_tiles.retain(|(id, _), _| *id < count);
+            self.fields.retain(|(id, _), _| id.is_none_or(|id| id < count));
+        }
         if let Some(visible) = cb.retain_only_pane {
             self.panes.retain(|id, _| *id == visible);
             self.wind.retain(|id, _| *id == visible);

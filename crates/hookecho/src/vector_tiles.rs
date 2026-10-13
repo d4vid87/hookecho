@@ -771,17 +771,12 @@ pub async fn fetch_tilejson(
             }
         }
     }
-    let body = client
-        .get(wxdata::net::fetch_url(TILEJSON_URL))
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .text()
-        .await
-        .ok()?;
-    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let http = client.clone();
+    let body = wxdata::shared_read::bytes(format!("tilejson:{TILEJSON_URL}"), async move {
+        Ok(http.get(wxdata::net::fetch_url(TILEJSON_URL))
+            .timeout(TILE_TIMEOUT).send().await?.error_for_status()?.bytes().await?.to_vec())
+    }).await.ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&body).ok()?;
     let t = v["tiles"].get(0)?.as_str()?.to_string();
     if let Some(dir) = cache_dir {
         let _ = std::fs::create_dir_all(dir);

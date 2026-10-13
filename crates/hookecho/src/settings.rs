@@ -1147,6 +1147,14 @@ pub fn marker_index(markers: &[Marker], id: &str) -> Option<usize> {
     markers.iter().position(|marker| marker.id == id)
 }
 
+/// Restore a deletion by stable identity without overwriting newer edits or creating two homes.
+pub fn restore_deleted_marker(markers: &mut Vec<Marker>, index: usize, mut marker: Marker) -> bool {
+    if marker_index(markers, &marker.id).is_some() { return false; }
+    if marker.home && markers.iter().any(|marker| marker.home) { marker.home = false; }
+    markers.insert(index.min(markers.len()), marker);
+    true
+}
+
 /// A fresh marker id: 8 hex characters from the system's randomness, which is plenty for a list
 /// a person types by hand.
 pub fn new_marker_id() -> String {
@@ -2334,5 +2342,21 @@ mod tests {
         old.priority_rules.track_age_min = 5;
         assert!(!old.priority_rules.migrate_track_age_default());
         assert_eq!(old.priority_rules.track_age_min, 5);
+    }
+}
+
+#[cfg(test)]
+mod deletion_undo_tests {
+    use super::*;
+    #[test]
+    fn restored_marker_keeps_identity_and_other_markers_edits() {
+        let mut settings = Settings::from_json_lossy(r#"{"markers":[{"id":"a","name":"First","lat":35.0,"lon":-97.0},{"id":"b","name":"Second","lat":36.0,"lon":-98.0}]}"#);
+        let deleted = settings.markers.remove(0);
+        settings.markers[0].name = "Edited after deletion".into();
+        assert!(restore_deleted_marker(&mut settings.markers, 0, deleted.clone()));
+        assert_eq!(settings.markers[0], deleted);
+        assert_eq!(settings.markers[1].name, "Edited after deletion");
+        assert!(!restore_deleted_marker(&mut settings.markers, 0, deleted));
+        assert_eq!(settings.markers.len(), 2);
     }
 }
