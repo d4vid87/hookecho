@@ -8585,7 +8585,7 @@ impl HookEchoApp {
         ui.label("Appearance applies to the active pane and is saved with its workspace.");
         let preset = crate::radar_appearance::AppearancePreset::capture(pane);
         if let Some(ms) = self.adaptive.p95_ms() {
-            ui.label(format!("UI CPU p95: {ms:.1} ms · {}", if self.adaptive.reduced { "Reduced smoothing cost" } else { "Requested quality" }));
+            ui.add(egui::Label::new(format!("UI CPU p95: {ms:.1} ms · {}", if self.adaptive.reduced { "Reduced cost" } else { "Requested quality" })).truncate());
         }
         if let Some(ms) = self.adaptive.cadence_p95_ms() { ui.label(format!("Gesture frame cadence p95: {ms:.1} ms")); }
         let gate_bytes: usize = self.views.iter().map(|view| view.binned_cache_bytes()).sum();
@@ -21694,8 +21694,10 @@ impl eframe::App for HookEchoApp {
                 let leader = &self.views[active].timeline;
                 if let Some(source) = leader.current().cloned() {
                     let selected_cut = self.views[active].selected_cut_ms();
+                    let lock_loaded_source = self.lock_source_frame && self.views[active].volume.as_ref().is_some_and(|v| v.name == source.name());
                     if let Some(time) = selected_cut
                         .and_then(chrono::DateTime::from_timestamp_millis)
+                        .or_else(|| self.views[active].displayed_time())
                         .or_else(|| source.date_time())
                     {
                         let (following, playing) = (leader.following, leader.playing);
@@ -21703,7 +21705,7 @@ impl eframe::App for HookEchoApp {
                             if i != active { view.timeline.alignment_target = Some(time); }
                             if i != active
                                 && (selected_cut.is_some()
-                                    || !self.lock_source_frame
+                                    || !lock_loaded_source
                                     || !view.timeline.align_to_source(
                                         &source, following, playing,
                                     ))
@@ -22016,7 +22018,9 @@ impl eframe::App for HookEchoApp {
         {
             self.perf.idle_ms = idle;
         }
-        self.adaptive.observe_cadence(ctx.input(|i| i.unstable_dt) * 1000.0, self.gesture_live);
+        let moving = self.gesture_live && ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO
+            || i.smooth_scroll_delta != egui::Vec2::ZERO || (i.zoom_delta() - 1.0).abs() > f32::EPSILON);
+        self.adaptive.observe_cadence(ctx.input(|i| i.unstable_dt) * 1000.0, moving);
         self.adaptive.observe(ui_started.elapsed().as_secs_f32() * 1000.0,
             self.settings.map_quality == crate::settings::MapQuality::Auto);
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));

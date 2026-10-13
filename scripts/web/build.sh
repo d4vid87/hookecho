@@ -141,7 +141,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Contour GeoJSON export measured 4,335,841 gzip bytes; keep a 9,159-byte margin.
 # Pane appearance, native precision and globe projection add about 17 KB gzip
 # (0.4%) to the prior baseline. Keep a small margin for the complete feature set.
-budget="${HOOKECHO_WASM_BUDGET:-4365000}"
+# Follow-up presets, sector freshness, timing limits and adaptive-quality counters measured
+# 4,365,401 bytes gzip before the final cadence refinement (~0.3% above the prior integration).
+# Retain a small explicit margin; the lite and startup budgets remain unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4380000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
