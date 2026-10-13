@@ -2806,6 +2806,16 @@ struct PaneSession {
     show_radar: bool,
     follow_low_cut: bool,
     cut: Option<(i64, Moment, usize)>,
+    #[serde(default)]
+    forecast_hour: Option<u8>,
+    #[serde(default)]
+    cut_volume_ms: Option<i64>,
+    #[serde(default)]
+    cut_playback: bool,
+    #[serde(default)]
+    cut_index: usize,
+    #[serde(default)]
+    replay_times: Option<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
 impl PaneSession {
@@ -2819,6 +2829,14 @@ impl PaneSession {
             show_radar: view.show_radar,
             follow_low_cut: view.follow_low_cut,
             cut: view.cut_selection,
+            forecast_hour: view.timeline.forecast_hour(),
+            cut_volume_ms: view.volume.as_ref().map(|volume| volume.time.timestamp_millis())
+                .or_else(|| view.recovery_cut.as_ref().map(|pending| pending.volume_ms)),
+            cut_playback: view.timeline.cut_playback,
+            cut_index: view.timeline.cut_index,
+            replay_times: view.timeline.replay.and_then(|(from, to)| {
+                view.timeline.frames.get(from)?.date_time().zip(view.timeline.frames.get(to)?.date_time())
+            }).or(view.timeline.replay_time_range),
         }
     }
 
@@ -2828,6 +2846,12 @@ impl PaneSession {
         view.timeline.date = self.date;
         view.timeline.following = self.following;
         view.timeline.seek_target = if self.following { None } else { self.time };
+        view.timeline.seek_forecast_hour = self.forecast_hour;
+        view.timeline.cut_playback = self.cut_playback;
+        view.timeline.cut_index = self.cut_index;
+        view.timeline.cut_count = 0;
+        view.timeline.replay = None;
+        view.timeline.replay_time_range = self.replay_times;
         view.timeline.frames_key = None;
         view.timeline.frames.clear();
         view.timeline.listing = false;
@@ -2835,6 +2859,8 @@ impl PaneSession {
         view.show_radar = self.show_radar;
         view.follow_low_cut = self.follow_low_cut;
         view.cut_selection = self.cut;
+        view.recovery_cut = self.cut.zip(self.cut_volume_ms.or_else(|| self.time.map(|time| time.timestamp_millis())))
+            .map(|(selection, volume_ms)| crate::view::RecoveryCut { site: view.site.clone(), volume_ms, selection });
     }
 }
 
@@ -2875,6 +2901,22 @@ mod mode_session_tests {
         back.version = 1;
         back.speed.clear();
         assert!(!back.valid());
+    }
+
+    #[test]
+    fn recovery_preserves_cut_playback_cursor_until_decode() {
+        let mut view = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 6.0));
+        view.timeline.cut_playback = true;
+        view.timeline.cut_index = 3;
+        let session: PaneSession = serde_json::from_str(&serde_json::to_string(&PaneSession::capture(&view)).unwrap()).unwrap();
+        view.timeline.cut_playback = false;
+        view.timeline.cut_index = 0;
+        session.restore(&mut view);
+        assert!(view.timeline.cut_playback);
+        view.timeline.set_cut_count(0);
+        assert_eq!(view.timeline.cut_index, 3);
+        view.timeline.set_cut_count(5);
+        assert_eq!(view.timeline.cut_index, 3);
     }
 
     #[test]

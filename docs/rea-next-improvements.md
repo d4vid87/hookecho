@@ -20,4 +20,4 @@ Latest static verification: workspace Clippy with all targets and warnings denie
 
 All seven PR CI checks passed on ed297f6: Linux, Windows, Android arm64, WebAssembly, production browser smoke, lavapipe GPU, and promotion logic. Later changes include overlay-inspector disclosure and notification validation; final-head revalidation remains.
 
-Recovery audit still needs forecast-tail and cut-playback cursor cases: the basic volume-time checkpoint does not yet preserve those modes through asynchronous reload. These remain in scope. Continuous outbreak summary expiry was fixed and tested so old titles cannot accumulate across rolling windows.
+Recovery now queues forecast hours and replay time bounds until frame listings arrive, retains cut-playback indices while decode is pending, and restores a manual cut only against its station/volume/product/tilt. Focused tests passed; ordinary volume changes still clear cut selections. Browser verification of these additional recovery modes remains. Continuous outbreak summary expiry was fixed and tested so old titles cannot accumulate across rolling windows.

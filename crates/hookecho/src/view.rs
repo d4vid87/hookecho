@@ -219,6 +219,12 @@ impl Volume {
 }
 
 /// One map pane.
+pub(crate) struct RecoveryCut {
+    pub(crate) site: Option<String>,
+    pub(crate) volume_ms: i64,
+    pub(crate) selection: (i64, Moment, usize),
+}
+
 pub struct MapView {
     pub camera: crate::render::mercator::Camera,
     /// Selected radar site (`None` = Supercell's cleared "None" state).
@@ -229,6 +235,7 @@ pub struct MapView {
     pub tilt: usize,
     /// Selected cut within the shown volume; `None` follows its newest matching sweep.
     pub cut_selection: Option<(i64, Moment, usize)>,
+    pub(crate) recovery_cut: Option<RecoveryCut>,
     /// Opt-in live mode: keep this pane on the newest available 0.5° revisit.
     pub follow_low_cut: bool,
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
@@ -331,6 +338,7 @@ impl MapView {
             custom_product: None,
             tilt: 0,
             cut_selection: None,
+            recovery_cut: None,
             follow_low_cut: false,
             thresholds,
             threshold_enabled,
@@ -399,6 +407,7 @@ impl MapView {
         self.frame_request.cancel();
         self.load_phase = None;
         self.failed_frame = None;
+        let restored_cut = self.recovery_cut.take();
         self.cut_selection = None;
         let vol = self
             .recent
@@ -410,6 +419,15 @@ impl MapView {
                 self.recent.put(old.name.clone(), old);
             }
         }
+        self.cut_selection = restored_cut.filter(|pending| {
+            pending.site == self.site && self.volume.as_ref().is_some_and(|volume| volume.time.timestamp_millis() == pending.volume_ms)
+        }).map(|pending| pending.selection).filter(|(ended, moment, tilt)| {
+            *moment == self.moment && *tilt == self.tilt && self.volume.as_ref().is_some_and(|volume| {
+                volume.cuts.iter().any(|cut| cut.ended_at_ms == *ended
+                    && level2::cut_has_moment(&volume.scan, *cut, *moment)
+                    && volume.elevations.get(*tilt).is_some_and(|elevation| (*elevation - cut.elevation_deg).abs() < 0.15))
+            })
+        });
         self.pin_low_cut();
     }
 
@@ -540,6 +558,24 @@ impl MapView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manual_cut_survives_loading_its_volume_after_recovery() {
+        let scan = std::sync::Arc::new(wxdata::level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
+        let mut view = super::MapView::new(Some("KDMX".into()), crate::render::mercator::Camera::at_lonlat(-93.7, 41.7, 6.0));
+        let time = chrono::Utc::now();
+        view.show_volume(scan.clone(), "fixture".into(), time);
+        let cut = view.volume.as_ref().unwrap().cuts.iter().find(|cut| wxdata::level2::cut_has_moment(&scan, **cut, wxdata::level2::Moment::Reflectivity)).copied().unwrap();
+        let tilt = view.volume.as_ref().unwrap().elevations.iter().position(|angle| (*angle - cut.elevation_deg).abs() < 0.15).unwrap();
+        view.volume = None;
+        view.tilt = tilt;
+        view.recovery_cut = Some(super::RecoveryCut { site: view.site.clone(), volume_ms: time.timestamp_millis(), selection: (cut.ended_at_ms, wxdata::level2::Moment::Reflectivity, tilt) });
+        view.show_volume(scan.clone(), "fixture".into(), time);
+        assert_eq!(view.selected_cut_ms(), Some(cut.ended_at_ms));
+        view.recovery_cut = Some(super::RecoveryCut { site: view.site.clone(), volume_ms: time.timestamp_millis(), selection: (cut.ended_at_ms + 1, wxdata::level2::Moment::Reflectivity, tilt) });
+        view.show_volume(scan, "fixture".into(), time);
+        assert_eq!(view.cut_selection, None);
+    }
+
     #[test]
     fn a_growing_live_volume_keeps_its_binned_tilts() {
         use super::tilts_only_grew;
