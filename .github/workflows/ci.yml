@@ -152,6 +152,7 @@ jobs:
           node scripts/web/smoke.mjs http://127.0.0.1:8080/ --webgl
           node scripts/web/smoke.mjs http://127.0.0.1:8080/ --family-hub
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ HOOKECHO_RELIABILITY_OUTPUT=outputs/reliability node scripts/web/reliability.mjs
+          HOOKECHO_BASE_URL=http://127.0.0.1:8080/ HOOKECHO_USABILITY_OUTPUT=outputs/usability node scripts/web/usability.mjs
 
       - name: Upload reliability evidence
         if: always()
