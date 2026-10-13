@@ -191,7 +191,8 @@ impl HookEchoApp {
                 let time = view.selected_cut_ms()
                     .and_then(chrono::DateTime::from_timestamp_millis)
                     .unwrap_or(volume.time);
-                format!("{site} · {product} · valid {}", time.format("%H:%M UTC"))
+                let displayed = view.displayed_station().unwrap_or("Unknown radar");
+                format!("{displayed} · {product} · valid {}", time.format("%H:%M UTC"))
             })).unwrap_or_else(|| format!("{site} · {product} · waiting for data")) + &health;
             let probe = self.linked_probe.and_then(|[lon, lat]| {
                 self.field_probe_at(i, lon, lat)
@@ -209,7 +210,7 @@ impl HookEchoApp {
                     let view = &self.views[i];
                     let radar = view.displayed_time();
                     if let Some(time) = radar {
-                        ui.label(format!("Radar observed {} UTC", time.format("%Y-%m-%d %H:%M:%S")));
+                        ui.label(format!("Radar {} observed {} UTC", view.displayed_station().unwrap_or("unknown"), time.format("%Y-%m-%d %H:%M:%S")));
                     } else {
                         ui.weak("Radar displayed time unavailable");
                     }

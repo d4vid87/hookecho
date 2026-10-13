@@ -3020,6 +3020,7 @@ pub struct HookEchoApp {
     pane_shown: std::collections::HashMap<usize, ShownKey>,
     /// Palette generation currently baked into each pane's LUT (see [`ShownKey`]).
     pane_lut: std::collections::HashMap<usize, u64>,
+    pane_upload_tokens: std::collections::HashMap<usize, u64>,
     /// Lazily measured shared scan payloads; weak identities do not retain volumes.
     radar_memory: crate::radar_memory::Inventory,
     radar_memory_highwater: usize,
@@ -4144,6 +4145,7 @@ impl HookEchoApp {
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
             pane_lut: std::collections::HashMap::new(),
+            pane_upload_tokens: Default::default(),
             pane_custom_sweep: std::collections::HashMap::new(),
             radar_memory: Default::default(),
             radar_memory_highwater: 0,
@@ -12697,10 +12699,7 @@ impl HookEchoApp {
         // a TDWR's Level 3 velocity is already unfolded before it leaves the radar.
         let dealias = self.settings.dealias_velocity
             && moment == Moment::Velocity
-            && !self.views[idx]
-                .site
-                .as_deref()
-                .is_some_and(wxdata::tdwr::is_tdwr);
+            && !self.views[idx].displayed_station().is_some_and(wxdata::tdwr::is_tdwr);
         let key: ShownKey = (
             name,
             moment,
@@ -12723,7 +12722,9 @@ impl HookEchoApp {
         );
         // Same sweep already up: the only thing left that can differ is the color table, and
         // that is a 3 KB write into the texture already bound.
-        let lut_only = self.pane_shown.get(&idx) == Some(&key);
+        let same_data = self.pane_shown.get(&idx) == Some(&key);
+        let token = self.pane_upload_tokens.get(&idx).copied().unwrap_or(0);
+        let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             return (None, true);
         }
@@ -12773,6 +12774,9 @@ impl HookEchoApp {
                 }
 
                 if self.adaptive.reduced { up.uniform[19] = 0.0; }
+                let token = if same_data && self.pane_lut.get(&idx) == Some(&lut_gen) && token != 0 { token } else { crate::gpu_metrics::next_upload_token() };
+                up.upload_token = token;
+                self.pane_upload_tokens.insert(idx, token);
                 self.pane_shown.insert(idx, key);
                 self.pane_lut.insert(idx, lut_gen);
                 (Some(up), true)
@@ -12936,7 +12940,9 @@ impl HookEchoApp {
             .wrapping_add(product_hash)
             .wrapping_add(self.views[idx].appearance.fingerprint(palette_moment))
             .wrapping_add(u64::from(self.adaptive.reduced));
-        let lut_only = reuse && self.pane_shown.get(&idx) == Some(&key);
+        let same_data = reuse && self.pane_shown.get(&idx) == Some(&key);
+        let token = self.pane_upload_tokens.get(&idx).copied().unwrap_or(0);
+        let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             self.views[idx].error = None;
             return (None, true);
@@ -12970,6 +12976,9 @@ impl HookEchoApp {
         upload.uniform[17] = self.views[idx].appearance.blend_width;
         upload.uniform[19] =
             f32::from(self.views[idx].appearance.multipass && !self.adaptive.reduced);
+        let token = if same_data && self.pane_lut.get(&idx) == Some(&lut_gen) && token != 0 { token } else { crate::gpu_metrics::next_upload_token() };
+        upload.upload_token = token;
+        self.pane_upload_tokens.insert(idx, token);
         self.pane_shown.insert(idx, key);
         self.pane_lut.insert(idx, lut_gen);
         self.views[idx].error = None;
@@ -13108,7 +13117,7 @@ impl HookEchoApp {
                     lat,
                     view.selected_cut_ms(),
                 )?,
-                view.site.clone().unwrap_or_else(|| "Radar".into()),
+                view.displayed_station().unwrap_or("Radar").to_owned(),
                 volume.vcp.clone(),
                 view.moment,
                 view.tilt,
@@ -17670,6 +17679,7 @@ impl HookEchoApp {
         self.pane_custom_input.retain(|idx, _| *idx < n);
         self.pane_custom_recipe.retain(|idx, _| *idx < n);
         self.pane_lut.retain(|idx, _| *idx < n);
+        self.pane_upload_tokens.retain(|idx, _| *idx < n);
         self.goes.truncate(n);
         self.trim_radar_memory();
         self.pane_fields.retain(|(pane, layer), _| {
@@ -18548,7 +18558,9 @@ impl HookEchoApp {
         let encoded_scan_bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan).chain(self.views.iter().flat_map(|view| view.retained_scans())));
         let (gpu_bytes, shadow_bytes) = crate::gpu_metrics::memory();
         let pane_metrics: Vec<_> = self.views.iter().enumerate().map(|(idx, view)| serde_json::json!({
-            "pane":idx, "binned_bytes":view.binned_cache_bytes(), "map_gpu_p50_p95_ms":crate::gpu_metrics::percentiles(idx as u32), "skipped_unavailable_frames":view.skipped_frames,
+            "pane":idx, "binned_bytes":view.binned_cache_bytes(),
+            "radar_upload_requested":self.pane_upload_tokens.get(&idx).copied().unwrap_or(0),
+            "radar_upload_prepared":crate::gpu_metrics::uploads()[idx], "map_gpu_p50_p95_ms":crate::gpu_metrics::percentiles(idx as u32), "skipped_unavailable_frames":view.skipped_frames,
             "derived_bytes":self.pane_custom_sweep.get(&idx).map_or(0, |sweep| sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2)),
         })).collect();
         let (shared_starts, shared_joins, shared_active) = wxdata::shared_read::byte_stats();
@@ -19333,6 +19345,7 @@ pub(crate) fn to_upload(
     };
 
     RadarUpload {
+        upload_token: 0,
         sector_opacity: None,
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,

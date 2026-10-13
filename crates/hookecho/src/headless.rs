@@ -3423,6 +3423,39 @@ mod golden_tests {
 
     #[test]
     #[ignore = "gpu"]
+    fn gpu_upload_acknowledges_prepared_data_and_requires_full_reupload_after_eviction() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let camera = Camera::at_lonlat(0.0, 0.0, 0.0);
+        let mut callback = performance_callback(&sweep, &table, camera, false);
+        callback.pane = 1;
+        callback.live_pane_count = Some(2);
+        callback.radar_upload.as_mut().unwrap().upload_token = 42;
+        assert_eq!(resources.upload_tokens()[1], 0, "queued data is not acknowledged");
+        resources.prepare_pane(&device, &queue, &callback);
+        assert_eq!(resources.upload_tokens()[1], 42);
+        callback.pane = 0;
+        callback.live_pane_count = Some(1);
+        callback.radar_upload = None;
+        resources.prepare_pane(&device, &queue, &callback);
+        assert_eq!(resources.upload_tokens()[1], 0, "closed pane loses its acknowledgement");
+        callback.pane = 1;
+        callback.live_pane_count = Some(2);
+        callback.radar_upload = Some(crate::app::to_upload(&sweep, &table, None, false, None, None, true));
+        callback.radar_upload.as_mut().unwrap().upload_token = 43;
+        resources.prepare_pane(&device, &queue, &callback);
+        assert_eq!(resources.upload_tokens()[1], 0, "LUT-only update cannot restore an evicted texture");
+        callback.radar_upload = Some(crate::app::to_upload(&sweep, &table, None, false, None, None, false));
+        callback.radar_upload.as_mut().unwrap().upload_token = 43;
+        resources.prepare_pane(&device, &queue, &callback);
+        assert_eq!(resources.upload_tokens()[1], 43);
+    }
+
+    #[test]
+    #[ignore = "gpu"]
     fn gpu_closed_panes_release_allocations_and_reopen_without_growth() {
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
         let (device, queue, _) = init_gpu(&rt).unwrap();

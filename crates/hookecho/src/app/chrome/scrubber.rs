@@ -433,19 +433,17 @@ impl HookEchoApp {
                         // top of each other. Scrubbed to the archive, the badge already carries
                         // the date; the age only earns its place while the timeline is live.
                         let age = match (&age, t.following) {
-                            _ if compact_live => &None,
+                            _ if compact_live || retained_station.is_some() => &None,
                             (Some(_), false) if ui.available_width() < 150.0 => &None,
                             _ => &age,
                         };
-                        if let Some(previous) = &retained_station {
-                            ui.label(egui::RichText::new(format!("Showing {previous}")).small().color(egui::Color32::from_rgb(255, 218, 140)));
-                        } else if let Some(age) = age {
+                        if let Some(age) = age {
                             ui.label(
                                 egui::RichText::new(age)
                                     .size(crate::ui::style::FONT_SM)
                                     .color(egui::Color32::from_rgb(217, 231, 255)),
                             );
-                        } else if loading && !compact_live {
+                        } else if loading && !compact_live && retained_station.is_none() {
                             ui.label(
                                 egui::RichText::new(load_label)
                                     .size(crate::ui::style::FONT_SM)

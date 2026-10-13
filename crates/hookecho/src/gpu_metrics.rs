@@ -15,6 +15,18 @@ pub fn set_memory(gpu: u64, shadows: u64) {
 pub fn memory() -> (u64, u64) {
     *MEMORY.lock().unwrap()
 }
+static UPLOADS: Mutex<[u64; 4]> = Mutex::new([0; 4]);
+/// Tokens identify radar data actually prepared, not merely queued by the UI.
+pub fn set_uploads(tokens: [u64; 4]) { *UPLOADS.lock().unwrap() = tokens; }
+pub fn uploads() -> [u64; 4] { *UPLOADS.lock().unwrap() }
+pub fn upload_acknowledged(pane: usize, token: u64) -> bool {
+    token != 0 && uploads().get(pane) == Some(&token)
+}
+pub fn next_upload_token() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 static SAMPLES: Mutex<Option<HashMap<u32, VecDeque<f32>>>> = Mutex::new(None);
 static LOST: AtomicBool = AtomicBool::new(false);
 pub fn report_device_loss() -> bool {

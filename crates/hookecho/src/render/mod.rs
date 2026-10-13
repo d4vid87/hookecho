@@ -39,6 +39,7 @@ pub struct VisibleTile {
 
 /// A binned sweep plus the world-space quad covering its range disk.
 pub struct RadarUpload {
+    pub upload_token: u64,
     pub az_bins: u32,
     pub gate_count: u32,
     pub data: Vec<u8>,
@@ -711,6 +712,7 @@ type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool);
 
 struct PaneGpu {
     id: u32,
+    upload_token: u64,
     camera_buf: wgpu::Buffer,
     camera_bg: wgpu::BindGroup,
     tile_vbuf: wgpu::Buffer,
@@ -772,6 +774,7 @@ pub struct RenderResources {
 
 impl RenderResources {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        crate::gpu_metrics::set_uploads([0; 4]);
         let tile_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/tiles.wgsl"));
         let radar_shader =
             device.create_shader_module(wgpu::include_wgsl!("../shaders/radar.wgsl"));
@@ -1110,6 +1113,7 @@ impl RenderResources {
             });
             PaneGpu {
                 id,
+                upload_token: 0,
                 camera_buf,
                 camera_bg,
                 tile_vbuf,
@@ -1604,6 +1608,7 @@ impl RenderResources {
         }
         if let Some(radar) = new_radar {
             pane.radar = Some(radar);
+            pane.upload_token = cb.radar_upload.as_ref().map_or(0, |upload| upload.upload_token);
         }
         if let Some((tverts, visible)) = quads {
             if tverts.len() as u64 > pane.tile_capacity {
@@ -1941,6 +1946,11 @@ impl RenderResources {
         }
         let (gpu, shadows) = self.memory_bytes();
         crate::gpu_metrics::set_memory(gpu, shadows);
+        crate::gpu_metrics::set_uploads(self.upload_tokens());
+    }
+
+    pub fn upload_tokens(&self) -> [u64; 4] {
+        std::array::from_fn(|id| self.panes.get(&(id as u32)).filter(|pane| pane.radar.is_some()).map_or(0, |pane| pane.upload_token))
     }
 
     /// Nominal resource sizes; excludes driver padding, framework targets and allocation overhead.

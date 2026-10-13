@@ -310,7 +310,7 @@ impl MapView {
         serde_json::json!({
             "selected_station": public_site(&self.site),
             "loaded_station": public_site(&self.loaded_site),
-            "displayed_station": public_site(&self.retained_station.as_ref().cloned().or_else(|| self.loaded_site.clone())),
+            "displayed_station": public_site(&self.displayed_station().map(str::to_owned)),
             "station_transition": self.retained_station.is_some(),
             "moment": self.moment,
             "custom_product_selected": self.custom_product.is_some(),
@@ -372,6 +372,12 @@ impl MapView {
                 }
             }
         }
+    }
+
+    /// Station belonging to the scan on screen, distinct from a pending selection.
+    pub fn displayed_station(&self) -> Option<&str> {
+        self.volume.as_ref()?;
+        self.retained_station.as_deref().or(self.loaded_site.as_deref()).or(self.site.as_deref())
     }
 
     pub fn displayed_time(&self) -> Option<DateTime<Utc>> {
@@ -1034,15 +1040,18 @@ mod tests {
         view.begin_station_switch();
         assert!(Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &old));
         assert_eq!(view.retained_station.as_deref(), Some("KTLX"));
+        assert_eq!(view.displayed_station(), Some("KTLX"));
         view.site = Some("KOUN".into());
         view.begin_station_switch();
         assert_eq!(view.retained_station.as_deref(), Some("KTLX"));
         view.show_volume(scan_at(&[0.5]), "replacement".into(), Utc::now());
         assert!(view.retained_station.is_none());
+        assert_eq!(view.displayed_station(), Some("KOUN"));
         assert!(!view.has_decoded_frame("old"), "old station must not enter new station's recent LRU");
         view.site = None;
         view.begin_station_switch();
         assert!(view.volume.is_none());
+        assert_eq!(view.displayed_station(), None);
     }
 
     #[test]
