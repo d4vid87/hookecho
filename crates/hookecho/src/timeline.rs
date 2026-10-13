@@ -433,6 +433,8 @@ impl Timeline {
 
     /// Jump to the newest frame and re-pin to live.
     pub fn go_head(&mut self) {
+        self.date = Utc::now().date_naive();
+        self.seek_target = None;
         self.seek_forecast_hour = None;
         self.replay_time_range = None;
         self.enable_cut_playback(false);
@@ -660,6 +662,20 @@ mod tests {
         timeline.frames.clear();
         timeline.seek_target = Some(first);
         assert_eq!(timeline.selected_time(), Some(first));
+    }
+
+    #[test]
+    fn return_to_live_exits_archive_day_and_pending_seek() {
+        let mut timeline = Timeline::default();
+        timeline.date = timeline.date.pred_opt().unwrap();
+        timeline.seek_target = Some(Utc::now() - chrono::Duration::days(1));
+        timeline.following = false;
+        timeline.playing = true;
+        timeline.go_head();
+        assert_eq!(timeline.date, Utc::now().date_naive());
+        assert!(timeline.seek_target.is_none());
+        assert!(timeline.following);
+        assert!(!timeline.playing);
     }
 
     #[test]
