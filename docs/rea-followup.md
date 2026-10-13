@@ -2,6 +2,8 @@
 
 These are independent HookEcho changes informed by the earlier architectural comparison. No RadarOmega implementation, private service adapter or credentials are included.
 
+This records the first follow-up stage and its measured revisions. Later work adds GPU timing, broader memory accounting and adaptive globe tessellation; see [the performance audit](rea-performance-audit.md) and [the subsequent verification report](rea-next-improvements.md) for current behavior.
+
 ## Implemented locally
 
 1. **Performance:** bounded UI CPU and gesture-cadence p95 observations, hysteresis for temporarily disabling extra smoothing and simplifying vector maps in Auto quality, browser/native counters, decode-path wall times, radar texture upload bytes and resident binned-gate buffer memory. Saved preferences are preserved. Recovery permits normal 60 Hz motion while requiring healthy CPU work. Only consecutive moving gestures contribute cadence pressure; idle intervals and stationary pointer holds are excluded. Observations are capped at 500 ms. Both CPU work and gesture cadence can trigger reduction. GPU execution time is not measured; cadence includes drawing and scheduling effects. Decode timings include worker scheduling/serialization. Memory is scoped to binned gate buffers rather than whole-process allocation.

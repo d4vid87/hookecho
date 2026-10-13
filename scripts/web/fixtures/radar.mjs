@@ -3,12 +3,13 @@ export async function fixtureRadar(page, options = {}) {
  const fixture = await fs.readFile(new URL('../../../crates/wxdata/tests/data/kdmx-one-sweep.bin',import.meta.url));
  const abi = options.abi ? await fs.readFile(new URL("../../../crates/wxdata/tests/data/g19-c13-meso.nc", import.meta.url)) : null;
  const l3 = await fs.readFile(new URL('../../../crates/nexrad-level3/tests/data/n0g_tlx.l3',import.meta.url));
- const counts = {list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[]};
+ const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[]};
  const tile = options.satellite ? await fs.readFile(new URL("../../../web/icon-192.png", import.meta.url)) : null;
  await page.setRequestInterception(true);
  page.on('request',async request=>{
   const url = new URL(request.url());
-  if(options.networkState?.offline && url.hostname !== "127.0.0.1") { await request.abort("internetdisconnected"); return; }
+  if (url.href.includes("nexrad-level2.s3.amazonaws.com")) counts.radarRequests.push(url.href);
+  if(options.networkState?.offline && (url.pathname.startsWith("/proxy/") || !["127.0.0.1", "localhost"].includes(url.hostname))) { counts.aborted.push(url.href); await request.abort("internetdisconnected"); return; }
   if(options.vector && (url.href.includes('tiles.openfreemap.org') || url.pathname.startsWith('/vector-fixture/'))) {
    counts.vectorRequests.push(url.href);
    if(url.href.includes('tiles.openfreemap.org')) await request.respond({status:200,contentType:'application/json',body:JSON.stringify({tiles:['http://127.0.0.1:8765/vector-fixture/{z}/{x}/{y}.pbf']})});
@@ -44,9 +45,11 @@ export async function fixtureRadar(page, options = {}) {
     const site=options.loopFrames ? parts[3] : 'KDMX';
     const contents=times.map(time=>`<Contents><Key>${prefix}/${site}${parts.slice(0,3).join('')}_${time}_V06</Key><LastModified>${parts.slice(0,3).join('-')}T17:00:00Z</LastModified><Size>${fixture.length}</Size></Contents>`).join('');
     await request.respond({status:200,contentType:'application/xml',body:`<ListBucketResult><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`});
+    counts.radarResponses.push(url.href);
    } else {
     counts.volume++;
     await request.respond({status:200,contentType:'application/octet-stream',body:fixture});
+    counts.radarResponses.push(url.href);
    }
   } else await request.continue();
  });

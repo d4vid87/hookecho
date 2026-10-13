@@ -4,6 +4,8 @@ This applies observed rendering and update patterns to HookEcho's own public-dat
 pipeline. No RadarOmega client code, credentials, private service adapter, or
 proprietary palette is imported.
 
+This records the initial integration and its verification revision. Subsequent custom-product precision, GPU globe wind, performance measurements and pane-independence changes are documented in [the performance audit](rea-performance-audit.md) and [the latest follow-up report](rea-next-improvements.md).
+
 ## Features
 
 1. **Two-ended display filters:** the existing physical minimum and a pane-local
