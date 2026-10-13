@@ -288,9 +288,13 @@ impl MapView {
         Some((self.displayed_time()? - target).num_seconds())
     }
 
+    pub fn alignment_offset_milliseconds(&self) -> Option<i64> {
+        Some((self.displayed_time()? - self.timeline.alignment_target?).num_milliseconds())
+    }
+
     pub fn alignment_acceptable(&self, limit: Option<u32>) -> bool {
         match (self.timeline.alignment_target, limit) {
-            (Some(_), Some(limit)) => self.alignment_offset_seconds().is_some_and(|s| s.unsigned_abs() <= u64::from(limit)),
+            (Some(target), Some(limit)) => self.displayed_time().is_some_and(|time| (time - target).abs() <= chrono::Duration::seconds(i64::from(limit))),
             _ => true,
         }
     }
@@ -628,6 +632,9 @@ mod tests {
         assert!(!view.alignment_acceptable(Some(120)));
         view.volume.as_mut().unwrap().time = target - chrono::Duration::seconds(120);
         assert!(view.alignment_acceptable(Some(120)));
+        view.volume.as_mut().unwrap().time -= chrono::Duration::milliseconds(1);
+        assert_eq!(view.alignment_offset_milliseconds(), Some(-120_001));
+        assert!(!view.alignment_acceptable(Some(120)), "a fractional second beyond the limit is outside the window");
         view.timeline.alignment_target = None;
         assert!(view.alignment_acceptable(Some(0)));
     }

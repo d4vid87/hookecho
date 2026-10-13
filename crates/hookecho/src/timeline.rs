@@ -240,7 +240,7 @@ impl Timeline {
 
     pub fn alignment_acceptable(&self, limit: Option<u32>) -> bool {
         match (self.alignment_target, limit) {
-            (Some(_), Some(limit)) => self.alignment_offset_seconds().is_some_and(|s| s.unsigned_abs() <= u64::from(limit)),
+            (Some(target), Some(limit)) => self.current().and_then(Identifier::date_time).is_some_and(|time| (time - target).abs() <= chrono::Duration::seconds(i64::from(limit))),
             _ => true,
         }
     }
@@ -635,6 +635,8 @@ mod tests {
         timeline.alignment_target = Some(time + chrono::Duration::seconds(120));
         assert_eq!(timeline.alignment_offset_seconds(), Some(-120));
         assert!(timeline.alignment_acceptable(Some(120)));
+        timeline.alignment_target = Some(time + chrono::Duration::milliseconds(120_001));
+        assert!(!timeline.alignment_acceptable(Some(120)));
         timeline.frames.clear();
         assert!(!timeline.alignment_acceptable(Some(120)));
         assert!(timeline.alignment_acceptable(None));

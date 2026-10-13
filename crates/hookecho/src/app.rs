@@ -15832,7 +15832,7 @@ impl HookEchoApp {
 
         if view.timeline.alignment_target.is_some() {
             let acceptable = view.alignment_acceptable(self.settings.linked_time_limit_seconds);
-            let offset = view.alignment_offset_seconds().map_or_else(|| "Awaiting matching scan".into(), |s| format!("Linked scan offset {s:+}s{}", if acceptable { "" } else { " · outside time limit" }));
+            let offset = view.alignment_offset_milliseconds().map_or_else(|| "Awaiting matching scan".into(), |ms| format!("Linked scan offset {:+.3}s{}", ms as f64 / 1000.0, if acceptable { "" } else { " · outside time limit" }));
             painter.text(prect.left_top() + egui::vec2(12.0, 54.0), egui::Align2::LEFT_TOP, offset,
                 egui::FontId::proportional(12.0), if acceptable { egui::Color32::WHITE } else { egui::Color32::from_rgb(255, 186, 86) });
         }

@@ -27,7 +27,7 @@ impl AdaptiveQuality {
             self.slow = self.slow.saturating_add(1);
             self.healthy = 0;
             if self.slow >= 30 { self.reduced = true; }
-        } else if pressure < 12.0 {
+        } else if ms < 12.0 && self.cadence_pressure < 20.0 {
             self.healthy = self.healthy.saturating_add(1);
             self.slow = 0;
             if self.healthy >= 240 { self.reduced = false; }
@@ -70,8 +70,11 @@ mod tests {
         let mut quality = AdaptiveQuality::default();
         for _ in 0..31 { quality.observe_cadence(50.0, true); quality.observe(2.0, true); }
         assert!(quality.reduced);
-        quality.observe_cadence(500.0, false);
-        for _ in 0..240 { quality.observe(2.0, true); }
+        // Recovery must work during normal 60 Hz motion, not require the user to stop panning.
+        for _ in 0..239 { quality.observe_cadence(16.7, true); quality.observe(2.0, true); }
+        assert!(quality.reduced);
+        quality.observe_cadence(16.7, true);
+        quality.observe(2.0, true);
         assert!(!quality.reduced);
     }
 
