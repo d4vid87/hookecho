@@ -40,7 +40,7 @@ pub struct MarkerWindow {
     pub pending_icon: Option<String>,
     pub results: Vec<(String, String, f64, f64)>,
     pub chosen: Option<(String, f64, f64)>,
-    selected: Option<usize>,
+    selected: Option<String>,
     adding: bool,
     new_name: String,
     new_address: String,
@@ -126,7 +126,7 @@ impl MarkerWindow {
                             .show(ui, |ui| { ui.label("No places saved yet. Search above or add a place below."); });
                     }
                     for (i, marker) in settings.markers.iter().enumerate() {
-                        let selected = self.selected == Some(i);
+                        let selected = self.selected.as_deref() == Some(marker.id.as_str());
                         let icon = builtin_icon(marker.icon.as_deref(), marker.home)
                             .unwrap_or(egui_phosphor::regular::MAP_PIN);
                         let fill = if selected { Color32::from_rgb(33, 76, 114) } else { CARD };
@@ -155,7 +155,7 @@ impl MarkerWindow {
                                 });
                             });
                         if ui.interact(card.response.rect, ui.id().with(("marker_card", i)), egui::Sense::click()).clicked() {
-                            self.selected = Some(i);
+                            self.selected = Some(marker.id.clone());
                             self.focus = Some(i);
                         }
                         ui.add_space(5.0);
@@ -194,7 +194,7 @@ impl MarkerWindow {
                                     }
                                 }
                             });
-                    } else if let Some(i) = self.selected.filter(|i| *i < settings.markers.len()) {
+                    } else if let Some(i) = self.selected.as_deref().and_then(|id| crate::settings::marker_index(&settings.markers, id)) {
                         ui.add_space(10.0);
                         let marker = &mut settings.markers[i];
                         if marker_editor(ui, marker, i, icon_tex, metric, &mut self.removed) {

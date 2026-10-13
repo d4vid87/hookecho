@@ -1142,6 +1142,11 @@ pub struct Marker {
     pub home: bool,
 }
 
+/// Resolve an editor's saved identity against the current marker order.
+pub fn marker_index(markers: &[Marker], id: &str) -> Option<usize> {
+    markers.iter().position(|marker| marker.id == id)
+}
+
 /// A fresh marker id: 8 hex characters from the system's randomness, which is plenty for a list
 /// a person types by hand.
 pub fn new_marker_id() -> String {
@@ -1794,6 +1799,20 @@ mod tests {
         assert!(ids.iter().all(|id| id.len() == 8));
         let unique: std::collections::HashSet<&String> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len());
+    }
+
+    #[test]
+    fn marker_editor_identity_survives_reordering_and_deletion() {
+        let mut markers: Vec<Marker> = serde_json::from_str(
+            r#"[{"id":"a","name":"Home","lat":35.0,"lon":-97.0},
+                {"id":"b","name":"Home","lat":36.0,"lon":-96.0}]"#,
+        ).unwrap();
+        assert_eq!(marker_index(&markers, "b"), Some(1));
+        markers.swap(0, 1);
+        assert_eq!(marker_index(&markers, "b"), Some(0));
+        markers.remove(0);
+        assert_eq!(marker_index(&markers, "b"), None);
+        assert_eq!(marker_index(&markers, "a"), Some(0));
     }
 
     #[test]

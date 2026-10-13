@@ -3028,10 +3028,8 @@ pub struct HookEchoApp {
     detail: Option<Detail>,
     /// Open "Storm {id} Attributes" window (a clicked storm cell).
     cell_popup: Option<Cell>,
-    /// Which of `settings.markers` the tapped-marker popup is editing.
-    // ponytail: index identity — markers have no id, and their names aren't unique ("Marker 3"
-    // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
-    marker_popup: Option<usize>,
+    /// Stable identity of the marker being edited in the map popup.
+    marker_popup: Option<String>,
     /// Which global model the global layers read, and how far into its run.
     global_model: wxdata::global::GlobalModel,
     global_fcst_hour: u16,
@@ -13391,7 +13389,7 @@ impl HookEchoApp {
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
                     _ if marker_hit.is_some() => {
-                        self.marker_popup = marker_hit;
+                        self.marker_popup = marker_hit.map(|i| self.settings.markers[i].id.clone());
                         self.cell_popup = None;
                         self.detail = None;
                     }
@@ -21215,15 +21213,6 @@ impl eframe::App for HookEchoApp {
                 cam.zoom = cam.zoom.max(9.0);
             }
         }
-        // The map popup indexes into the same list: a delete above it leaves it describing the
-        // wrong marker, which is the one way this UI can lie about which place you are editing.
-        if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
-            self.marker_popup = match gone.cmp(&open) {
-                std::cmp::Ordering::Less => Some(open - 1),
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(open),
-            };
-        }
         if let Some(query) = query {
             self.marker_window.searching = true;
             self.marker_window.status = Some("Searching…".into());
@@ -21693,8 +21682,9 @@ impl eframe::App for HookEchoApp {
             self.vol3d.clip = clip;
             self.build_volume3d();
         }
-        if let Some(i) = self.marker_popup {
-            match self.settings.markers.get_mut(i) {
+        if let Some(id) = self.marker_popup.as_deref() {
+            let index = crate::settings::marker_index(&self.settings.markers, id);
+            match index.and_then(|i| self.settings.markers.get_mut(i)) {
                 // The list shrank under us (the manager window deleted a row this frame).
                 None => self.marker_popup = None,
                 Some(m) => {
@@ -21709,7 +21699,7 @@ impl eframe::App for HookEchoApp {
                         self.watch_stream(name, url);
                     }
                     if r.remove {
-                        self.settings.markers.remove(i);
+                        self.settings.markers.remove(index.expect("resolved marker"));
                         self.marker_popup = None;
                     } else if !r.open {
                         self.marker_popup = None;
