@@ -24,6 +24,32 @@ impl HookEchoApp {
     pub(crate) fn workbench_inspector_body(&mut self, ui: &mut egui::Ui) {
         ui.heading("Inspector");
         ui.weak("Native values and actual source times");
+        let enabled_overlays: Vec<_> = OverlayToggle::ALL.into_iter()
+            .filter(|toggle| !toggle.session_only() && *self.overlay_flag(*toggle))
+            .collect();
+        let entries = self.palette_entries();
+        let overlay_sources: Vec<_> = enabled_overlays.into_iter().map(|toggle| {
+            let name = entries.iter().find(|entry| matches!(entry.action, PaletteAction::ToggleOverlay(other) if other == toggle))
+                .map_or_else(|| format!("{toggle:?}"), |entry| entry.label.clone());
+            (name, self.palette_health(PaletteAction::ToggleOverlay(toggle)))
+        }).collect();
+        if !overlay_sources.is_empty() {
+            ui.collapsing("Weather overlay sources", |ui| {
+                ui.weak("These overlays are shared by the visible panes.");
+                for (name, health) in &overlay_sources {
+                    ui.separator();
+                    ui.strong(name);
+                    if let Some(health) = health {
+                        ui.label(format!("Feed: {} · {}", health.source, crate::ui::layers_panel::health_look(health.state()).0));
+                        if let Some(age) = health.last_success { ui.label(format!("Last successful receipt {:.1} min ago", age.as_secs_f64() / 60.0)); }
+                        if let Some(age) = health.data_age { ui.label(format!("Source valid age {:.1} min", age.as_secs_f64() / 60.0)); }
+                        else { ui.weak("No shared valid time; receipt time does not establish observation time."); }
+                    } else {
+                        ui.weak("Local or feature-level data; no shared source clock.");
+                    }
+                }
+            });
+        }
         let view = &mut self.views[self.active];
         if ui.checkbox(&mut view.follow_low_cut, "Follow newest 0.5° cut")
             .on_hover_text("Keep this pane on the newest low-level radar revisit while live")

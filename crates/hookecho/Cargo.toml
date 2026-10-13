@@ -13,6 +13,10 @@ name = "hookecho"
 path = "src/lib.rs"
 crate-type = ["lib", "cdylib"]
 
+[[example]]
+name = "notification-check"
+crate-type = ["cdylib"]
+
 [[bin]]
 name = "hookecho"
 path = "src/main.rs"
