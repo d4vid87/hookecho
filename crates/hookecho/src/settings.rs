@@ -1400,6 +1400,14 @@ impl Settings {
     /// Probe presentation follows the same independent temperature and velocity preferences
     /// as radar labels; scientific values and export units remain native.
     pub fn field_display_value(&self, descriptor: &wxdata::field::FieldDescriptor, value: f32) -> wxdata::field::DisplayValue {
+        if let Some(ramp) = crate::render::FieldLayer::from_stable_id(descriptor.id.0)
+            .and_then(crate::render::field_ramps::ramp_for)
+        {
+            if matches!(ramp.scale, crate::render::field_ramps::FieldScale::Ramp { .. }) {
+                let (value, units) = ramp.label_value(ramp.display(value), self);
+                return wxdata::field::DisplayValue { value, units };
+            }
+        }
         if descriptor.units == "m s-1" || descriptor.units == "m/s" {
             wxdata::field::DisplayValue { value: value * self.velocity_unit.factor_from_ms(), units: self.velocity_unit.label() }
         } else if descriptor.units == "Pa" {
@@ -1830,6 +1838,20 @@ mod tests {
         let value = settings.field_display_value(descriptor, 10.0);
         assert_eq!(value.units, "m/s");
         assert_eq!(value.value, 10.0);
+    }
+
+    #[test]
+    fn physical_field_probes_share_legend_conversions() {
+        let mut settings = Settings::default();
+        let mesh = crate::render::FieldLayer::Mesh.descriptor().unwrap();
+        let hail = settings.field_display_value(mesh, 25.4);
+        assert_eq!(hail.units, "in");
+        assert!((hail.value - 1.0).abs() < 0.001);
+        settings.temp_unit = TempUnit::Celsius;
+        let visibility = crate::render::FieldLayer::RtmaVisibility.descriptor().unwrap();
+        let value = settings.field_display_value(visibility, 1000.0);
+        assert_eq!(value.units, "km");
+        assert!((value.value - 1.0).abs() < 0.001);
     }
 
     #[test]

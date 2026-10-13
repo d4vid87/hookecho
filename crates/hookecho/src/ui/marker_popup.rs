@@ -39,6 +39,7 @@ pub fn show(
         .show(ctx, |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut m.name)
+                    .id(egui::Id::new(("marker-popup-name", &m.id)))
                     .hint_text("Name")
                     .desired_width(ui.available_width()),
             );

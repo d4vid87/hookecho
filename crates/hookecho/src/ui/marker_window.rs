@@ -154,7 +154,7 @@ impl MarkerWindow {
                                     });
                                 });
                             });
-                        if ui.interact(card.response.rect, ui.id().with(("marker_card", i)), egui::Sense::click()).clicked() {
+                        if ui.interact(card.response.rect, ui.id().with(("marker_card", &marker.id)), egui::Sense::click()).clicked() {
                             self.selected = Some(marker.id.clone());
                             self.focus = Some(i);
                         }
@@ -251,7 +251,7 @@ fn marker_editor(ui: &mut egui::Ui, marker: &mut Marker, i: usize, icon_tex: &Ic
         .corner_radius(10.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new("PLACE DETAILS").monospace().size(10.0).color(MUTED));
-            ui.add(egui::TextEdit::singleline(&mut marker.name).desired_width(ui.available_width()));
+            ui.add(egui::TextEdit::singleline(&mut marker.name).id(egui::Id::new(("marker-manager-name", &marker.id))).desired_width(ui.available_width()));
             ui.add_space(7.0);
             ui.horizontal(|ui| {
                 ui.label("Latitude");
@@ -271,7 +271,7 @@ fn marker_editor(ui: &mut egui::Ui, marker: &mut Marker, i: usize, icon_tex: &Ic
                 make_home = true;
             }
             ui.label(RichText::new("Video stream URL").size(11.0).color(MUTED));
-            ui.add(egui::TextEdit::singleline(&mut marker.video_url).hint_text("Optional HLS or MJPEG URL").desired_width(ui.available_width()));
+            ui.add(egui::TextEdit::singleline(&mut marker.video_url).id(egui::Id::new(("marker-manager-video", &marker.id))).hint_text("Optional HLS or MJPEG URL").desired_width(ui.available_width()));
             ui.add_space(7.0);
             let mut choice = marker.icon.as_deref().and_then(|v| v.strip_prefix("builtin:"))
                 .unwrap_or(if marker.icon.is_some() { "" } else if marker.home { "home" } else { "place" }).to_string();
