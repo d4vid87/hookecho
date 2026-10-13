@@ -2755,15 +2755,40 @@ impl ViewMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 enum PanelSection { #[default] Radar, Overlays, Alerts, Tools }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ModeSession {
     workspace: crate::workspace::Workspace,
     panes: Vec<PaneSession>,
     inspector: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RecoverySnapshot {
+    version: u8,
+    session: ModeSession,
+    analyst: bool,
+    playing: Vec<bool>,
+    speed: Vec<f32>,
+    loop_enabled: Vec<bool>,
+}
+
+impl RecoverySnapshot {
+    fn valid(&self) -> bool {
+        self.version == 1
+            && !self.session.workspace.panes.is_empty()
+            && self.session.workspace.panes.len() <= crate::workspace::MAX_PANES
+            && self.session.panes.len() == self.session.workspace.panes.len()
+            && self.playing.len() == self.session.panes.len()
+            && self.speed.len() == self.session.panes.len()
+            && self.loop_enabled.len() == self.session.panes.len()
+            && self.session.workspace.panes.iter().all(|pane| pane.lon.is_finite() && pane.lat.is_finite() && pane.zoom.is_finite())
+            && self.speed.iter().all(|speed| speed.is_finite() && *speed > 0.0 && *speed <= 60.0)
+    }
+}
+
 type MarkerGeocodeResult = Result<Vec<(String, String, f64, f64)>, String>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct PaneSession {
     thresholds: [Option<f32>; Moment::ALL.len()],
     threshold_enabled: [bool; Moment::ALL.len()],
@@ -2808,6 +2833,41 @@ impl PaneSession {
 #[cfg(test)]
 mod mode_session_tests {
     use super::*;
+
+    #[test]
+    fn recovery_roundtrip_keeps_unsaved_appearance_and_archive_position() {
+        let mut view = MapView::new(Some("KFWS".into()), crate::render::mercator::Camera::at_lonlat(-97.3, 32.6, 8.0));
+        view.timeline.following = false;
+        view.timeline.seek_target = Some(chrono::DateTime::parse_from_rfc3339("2026-09-22T21:00:00Z").unwrap().with_timezone(&chrono::Utc));
+        view.thresholds[Moment::Reflectivity.index()] = Some(27.0);
+        view.appearance.blend_width = 0.83;
+        view.appearance.precision = true;
+        let workspace = crate::workspace::Workspace {
+            name: "Recovery".into(), panes: vec![crate::workspace::PaneSnap::capture(&view)], active: 0,
+            link_cameras: false, link_times: false, overlays_on: vec![], adopt_site: false,
+            fields_on: vec![], chrome: None,
+        };
+        let snapshot = RecoverySnapshot {
+            version: 1, session: ModeSession { workspace, panes: vec![PaneSession::capture(&view)], inspector: true },
+            analyst: true, playing: vec![true], speed: vec![2.0], loop_enabled: vec![false],
+        };
+        let mut back: RecoverySnapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        assert!(back.valid());
+        assert_eq!(back.session.workspace.panes[0].appearance.blend_width, 0.83);
+        assert!(back.session.workspace.panes[0].appearance.precision);
+        view.timeline.seek_target = None;
+        view.thresholds[Moment::Reflectivity.index()] = None;
+        back.session.panes[0].restore(&mut view);
+        assert_eq!(view.thresholds[Moment::Reflectivity.index()], Some(27.0));
+        assert_eq!(view.timeline.selected_time(), snapshot.session.panes[0].time);
+        assert!(back.playing[0]);
+        assert_eq!(back.speed[0], 2.0);
+        back.version = 2;
+        assert!(!back.valid());
+        back.version = 1;
+        back.speed.clear();
+        assert!(!back.valid());
+    }
 
     #[test]
     fn split_layout_cannot_be_mistaken_for_regular_radar() {
@@ -3391,6 +3451,7 @@ pub struct HookEchoApp {
     radar_session: Option<ModeSession>,
     analyst_session: Option<ModeSession>,
     workspace_return_session: Option<ModeSession>,
+    recovery_json: Option<String>,
     active_workspace: Option<String>,
     panel_section: PanelSection,
     /// Is the background picker slid out beside the control column?
@@ -4306,6 +4367,7 @@ impl HookEchoApp {
             radar_session: None,
             analyst_session: None,
             workspace_return_session: None,
+            recovery_json: None,
             active_workspace: None,
             panel_section: PanelSection::Radar,
             basemap_open: false,
@@ -4502,6 +4564,27 @@ impl HookEchoApp {
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         if app.settings.gps_autoconnect {
             app.connect_gpsd();
+        }
+        #[cfg(target_arch = "wasm32")]
+        let graphics_relaunch = web_sys::window().and_then(|window| window.location().search().ok())
+            .is_some_and(|search| search.trim_start_matches('?').split('&').any(|part| part.split('=').next() == Some("relaunched")));
+        #[cfg(not(target_arch = "wasm32"))]
+        let graphics_relaunch = false;
+        if !app.embed && (app.settings.start_view.is_none() || graphics_relaunch) {
+            if let Some(json) = crate::recovery::load() {
+                if let Ok(snapshot) = serde_json::from_str::<RecoverySnapshot>(&json) {
+                    if snapshot.valid() {
+                        app.restore_mode_session(snapshot.session, &cc.egui_ctx);
+                        app.analyst_open = snapshot.analyst;
+                        for (i, view) in app.views.iter_mut().enumerate() {
+                            view.timeline.playing = snapshot.playing.get(i).copied().unwrap_or(false);
+                            view.timeline.speed = snapshot.speed.get(i).copied().unwrap_or(4.0);
+                            view.timeline.loop_enabled = snapshot.loop_enabled.get(i).copied().unwrap_or(true);
+                        }
+                        app.recovery_json = Some(json);
+                    }
+                }
+            }
         }
         app
     }
@@ -17151,6 +17234,30 @@ impl HookEchoApp {
         }
     }
 
+    fn checkpoint_recovery(&mut self) {
+        if self.embed || !self.settings.setup_done { return; }
+        let snapshot = RecoverySnapshot {
+            version: 1,
+            session: ModeSession {
+                workspace: self.capture_workspace(),
+                panes: self.views.iter().map(PaneSession::capture).collect(),
+                inspector: self.analyst_inspector_open,
+            },
+            analyst: self.analyst_open,
+            playing: self.views.iter().map(|v| v.timeline.playing).collect(),
+            speed: self.views.iter().map(|v| v.timeline.speed).collect(),
+            loop_enabled: self.views.iter().map(|v| v.timeline.loop_enabled).collect(),
+        };
+        if let Ok(json) = serde_json::to_string(&snapshot) {
+            if self.recovery_json.as_ref() != Some(&json) {
+                match crate::recovery::save(&json) {
+                    Ok(()) => self.recovery_json = Some(json),
+                    Err(error) => log::warn!("recovery checkpoint: {error}"),
+                }
+            }
+        }
+    }
+
     /// Restore a saved arrangement. Panes come back empty of data and fill through the normal
     /// poll, exactly as a freshly split pane does.
     fn capture_mode_session(&mut self) -> ModeSession {
@@ -19866,6 +19973,7 @@ fn nearest_tropical_id(
 impl eframe::App for HookEchoApp {
     /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
     fn on_exit(&mut self) {
+        self.checkpoint_recovery();
         // Remember where we were looking, so a relaunch picks up the map where it was left. Only
         // while no explicit startup view is saved — that one is the user's choice, not ours.
         // Written here rather than per-frame: Android's alert service reads this file concurrently.
@@ -22038,6 +22146,7 @@ impl eframe::App for HookEchoApp {
             .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
         if due {
             self.settings_checked = Some(Instant::now());
+            self.checkpoint_recovery();
             // Fold the live overlay toggles into the settings so the diff below persists them
             // like any other change — no separate save path, no per-frame churn.
             let on: Vec<String> = OverlayToggle::ALL

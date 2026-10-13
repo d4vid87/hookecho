@@ -10,7 +10,7 @@ Scope: complete the seven recommendations made after the performance audit, with
 | Notification summary updates | Rollup throttles summaries but native delivery creates new cards. Linux delivery reuses the notification daemon ID; browser summaries use a dedicated replacement tag, while individual alerts are untagged. macOS/Windows/Android retain current fallback behavior. Delivery verification remains. |
 | Stable marker editors | Map popup and manager now resolve existing persistent marker IDs each frame. Regression test covers duplicate names, reorder and removal; native test passed. Further UI verification pending. |
 | Sustained-session validation | Run long two/four-pane animation, switching, background and interruption scenarios; record memory, dropped frames, network duplication and recovery. Controlled GPU matrix does not prove this requirement. |
-| Restore work on recovery | Inspect current automatic persistence, preserve unsaved pane state and playback position across graphics reload, verify real reload behavior. |
+| Restore work on recovery | Added a separate bounded crash/reload checkpoint for layout, appearance, archive time, disabled thresholds and playback controls. Native snapshot roundtrip test passed; actual browser reload verification remains. Explicit startup view is honored except graphics recovery reload. Checkpoints update at most once a second and flush on normal exit. |
 
 Implementation remains in progress. The prior PR's green CI does not validate these new changes.
 

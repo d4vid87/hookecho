@@ -31,6 +31,7 @@ pub mod cloud;
 pub mod colormap;
 pub mod radar_appearance;
 pub mod radar_memory;
+pub mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod crash;
 pub mod dialog;
