@@ -5,6 +5,11 @@
 //! `eframe::NativeOptions`, Android hands eframe the `AndroidApp` from the activity glue and points
 //! [`paths`] at the app-private data dir.
 
+pub mod adaptive;
+pub mod custom_cache;
+pub mod frame_request;
+pub mod gpu_metrics;
+pub mod satellite_time;
 pub mod alert_rollup;
 pub mod alert_snapshot;
 pub mod app;
@@ -24,6 +29,9 @@ pub mod chaselog;
 pub mod chrome;
 pub mod cloud;
 pub mod colormap;
+pub mod radar_appearance;
+pub mod radar_memory;
+pub mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod crash;
 pub mod dialog;
@@ -63,6 +71,9 @@ pub mod platform;
 pub mod plugins;
 pub mod products;
 pub mod profiling;
+pub mod map_trace;
+pub mod map_work;
+pub mod camera_motion;
 pub mod rain_arrival;
 pub mod render;
 pub mod render3d;
@@ -119,6 +130,7 @@ fn cap_texture_limit_to_adapter(options: &mut egui_wgpu::WgpuConfiguration) {
     let base = std::sync::Arc::clone(&setup.device_descriptor);
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
         let mut desc = base(adapter);
+        desc.required_features |= adapter.features() & crate::gpu_metrics::FEATURES;
         let cap = adapter.limits().max_texture_dimension_2d;
         desc.required_limits.max_texture_dimension_2d =
             desc.required_limits.max_texture_dimension_2d.min(cap);

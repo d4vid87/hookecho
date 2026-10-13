@@ -3,7 +3,7 @@
 use super::*;
 
 impl HookEchoApp {
-    fn request_health(&self, lane: RequestLane) -> SourceHealth {
+    pub(in crate::app) fn request_health(&self, lane: RequestLane) -> SourceHealth {
         self.overlay_requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -45,6 +45,9 @@ impl HookEchoApp {
     pub(crate) fn palette_health(&self, action: PaletteAction) -> Option<SourceHealth> {
         use crate::render::FieldLayer as FL;
         use OverlayToggle as T;
+        if let PaletteAction::ToggleField(layer) = action {
+            if layer.is_native_abi() { return Some(self.request_health(RequestLane::PaneField(self.active, layer))); }
+        }
         let lane = match action {
             PaletteAction::SetMoment(..) => return Some(self.radar_health()),
             PaletteAction::SetContours(k) if k != ContourKind::Off => {
@@ -1055,6 +1058,14 @@ impl HookEchoApp {
             Some(self.filters.outlook_day != 0),
         );
         push(
+            "Map settings",
+            "Reference",
+            "Active pane palettes, display smoothing, precision and globe projection",
+            true,
+            PaletteAction::OpenMapSettings,
+            None,
+        );
+        push(
             "Cycle basemap",
             "Reference",
             "Switch the map underneath the radar",
@@ -1118,6 +1129,8 @@ impl HookEchoApp {
             PaletteAction::ImportCase,
             None,
         );
+        push("Undo workspace action", "Reference", "Restore a closed pane, deleted marker, or replaced layout", !self.undo_history.is_empty(), PaletteAction::UndoWorkspaceAction, None);
+        push("Save diagnostics", "Reference", "Export performance and source-health measurements", true, PaletteAction::SaveDiagnostics, None);
         for (i, ws) in self.settings.workspaces.iter().enumerate() {
             push(
                 &format!("Workspace: {}", ws.name),

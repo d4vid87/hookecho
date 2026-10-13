@@ -15,15 +15,15 @@ pub type TileId = (u8, u32, u32);
 /// A tile plus which basemap style it came from. Panes can show different basemaps at once, so
 /// the same `(z, x, y)` may be resident twice with different imagery; the style key keeps them
 /// apart in the GPU cache.
-pub type TileKey = (u8, TileId);
+pub type TileKey = (u64, TileId);
 
-const MAX_TILE_VERTS: u64 = 512 * 6; // up to 512 visible tiles per frame
+const MAX_TILE_VERTS: u64 = 512 * 6 * 16 * 16; // up to 512 visible tiles per frame
 
 /// A decoded RGBA tile the app wants uploaded this frame.
 pub struct PendingTile {
     pub id: TileId,
     /// Basemap style this tile was fetched for ([`crate::tiles::BasemapStyle::key`]).
-    pub style: u8,
+    pub style: u64,
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
@@ -39,13 +39,17 @@ pub struct VisibleTile {
 
 /// A binned sweep plus the world-space quad covering its range disk.
 pub struct RadarUpload {
+    pub upload_token: u64,
     pub az_bins: u32,
     pub gate_count: u32,
     pub data: Vec<u8>,
+    pub data16: Option<Vec<u16>>,
     /// [radar_lat, radar_lon, first_gate_km, gate_interval_km, az_bins, gate_count,
     ///  smoothing, srv, motion_e, motion_n, tint, flag_nx, flag_ny, flag_west, flag_north,
-    ///  flag_east, flag_south, _pad, _pad, _pad] (see `shaders/radar.wgsl`).
+    ///  flag_east, flag_south, blend_width, _pad, _pad] (see `shaders/radar.wgsl`).
     pub uniform: [f32; 20],
+    /// Half-degree azimuth opacity; absent means all sectors are fully opaque.
+    pub sector_opacity: Option<[f32; 720]>,
     /// 256×3 RGBA color LUT indexed by the sweep's `u8`: row 0 rain (the user's own table),
     /// row 1 snow, row 2 mix. Rows 1 and 2 are copies of row 0 unless the precipitation-type
     /// tint is on (see `colormap::tint_lut`).
@@ -289,6 +293,10 @@ impl FieldLayer {
         FieldLayer::MrmsEchoTop18,
         FieldLayer::MrmsVil,
     ];
+
+    pub fn is_native_abi(self) -> bool {
+        matches!(self, Self::GoesC13 | Self::GoesWaterVapor | Self::GoesMidWaterVapor | Self::GoesLongwaveIr | Self::GoesVisible | Self::GoesTrueColor | Self::GoesCatalog(_))
+    }
 
     pub fn draw_order() -> impl DoubleEndedIterator<Item = FieldLayer> {
         Self::BASE_DRAW_ORDER
@@ -586,13 +594,16 @@ pub struct MapCallback {
     pub pane: u32,
     /// On a phone, free GPU allocations belonging to hidden analyst panes.
     pub retain_only_pane: Option<u32>,
+    /// Drop resources for panes closed by the current layout.
+    pub live_pane_count: Option<u32>,
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
+    pub globe: [f32; 4],
     pub world_per_pixel: f32,
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
     /// Which basemap style this pane draws ([`crate::tiles::BasemapStyle::key`]).
-    pub basemap_key: u8,
+    pub basemap_key: u64,
     /// Draw the vector basemap *after* the raster tiles instead of under them — the hybrid
     /// satellite style, where the vector geometry is roads over imagery.
     pub vector_over_raster: bool,
@@ -632,6 +643,7 @@ pub struct MapCallback {
 struct TileVertex {
     world: [f32; 2],
     uv: [f32; 2],
+    transform: [f32; 4],
 }
 
 #[repr(C)]
@@ -649,6 +661,7 @@ struct CameraUniform {
     road_scale: f32,
     // WebGL uniform bindings must occupy a multiple of 16 bytes.
     _pad: [f32; 2],
+    globe: [f32; 4],
 }
 
 struct TileGpu {
@@ -666,6 +679,10 @@ struct RadarGpu {
     /// shape writes into these textures instead of building new ones with a new bind group.
     dims: (u32, u32),
     flag_dims: (u32, u32),
+    precision: bool,
+    lut_width: u32,
+    gate_bytes: Vec<u8>,
+    flag_bytes: Vec<u8>,
 }
 
 struct OverlayGpu {
@@ -691,24 +708,30 @@ struct MrmsGpu {
 /// Per-pane GPU state: its own camera uniform, radar sweep, tile/radar quad buffers, and the
 /// draw lists staged during `prepare` and consumed during `paint`. (All `prepare`s run before
 /// any `paint`, so shared per-frame buffers would clobber across panes — hence per-pane.)
+type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool);
+
 struct PaneGpu {
+    id: u32,
+    upload_token: u64,
     camera_buf: wgpu::Buffer,
     camera_bg: wgpu::BindGroup,
     tile_vbuf: wgpu::Buffer,
+    tile_capacity: u64,
     radar_vbuf: wgpu::Buffer,
     radar: Option<RadarGpu>,
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
-    frame_visible: Vec<TileKey>,
+    frame_visible: Vec<(TileKey, std::ops::Range<u32>)>,
     /// What the tile quads in `tile_vbuf` were built from: tile-cache generation, basemap, camera
     /// and visible count. Unchanged means the quads are still the right ones, so a still map
     /// re-uploads nothing.
     // ponytail: the visible *count* rather than the list — camera plus generation already decide
     // which tiles are asked for; compare the ids if a case ever shows a stale quad.
-    quads_key: Option<(u64, u8, u32, u32, u32, u32, usize)>,
+    quads_key: Option<TileQuadsKey>,
     frame_visible_vector: Vec<TileId>,
     vector_over_raster: bool,
     frame_draw_radar: bool,
+    frame_draw_wind: bool,
     frame_draw_overlay: bool,
     /// Field layers this pane draws this frame. Per-pane, not shared: two panes are how you look
     /// at two fields at once.
@@ -734,21 +757,24 @@ pub struct RenderResources {
     // believing an evicted tile was still uploaded and never re-sent it, so zooming back to an
     // area left black squares where those tiles used to be.
     tiles: HashMap<TileKey, TileGpu>,
-    vector_tiles: HashMap<TileId, VectorGpu>,
+    vector_tiles: HashMap<(u32, TileId), VectorGpu>,
     overlay: Option<OverlayGpu>,
-    fields: HashMap<FieldLayer, MrmsGpu>,
+    fields: HashMap<(Option<u32>, FieldLayer), MrmsGpu>,
     // One entry per live pane.
     panes: HashMap<u32, PaneGpu>,
     /// Bumped whenever the shared tile cache gains or loses a texture, so a pane can tell that
     /// its quad list is still current.
     tiles_gen: u64,
+    gpu_timers: HashMap<u32, crate::gpu_metrics::Timer>,
     /// GPU wind particles, built on first use. `None` when the CPU path is in charge.
-    wind: Option<crate::wind_gpu::WindGpu>,
+    wind: HashMap<u32, crate::wind_gpu::WindGpu>,
+    wind_grid: Option<Box<crate::wind_gpu::WindGrid>>,
     target_format: wgpu::TextureFormat,
 }
 
 impl RenderResources {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        crate::gpu_metrics::set_uploads([0; 4]);
         let tile_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/tiles.wgsl"));
         let radar_shader =
             device.create_shader_module(wgpu::include_wgsl!("../shaders/radar.wgsl"));
@@ -802,7 +828,7 @@ impl RenderResources {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(80),
+                        min_binding_size: NonZeroU64::new(80 + 720 * 4),
                     },
                     count: None,
                 },
@@ -863,7 +889,7 @@ impl RenderResources {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<TileVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -1048,7 +1074,9 @@ impl RenderResources {
             fields: HashMap::new(),
             panes: HashMap::new(),
             tiles_gen: 0,
-            wind: None,
+            gpu_timers: HashMap::new(),
+            wind: HashMap::new(),
+            wind_grid: None,
             target_format,
         }
     }
@@ -1073,7 +1101,7 @@ impl RenderResources {
             });
             let tile_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("tile_vbuf"),
-                size: MAX_TILE_VERTS * std::mem::size_of::<TileVertex>() as u64,
+                size: 512 * 6 * std::mem::size_of::<TileVertex>() as u64,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -1084,9 +1112,12 @@ impl RenderResources {
                 mapped_at_creation: false,
             });
             PaneGpu {
+                id,
+                upload_token: 0,
                 camera_buf,
                 camera_bg,
                 tile_vbuf,
+                tile_capacity: 512 * 6,
                 radar_vbuf,
                 radar: None,
                 frame_visible: Vec::new(),
@@ -1094,6 +1125,7 @@ impl RenderResources {
                 frame_visible_vector: Vec::new(),
                 vector_over_raster: false,
                 frame_draw_radar: false,
+                frame_draw_wind: false,
                 frame_draw_overlay: false,
                 field_draws: Vec::new(),
             }
@@ -1111,7 +1143,7 @@ impl RenderResources {
     #[allow(clippy::type_complexity)] // one call site; a struct here would be ceremony
     fn tile_quads(
         &self,
-        style: u8,
+        style: u64,
         v: &VisibleTile,
     ) -> Vec<(TileKey, [f32; 2], [f32; 2], [f32; 2], [f32; 2])> {
         const FULL: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
@@ -1217,15 +1249,20 @@ impl RenderResources {
         existing: Option<RadarGpu>,
     ) -> Option<RadarGpu> {
         let flag_dims = flag_dims(r);
+        let precision = r.data16.is_some();
+        let bytes_per_gate = if precision { 2 } else { 1 };
+        let gate_data: &[u8] = r.data16.as_ref().map_or(r.data.as_slice(), |d| bytemuck::cast_slice(d));
+        let lut_width = (r.lut.len() / (3 * 4)) as u32;
         // Same shape: write into the retained textures and keep the bind group. Dimensions are
         // the only thing a bind group depends on here, so nothing else can go stale.
-        if let Some(g) = existing {
-            if g.dims == (r.gate_count, r.az_bins) && g.flag_dims == flag_dims {
+        if let Some(mut g) = existing {
+            if g.dims == (r.gate_count, r.az_bins) && g.flag_dims == flag_dims && g.precision == precision && g.lut_width == lut_width {
                 if !r.lut_only {
-                    write_r8(queue, &g.tex, g.dims, &r.data);
-                    write_r8(queue, &g.flag, g.flag_dims, &flag_bytes(r, g.flag_dims));
+                    write_texture_changes(queue, &g.tex, g.dims, bytes_per_gate, &mut g.gate_bytes, gate_data);
+                    write_texture_changes(queue, &g.flag, g.flag_dims, 1, &mut g.flag_bytes, &flag_bytes(r, g.flag_dims));
                 }
                 queue.write_buffer(&g.uni, 0, bytemuck::cast_slice(&r.uniform));
+                queue.write_buffer(&g.uni, 80, bytemuck::cast_slice(&r.sector_opacity.unwrap_or([1.0; 720])));
                 write_lut(queue, &g.lut, &r.lut);
                 return Some(g);
             }
@@ -1245,10 +1282,11 @@ impl RenderResources {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Uint,
+            format: if precision { wgpu::TextureFormat::R16Uint } else { wgpu::TextureFormat::R8Uint },
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, gate_data.len() as u64);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &tex,
@@ -1256,23 +1294,25 @@ impl RenderResources {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &r.data,
+            gate_data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(r.gate_count),
+                bytes_per_row: Some(r.gate_count * bytes_per_gate),
                 rows_per_image: Some(r.az_bins),
             },
             size,
         );
+        let mut uniform = r.uniform.to_vec();
+        uniform.extend_from_slice(&r.sector_opacity.unwrap_or([1.0; 720]));
         let uni = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("radar_uniform"),
-            contents: bytemuck::cast_slice(&r.uniform),
+            contents: bytemuck::cast_slice(&uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         // 256×3 color LUT, indexed by the sweep u8 across and the precipitation type down.
         let lut_size = wgpu::Extent3d {
-            width: 256,
+            width: lut_width,
             height: 3,
             depth_or_array_layers: 1,
         };
@@ -1286,6 +1326,7 @@ impl RenderResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, r.lut.len() as u64);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &lut_tex,
@@ -1296,7 +1337,7 @@ impl RenderResources {
             &r.lut,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4),
+                bytes_per_row: Some(lut_width * 4),
                 rows_per_image: Some(3),
             },
             lut_size,
@@ -1324,6 +1365,7 @@ impl RenderResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, flag_data.len() as u64);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &flag_tex,
@@ -1371,6 +1413,10 @@ impl RenderResources {
             bind_group,
             dims: (r.gate_count, r.az_bins),
             flag_dims,
+            precision,
+            lut_width,
+            gate_bytes: gate_data.to_vec(),
+            flag_bytes: flag_bytes(r, flag_dims),
         })
     }
 
@@ -1390,57 +1436,66 @@ impl RenderResources {
         if cb.wind.is_none() && cb.wind_upload.is_none() {
             return;
         }
-        let format = self.target_format;
-        let wind = self
-            .wind
-            .get_or_insert_with(|| crate::wind_gpu::WindGpu::new(device, queue, format));
         if let Some(up) = &cb.wind_upload {
-            wind.upload_grid(queue, up);
+            for wind in self.wind.values_mut() {
+                wind.upload_grid(queue, up);
+            }
+            self.wind_grid = Some(up.clone());
+        }
+        let format = self.target_format;
+        if !self.wind.contains_key(&cb.pane) {
+            let mut wind = crate::wind_gpu::WindGpu::new(device, queue, format);
+            if let Some(grid) = &self.wind_grid {
+                wind.upload_grid(queue, grid);
+            }
+            self.wind.insert(cb.pane, wind);
         }
         if let Some(frame) = &cb.wind {
-            wind.step(device, queue, encoder, cb.pane, frame);
+            self.wind
+                .get_mut(&cb.pane)
+                .unwrap()
+                .step(device, queue, encoder, cb.pane, frame);
         }
     }
 
     /// The tile quads for this frame, and the tile ids they draw in quad order.
-    fn tile_verts(&self, cb: &MapCallback) -> (Vec<TileVertex>, Vec<TileKey>) {
+    fn tile_verts(
+        &self,
+        cb: &MapCallback,
+    ) -> (Vec<TileVertex>, Vec<(TileKey, std::ops::Range<u32>)>) {
         wxdata::stats::bump(wxdata::stats::Counter::TileQuadsBuilt);
         let mut tverts: Vec<TileVertex> = Vec::new();
-        let mut visible: Vec<TileKey> = Vec::new();
+        let mut visible = Vec::new();
         for v in &cb.visible {
             for (id, wmin, wmax, uvmin, uvmax) in self.tile_quads(cb.basemap_key, v) {
-                if tverts.len() as u64 + 6 > MAX_TILE_VERTS {
+                let steps = tile_subdivisions(cb.globe, cb.world_per_pixel, wmin, wmax);
+                let first = tverts.len() as u32;
+                if tverts.len() as u64 + 6 * steps * steps > MAX_TILE_VERTS {
                     break;
                 }
-                let ([x0, y0], [x1, y1]) = (wmin, wmax);
-                let ([u0, t0], [u1, t1]) = (uvmin, uvmax);
-                tverts.extend_from_slice(&[
-                    TileVertex {
-                        world: [x0, y0],
-                        uv: [u0, t0],
-                    },
-                    TileVertex {
-                        world: [x1, y0],
-                        uv: [u1, t0],
-                    },
-                    TileVertex {
-                        world: [x1, y1],
-                        uv: [u1, t1],
-                    },
-                    TileVertex {
-                        world: [x0, y0],
-                        uv: [u0, t0],
-                    },
-                    TileVertex {
-                        world: [x1, y1],
-                        uv: [u1, t1],
-                    },
-                    TileVertex {
-                        world: [x0, y1],
-                        uv: [u0, t1],
-                    },
-                ]);
-                visible.push(id);
+                let sx = (uvmax[0] - uvmin[0]) / (wmax[0] - wmin[0]);
+                let sy = (uvmax[1] - uvmin[1]) / (wmax[1] - wmin[1]);
+                let transform = [wmin[0] - uvmin[0] / sx, wmin[1] - uvmin[1] / sy, sx, sy];
+                for y in 0..steps {
+                    for x in 0..steps {
+                        for (dx, dy) in [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)] {
+                            let u = (x + dx) as f32 / steps as f32;
+                            let v = (y + dy) as f32 / steps as f32;
+                            tverts.push(TileVertex {
+                                world: [
+                                    wmin[0] + u * (wmax[0] - wmin[0]),
+                                    wmin[1] + v * (wmax[1] - wmin[1]),
+                                ],
+                                uv: [
+                                    uvmin[0] + u * (uvmax[0] - uvmin[0]),
+                                    uvmin[1] + v * (uvmax[1] - uvmin[1]),
+                                ],
+                                transform,
+                            });
+                        }
+                    }
+                }
+                visible.push((id, first..tverts.len() as u32));
             }
         }
         (tverts, visible)
@@ -1452,13 +1507,13 @@ impl RenderResources {
             self.tiles.clear();
         }
         if cb.clear_vector {
-            self.vector_tiles.clear();
+            self.vector_tiles.retain(|(pane, _), _| *pane != cb.pane);
         }
         for id in &cb.drop_vector_tiles {
-            self.vector_tiles.remove(id);
+            self.vector_tiles.remove(&(cb.pane, *id));
         }
         for t in &cb.new_vector_tiles {
-            self.upload_vector_tile(device, t);
+            self.upload_vector_tile(device, cb.pane, t);
         }
         for t in &cb.new_tiles {
             self.upload_tile(device, queue, t);
@@ -1480,17 +1535,17 @@ impl RenderResources {
         // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
         // here, before any drawing.
         for layer in &cb.drop_fields {
-            self.fields.remove(layer);
+            self.fields.remove(&(layer.is_native_abi().then_some(cb.pane), *layer));
         }
         for (layer, up) in &cb.field_uploads {
             let gpu = self.build_field_layer(device, queue, up);
-            self.fields.insert(*layer, gpu);
+            self.fields.insert((layer.is_native_abi().then_some(cb.pane), *layer), gpu);
         }
         // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
         // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
         let mut field_draws = Vec::new();
         for (layer, opacity) in &cb.field_draws {
-            if let Some(f) = self.fields.get(layer) {
+            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(cb.pane), *layer)) {
                 queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
                 field_draws.push(*layer);
             }
@@ -1516,10 +1571,11 @@ impl RenderResources {
             cb.camera_scale[0].to_bits(),
             cb.camera_scale[1].to_bits(),
             cb.visible.len(),
+            cb.globe[2] != 0.0,
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
-        let visible_vector = vector_draw_tiles(&cb.visible_vector, self.vector_tiles.keys().copied());
+        let visible_vector = vector_draw_tiles(&cb.visible_vector, self.vector_tiles.keys().filter_map(|(pane, id)| (*pane == cb.pane).then_some(*id)));
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
@@ -1534,6 +1590,7 @@ impl RenderResources {
                     -(256.0 * cb.world_per_pixel as f64).log2(),
                 ) as f32,
                 _pad: [0.0; 2],
+                globe: cb.globe,
             }),
         );
         if let Some(r) = &cb.radar_upload {
@@ -1551,8 +1608,18 @@ impl RenderResources {
         }
         if let Some(radar) = new_radar {
             pane.radar = Some(radar);
+            pane.upload_token = cb.radar_upload.as_ref().map_or(0, |upload| upload.upload_token);
         }
         if let Some((tverts, visible)) = quads {
+            if tverts.len() as u64 > pane.tile_capacity {
+                pane.tile_capacity = (tverts.len() as u64).next_power_of_two();
+                pane.tile_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("globe_tile_vertices"),
+                    size: pane.tile_capacity * std::mem::size_of::<TileVertex>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
             if !tverts.is_empty() {
                 queue.write_buffer(&pane.tile_vbuf, 0, bytemuck::cast_slice(&tverts));
             }
@@ -1561,6 +1628,7 @@ impl RenderResources {
         }
         pane.frame_visible_vector = visible_vector;
         pane.vector_over_raster = cb.vector_over_raster;
+        pane.frame_draw_wind = cb.wind.is_some();
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
         pane.frame_draw_overlay = cb.draw_overlay && overlay_present;
         pane.field_draws = field_draws;
@@ -1709,9 +1777,9 @@ impl RenderResources {
         }
     }
 
-    fn upload_vector_tile(&mut self, device: &wgpu::Device, t: &PendingVectorTile) {
+    fn upload_vector_tile(&mut self, device: &wgpu::Device, pane: u32, t: &PendingVectorTile) {
         if t.indices.is_empty() {
-            self.vector_tiles.remove(&t.id);
+            self.vector_tiles.remove(&(pane, t.id));
             return;
         }
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1737,7 +1805,7 @@ impl RenderResources {
             }),
             index_count: t.foreground_indices.len() as u32,
         });
-        self.vector_tiles.insert(t.id, VectorGpu {
+        self.vector_tiles.insert((pane, t.id), VectorGpu {
             base: OverlayGpu { vbuf, ibuf, index_count: t.indices.len() as u32 },
             foreground,
         });
@@ -1751,7 +1819,7 @@ impl RenderResources {
             if layer.below_radar() != below || !pane.field_draws.contains(&layer) {
                 continue;
             }
-            if let Some(f) = self.fields.get(&layer) {
+            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(pane.id), layer)) {
                 pass.set_pipeline(&self.mrms_pipeline);
                 pass.set_bind_group(0, cam, &[]);
                 pass.set_bind_group(1, &f.bind_group, &[]);
@@ -1776,11 +1844,10 @@ impl RenderResources {
         pass.set_pipeline(&self.tile_pipeline);
         pass.set_bind_group(0, cam, &[]);
         pass.set_vertex_buffer(0, pane.tile_vbuf.slice(..));
-        for (i, id) in pane.frame_visible.iter().enumerate() {
+        for (id, vertices) in &pane.frame_visible {
             if let Some(tile) = self.tiles.get(id) {
                 pass.set_bind_group(1, &tile.bind_group, &[]);
-                let base = (i * 6) as u32;
-                pass.draw(base..base + 6, 0..1);
+                pass.draw(vertices.clone(), 0..1);
             }
         }
         if pane.vector_over_raster {
@@ -1805,8 +1872,8 @@ impl RenderResources {
         // Wind particles under the overlay, not over it: the CPU path paints in egui's own layer,
         // which is above everything, and a warning polygon disappearing under a particle trail
         // was the one complaint that layer ever attracted.
-        if let Some(wind) = &self.wind {
-            wind.draw(id, pass);
+        if pane.frame_draw_wind {
+            if let Some(wind) = self.wind.get(&id) { wind.draw(id, pass); }
         }
         if pane.frame_draw_overlay {
             if let Some(overlay) = &self.overlay {
@@ -1834,7 +1901,7 @@ impl RenderResources {
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
         for tid in &pane.frame_visible_vector {
-            if let Some(t) = self.vector_tiles.get(tid) {
+            if let Some(t) = self.vector_tiles.get(&(pane.id, *tid)) {
                 pass.set_vertex_buffer(0, t.base.vbuf.slice(..));
                 pass.set_index_buffer(t.base.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..t.base.index_count, 0, 0..1);
@@ -1851,7 +1918,7 @@ impl RenderResources {
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
         for tid in &pane.frame_visible_vector {
-            let Some(t) = self.vector_tiles.get(tid).and_then(|t| t.foreground.as_ref()) else {
+            let Some(t) = self.vector_tiles.get(&(pane.id, *tid)).and_then(|t| t.foreground.as_ref()) else {
                 continue;
             };
             pass.set_vertex_buffer(0, t.vbuf.slice(..));
@@ -1861,10 +1928,80 @@ impl RenderResources {
     }
 
     pub fn prepare_pane(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &MapCallback) {
+        if let Some(count) = cb.live_pane_count {
+            self.panes.retain(|id, _| *id < count);
+            self.wind.retain(|id, _| *id < count);
+            self.gpu_timers.retain(|id, _| *id < count);
+            self.vector_tiles.retain(|(id, _), _| *id < count);
+            self.fields.retain(|(id, _), _| id.is_none_or(|id| id < count));
+        }
         if let Some(visible) = cb.retain_only_pane {
             self.panes.retain(|id, _| *id == visible);
+            self.wind.retain(|id, _| *id == visible);
+            self.gpu_timers.retain(|id, _| *id == visible);
         }
         self.upload_frame(device, queue, cb);
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.gpu_timers.entry(cb.pane) {
+            if let Some(timer) = crate::gpu_metrics::Timer::new(device) { entry.insert(timer); }
+        }
+        let (gpu, shadows) = self.memory_bytes();
+        crate::gpu_metrics::set_memory(gpu, shadows);
+        crate::gpu_metrics::set_uploads(self.upload_tokens());
+    }
+
+    pub fn upload_tokens(&self) -> [u64; 4] {
+        std::array::from_fn(|id| self.panes.get(&(id as u32)).filter(|pane| pane.radar.is_some()).map_or(0, |pane| pane.upload_token))
+    }
+
+    /// Nominal resource sizes; excludes driver padding, framework targets and allocation overhead.
+    pub fn memory_bytes(&self) -> (u64, u64) {
+        let texture = |tex: &wgpu::Texture| {
+            let size = tex.size();
+            size.width as u64
+                * size.height as u64
+                * size.depth_or_array_layers as u64
+                * u64::from(tex.format().block_copy_size(None).unwrap_or(4))
+        };
+        let overlay = |geometry: &OverlayGpu| geometry.vbuf.size() + geometry.ibuf.size();
+        let mut gpu = self
+            .tiles
+            .values()
+            .map(|tile| texture(&tile._tex))
+            .sum::<u64>()
+            + self
+                .vector_tiles
+                .values()
+                .map(|tile| overlay(&tile.base) + tile.foreground.as_ref().map_or(0, overlay))
+                .sum::<u64>()
+            + self.overlay.as_ref().map_or(0, overlay)
+            + self
+                .fields
+                .values()
+                .map(|field| {
+                    texture(&field._tex)
+                        + texture(&field._lut)
+                        + field.uni.size()
+                        + field.vbuf.size()
+                })
+                .sum::<u64>()
+            + self
+                .wind
+                .values()
+                .map(|wind| wind.estimated_bytes())
+                .sum::<u64>();
+        gpu += self.gpu_timers.len() as u64 * 272;
+        let mut shadows = 0;
+        for pane in self.panes.values() {
+            gpu += pane.camera_buf.size() + pane.tile_vbuf.size() + pane.radar_vbuf.size();
+            if let Some(radar) = &pane.radar {
+                gpu += texture(&radar.tex)
+                    + texture(&radar.flag)
+                    + texture(&radar.lut)
+                    + radar.uni.size();
+                shadows += (radar.gate_bytes.len() + radar.flag_bytes.len()) as u64;
+            }
+        }
+        (gpu, shadows)
     }
 
     /// Draw a previously-prepared pane to `view` (mirrors the egui `paint` phase).
@@ -1879,6 +2016,7 @@ impl RenderResources {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("headless"),
         });
+        if let Some(timer) = self.gpu_timers.get(&pane) { timer.collect_into(&mut encoder, queue, pane); }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("headless_pass"),
@@ -1896,7 +2034,9 @@ impl RenderResources {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some(timer) = self.gpu_timers.get(&pane) { timer.begin(&mut pass); }
             self.record_pane(pane, &mut pass);
+            if let Some(timer) = self.gpu_timers.get(&pane) { timer.end(&mut pass); }
         }
         queue.submit(Some(encoder.finish()));
     }
@@ -1926,7 +2066,8 @@ impl egui_wgpu::CallbackTrait for MapCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         crate::prof_scope!("render prepare");
         let res: &mut RenderResources = resources.get_mut().unwrap();
-        res.upload_frame(device, queue, self);
+        res.prepare_pane(device, queue, self);
+        if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.collect_into(_encoder, queue, self.pane); }
         res.step_wind(device, queue, _encoder, self);
         Vec::new()
     }
@@ -1939,7 +2080,9 @@ impl egui_wgpu::CallbackTrait for MapCallback {
     ) {
         crate::prof_scope!("render paint");
         let res: &RenderResources = resources.get().unwrap();
+        if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.begin(pass); }
         res.record_pane(self.pane, pass);
+        if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.end(pass); }
     }
 }
 
@@ -2037,32 +2180,49 @@ fn flag_bytes(r: &RadarUpload, dims: (u32, u32)) -> Vec<u8> {
     }
 }
 
-/// Write a full R8 texture of `dims`.
-fn write_r8(queue: &wgpu::Queue, tex: &wgpu::Texture, dims: (u32, u32), data: &[u8]) {
+/// Coalesce dirty radial rows. Dense or fragmented changes use one full write;
+/// sparse updates preserve unchanged rows and avoid hundreds of tiny queue calls.
+fn changed_rows(previous: &[u8], next: &[u8], width: usize) -> Vec<std::ops::Range<usize>> {
+    if width == 0 || !next.len().is_multiple_of(width) { return Vec::new(); }
+    let height = next.len() / width;
+    if previous.len() != next.len() { return std::iter::once(0..height).collect(); }
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut changed = 0;
+    for row in 0..height {
+        let bytes = row * width..(row + 1) * width;
+        if previous[bytes.clone()] != next[bytes] {
+            changed += 1;
+            if let Some(last) = ranges.last_mut().filter(|r| r.end == row) { last.end += 1; }
+            else { ranges.push(row..row + 1); }
+        }
+    }
+    if ranges.len() > 32 || changed * 2 > height { std::iter::once(0..height).collect() } else { ranges }
+}
+
+fn write_texture_changes(queue: &wgpu::Queue, tex: &wgpu::Texture, dims: (u32, u32), bytes_per_pixel: u32, previous: &mut Vec<u8>, next: &[u8]) {
     let (width, height) = dims;
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: tex,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        data,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(width),
-            rows_per_image: Some(height),
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
+    let row_bytes = width * bytes_per_pixel;
+    if next.len() != row_bytes as usize * height as usize { return; }
+    let ranges = changed_rows(previous, next, row_bytes as usize);
+    if ranges.is_empty() { return; }
+    for rows in ranges {
+        let bytes = rows.start * row_bytes as usize..rows.end * row_bytes as usize;
+        wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, bytes.len() as u64);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: rows.start as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
+            &next[bytes],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row_bytes), rows_per_image: Some(rows.len() as u32) },
+            wgpu::Extent3d { width, height: rows.len() as u32, depth_or_array_layers: 1 },
+        );
+    }
+    previous.clear();
+    previous.extend_from_slice(next);
 }
 
 /// Write the 256×3 RGBA color LUT.
 fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, lut: &[u8]) {
+    wxdata::stats::add(wxdata::stats::Counter::RadarUploadBytes, lut.len() as u64);
+    let width = (lut.len() / (3 * 4)) as u32;
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: tex,
@@ -2073,13 +2233,60 @@ fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, lut: &[u8]) {
         lut,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(256 * 4),
+            bytes_per_row: Some(width * 4),
             rows_per_image: Some(3),
         },
         wgpu::Extent3d {
-            width: 256,
+            width,
             height: 3,
             depth_or_array_layers: 1,
         },
     );
+}
+
+/// Bound projected chord error to about one pixel, quantized to prevent geometry churn.
+/// The hard 16 subdivision ceiling and MAX_TILE_VERTS keep global allocation bounded.
+fn tile_subdivisions(globe: [f32; 4], world_per_pixel: f32, min: [f32; 2], max: [f32; 2]) -> u64 {
+    if globe[2] == 0.0 { return 1; }
+    let latitude = |y: f32| (std::f32::consts::PI * (1.0 - 2.0 * y)).sinh().atan();
+    let angle = ((max[0] - min[0]).abs() * std::f32::consts::TAU).max((latitude(max[1]) - latitude(min[1])).abs());
+    let radius = 1.0 / (world_per_pixel.max(1e-12) * globe[1].abs().max(0.05) * std::f32::consts::TAU);
+    let needed = (radius * angle * angle / 8.0).sqrt().ceil() as u64;
+    needed.clamp(2, 16).next_power_of_two().min(16)
+}
+
+#[cfg(test)]
+mod dirty_radar_rows_tests {
+    use super::changed_rows;
+    #[test]
+    fn globe_geometry_tracks_screen_error_and_stays_bounded() {
+        let globe = [0.0, 1.0, 2.0, 2.0];
+        assert_eq!(super::tile_subdivisions([0.0; 4], 0.001, [0.0; 2], [1.0; 2]), 1);
+        let wide = super::tile_subdivisions(globe, 0.001, [0.0; 2], [0.5; 2]);
+        let narrow = super::tile_subdivisions(globe, 0.001, [0.0; 2], [0.01; 2]);
+        assert!(wide > narrow);
+        assert_eq!(super::tile_subdivisions(globe, 1e-12, [0.0; 2], [1.0; 2]), 16);
+        assert!(super::tile_subdivisions(globe, 0.0001, [0.0; 2], [0.1; 2]) >= super::tile_subdivisions(globe, 0.001, [0.0; 2], [0.1; 2]));
+    }
+
+    #[test]
+    fn sparse_changes_include_cleared_gates_and_coalesce_neighbors() {
+        let previous = vec![7; 40];
+        let mut next = previous.clone();
+        next[8] = 0; next[12] = 8; next[28] = 9;
+        assert_eq!(changed_rows(&previous, &next, 4), vec![2..4, 7..8]);
+        let mut reconstructed = previous.clone();
+        for rows in changed_rows(&previous, &next, 4) {
+            let bytes = rows.start * 4..rows.end * 4;
+            reconstructed[bytes.clone()].copy_from_slice(&next[bytes]);
+        }
+        assert_eq!(reconstructed, next);
+        assert!(changed_rows(&next, &next, 4).is_empty());
+    }
+    #[test]
+    fn dense_changes_and_shape_changes_use_full_upload() {
+        assert_eq!(changed_rows(&[0; 16], &[1; 16], 4), vec![0..4]);
+        assert_eq!(changed_rows(&[], &[1; 16], 4), vec![0..4]);
+        assert!(changed_rows(&[], &[1; 3], 4).is_empty());
+    }
 }

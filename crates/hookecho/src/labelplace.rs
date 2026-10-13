@@ -70,6 +70,13 @@ impl Placer {
         self.last_priority = None;
     }
 
+    /// Each pane has its own clipped map and priority pass. Keep visibility history for the
+    /// frame, but don't let a rectangle clipped at one pane's edge suppress a neighbor's text.
+    pub fn begin_pane(&mut self) {
+        self.taken.clear();
+        self.last_priority = None;
+    }
+
     /// Was this label drawn on the previous frame? Layers sort their candidates by this first, so
     /// a label that is already on screen gets its slot back before a newcomer takes it.
     pub fn was_shown(&self, key: LabelKey) -> bool {
@@ -100,6 +107,14 @@ mod tests {
 
     fn r(x: f32, y: f32) -> egui::Rect {
         egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(10.0, 10.0))
+    }
+
+    #[test]
+    fn pane_priority_restarts_without_forgetting_frame_visibility() {
+        let mut p=Placer::default();p.begin();p.begin_pane();
+        assert!(p.place(key("first"),r(0.0,0.0),Priority::Minor));
+        p.begin_pane();assert!(p.place(key("second"),r(0.0,0.0),Priority::Warning));
+        p.begin();assert!(p.was_shown(key("first")));assert!(p.was_shown(key("second")));
     }
 
     #[test]

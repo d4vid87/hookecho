@@ -12,14 +12,19 @@ use wxdata::level2::{self, Identifier, Scan};
 /// `cache` is the native disk cache directory, or `None` at the live head where the newest object
 /// may still be uploading.
 pub async fn fetch(id: Identifier, cache: Option<std::path::PathBuf>) -> anyhow::Result<Scan> {
+    fetch_with_progress(id, cache, |_| {}).await
+}
+
+pub async fn fetch_with_progress(id: Identifier, cache: Option<std::path::PathBuf>, progress: impl Fn(level2::LoadPhase) + Send) -> anyhow::Result<Scan> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = &cache;
         let name = id.name().to_string();
         if let Some(bytes) = crate::webcache::volume(&name).await {
             log::debug!("volume {name} came from an offline pack");
+            progress(level2::LoadPhase::Decoding);
             return level2::scan_from_volume_bytes(&name, bytes).await;
         }
     }
-    level2::download_scan(id, cache).await
+    level2::download_scan_with_progress(id, cache, progress).await
 }

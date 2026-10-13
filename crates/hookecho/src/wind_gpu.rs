@@ -30,6 +30,7 @@ pub struct Frame {
     pub bbox_min: [f32; 2],
     pub bbox_max: [f32; 2],
     pub center: [f32; 2],
+    pub globe: [f32; 4],
     pub scale: [f32; 2],
     pub dt: f32,
     pub world_per_px: f32,
@@ -53,6 +54,8 @@ struct Uniform {
     seed: f32,
     opacity: f32,
     point_px: f32,
+    globe: [f32; 4],
+    trail: [f32; 4],
 }
 
 /// Pipelines and the textures they run over. One instance for the whole app; the trail buffers
@@ -93,6 +96,7 @@ struct Trails {
     src_bg: [wgpu::BindGroup; 2],
     cur: usize,
     size: (u32, u32),
+    camera: Option<([f32; 2], [f32; 2], [f32; 4])>,
 }
 
 const POS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -352,6 +356,11 @@ impl WindGpu {
         f: &Frame,
     ) {
         self.frames += 1;
+        self.ensure_trails(device, pane, f.viewport);
+        let camera = (f.center, f.scale, f.globe);
+        let trails = self.trails.get_mut(&pane).unwrap();
+        let fade = if trails.camera == Some(camera) { 0.94 } else { 0.0 };
+        trails.camera = Some(camera);
         queue.write_buffer(
             &self.uni,
             0,
@@ -370,6 +379,8 @@ impl WindGpu {
                 seed: (self.frames % 4096) as f32 * 0.7913,
                 opacity: f.opacity,
                 point_px: 2.0,
+                globe: f.globe,
+                trail: [fade, 0.0, 0.0, 0.0],
             }),
         );
 
@@ -422,6 +433,12 @@ impl WindGpu {
         pass.draw(0..3, 0..1);
     }
 
+    pub fn estimated_bytes(&self) -> u64 {
+        // RGBA8 grid, two position textures, LUT, uniform and two trail targets per pane.
+        (GRID * GRID * 4 + SIDE * SIDE * 8 + 256 * 4) as u64 + self.uni.size()
+            + self.trails.values().map(|trail| trail.size.0 as u64 * trail.size.1 as u64 * 8).sum::<u64>()
+    }
+
     /// Forget a pane's trail buffers (the pane closed, or the layout changed).
     pub fn retain_panes(&mut self, keep: impl Fn(u32) -> bool) {
         self.trails.retain(|k, _| keep(*k));
@@ -446,6 +463,7 @@ impl WindGpu {
                     tex,
                     view,
                     src_bg,
+                    camera: None,
                     cur: 0,
                     size: (size.0.max(1), size.1.max(1)),
                 }
@@ -474,6 +492,7 @@ fn src_bind_group(
 ///
 /// The HRRR grids are regular in lon/lat and the particles live in mercator world space, so the
 /// warp has to happen somewhere. Here, on the CPU, once per new field.
+#[derive(Clone)]
 pub struct WindGrid {
     pub rgba: Vec<u8>,
     pub bbox_min: [f32; 2],
@@ -647,6 +666,7 @@ mod tests {
                 bbox_min,
                 bbox_max,
                 center: [0.3, 0.4],
+                globe: [0.0; 4],
                 scale: [100.0, 100.0],
                 dt: 0.1,
                 world_per_px,
@@ -676,6 +696,145 @@ mod tests {
             back.len(),
             adapter.get_info().name
         );
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_globe_wind_clips_sky_and_far_hemisphere_and_resets_trails() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let instance = wgpu::Instance::default();
+        let adapter = rt
+            .block_on(instance.request_adapter(&Default::default()))
+            .unwrap();
+        let (device, queue) = rt
+            .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_features: adapter.features() & crate::gpu_metrics::FEATURES,
+                ..Default::default()
+            }))
+            .unwrap();
+        let size = 128;
+        let target =
+            crate::headless::new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, size);
+        let view = target.create_view(&Default::default());
+        let mut gpu = WindGpu::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let field = constant_field(10.0, 0.0);
+        let nw = crate::render::mercator::lonlat_to_world(-110.0, 45.0);
+        let se = crate::render::mercator::lonlat_to_world(-80.0, 25.0);
+        let bbox_min = [nw.0 as f32, nw.1 as f32];
+        let bbox_max = [se.0 as f32, se.1 as f32];
+        gpu.upload_grid(
+            &queue,
+            &WindGrid {
+                rgba: warp_field(&field, bbox_min, bbox_max),
+                bbox_min,
+                bbox_max,
+            },
+        );
+        let timer = crate::gpu_metrics::Timer::new(&device);
+        crate::gpu_metrics::reset_samples();
+        let mut front = crate::render::mercator::Camera::at_lonlat(-95.0, 35.0, 0.0);
+        front.globe = true;
+        let mut cpu_particles = crate::wind_draw::Particles::default();
+        let mut cpu_ms = Vec::new();
+        let mut gpu_enqueue_ms = Vec::new();
+        let mut camera = front;
+        for iteration in 0..12 {
+            if iteration == 11 {
+                camera = crate::render::mercator::Camera::at_lonlat(85.0, -35.0, 0.0);
+                camera.globe = true;
+            }
+            let vp = (size as f32, size as f32);
+            let (center, scale) = camera.world_to_clip_uniform(vp);
+            let start = std::time::Instant::now();
+            cpu_particles.update(&field, &camera, vp, 0.016);
+            let _ = cpu_particles.build_mesh(&camera, vp, egui::Pos2::ZERO, 1.0);
+            if (5..11).contains(&iteration) {
+                cpu_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            let start = std::time::Instant::now();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            if let Some(timer) = &timer {
+                timer.collect_into(&mut encoder, &queue, 0);
+                timer.begin_encoder(&mut encoder);
+            }
+            gpu.step(
+                &device,
+                &queue,
+                &mut encoder,
+                0,
+                &Frame {
+                    bbox_min,
+                    bbox_max,
+                    center,
+                    scale,
+                    globe: camera.globe_uniform(vp),
+                    dt: 0.016,
+                    world_per_px: camera.world_per_pixel() as f32,
+                    opacity: 1.0,
+                    viewport: (size, size),
+                },
+            );
+            if let Some(timer) = &timer {
+                timer.end_encoder(&mut encoder);
+            }
+            {
+                let mut pass = color_pass(
+                    &mut encoder,
+                    "globe wind validation",
+                    &view,
+                    Some(wgpu::Color::TRANSPARENT),
+                );
+                gpu.draw(0, &mut pass);
+            }
+            queue.submit(Some(encoder.finish()));
+            if (5..11).contains(&iteration) {
+                gpu_enqueue_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            if iteration == 5 {
+                crate::gpu_metrics::reset_samples();
+            }
+            let pixels = crate::headless::read_target(&device, &queue, &target, size);
+            if iteration == 10 {
+                assert!(
+                    pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0),
+                    "near hemisphere must show particles"
+                );
+                let radius = camera.globe_radius();
+                for y in 0..size {
+                    for x in 0..size {
+                        if ((x as f64 + 0.5 - size as f64 / 2.0).powi(2)
+                            + (y as f64 + 0.5 - size as f64 / 2.0).powi(2))
+                        .sqrt()
+                            > radius + 1.0
+                        {
+                            assert_eq!(
+                                pixels[((y * size + x) * 4 + 3) as usize],
+                                0,
+                                "wind must not paint sky"
+                            );
+                        }
+                    }
+                }
+                if let Ok(path) = std::env::var("HOOKECHO_WIND_IMAGE") {
+                    image::save_buffer(path, &pixels, size, size, image::ColorType::Rgba8).unwrap();
+                }
+            }
+            if iteration == 11 {
+                assert!(
+                    pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0),
+                    "back hemisphere and previous-camera trails must be hidden"
+                );
+            }
+        }
+        let info = adapter.get_info();
+        let report = serde_json::json!({"adapter":info.name,"backend":format!("{:?}",info.backend),"viewport":[size,size],"cpu_update_and_mesh_ms":cpu_ms,"gpu_enqueue_ms":gpu_enqueue_ms,"gpu_advection_and_trails_p50_p95_ms":crate::gpu_metrics::percentiles(0),"nominal_gpu_bytes":gpu.estimated_bytes(),"limits":"Different particle counts and rendering methods; these are measurements of each path, not an equivalent-work speedup claim.","front_visible":true,"sky_hidden":true,"back_hidden":true,"camera_change_clears_trails":true});
+        if let Ok(path) = std::env::var("HOOKECHO_WIND_REPORT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        }
     }
 
     /// Read the position texture back and decode it the way the shader encodes it.

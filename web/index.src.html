@@ -194,6 +194,7 @@
         url.searchParams.append("relaunched", "1");
         location.href = url.href;
       };
+      addEventListener("hookecho-device-lost", () => recover("Graphics device lost — reload HookEcho."));
       document.getElementById("hookecho").addEventListener("webglcontextlost", (e) => {
         e.preventDefault();
         recover("Graphics context lost — reload the page.");

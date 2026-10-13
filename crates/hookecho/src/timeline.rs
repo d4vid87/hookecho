@@ -9,9 +9,24 @@ use chrono::{DateTime, NaiveDate, Utc};
 use wxdata::clock::Instant;
 use wxdata::level2::Identifier;
 
+/// Availability refers to decoded radar frames, never merely a successful network response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum FrameStatus { Unloaded, Downloading, Decoding, Ready, Unavailable, Skipped }
+impl FrameStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unloaded => "Not downloaded", Self::Downloading => "Downloading",
+            Self::Decoding => "Decoding", Self::Ready => "Ready",
+            Self::Unavailable => "Unavailable", Self::Skipped => "Skipped unavailable frame",
+        }
+    }
+}
+
 pub struct Timeline {
     /// Selected UTC archive day.
     pub date: NaiveDate,
+    /// Comparison target, cleared whenever time linking is disabled.
+    pub alignment_target: Option<DateTime<Utc>>,
     /// Volumes for the current site+date, oldest first.
     pub frames: Vec<Identifier>,
     /// Index into `frames` of the displayed volume.
@@ -31,6 +46,9 @@ pub struct Timeline {
     /// After the next listing lands, snap the playhead to the frame nearest this time (event
     /// jump / archive deep-link). Cleared once applied.
     pub seek_target: Option<DateTime<Utc>>,
+    /// Recovery cursors wait for a nonempty listing instead of trusting old frame indices.
+    pub seek_forecast_hour: Option<u8>,
+    pub replay_time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
     /// How long a replay bundle's window is, in minutes. Set alongside `seek_target` when an
     /// event or a saved replay is opened; consumed when the listing lands, which is the first
     /// moment frame indices exist to bound.
@@ -52,6 +70,7 @@ impl Default for Timeline {
     fn default() -> Self {
         Self {
             date: chrono::Utc::now().date_naive(),
+            alignment_target: None,
             frames: Vec::new(),
             playhead: 0,
             following: true,
@@ -62,6 +81,8 @@ impl Default for Timeline {
             frames_key: None,
             listing: false,
             seek_target: None,
+            seek_forecast_hour: None,
+            replay_time_range: None,
             replay_span_min: 0,
             replay: None,
             forecast_hours: 6,
@@ -101,7 +122,7 @@ impl Timeline {
         if !self.frames.is_empty() && self.playhead >= self.frames.len() {
             Some((self.playhead - self.frames.len() + 1) as u8)
         } else {
-            None
+            self.seek_forecast_hour.map(|hour| hour.min(self.forecast_hours)).filter(|hour| *hour > 0)
         }
     }
 
@@ -118,10 +139,25 @@ impl Timeline {
         // the same moment as index N of another's. Carrying the playhead index across a site
         // switch is what drops a live loop hours into the archive — the loop window is a dozen
         // frames, a full day is hundreds, so index 8 lands just after 00Z instead of at the head.
+        let forecast = self.forecast_hour();
         let switched_site = self.frames_key.as_ref().is_some_and(|(s, _)| *s != key.0);
         self.frames = frames;
         self.frames_key = Some(key);
         self.listing = false;
+        if !self.frames.is_empty() {
+            if let Some((start, end)) = self.replay_time_range {
+                if let Some((from, to)) = self.nearest_frame(start).zip(self.nearest_frame(end)) {
+                    if from < to { self.replay = Some((from, to)); self.replay_time_range = None; }
+                }
+            }
+            if self.seek_target.is_none() && !self.following && self.forecast_hours > 0 {
+                if let Some(hour) = forecast.filter(|hour| *hour > 0) {
+                    self.playhead = self.frames.len() + usize::from(hour.min(self.forecast_hours)) - 1;
+                    self.seek_forecast_hour = None;
+                    return;
+                }
+            }
+        }
         // A pending event/deep-link seek wins: snap to the nearest frame by time. The target is
         // only consumed once a listing actually has a frame to land on — the first listing after
         // a site switch can arrive empty, and taking the seek there dropped it on the floor and
@@ -230,8 +266,22 @@ impl Timeline {
             .map(|(i, _)| i)
     }
 
+    /// Signed offset of the selected source from the linked comparison time.
+    pub fn alignment_offset_seconds(&self) -> Option<i64> {
+        Some((self.current()?.date_time()? - self.alignment_target?).num_seconds())
+    }
+
+    pub fn alignment_acceptable(&self, limit: Option<u32>) -> bool {
+        match (self.alignment_target, limit) {
+            (Some(target), Some(limit)) => self.current().and_then(Identifier::date_time).is_some_and(|time| (time - target).abs() <= chrono::Duration::seconds(i64::from(limit))),
+            _ => true,
+        }
+    }
+
     /// Match another pane's valid time, using this radar's nearest available volume.
     pub fn align_to(&mut self, target: DateTime<Utc>, following: bool, playing: bool) {
+        self.seek_forecast_hour = None;
+        self.replay_time_range = None;
         let date = target.date_naive();
         if self.date != date || self.frames_key.as_ref().is_some_and(|(_, d)| *d != date) {
             self.date = date;
@@ -253,6 +303,8 @@ impl Timeline {
             return false;
         };
         self.playhead = index;
+        self.seek_forecast_hour = None;
+        self.replay_time_range = None;
         self.seek_target = None;
         self.following = following;
         self.playing = playing;
@@ -262,6 +314,8 @@ impl Timeline {
 
     /// Step `delta` slots (observed frames + forecast tail), un-pinning and pausing playback.
     pub fn step(&mut self, delta: i32) {
+        self.seek_forecast_hour = None;
+        self.replay_time_range = None;
         self.playing = false;
         self.replay = None;
         let n = self.slot_count() as i32;
@@ -379,6 +433,8 @@ impl Timeline {
 
     /// Jump to the newest frame and re-pin to live.
     pub fn go_head(&mut self) {
+        self.seek_forecast_hour = None;
+        self.replay_time_range = None;
         self.enable_cut_playback(false);
         self.replay = None;
         self.following = true;
@@ -388,6 +444,8 @@ impl Timeline {
 
     /// Jump to the oldest frame.
     pub fn go_begin(&mut self) {
+        self.seek_forecast_hour = None;
+        self.replay_time_range = None;
         self.following = false;
         self.playing = false;
         self.playhead = 0;
@@ -557,6 +615,40 @@ mod tests {
     }
 
     #[test]
+    fn forecast_recovery_waits_for_frames_and_tracks_listing_growth() {
+        let mut timeline = Timeline { following: false, seek_forecast_hour: Some(2), ..Default::default() };
+        let key = ("KTLX".into(), timeline.date);
+        timeline.set_frames(vec![], key.clone());
+        assert_eq!(timeline.forecast_hour(), Some(2));
+        timeline.set_frames(day("KTLX", 4), key.clone());
+        assert_eq!(timeline.playhead, 5);
+        assert_eq!(timeline.forecast_hour(), Some(2));
+        timeline.set_frames(day("KTLX", 6), key);
+        assert_eq!(timeline.playhead, 7);
+        assert_eq!(timeline.forecast_hour(), Some(2));
+        timeline.go_head();
+        assert_eq!(timeline.forecast_hour(), None);
+    }
+
+    #[test]
+    fn replay_recovery_uses_times_when_the_listing_changes() {
+        let old = day("KTLX", 6);
+        let mut timeline = Timeline {
+            following: false,
+            seek_target: old[3].date_time(),
+            replay_time_range: old[1].date_time().zip(old[4].date_time()),
+            ..Default::default()
+        };
+        let key = ("KTLX".into(), timeline.date);
+        timeline.set_frames(vec![], key.clone());
+        assert!(timeline.replay_time_range.is_some());
+        timeline.set_frames(old[1..].to_vec(), key);
+        assert_eq!(timeline.playhead, 2);
+        assert_eq!(timeline.replay, Some((0, 3)));
+    }
+
+
+    #[test]
     fn selected_time_tracks_live_loop_and_pending_archive_seek() {
         let mut timeline = Timeline::default();
         let date = timeline.date;
@@ -605,6 +697,28 @@ mod tests {
         t.playhead = 0;
         t.set_frames(day("KFWS", 280), ("KFWS".into(), today));
         assert_eq!(t.current().unwrap().date_time(), Some(want));
+    }
+
+    #[test]
+    fn linked_time_limit_is_inclusive_and_rejects_unknown_sources() {
+        let mut timeline = Timeline::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        timeline.set_frames(day("KTLX", 2), ("KTLX".into(), date));
+        let time = timeline.current().unwrap().date_time().unwrap();
+        timeline.alignment_target = Some(time - chrono::Duration::seconds(120));
+        assert_eq!(timeline.alignment_offset_seconds(), Some(120));
+        assert!(timeline.alignment_acceptable(Some(120)));
+        assert!(!timeline.alignment_acceptable(Some(119)));
+        timeline.alignment_target = Some(time + chrono::Duration::seconds(120));
+        assert_eq!(timeline.alignment_offset_seconds(), Some(-120));
+        assert!(timeline.alignment_acceptable(Some(120)));
+        timeline.alignment_target = Some(time + chrono::Duration::milliseconds(120_001));
+        assert!(!timeline.alignment_acceptable(Some(120)));
+        timeline.frames.clear();
+        assert!(!timeline.alignment_acceptable(Some(120)));
+        assert!(timeline.alignment_acceptable(None));
+        timeline.alignment_target = None;
+        assert!(timeline.alignment_acceptable(Some(0)));
     }
 
     #[test]

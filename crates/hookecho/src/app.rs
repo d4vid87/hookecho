@@ -92,6 +92,14 @@ fn new_tds_locations(
     new
 }
 
+/// Soft encoded-payload cap. Displayed frames and actively borrowed scans are never evicted;
+/// diagnostics explicitly report when those pinned allocations alone exceed the cap.
+fn radar_payload_budget() -> usize {
+    if cfg!(target_os = "android") { 96 * 1024 * 1024 }
+    else if cfg!(target_arch = "wasm32") { 192 * 1024 * 1024 }
+    else { 512 * 1024 * 1024 }
+}
+
 /// Loop frames in flight, keyed by volume name, with when each was kicked off.
 type PrefetchBook = std::collections::HashMap<String, Instant>;
 
@@ -257,7 +265,8 @@ enum OverlayMsg {
         Option<wxdata::mrms::MrmsField>,
     ),
     /// A direct RGBA satellite composite.
-    Rgb(crate::render::FieldLayer, wxdata::abi::RgbImage),
+    PaneAbi(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
+    PaneRgb(usize, crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
     GefsDistribution(wxdata::global::GefsPointPlume),
@@ -361,12 +370,13 @@ enum OverlaySource {
     Field(crate::render::FieldLayer, String),
     /// Native GOES ABI imagery for a registered band.
     GoesAbi(
+        usize,
         crate::render::FieldLayer,
         u8,
         wxdata::abi::Scene,
         Option<DateTime<Utc>>,
     ),
-    GoesRgb(wxdata::abi::Scene, Option<DateTime<Utc>>),
+    GoesRgb(usize, wxdata::abi::Scene, Option<DateTime<Utc>>),
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
@@ -491,6 +501,7 @@ enum OverlaySource {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RequestLane {
     Field(crate::render::FieldLayer),
+    PaneField(usize, crate::render::FieldLayer),
     Placefile(String),
     Feed(&'static str),
 }
@@ -499,6 +510,7 @@ impl RequestLane {
     fn label(&self) -> String {
         match self {
             Self::Field(layer) => format!("field {}", layer.slug()),
+            Self::PaneField(pane, layer) => format!("pane {} field {}", pane + 1, layer.slug()),
             Self::Placefile(source) => format!("Placefile {source}"),
             Self::Feed(label) => (*label).into(),
         }
@@ -506,7 +518,7 @@ impl RequestLane {
 
     fn cadence(&self) -> std::time::Duration {
         let secs = match self {
-            Self::Field(layer) => field_refresh_secs(*layer),
+            Self::Field(layer) | Self::PaneField(_, layer) => field_refresh_secs(*layer),
             Self::Placefile(_) => 120,
             Self::Feed(label) => match *label {
                 "Spotter Network" | "Live stations" | "Field mill" | "Derived radar fields" => 60,
@@ -649,8 +661,8 @@ impl OverlaySource {
             Self::Spotters => RequestLane::Feed("Spotter Network"),
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
-            Self::GoesAbi(layer, ..) => RequestLane::Field(*layer),
-            Self::GoesRgb(..) => RequestLane::Field(crate::render::FieldLayer::GoesTrueColor),
+            Self::GoesAbi(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
+            Self::GoesRgb(pane, ..) => RequestLane::PaneField(*pane, crate::render::FieldLayer::GoesTrueColor),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
@@ -752,7 +764,7 @@ impl OverlaySource {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
             }
-            OverlaySource::GoesAbi(layer, band, scene, at) => {
+            OverlaySource::GoesAbi(pane, layer, band, scene, at) => {
                 let received = Utc::now();
                 let image = wxdata::abi::fetch_at(
                     http,
@@ -772,9 +784,12 @@ impl OverlaySource {
                 };
                 #[cfg(not(target_arch = "wasm32"))]
                 let frame = image.into_frame(received)?;
-                OverlayMsg::RegisteredField(layer, frame, None)
+                let mut frame = frame;
+                frame.stamp.received_time = Utc::now();
+                OverlayMsg::PaneAbi(pane, layer, frame, None)
             }
-            OverlaySource::GoesRgb(scene, at) => OverlayMsg::Rgb(
+            OverlaySource::GoesRgb(pane, scene, at) => OverlayMsg::PaneRgb(
+                pane,
                 crate::render::FieldLayer::GoesTrueColor,
                 wxdata::abi::fetch_rgb_at(
                     http,
@@ -1936,6 +1951,8 @@ pub(crate) enum PaletteAction {
     ToggleOverlay(OverlayToggle),
     /// Open the SPC outlook day and hazard controls.
     OpenOutlooks,
+    /// Open display and projection controls for the active pane.
+    OpenMapSettings,
     /// Show Day 1 SPC outlook, or hide the selected outlook.
     ToggleOutlook,
     SetOutlookDay(u8),
@@ -1946,6 +1963,7 @@ pub(crate) enum PaletteAction {
     ExportDetectorHistory,
     OpenWindow(AppWindow),
     SetPanes(usize),
+    UndoWorkspaceAction,
     CycleBasemap,
     ToggleMute,
     /// Show/hide the docked timeline bar under the map (desktop).
@@ -1963,6 +1981,7 @@ pub(crate) enum PaletteAction {
     Explain(usize),
     /// Snapshot the current pane layout as a new workspace.
     SaveWorkspace,
+    SaveDiagnostics,
     ExportCase,
     ExportCaseReport,
     ImportCase,
@@ -2184,6 +2203,7 @@ pub(crate) struct FieldState {
     pub last_fetch: Option<Instant>,
     /// Analysis time used by the current native-satellite request (`None` inside = live).
     pub requested_time: Option<Option<DateTime<Utc>>>,
+    pub requested_scene: Option<wxdata::abi::Scene>,
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
     pub off_since: Option<Instant>,
@@ -2358,7 +2378,12 @@ fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) 
 const WEB_LOOP_WINDOW: usize = 4;
 
 enum DataMsg {
+    ListingFailed { view: usize, site: String, date: NaiveDate },
+    Guarded { view: usize, site: String, generation: u64, head: bool, result: Box<DataMsg> },
+    FramePhase { view: usize, site: String, name: String, generation: u64, phase: level2::LoadPhase },
+    FrameError { view: usize, site: String, name: String, generation: u64, err: String },
     Volume {
+        selected_frame: Option<u64>,
         view: usize,
         site: String,
         name: String,
@@ -2424,23 +2449,31 @@ fn live_update_is_current(
 impl DataMsg {
     fn view(&self) -> usize {
         match self {
-            DataMsg::Volume { view, .. }
+            DataMsg::ListingFailed { view, .. }
+            | DataMsg::Guarded { view, .. }
+            | DataMsg::Volume { view, .. }
             | DataMsg::Live { view, .. }
             | DataMsg::LiveEnded { view, .. }
             | DataMsg::Frames { view, .. }
             | DataMsg::UpToDate { view, .. }
             | DataMsg::Prefetched { view, .. }
+            | DataMsg::FramePhase { view, .. }
+            | DataMsg::FrameError { view, .. }
             | DataMsg::Error { view, .. } => *view,
         }
     }
     fn site(&self) -> &str {
         match self {
-            DataMsg::Volume { site, .. }
+            DataMsg::ListingFailed { site, .. }
+            | DataMsg::Guarded { site, .. }
+            | DataMsg::Volume { site, .. }
             | DataMsg::Live { site, .. }
             | DataMsg::LiveEnded { site, .. }
             | DataMsg::Frames { site, .. }
             | DataMsg::UpToDate { site, .. }
             | DataMsg::Prefetched { site, .. }
+            | DataMsg::FramePhase { site, .. }
+            | DataMsg::FrameError { site, .. }
             | DataMsg::Error { site, .. } => site,
         }
     }
@@ -2464,6 +2497,7 @@ type ShownKey = (
     Option<u32>,
     Option<i64>,
     Option<u64>,
+    bool,
 );
 
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
@@ -2744,15 +2778,46 @@ impl ViewMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 enum PanelSection { #[default] Radar, Overlays, Alerts, Tools }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ModeSession {
     workspace: crate::workspace::Workspace,
     panes: Vec<PaneSession>,
     inspector: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RecoverySnapshot {
+    version: u8,
+    session: ModeSession,
+    analyst: bool,
+    playing: Vec<bool>,
+    speed: Vec<f32>,
+    loop_enabled: Vec<bool>,
+}
+
+#[derive(serde::Serialize)]
+enum UndoEntry {
+    Layout { snapshot: RecoverySnapshot, active_workspace: Option<String> },
+    Marker { marker: crate::settings::Marker, index: usize },
+}
+
+impl RecoverySnapshot {
+    fn valid(&self) -> bool {
+        self.version == 1
+            && !self.session.workspace.panes.is_empty()
+            && self.session.workspace.panes.len() <= crate::workspace::MAX_PANES
+            && self.session.panes.len() == self.session.workspace.panes.len()
+            && self.playing.len() == self.session.panes.len()
+            && self.speed.len() == self.session.panes.len()
+            && self.loop_enabled.len() == self.session.panes.len()
+            && self.session.workspace.panes.iter().all(|pane| pane.lon.is_finite() && pane.lat.is_finite() && pane.zoom.is_finite())
+            && self.speed.iter().all(|speed| speed.is_finite() && *speed > 0.0 && *speed <= 60.0)
+    }
+}
+
 type MarkerGeocodeResult = Result<Vec<(String, String, f64, f64)>, String>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct PaneSession {
     thresholds: [Option<f32>; Moment::ALL.len()],
     threshold_enabled: [bool; Moment::ALL.len()],
@@ -2762,6 +2827,16 @@ struct PaneSession {
     show_radar: bool,
     follow_low_cut: bool,
     cut: Option<(i64, Moment, usize)>,
+    #[serde(default)]
+    forecast_hour: Option<u8>,
+    #[serde(default)]
+    cut_volume_ms: Option<i64>,
+    #[serde(default)]
+    cut_playback: bool,
+    #[serde(default)]
+    cut_index: usize,
+    #[serde(default)]
+    replay_times: Option<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
 impl PaneSession {
@@ -2774,7 +2849,15 @@ impl PaneSession {
             time: view.timeline.selected_time(),
             show_radar: view.show_radar,
             follow_low_cut: view.follow_low_cut,
-            cut: view.cut_selection,
+            cut: view.cut_selection.or_else(|| view.recovery_cut.as_ref().map(|pending| pending.selection)),
+            forecast_hour: view.timeline.forecast_hour(),
+            cut_volume_ms: view.volume.as_ref().map(|volume| volume.time.timestamp_millis())
+                .or_else(|| view.recovery_cut.as_ref().map(|pending| pending.volume_ms)),
+            cut_playback: view.timeline.cut_playback,
+            cut_index: view.timeline.cut_index,
+            replay_times: view.timeline.replay.and_then(|(from, to)| {
+                view.timeline.frames.get(from)?.date_time().zip(view.timeline.frames.get(to)?.date_time())
+            }).or(view.timeline.replay_time_range),
         }
     }
 
@@ -2784,19 +2867,78 @@ impl PaneSession {
         view.timeline.date = self.date;
         view.timeline.following = self.following;
         view.timeline.seek_target = if self.following { None } else { self.time };
+        view.timeline.seek_forecast_hour = self.forecast_hour;
+        view.timeline.cut_playback = self.cut_playback;
+        view.timeline.cut_index = self.cut_index;
+        view.timeline.cut_count = 0;
+        view.timeline.replay = None;
+        view.timeline.replay_time_range = self.replay_times;
         view.timeline.frames_key = None;
         view.timeline.frames.clear();
         view.timeline.listing = false;
         view.timeline.playing = false;
         view.show_radar = self.show_radar;
         view.follow_low_cut = self.follow_low_cut;
-        view.cut_selection = self.cut;
+        view.cut_selection = None;
+        view.recovery_cut = self.cut.zip(self.cut_volume_ms.or_else(|| self.time.map(|time| time.timestamp_millis())))
+            .map(|(selection, volume_ms)| crate::view::RecoveryCut { site: view.site.clone(), volume_ms, selection });
     }
 }
 
 #[cfg(test)]
 mod mode_session_tests {
     use super::*;
+
+    #[test]
+    fn recovery_roundtrip_keeps_unsaved_appearance_and_archive_position() {
+        let mut view = MapView::new(Some("KFWS".into()), crate::render::mercator::Camera::at_lonlat(-97.3, 32.6, 8.0));
+        view.timeline.following = false;
+        view.timeline.seek_target = Some(chrono::DateTime::parse_from_rfc3339("2026-09-22T21:00:00Z").unwrap().with_timezone(&chrono::Utc));
+        view.thresholds[Moment::Reflectivity.index()] = Some(27.0);
+        view.appearance.blend_width = 0.83;
+        view.appearance.precision = true;
+        let workspace = crate::workspace::Workspace {
+            name: "Recovery".into(), panes: vec![crate::workspace::PaneSnap::capture(&view)], active: 0,
+            link_cameras: false, link_times: false, overlays_on: vec![], adopt_site: false,
+            fields_on: vec![], chrome: None,
+        };
+        let snapshot = RecoverySnapshot {
+            version: 1, session: ModeSession { workspace, panes: vec![PaneSession::capture(&view)], inspector: true },
+            analyst: true, playing: vec![true], speed: vec![2.0], loop_enabled: vec![false],
+        };
+        let mut back: RecoverySnapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        assert!(back.valid());
+        assert_eq!(back.session.workspace.panes[0].appearance.blend_width, 0.83);
+        assert!(back.session.workspace.panes[0].appearance.precision);
+        view.timeline.seek_target = None;
+        view.thresholds[Moment::Reflectivity.index()] = None;
+        back.session.panes[0].restore(&mut view);
+        assert_eq!(view.thresholds[Moment::Reflectivity.index()], Some(27.0));
+        assert_eq!(view.timeline.selected_time(), snapshot.session.panes[0].time);
+        assert!(back.playing[0]);
+        assert_eq!(back.speed[0], 2.0);
+        back.version = 2;
+        assert!(!back.valid());
+        back.version = 1;
+        back.speed.clear();
+        assert!(!back.valid());
+    }
+
+    #[test]
+    fn recovery_preserves_cut_playback_cursor_until_decode() {
+        let mut view = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 6.0));
+        view.timeline.cut_playback = true;
+        view.timeline.cut_index = 3;
+        let session: PaneSession = serde_json::from_str(&serde_json::to_string(&PaneSession::capture(&view)).unwrap()).unwrap();
+        view.timeline.cut_playback = false;
+        view.timeline.cut_index = 0;
+        session.restore(&mut view);
+        assert!(view.timeline.cut_playback);
+        view.timeline.set_cut_count(0);
+        assert_eq!(view.timeline.cut_index, 3);
+        view.timeline.set_cut_count(5);
+        assert_eq!(view.timeline.cut_index, 3);
+    }
 
     #[test]
     fn split_layout_cannot_be_mistaken_for_regular_radar() {
@@ -2846,6 +2988,7 @@ pub struct HookEchoApp {
     spawner: crate::rt::Spawner,
     tiles: TileManager,
     vtiles: crate::vector_tiles::VectorTileManager,
+    pane_vtiles: Vec<crate::vector_tiles::VectorTileManager>,
     /// One shared label-occupancy pass for the whole frame — see [`crate::labelplace`].
     labels: crate::labelplace::Placer,
     settings: Settings,
@@ -2877,6 +3020,15 @@ pub struct HookEchoApp {
     pane_shown: std::collections::HashMap<usize, ShownKey>,
     /// Palette generation currently baked into each pane's LUT (see [`ShownKey`]).
     pane_lut: std::collections::HashMap<usize, u64>,
+    pane_upload_tokens: std::collections::HashMap<usize, u64>,
+    /// Lazily measured shared scan payloads; weak identities do not retain volumes.
+    radar_memory: crate::radar_memory::Inventory,
+    radar_memory_highwater: usize,
+    radar_cache_evictions: u64,
+    /// Compiled recipe per pane; full definition comparison covers all dependencies.
+    pane_custom_recipe: std::collections::HashMap<usize, std::sync::Arc<wxdata::product_dsl::Product>>,
+    /// Weak scan identity avoids retaining decoded volumes or reusing an allocation address.
+    pane_custom_input: std::collections::HashMap<usize, crate::custom_cache::Input<Scan>>,
     /// Last evaluated custom sweep per pane, retained for cursor sampling.
     pane_custom_sweep: std::collections::HashMap<usize, BinnedSweep>,
     /// Last `(theme, system_dark, density, accent)` handed to `theme::apply`.
@@ -2893,10 +3045,10 @@ pub struct HookEchoApp {
     palette_cache: Option<(u64, std::sync::Arc<[PaletteEntry]>)>,
     /// Visible city/town labels, keyed by the visible tile ids and the label-set generation.
     #[allow(clippy::type_complexity)]
-    vlabel_cache: Option<(
+    vlabel_cache: Vec<Option<(
         (Vec<crate::render::TileId>, u64),
         std::sync::Arc<[crate::vector_tiles::PlaceLabel]>,
-    )>,
+    )>>,
     /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
     #[allow(clippy::type_complexity)]
     nowcast_cache: Option<(
@@ -3011,10 +3163,8 @@ pub struct HookEchoApp {
     detail: Option<Detail>,
     /// Open "Storm {id} Attributes" window (a clicked storm cell).
     cell_popup: Option<Cell>,
-    /// Which of `settings.markers` the tapped-marker popup is editing.
-    // ponytail: index identity — markers have no id, and their names aren't unique ("Marker 3"
-    // comes back after a delete). A bounds check closes the popup if the list shrinks under it.
-    marker_popup: Option<usize>,
+    /// Stable identity of the marker being edited in the map popup.
+    marker_popup: Option<String>,
     /// Which global model the global layers read, and how far into its run.
     global_model: wxdata::global::GlobalModel,
     global_fcst_hour: u16,
@@ -3182,18 +3332,8 @@ pub struct HookEchoApp {
     peers: std::collections::HashMap<String, crate::share::Peer>,
     /// When we last put our own fix on the wire (both transports share the cadence).
     share_sent: Option<wxdata::clock::Instant>,
-    /// GOES satellite frame times (for the sub-hourly scrub), the style they were fetched for,
-    /// and the selected index (`None` = latest).
-    goes_times: Vec<chrono::DateTime<chrono::Utc>>,
-    goes_times_style: Option<crate::tiles::BasemapStyle>,
-    goes_time_idx: Option<usize>,
-    /// Keep the GOES frame on the active pane's radar clock rather than on a hand-picked frame.
-    goes_follow_radar: bool,
-    goes_times_rx: Option<std::sync::mpsc::Receiver<Vec<chrono::DateTime<chrono::Utc>>>>,
-    /// The archive hour the loaded frame times cover (`None` = the live window ending now).
-    /// Scrubbing far enough back to cross into another hour refetches; staying inside one does
-    /// not, which is what keeps an archive loop from asking GIBS a question per frame.
-    goes_hour: Option<i64>,
+    /// Independently fetched frame catalogs for each pane.
+    goes: Vec<crate::satellite_time::Catalog>,
     /// The previous flash-extent grid, kept only so the lightning jump has something to subtract.
     glm_fed_prev: Option<wxdata::mrms::MrmsField>,
     /// When the Android widget snapshot was last written.
@@ -3240,6 +3380,7 @@ pub struct HookEchoApp {
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
     /// its own toggle + pending GPU upload + refresh throttle. Keyed by [`crate::render::FieldLayer`].
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
+    pane_fields: std::collections::HashMap<(usize, crate::render::FieldLayer), FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
     reflectivity_trail: wxdata::trail::ExtremaTrail,
@@ -3386,6 +3527,10 @@ pub struct HookEchoApp {
     radar_session: Option<ModeSession>,
     analyst_session: Option<ModeSession>,
     workspace_return_session: Option<ModeSession>,
+    recovery_json: Option<String>,
+    undo_history: std::collections::VecDeque<(UndoEntry, usize)>,
+    undo_suspended: bool,
+    interaction_history: std::collections::VecDeque<serde_json::Value>,
     active_workspace: Option<String>,
     panel_section: PanelSection,
     /// Is the background picker slid out beside the control column?
@@ -3591,6 +3736,7 @@ pub struct HookEchoApp {
     /// A drag, touch, scroll or pinch is active this frame. Read at the top of `ui`, because the overlay
     /// tessellation asks it before any pane has drawn.
     gesture_live: bool,
+    map_upload_budget: crate::map_work::UploadBudget,
     /// Perf readout state: whether `HOOKECHO_PERF=1` asked for the window, the frame count and
     /// mark the frames-per-minute number is derived from, and the last idle interval requested.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3624,6 +3770,7 @@ pub struct HookEchoApp {
     /// Last settings-write failure already shown. Keeping the dirty snapshot means the next
     /// one-second save tick retries; remembering the text prevents a toast every second.
     settings_save_error: Option<String>,
+    adaptive: crate::adaptive::AdaptiveQuality,
     /// Auxiliary feeds already reported to the user; see [`HookEchoApp::drain_feed_errors`].
     feed_errors_told: std::collections::HashMap<String, Instant>,
     /// Right-dock active-alerts panel toggle.
@@ -3769,11 +3916,8 @@ impl HookEchoApp {
         // a JS context-loss event either (seen on NVIDIA + WebKitGTK: dies at first paint, the
         // page-level handler never fires). Reload is the only recovery on every backend.
         //
-        // The throttle lives in the URL, not sessionStorage — WebKit blocks storage in
-        // third-party iframes (the StormDesk embed), and a throttle that fails open there is a
-        // reload loop (the Ubuntu lockup). One reload per navigation: flag already present means
-        // this navigation was the retry, so stay on the dead canvas. index.src.html strips the
-        // flag after 60s of healthy running, earning a future retry.
+        // The page-level recovery handler owns the URL retry throttle for both device and
+        // context loss. On a second failure it presents an actionable reload instead of looping.
         #[cfg(target_arch = "wasm32")]
         render_state.device.set_device_lost_callback(|reason, msg| {
             // `Dropped`/`ReplacedCallback` are clean teardown, not failure.
@@ -3782,15 +3926,16 @@ impl HookEchoApp {
             }
             log::error!("wgpu device lost: {msg}");
             let Some(win) = web_sys::window() else { return };
-            let search = win.location().search().unwrap_or_default();
-            if search.contains("relaunched") {
-                return;
+            if let Ok(event) = web_sys::Event::new("hookecho-device-lost") { let _ = win.dispatch_event(&event); }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        render_state.device.set_device_lost_callback(|reason, message| {
+            if matches!(reason, wgpu::DeviceLostReason::Unknown) {
+                log::error!("graphics device lost: {message}");
+                if crate::gpu_metrics::report_device_loss() {
+                    std::thread::spawn(|| crate::notify::desktop("HookEcho graphics stopped", "Restart HookEcho to restore the graphics device."));
+                }
             }
-            let sep = if search.is_empty() { "?" } else { "&" };
-            // Setting `search` navigates; the spec keeps the fragment, so `#goto=…` survives.
-            let _ = win
-                .location()
-                .set_search(&format!("{search}{sep}relaunched"));
         });
         // The GPU's 2D texture-size cap: desktop/Adreno do 16384, but many mobile GPUs cap at
         // 4096. Field grids (MRMS rotation/AzShear reach 14000 px) are decimated to fit this.
@@ -3949,6 +4094,7 @@ impl HookEchoApp {
                 Camera {
                     center: (sv.x, sv.y),
                     zoom: sv.zoom,
+                    globe: false,
                 },
             ),
             _ => {
@@ -3968,6 +4114,11 @@ impl HookEchoApp {
         let settings_setup_done = settings.setup_done;
 
         let mut app = Self {
+            pane_vtiles: (0..crate::workspace::MAX_PANES).map(|_| {
+                let mut manager = crate::vector_tiles::VectorTileManager::new(spawner.clone());
+                manager.set_ctx(cc.egui_ctx.clone());
+                manager
+            }).collect(),
             vtiles,
             labels: crate::labelplace::Placer::default(),
             spawner,
@@ -3995,12 +4146,18 @@ impl HookEchoApp {
             chasepack: None,
             pane_shown: std::collections::HashMap::new(),
             pane_lut: std::collections::HashMap::new(),
+            pane_upload_tokens: Default::default(),
             pane_custom_sweep: std::collections::HashMap::new(),
+            radar_memory: Default::default(),
+            radar_memory_highwater: 0,
+            radar_cache_evictions: 0,
+            pane_custom_recipe: std::collections::HashMap::new(),
+            pane_custom_input: std::collections::HashMap::new(),
             theme_applied: None,
             settings_checked: None,
             frame_nr: 0,
             palette_cache: None,
-            vlabel_cache: None,
+            vlabel_cache: vec![None; crate::workspace::MAX_PANES],
             nowcast_cache: None,
             tds_cache: None,
             tbss_cache: None,
@@ -4176,12 +4333,7 @@ impl HookEchoApp {
             share: None,
             peers: std::collections::HashMap::new(),
             share_sent: None,
-            goes_times: Vec::new(),
-            goes_times_style: None,
-            goes_time_idx: None,
-            goes_follow_radar: true,
-            goes_times_rx: None,
-            goes_hour: None,
+            goes: Vec::new(),
             glm_fed_prev: None,
             widget_shot_at: None,
             snapshot_push: None,
@@ -4206,6 +4358,7 @@ impl HookEchoApp {
             crash_report: None,
             cells_site: None,
             cell_trends: std::collections::HashMap::new(),
+            pane_fields: Default::default(),
             fields: crate::render::FieldLayer::draw_order()
                 .map(|l| (l, FieldState::default()))
                 .collect(),
@@ -4303,6 +4456,10 @@ impl HookEchoApp {
             radar_session: None,
             analyst_session: None,
             workspace_return_session: None,
+            recovery_json: None,
+            undo_history: Default::default(),
+            undo_suspended: false,
+            interaction_history: Default::default(),
             active_workspace: None,
             panel_section: PanelSection::Radar,
             basemap_open: false,
@@ -4415,6 +4572,7 @@ impl HookEchoApp {
             embed_live: false,
             last_input: Instant::now(),
             gesture_live: false,
+            map_upload_budget: crate::map_work::UploadBudget::frame(false),
             #[cfg(not(target_arch = "wasm32"))]
             perf: PerfReadout::new(),
             renderer_info,
@@ -4433,6 +4591,7 @@ impl HookEchoApp {
             warning_banners: Vec::new(),
             toasts: Vec::new(),
             settings_save_error: None,
+            adaptive: Default::default(),
             feed_errors_told: std::collections::HashMap::new(),
             show_alert_panel: false,
             xsection_pts: Vec::new(),
@@ -4498,6 +4657,27 @@ impl HookEchoApp {
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         if app.settings.gps_autoconnect {
             app.connect_gpsd();
+        }
+        #[cfg(target_arch = "wasm32")]
+        let graphics_relaunch = web_sys::window().and_then(|window| window.location().search().ok())
+            .is_some_and(|search| search.trim_start_matches('?').split('&').any(|part| part.split('=').next() == Some("relaunched")));
+        #[cfg(not(target_arch = "wasm32"))]
+        let graphics_relaunch = false;
+        if !app.embed && (app.settings.start_view.is_none() || graphics_relaunch) {
+            if let Some(json) = crate::recovery::load() {
+                if let Ok(snapshot) = serde_json::from_str::<RecoverySnapshot>(&json) {
+                    if snapshot.valid() {
+                        app.restore_mode_session(snapshot.session, &cc.egui_ctx);
+                        app.analyst_open = snapshot.analyst;
+                        for (i, view) in app.views.iter_mut().enumerate() {
+                            view.timeline.playing = snapshot.playing.get(i).copied().unwrap_or(false);
+                            view.timeline.speed = snapshot.speed.get(i).copied().unwrap_or(4.0);
+                            view.timeline.loop_enabled = snapshot.loop_enabled.get(i).copied().unwrap_or(true);
+                        }
+                        app.recovery_json = Some(json);
+                    }
+                }
+            }
         }
         app
     }
@@ -4749,8 +4929,7 @@ impl HookEchoApp {
         };
         let cam = &view.camera;
         let vp = self.last_viewport;
-        let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
-        let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+        let ((wx0, wy0), (wx1, wy1)) = cam.visible_bounds(vp);
         let world = [wx0, wy0, wx1, wy1];
         let key = BlockageKey {
             site: site.id.to_string(),
@@ -4966,6 +5145,10 @@ impl HookEchoApp {
                         OverlayMsg::RegisteredField(layer, frame, _) => {
                             let display = registered_display_field(&frame, cap);
                             OverlayMsg::RegisteredField(layer, frame, display)
+                        }
+                        OverlayMsg::PaneAbi(pane, layer, frame, _) => {
+                            let display = registered_display_field(&frame, cap);
+                            OverlayMsg::PaneAbi(pane, layer, frame, display)
                         }
                         other => other,
                     })
@@ -6431,9 +6614,7 @@ impl HookEchoApp {
 
         // Outbreak mode: past the threshold, one rolling summary goes out instead of one push per
         // warning. Escalated alerts are exempt — those are the ones worth a buzz each.
-        // ponytail: the summary is a fresh notification each refresh, not an in-place replace;
-        // desktop replace-by-tag and the Android fixed notification id can land with the rest of
-        // the Android delivery stack.
+        let mut summary = false;
         if !urgent && self.settings.alert_rollup_threshold > 0 {
             let window =
                 std::time::Duration::from_secs(self.settings.alert_rollup_window_min.max(1) * 60);
@@ -6448,6 +6629,7 @@ impl HookEchoApp {
             match decision {
                 Ok(crate::alert_rollup::Decision::Hold) => return,
                 Ok(crate::alert_rollup::Decision::Rollup(text)) => {
+                    summary = true;
                     title = "Multiple alerts".to_string();
                     body = text;
                 }
@@ -6457,7 +6639,11 @@ impl HookEchoApp {
         let (title, body) = (title, body);
 
         if self.settings.desktop_notify {
-            crate::notify::desktop(&title, &body);
+            if summary {
+                crate::notify::desktop_summary(&title, &body);
+            } else {
+                crate::notify::desktop(&title, &body);
+            }
         }
 
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
@@ -6630,86 +6816,129 @@ impl HookEchoApp {
     /// imagery, a WMS radar composite) and its frame times are loaded. Steps through the recent
     /// frames; "Latest" pins to the newest.
     fn goes_time_bar(&mut self, ctx: &egui::Context) {
-        let active_is_timed = self.views[self.active].basemap.timed();
-        if !active_is_timed || self.goes_times.is_empty() {
+        let idx = self.active;
+        if !self.views[idx].basemap.timed() || idx >= self.goes.len() {
             return;
         }
-        // While following, the readout is whichever frame the radar clock picked.
-        let followed = self.goes_follow_radar.then(|| {
-            self.views[self.active]
-                .volume
-                .as_ref()
-                .map(|v| v.time)
-                .and_then(|t| nearest_goes(&self.goes_times, t))
-        });
+        let times = self.goes[idx].times.clone();
+        let radar = self.views[idx].displayed_time();
+        let selected = self.views[idx].satellite.selected(&times, radar);
+        let tz = self.active_tz();
         egui::Area::new(egui::Id::new("goes_time_bar"))
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -34.0))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -120.0))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let n = self.goes_times.len();
-                        // Effective index (None = latest = n-1).
-                        let cur = match followed.flatten() {
-                            Some(t) => self
-                                .goes_times
-                                .iter()
-                                .position(|x| *x == t)
-                                .unwrap_or(n - 1),
-                            None => self.goes_time_idx.unwrap_or(n - 1),
-                        };
-                        ui.label("🛰 GOES:");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(if self.goes[idx].imagery_ready {
+                            "🛰 GOES displayed:"
+                        } else if self.goes[idx].imagery_incomplete {
+                            "🛰 GOES selected (incomplete):"
+                        } else {
+                            "🛰 GOES selected (loading):"
+                        });
+                        let selection = &mut self.views[idx].satellite;
                         if ui
-                            .selectable_label(self.goes_follow_radar, "⟲ radar time")
-                            .on_hover_text(
-                                "Keep the satellite on the radar's clock — scrub the timeline \
-                                 and the imagery follows",
-                            )
+                            .selectable_label(selection.follow_radar, "Follow radar")
                             .clicked()
                         {
-                            self.goes_follow_radar = !self.goes_follow_radar;
-                            self.goes_time_idx = None;
+                            selection.follow_radar = !selection.follow_radar;
+                            selection.time = None;
+                        }
+                        let cur =
+                            selected.and_then(|time| times.iter().position(|frame| *frame == time));
+                        if ui
+                            .add_enabled(cur.is_some_and(|i| i > 0), egui::Button::new("◀"))
+                            .clicked()
+                        {
+                            selection.follow_radar = false;
+                            selection.time = cur.map(|i| times[i - 1]);
+                        }
+                        if let Some(time) = selected {
+                            ui.monospace(crate::timefmt::fmt_clock(time, tz, false));
+                            if let Some(radar) = radar {
+                                ui.label(format!(
+                                    "Δ radar {:+.1}s",
+                                    (time - radar).num_milliseconds() as f64 / 1000.0
+                                ));
+                            }
+                        } else {
+                            ui.label(if self.goes[idx].rx.is_some() {
+                                "Loading frame catalog"
+                            } else {
+                                "Frame unavailable"
+                            });
                         }
                         if ui
                             .add_enabled(
-                                cur > 0,
-                                egui::Button::new(egui_phosphor::regular::CARET_LEFT),
+                                cur.is_some_and(|i| i + 1 < times.len()),
+                                egui::Button::new("▶"),
                             )
                             .clicked()
                         {
-                            self.goes_follow_radar = false;
-                            self.goes_time_idx = Some(cur.saturating_sub(1));
+                            selection.follow_radar = false;
+                            selection.time = cur.map(|i| times[i + 1]);
                         }
-                        let label = crate::timefmt::fmt_clock(
-                            self.goes_times[cur],
-                            self.active_tz(),
-                            false,
-                        );
-                        ui.monospace(label);
-                        if ui
-                            .add_enabled(
-                                cur + 1 < n,
-                                egui::Button::new(egui_phosphor::regular::CARET_RIGHT),
-                            )
-                            .clicked()
-                        {
-                            self.goes_follow_radar = false;
-                            let ni = cur + 1;
-                            self.goes_time_idx = if ni >= n - 1 { None } else { Some(ni) };
+                        if ui.button("Latest").clicked() {
+                            selection.follow_radar = false;
+                            selection.time = None;
                         }
                         if ui
-                            .add_enabled(
-                                self.goes_time_idx.is_some() || self.goes_follow_radar,
-                                egui::Button::new("Latest"),
+                            .checkbox(
+                                &mut self.settings.link_satellite_times,
+                                "Link satellite panes",
                             )
-                            .clicked()
+                            .changed()
                         {
-                            self.goes_follow_radar = false;
-                            self.goes_time_idx = None;
+                            self.settings.save();
                         }
                     });
                 });
             });
+    }
+
+    fn prepare_satellite_pane(
+        &mut self,
+        idx: usize,
+        style: crate::tiles::BasemapStyle,
+    ) -> Option<chrono::DateTime<Utc>> {
+        if !style.timed() {
+            return None;
+        }
+        if self.goes.len() <= idx {
+            self.goes.resize_with(idx + 1, Default::default);
+        }
+        let radar = self.views[idx].displayed_time();
+        let selection_clock = if self.settings.link_satellite_times { self.views[self.active].displayed_time() } else { radar };
+        // An explicit satellite selection must fetch its own archive window.
+        let clock = if self.views[idx].satellite.follow_radar {
+            selection_clock
+        } else {
+            self.views[idx].satellite.time
+        };
+        let (hour, from, to) = crate::tiles::goes_window(Utc::now(), clock);
+        let catalog = &mut self.goes[idx];
+        let changed = catalog.style != Some(style) || catalog.hour != hour;
+        let refresh = catalog.rx.is_none()
+            && catalog
+                .requested_at
+                .is_none_or(|time| time.elapsed() >= std::time::Duration::from_secs(60));
+        if changed || refresh {
+            catalog.style = Some(style);
+            catalog.hour = hour;
+            if changed {
+                catalog.times.clear();
+            }
+            catalog.requested_at = Some(wxdata::clock::Instant::now());
+            let (tx, rx) = std::sync::mpsc::channel();
+            catalog.rx = Some(rx);
+            let http = self.http.clone();
+            self.spawner.spawn(async move {
+                let times = crate::tiles::fetch_frame_times(&http, style, from, to, 48).await;
+                let _ = tx.send(times);
+            });
+        }
+        self.views[idx].satellite.selected(&catalog.times, selection_clock)
     }
 
     /// Open the gpsd stream and enter chase mode. Shared by the Chase tab's connect button,
@@ -8115,8 +8344,7 @@ impl HookEchoApp {
         use crate::render::mercator::world_to_lonlat;
         let cam = &self.views[self.active].camera;
         let vp = self.last_viewport;
-        let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
-        let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+        let ((wx0, wy0), (wx1, wy1)) = cam.visible_bounds(vp);
         let (lon0, lat0) = world_to_lonlat(wx0, wy0);
         let (lon1, lat1) = world_to_lonlat(wx1, wy1);
         (
@@ -8525,7 +8753,7 @@ impl HookEchoApp {
         ui.add_space(4.0);
         ui.separator();
         ui.label(egui::RichText::new("Radar appearance").strong());
-        let mut smooth = self.settings.smooth_radar;
+        let mut smooth = self.views[self.active].smooth;
         ui.horizontal(|ui| {
             let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
             for (label, value, hint) in [
@@ -8546,12 +8774,100 @@ impl HookEchoApp {
                 }
             }
         });
-        if smooth != self.settings.smooth_radar {
-            self.settings.smooth_radar = smooth;
-            for view in &mut self.views {
-                view.smooth = smooth;
-            }
+        self.views[self.active].smooth = smooth;
+        let pane = &mut self.views[self.active];
+        let palette_moment = pane.custom_product.as_ref()
+            .and_then(|name| self.settings.radar_products.iter().find(|p| &p.name == name))
+            .and_then(|p| Moment::from_code(&p.palette))
+            .unwrap_or(pane.moment);
+        let mut globe = pane.camera.globe;
+        if ui.checkbox(&mut globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() { pane.camera.set_globe(globe); }
+        ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
+        if smooth {
+            ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Uses more GPU samples.");
+            ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
+                .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
         }
+        ui.checkbox(&mut pane.appearance.fade_old_sectors, "Fade retained sectors from the previous scan").on_hover_text("Live radar only: older sectors remain visible at 35% opacity until replaced. Measurements and archive playback are unchanged.");
+        let moment = palette_moment;
+        let key = moment.short_name().to_string();
+        let current = if pane.appearance.palettes.contains_key(&key) { "Pane palette" } else { "App palette" };
+        ui.menu_button(format!("{current} · Change…"), |ui| {
+            if ui.button("Follow app palette").clicked() { pane.appearance.palettes.remove(&key); ui.close(); }
+            if ui.button("Keep current app palette in this pane").clicked() {
+                pane.appearance.palettes.insert(key.clone(), crate::colormap::effective_table(&self.palettes, moment, self.settings.theme));
+                ui.close();
+            }
+            if ui.button("Built-in default").clicked() { pane.appearance.palettes.insert(key.clone(), crate::colormap::default_table(moment).clone()); ui.close(); }
+            for name in crate::colormap::alt_names(moment) {
+                if ui.button(name).clicked() {
+                    if let Some(table) = crate::colormap::builtin_alt(name) { pane.appearance.palettes.insert(key.clone(), table); }
+                    ui.close();
+                }
+            }
+        });
+        ui.label("Appearance applies to the active pane and is saved with its workspace.");
+        let preset = crate::radar_appearance::AppearancePreset::capture(pane);
+        let gate_bytes: usize = self.views.iter().map(|view| view.binned_cache_bytes()).sum();
+        let derived_bytes: usize = self.pane_custom_sweep.values().map(|sweep| {
+            sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2)
+        }).sum();
+        ui.collapsing("Performance counters", |ui| {
+            let encoded_bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan).chain(self.views.iter().flat_map(|view| view.retained_scans())));
+            let (gpu_bytes, shadow_bytes) = crate::gpu_metrics::memory();
+            ui.label(format!("Encoded scan gates (shared once): {:.1} MiB", encoded_bytes as f64 / 1_048_576.0));
+            ui.label(format!("GPU resource estimate: {:.1} MiB · CPU upload shadows: {:.1} MiB", gpu_bytes as f64 / 1_048_576.0, shadow_bytes as f64 / 1_048_576.0));
+            ui.label(self.adaptive.p95_ms().map_or_else(|| "UI CPU p95: collecting".to_owned(), |ms| format!("UI CPU p95: {ms:.1} ms")));
+            ui.label(self.adaptive.cadence_p95_ms().map_or_else(|| "Gesture cadence p95: collecting".to_owned(), |ms| format!("Gesture cadence p95: {ms:.1} ms")));
+            ui.label(if self.adaptive.reduced { "Reduced cost" } else { "Requested quality" });
+            if crate::gpu_metrics::supported() {
+                if let Some((p50, p95)) = crate::gpu_metrics::percentiles(self.active as u32) {
+                    ui.label(format!("Map GPU draw p50/p95: {p50:.2}/{p95:.2} ms"));
+                } else { ui.label("Map GPU draw: collecting"); }
+            } else { ui.label("Map GPU timing: unsupported by this device/backend"); }
+            ui.label("GPU draw excludes uploads and wind advection; memory counts are retained buffers, not process memory.");
+            ui.label(format!("Binned radar buffers: {:.1} MiB", gate_bytes as f64 / 1_048_576.0));
+            ui.label(format!("Unavailable playback frames skipped: {}", self.views[self.active].skipped_frames));
+            ui.label(format!("Derived radar buffers: {:.1} MiB", derived_bytes as f64 / 1_048_576.0));
+            for (name, value) in wxdata::stats::snapshot() { ui.label(format!("{name}: {value}")); }
+        });
+        let mut limited = self.settings.linked_time_limit_seconds.is_some();
+        if ui.checkbox(&mut limited, "Limit linked radar time difference").changed() {
+            self.settings.linked_time_limit_seconds = limited.then_some(120);
+            self.settings.save();
+        }
+        if let Some(seconds) = &mut self.settings.linked_time_limit_seconds {
+            if ui.add(egui::Slider::new(seconds, 0..=1800).text("Maximum difference (seconds)")).changed() { self.settings.save(); }
+        }
+        let mut name = ui.ctx().data_mut(|d| d.get_temp::<String>(egui::Id::new("appearance_preset_name")).unwrap_or_default());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("Preset name").desired_width(150.0));
+            if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save preset")).clicked() {
+                self.settings.appearance_presets.insert(name.trim().to_string(), preset.clone());
+                self.settings.save();
+            }
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("appearance_preset_name"), name));
+        let mut load = None;
+        let mut remove = None;
+        ui.menu_button("Saved appearance presets", |ui| {
+            for (name, saved) in &self.settings.appearance_presets {
+                ui.horizontal(|ui| {
+                    if ui.button(name).clicked() { load = Some(saved.clone()); ui.close(); }
+                    if ui.small_button("Delete").clicked() { remove = Some(name.clone()); }
+                });
+            }
+            if self.settings.appearance_presets.is_empty() { ui.label("Save an appearance above to reuse it."); }
+        });
+        if let Some(saved) = load { saved.apply(&mut self.views[self.active]); }
+        if let Some(name) = remove { self.settings.appearance_presets.remove(&name); self.settings.save(); }
+        ui.menu_button("Copy appearance to pane", |ui| {
+            for (i, view) in self.views.iter_mut().enumerate() {
+                if i != self.active && ui.button(format!("Pane {}", i + 1)).clicked() {
+                    preset.apply(view); ui.close();
+                }
+            }
+        });
         let (view, settings) = (&mut self.views[self.active], &mut self.settings);
 
         // A download in flight stays above the disclosure — progress you can't find reads as a hang.
@@ -8748,6 +9064,8 @@ impl HookEchoApp {
         };
         let mut thr_on = self.views[self.active].threshold_enabled[mi];
         let mut thr = self.views[self.active].thresholds[mi];
+        let mut upper = self.views[self.active].appearance.upper_bounds[mi];
+        let mut upper_on = upper.is_some();
         let (vmin, vmax) = moment.value_range();
         let (unit_factor, unit_label) = display_units(moment, &self.settings);
         let health = self.radar_health();
@@ -8909,6 +9227,19 @@ impl HookEchoApp {
                         }
                         // Threshold for the active moment. The slider value stays internal (m/s
                         // for velocity); display honors the Units setting.
+                        ui.add_enabled_ui(custom_product.is_none(), |ui| { ui.horizontal(|ui| {
+                            ui.checkbox(&mut upper_on, "Maximum value");
+                            if upper_on {
+                                let ceiling = upper.get_or_insert(vmax);
+                                let floor = if thr_on { thr.unwrap_or(vmin) } else { vmin };
+                                *ceiling = ceiling.clamp(floor, vmax);
+                                let f = unit_factor as f64;
+                                ui.add(egui::Slider::new(ceiling, floor..=vmax)
+                                    .custom_formatter(move |v, _| format!("{:.2}", v * f))
+                                    .custom_parser(move |s| s.parse::<f64>().ok().map(|x| x / f))
+                                    .suffix(unit_label));
+                            }
+                        }); });
                         if moment != Moment::Reflectivity {
                             let f = unit_factor as f64;
                             ui.horizontal(|ui| {
@@ -8950,6 +9281,7 @@ impl HookEchoApp {
             v.storm_speed_kt = speed_kt;
             v.threshold_enabled[mi] = thr_on;
             v.thresholds[mi] = thr;
+            v.appearance.upper_bounds[mi] = upper.filter(|_| upper_on).map(|u| u.max(if thr_on { thr.unwrap_or(vmin) } else { vmin }));
         }
         if let Some((moment, relative)) = pick {
             self.apply_palette(PaletteAction::SetMoment(moment, relative), ui.ctx());
@@ -9186,6 +9518,14 @@ impl HookEchoApp {
 
     /// Run one registry action. Every surface (drawer, pills, mobile sheets) routes through it.
     pub(crate) fn apply_palette(&mut self, action: PaletteAction, ctx: &egui::Context) {
+        self.record_interaction(match &action {
+            PaletteAction::SetMoment(..) => "select_product",
+            PaletteAction::SetPanes(..) => "pane_layout_command",
+            PaletteAction::GoLive => "go_live",
+            PaletteAction::InstantReplay => "instant_replay",
+            PaletteAction::SetContours(..) => "select_contours",
+            _ => "command",
+        });
         use AppWindow as W;
         if matches!(action, PaletteAction::OpenWindow(_)) { self.drawer.resume(); }
         match action {
@@ -9229,6 +9569,18 @@ impl HookEchoApp {
                 ) {
                     self.rebuild_overlays();
                 }
+            }
+            PaletteAction::OpenMapSettings => {
+                self.panel_open = true;
+                self.show_alert_panel = false;
+                self.sidebar_focus_search = false;
+                self.layers_query.clear();
+                self.panel_section = PanelSection::Tools;
+                self.drawer.show_search();
+                ctx.data_mut(|d| {
+                    d.insert_temp(egui::Id::new("panel_settings_page"), Some("Map settings"));
+                    d.insert_temp(egui::Id::new("context_all_controls"), false);
+                });
             }
             PaletteAction::OpenOutlooks => {
                 self.panel_open = true;
@@ -9335,6 +9687,8 @@ impl HookEchoApp {
                     self.banner("Link copied".to_string(), link);
                 }
             }
+            PaletteAction::UndoWorkspaceAction => self.undo_workspace_action(ctx),
+            PaletteAction::SaveDiagnostics => self.export_diagnostics(),
             PaletteAction::SaveWorkspace => {
                 let ws = self.capture_workspace();
                 let name = ws.name.clone();
@@ -9471,7 +9825,7 @@ impl HookEchoApp {
                     result,
                 } => {
                     let data_time = match &result {
-                        Ok(OverlayMsg::RegisteredField(_, frame, _)) => {
+                        Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneAbi(_, _, frame, _)) => {
                             Some(frame.stamp.valid_time)
                         }
                         _ => None,
@@ -9660,34 +10014,28 @@ impl HookEchoApp {
                         s.frame = Some(frame);
                     }
                 }
-                OverlayMsg::Rgb(layer, image) => {
-                    let upload = rgb_upload(&image);
-                    if let Some(state) = self.fields.get_mut(&layer) {
-                        state.pending = Some(upload);
-                        state.metadata = Some((
-                            wxdata::field::GridSpec {
-                                nx: image.width,
-                                ny: image.height,
-                                projection: "GOES-R fixed grid",
-                                lon_west: image.lon_west,
-                                lon_east: image.lon_east,
-                                lat_north: image.lat_north,
-                                lat_south: image.lat_south,
-                                native_resolution_m: None,
-                                missing: wxdata::field::MissingData::Nan,
-                            },
-                            wxdata::field::DataStamp {
-                                source_identity: image.source_identity.clone(),
-                                issue_time: None,
-                                run_time: None,
-                                valid_time: image.valid_time,
-                                received_time: image.received_time.unwrap_or_else(Utc::now),
-                                class: wxdata::field::DataClass::Observed,
-                                quality: wxdata::field::QualitySummary::Unknown,
-                                available_members: None,
-                            },
-                        ));
-                    }
+                OverlayMsg::PaneAbi(pane, layer, frame, display) => {
+                    if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
+                    let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
+                    let state = self.pane_fields.entry((pane, layer)).or_default();
+                    state.pending = Some(upload);
+                    state.metadata = Some((frame.grid.clone(), frame.stamp.clone()));
+                    state.frame = Some(frame);
+                }
+                OverlayMsg::PaneRgb(pane, layer, image) => {
+                    if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
+                    let state = self.pane_fields.entry((pane, layer)).or_default();
+                    state.pending = Some(rgb_upload(&image));
+                    state.metadata = Some((wxdata::field::GridSpec {
+                        nx: image.width, ny: image.height, projection: "GOES-R fixed grid",
+                        lon_west: image.lon_west, lon_east: image.lon_east,
+                        lat_north: image.lat_north, lat_south: image.lat_south,
+                        native_resolution_m: None, missing: wxdata::field::MissingData::Nan,
+                    }, wxdata::field::DataStamp {
+                        source_identity: image.source_identity.clone(), issue_time: None, run_time: None,
+                        valid_time: image.valid_time, received_time: Utc::now(), class: wxdata::field::DataClass::Observed,
+                        quality: wxdata::field::QualitySummary::Unknown, available_members: None,
+                    }));
                 }
                 OverlayMsg::ModelDiff(frame, valid) => {
                     let layer = crate::render::FieldLayer::ModelDiff;
@@ -9907,7 +10255,7 @@ impl HookEchoApp {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| self.fields.get(&layer))
+            .and_then(|layer| self.field_state(self.active, layer))
             .and_then(|state| state.frame.as_ref());
         let (label, units, product_id, valid, class, profile) = if let Some(frame) = frame {
             (
@@ -11193,12 +11541,14 @@ impl HookEchoApp {
     /// Spawn a background fetch of the latest volume for `site`, routed back to `view_idx`.
     /// `current_name = None` forces a re-download even if the newest volume is unchanged.
     fn spawn_fetch(
-        &self,
+        &mut self,
         view_idx: usize,
         site: String,
         current_name: Option<String>,
         ctx: egui::Context,
     ) {
+        let generation = self.views[view_idx].head_request.start(site.clone());
+        let request_site = site.clone();
         let tx = self.msg_tx.clone();
         let network = wxdata::sites::network(&site);
         if network != wxdata::sites::Network::Nexrad {
@@ -11206,7 +11556,7 @@ impl HookEchoApp {
             // from the newest Level 3 tilt products (TDWR) or assembled from the newest ODIM
             // files (DWD, OPERA).
             let http = self.http.clone();
-            self.spawner.spawn(async move {
+            let handle = self.spawner.spawn_abortable(async move {
                 use wxdata::sites::Network;
                 // Each of these asks its feed what the newest volume is *before* downloading it,
                 // and answers `None` when that is what we are already showing. The NEXRAD path
@@ -11235,6 +11585,7 @@ impl HookEchoApp {
                         }
                     }
                     Ok(Some((name, time, scan))) => DataMsg::Volume {
+                        selected_frame: None,
                         view: view_idx,
                         site,
                         name,
@@ -11247,12 +11598,13 @@ impl HookEchoApp {
                         err: e.to_string(),
                     },
                 };
-                let _ = tx.send(msg);
+                let _ = tx.send(DataMsg::Guarded { view: view_idx, site: request_site, generation, head: true, result: Box::new(msg) });
                 ctx.request_repaint();
             });
+            self.views[view_idx].head_request.attach(generation, handle);
             return;
         }
-        self.spawner.spawn(async move {
+        let handle = self.spawner.spawn_abortable(async move {
             let timeout_site = site.clone();
             // Ask for two: the newest volume is usually still uploading, and one caught before
             // its metadata record lands can't be decoded at all. Falling back one volume shows
@@ -11294,6 +11646,7 @@ impl HookEchoApp {
                         };
                         match fetched {
                             Ok((name, time, scan)) => DataMsg::Volume {
+                        selected_frame: None,
                                 view: view_idx,
                                 site,
                                 name,
@@ -11319,15 +11672,48 @@ impl HookEchoApp {
                 site: timeout_site,
                 err: e.to_string(),
             });
-            let _ = tx.send(msg);
+            let _ = tx.send(DataMsg::Guarded { view: view_idx, site: request_site, generation, head: true, result: Box::new(msg) });
             ctx.request_repaint();
         });
+        self.views[view_idx].head_request.attach(generation, handle);
+    }
+
+    fn trim_radar_memory(&mut self) {
+        let mut bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan)
+            .chain(self.views.iter().flat_map(|view| view.retained_scans())));
+        self.radar_memory_highwater = self.radar_memory_highwater.max(bytes);
+        let cap = radar_payload_budget();
+        let binned_cap = if cfg!(target_os = "android") { 16 * 1024 * 1024 }
+            else if cfg!(target_arch = "wasm32") { 24 * 1024 * 1024 } else { 64 * 1024 * 1024 };
+        for view in &mut self.views { view.trim_binned_memory(binned_cap); }
+        if bytes <= cap { return; }
+        // Displayed frames remain pinned. Recent display bins can be rebuilt from the shared
+        // scan cache; discard their duplicate retention before choosing unpinned LRU victims.
+        for view in &mut self.views { view.forget_recent(); }
+        while bytes > cap {
+            let victim = self.scan_cache.iter().rev().find(|(_, scan)| Arc::strong_count(scan) == 1).map(|(key, _)| key.clone());
+            let Some(victim) = victim else { break; };
+            self.scan_cache.pop(&victim);
+            self.radar_cache_evictions += 1;
+            bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan)
+                .chain(self.views.iter().flat_map(|view| view.retained_scans())));
+        }
     }
 
     fn poll_messages(&mut self) {
         self.drain_feed_errors();
         self.speak_visible_warnings();
         while let Ok(msg) = self.msg_rx.try_recv() {
+            let msg = match msg {
+                DataMsg::Guarded { view, site, generation, head, result } => {
+                    let Some(pane) = self.views.get_mut(view) else { continue; };
+                    let request = if head { &mut pane.head_request } else { &mut pane.list_request };
+                    if !request.matches(&site, generation) { continue; }
+                    request.cancel();
+                    *result
+                }
+                msg => msg,
+            };
             let idx = msg.view();
             // LiveEnded must be handled even after a site change (to drop the stream handle).
             if matches!(msg, DataMsg::LiveEnded { .. }) {
@@ -11352,16 +11738,35 @@ impl HookEchoApp {
                 continue; // view gone or its site changed since the fetch spawned
             }
             match msg {
+                DataMsg::FramePhase { view, name, generation, phase, .. } => {
+                    if self.views[view].frame_request.matches(&name, generation) && frame_result_is_current(&self.views[view].timeline, &name) { self.views[view].load_phase = Some(phase); }
+                }
+                DataMsg::FrameError { view, name, generation, err, .. } => {
+                    if self.views[view].frame_request.matches(&name, generation) && frame_result_is_current(&self.views[view].timeline, &name) {
+                        self.views[view].loading = false;
+                        self.views[view].load_phase = None;
+                        self.views[view].frame_request.cancel();
+                        self.views[view].note_frame_status(name.clone(), crate::timeline::FrameStatus::Unavailable);
+                        self.views[view].failed_frame = Some(name);
+                        self.views[view].error = Some(err);
+                    }
+                }
                 DataMsg::Volume {
                     view,
                     name,
                     time,
                     scan,
+                    selected_frame,
                     ..
                 } => {
                     let scan = Arc::new(scan);
                     self.scan_cache.put(name.clone(), Arc::clone(&scan));
                     let v = &mut self.views[view];
+                    if let Some(generation) = selected_frame {
+                        if !v.frame_request.matches(&name, generation) || !frame_result_is_current(&v.timeline, &name) { continue; }
+                    } else if !v.timeline.following && v.timeline.current().is_some() && !frame_result_is_current(&v.timeline, &name) {
+                        continue;
+                    }
                     let looping = v.timeline.live_looping();
                     // A newly-arrived live head (following): roll the day at UTC midnight, or grow
                     // the frame list so the loop window slides forward. A frame-fetch result for a
@@ -11387,14 +11792,19 @@ impl HookEchoApp {
                     // only appended, not shown. Every other case updates the displayed volume.
                     if !(looping && new_head) {
                         v.show_volume(scan, name, time);
+                        v.loading = false;
+                        v.error = None;
+                        self.pane_shown.remove(&view);
                     }
-                    v.loading = false;
-                    v.error = None;
                     v.fetch_failures = 0;
                     v.clamp_tilt();
                     v.clamp_moment();
-                    self.pane_shown.remove(&view);
                     self.scan_chime(view, time);
+                }
+                DataMsg::ListingFailed { view, date, .. } => {
+                    let pane = &mut self.views[view];
+                    pane.timeline.listing = false;
+                    if pane.timeline.date == date { pane.last_list_failure = Some(Instant::now()); }
                 }
                 DataMsg::Frames {
                     view,
@@ -11404,6 +11814,7 @@ impl HookEchoApp {
                 } => {
                     let v = &mut self.views[view];
                     v.timeline.listing = false;
+                    v.last_list_failure = None;
                     if v.timeline.date == date && v.site.as_deref() == Some(site.as_str()) {
                         v.timeline.set_frames(frames, (site, date));
                         self.pane_shown.remove(&view);
@@ -11429,6 +11840,8 @@ impl HookEchoApp {
                     if v.timeline.playing {
                         continue; // looping pane owns its displayed frame (cf. Volume above)
                     }
+                    if v.retained_station.is_some() { v.volume = None; }
+                    v.station_ready();
                     match &mut v.volume {
                         Some(vol) => vol.apply_live(scan, name, time, &changed, status),
                         None => {
@@ -11450,6 +11863,7 @@ impl HookEchoApp {
                     self.scan_chime(view, time);
                 }
                 DataMsg::UpToDate { view, .. } => {
+                    self.views[view].station_ready();
                     self.views[view].loading = false;
                     self.views[view].fetch_failures = 0;
                 }
@@ -11458,7 +11872,9 @@ impl HookEchoApp {
                 }
                 DataMsg::Error { view, err, site } => {
                     let v = &mut self.views[view];
+                    if v.frame_request.pending_name().is_some() || (!v.timeline.following && v.timeline.current().is_some()) { continue; }
                     v.loading = false;
+                    v.load_phase = None;
                     // The newest archive volume is published while the radar is still writing it,
                     // so the head can briefly lack its VCP message. That is a "not finished yet",
                     // not a failure: the next poll gets a complete file a minute later. Showing a
@@ -11485,8 +11901,10 @@ impl HookEchoApp {
                     }
                 }
                 DataMsg::LiveEnded { .. } => unreachable!("handled above"),
+                DataMsg::Guarded { .. } => continue,
             }
         }
+        self.trim_radar_memory();
     }
 
     /// Start/stop the live chunk stream for the active view. One stream at a time (the active
@@ -11506,7 +11924,8 @@ impl HookEchoApp {
                 && !v.timeline.playing
                 && self.settings.radar_feed == crate::settings::RadarFeed::Automatic
                 && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
-                && v.volume.is_some();
+                && v.volume.is_some()
+                && v.retained_station.is_none();
             (
                 want,
                 v.site.clone(),
@@ -11758,24 +12177,24 @@ impl HookEchoApp {
     /// Per-frame per-pane: react to site changes, keep the timeline current, and (for the active
     /// pane) manage the live stream. Each pane fetches its own volume via its view index.
     fn sync_pane(&mut self, idx: usize, ctx: &egui::Context) {
-        // Site change: clear the old volume, recenter, and (if a real site) refetch.
+        // Site change: retain an explicitly identified prior scan until the replacement is ready.
         let site_changed = self.views[idx].site != self.views[idx].loaded_site;
         if site_changed {
+            self.record_interaction("switch_station");
             if idx == self.active && self.analyst_open && self.link_cameras && self.views.len() == 4 {
                 let site = self.views[idx].site.clone();
                 for view in &mut self.views { view.site = site.clone(); }
             }
             let v = &mut self.views[idx];
-            v.loaded_site = v.site.clone();
-            v.volume = None;
-            v.cut_selection = None;
-            v.forget_recent();
+            v.begin_station_switch();
             v.moments_seen = [false; Moment::ALL.len()];
             v.error = None;
             // Clear a stuck in-flight flag: if the previous site's fetch is still running when the
             // site changes, its result is dropped on arrival (site mismatch) without clearing
             // `loading`, which would then block the new site's fetch forever ("no volume").
             v.loading = false;
+            v.load_phase = None;
+            v.frame_request.cancel();
             // The old site's frame list is not this site's. Left in place it is both what the
             // scrub path displays and what it downloads until the new listing lands — i.e. the
             // wrong radar's volumes at an index that means nothing here. A scrubbed pane keeps
@@ -11791,6 +12210,7 @@ impl HookEchoApp {
             match &v.site {
                 // ...unless a deep link already aimed the camera at something specific.
                 Some(_) if std::mem::take(&mut v.camera_placed) => {}
+                Some(_) if v.retained_station.is_some() => v.recenter_on_ready = true,
                 Some(s) => ui::site_dialog::center_on_site(&mut v.camera, s),
                 None => {
                     self.pane_shown.remove(&idx);
@@ -11879,8 +12299,20 @@ impl HookEchoApp {
         };
         // A frame switch bins and uploads a full sweep. Holding animation while the map is under
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
+        self.views[idx].buffering = next_pending;
         if should_advance_timeline(next_pending, self.gesture_live) {
-            self.views[idx].timeline.tick_cut();
+            let view = &mut self.views[idx];
+            let previous = view.timeline.playhead;
+            let unavailable = view.failed_frame.as_deref().is_some_and(|name| view.timeline.current().is_some_and(|frame| frame.name() == name));
+            view.timeline.tick_cut();
+            if unavailable && view.timeline.playhead != previous {
+                if let Some(name) = view.failed_frame.clone() {
+                    view.note_frame_status(name, crate::timeline::FrameStatus::Skipped);
+                }
+                view.skipped_frames += 1;
+                view.last_skipped_at = Some(wxdata::clock::Instant::now());
+                view.failed_frame = None;
+            }
         }
         if self.views[idx].timeline.following {
             self.views[idx].cut_selection = None;
@@ -11905,6 +12337,13 @@ impl HookEchoApp {
         if !crate::platform::activity::is_active() {
             return; // backgrounded: no listings, no head polls, no downloads
         }
+        // Cancel a listing whose day changed while it was in flight.
+        let listing_identity = self.views[idx].site.as_ref().map(|site| format!("{site}:{}", self.views[idx].timeline.date));
+        if self.views[idx].timeline.listing && self.views[idx].list_request.pending_name() != listing_identity.as_deref() {
+            self.views[idx].list_request.cancel();
+            self.views[idx].timeline.listing = false;
+            self.views[idx].last_list_failure = None;
+        }
         // (Re)list volumes when the site or selected date changed.
         let (site, date, following, need_list, listing) = {
             let v = &self.views[idx];
@@ -11912,7 +12351,8 @@ impl HookEchoApp {
             // TDWRs and DWD radars have no archive to list; their timeline stays empty and
             // always live.
             let need = v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
-                && v.timeline.frames_key != key;
+                && v.timeline.frames_key != key
+                && v.last_list_failure.is_none_or(|at| at.elapsed().as_secs() >= 10);
             (
                 v.site.clone(),
                 v.timeline.date,
@@ -11980,7 +12420,7 @@ impl HookEchoApp {
                         v.clamp_tilt();
                         v.clamp_moment();
                         self.pane_shown.remove(&idx);
-                    } else if !self.views[idx].loading {
+                    } else if !self.views[idx].loading || self.views[idx].frame_request.pending_name() != Some(name.as_str()) {
                         wxdata::stats::bump(wxdata::stats::Counter::ScanCacheMisses);
                         let s = self.views[idx].site.clone().unwrap_or_default();
                         self.views[idx].loading = true;
@@ -12133,9 +12573,11 @@ impl HookEchoApp {
     }
 
     /// Download a specific archive volume (a scrubbed timeline frame), routed to `view_idx`.
-    fn spawn_frame_fetch(&self, view_idx: usize, site: String, id: Identifier, ctx: egui::Context) {
+    fn spawn_frame_fetch(&mut self, view_idx: usize, site: String, id: Identifier, ctx: egui::Context) {
+        let generation = self.views[view_idx].frame_request.start(id.name().to_string());
+        self.views[view_idx].load_phase = None;
         let tx = self.msg_tx.clone();
-        self.spawner.spawn(async move {
+        let handle = self.spawner.spawn_abortable(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
             // The `Err` arm is what matters here: it clears the pane's `loading` flag. Without a
@@ -12143,19 +12585,25 @@ impl HookEchoApp {
             // stops polling for the rest of the session.
             let fetched = wxdata::task::timeout(
                 VOLUME_TIMEOUT,
-                crate::volume::fetch(id, crate::paths::cache_dir()),
+                crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
+                    let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
+                    ctx.request_repaint();
+                }),
             )
             .await
             .unwrap_or_else(Err);
             let msg = match fetched {
                 Ok(scan) => DataMsg::Volume {
+                        selected_frame: Some(generation),
                     view: view_idx,
                     site,
                     name,
                     time,
                     scan,
                 },
-                Err(e) => DataMsg::Error {
+                Err(e) => DataMsg::FrameError {
+                    name,
+                    generation,
                     view: view_idx,
                     site,
                     err: e.to_string(),
@@ -12164,31 +12612,27 @@ impl HookEchoApp {
             let _ = tx.send(msg);
             ctx.request_repaint();
         });
+        self.views[view_idx].frame_request.attach(generation, handle);
     }
 
     /// List the archive volumes for `site` on `date` (timeline frames).
-    fn spawn_list_frames(
-        &self,
-        view_idx: usize,
-        site: String,
-        date: NaiveDate,
-        ctx: egui::Context,
-    ) {
+    fn spawn_list_frames(&mut self, view_idx: usize, site: String, date: NaiveDate, ctx: egui::Context) {
+        let identity = format!("{site}:{date}");
+        let generation = self.views[view_idx].list_request.start(identity.clone());
         let tx = self.msg_tx.clone();
-        self.spawner.spawn(async move {
-            match level2::list_volumes(&site, date).await {
-                Ok(frames) => {
-                    let _ = tx.send(DataMsg::Frames {
-                        view: view_idx,
-                        site,
-                        date,
-                        frames,
-                    });
-                    ctx.request_repaint();
+        let handle = self.spawner.spawn_abortable(async move {
+            let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, level2::list_volumes(&site, date)).await.unwrap_or_else(Err);
+            let result = match fetched {
+                Ok(frames) => DataMsg::Frames { view: view_idx, site, date, frames },
+                Err(error) => {
+                    note_feed_error("Archive frame list", format!("{site} {date}: {error}"));
+                    DataMsg::ListingFailed { view: view_idx, site, date }
                 }
-                Err(e) => note_feed_error("Archive frame list", format!("{site} {date}: {e}")),
-            }
+            };
+            let _ = tx.send(DataMsg::Guarded { view: view_idx, site: identity, generation, head: false, result: Box::new(result) });
+            ctx.request_repaint();
         });
+        self.views[view_idx].list_request.attach(generation, handle);
     }
 
     /// Radar upload for pane `idx`, binning the shared volume in `data` (usually the active pane)
@@ -12196,11 +12640,16 @@ impl HookEchoApp {
     /// buffer persists, so `None` means "reuse what's uploaded". Caches per pane via `pane_shown`.
     fn pane_radar(&mut self, idx: usize, data: usize) -> (Option<RadarUpload>, bool) {
         crate::prof_scope!("pane_radar");
+        if !self.views[idx].alignment_acceptable(self.settings.linked_time_limit_seconds) {
+            return (None, false);
+        }
         let has_volume = self.views[data].volume.is_some();
         if !self.views[idx].show_radar || !has_volume {
             self.pane_shown.remove(&idx);
             self.pane_lut.remove(&idx);
             self.pane_custom_sweep.remove(&idx);
+            self.pane_custom_recipe.remove(&idx);
+            self.pane_custom_input.remove(&idx);
             return (None, false);
         }
         let count = self.views[data].elevation_count();
@@ -12209,6 +12658,9 @@ impl HookEchoApp {
             return self.pane_custom_radar(idx, data, &name);
         }
         self.pane_custom_sweep.remove(&idx);
+        self.pane_custom_recipe.remove(&idx);
+        self.pane_custom_input.remove(&idx);
+        let precision = self.views[idx].appearance.precision;
         let (moment, tilt, threshold, smooth, storm_uv, cut_end_ms) = {
             let v = &self.views[idx];
             (
@@ -12249,10 +12701,7 @@ impl HookEchoApp {
         // a TDWR's Level 3 velocity is already unfolded before it leaves the radar.
         let dealias = self.settings.dealias_velocity
             && moment == Moment::Velocity
-            && !self.views[idx]
-                .site
-                .as_deref()
-                .is_some_and(wxdata::tdwr::is_tdwr);
+            && !self.views[idx].displayed_station().is_some_and(wxdata::tdwr::is_tdwr);
         let key: ShownKey = (
             name,
             moment,
@@ -12264,8 +12713,9 @@ impl HookEchoApp {
             self.settings.precip_tint.then_some(self.precip_flag_gen),
             cut_end_ms,
             None,
+            precision,
         );
-        let lut_gen = self.palettes.gen.wrapping_add(
+        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(u64::from(self.adaptive.reduced)).wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
                 0x9e37_79b9_7f4a_7c15
             } else {
@@ -12274,12 +12724,13 @@ impl HookEchoApp {
         );
         // Same sweep already up: the only thing left that can differ is the color table, and
         // that is a 3 KB write into the texture already bound.
-        let lut_only = self.pane_shown.get(&idx) == Some(&key);
+        let same_data = self.pane_shown.get(&idx) == Some(&key);
+        let token = self.pane_upload_tokens.get(&idx).copied().unwrap_or(0);
+        let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             return (None, true);
         }
-        let table_owned =
-            crate::colormap::effective_table(&self.palettes, moment, self.settings.theme);
+        let table_owned = self.views[idx].appearance.table(&self.palettes, moment, self.settings.theme);
         let table = &table_owned;
         // Cheap handle taken before the volume is borrowed mutably below.
         let precip = self
@@ -12296,7 +12747,7 @@ impl HookEchoApp {
             if vol.elevations.is_empty() {
                 return (None, true);
             }
-            vol.binned_at(moment, tilt, dealias, cut_end_ms).map(|s| {
+            vol.binned_display_at(moment, tilt, dealias, cut_end_ms, precision).map(|s| {
                 to_upload(
                     s,
                     table,
@@ -12309,7 +12760,25 @@ impl HookEchoApp {
             })
         };
         match upload {
-            Ok(up) => {
+            Ok(mut up) => {
+                self.views[idx].appearance.apply_upload(&mut up, moment);
+                let view = &self.views[idx];
+                if view.appearance.fade_old_sectors && view.timeline.following && cut_end_ms.is_none() {
+                    up.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
+                        let status = volume.live_status.as_ref().filter(|status| status.stream_active)?;
+                        let ages = level2::azimuth_age(&volume.scan, moment, tilt, status.volume_start_ms?)?;
+                        Some(ages.map(|age| match age {
+                            level2::AzimuthAge::Current => 1.0,
+                            level2::AzimuthAge::Older => 0.35,
+                            level2::AzimuthAge::Missing => 0.0,
+                        }))
+                    });
+                }
+
+                if self.adaptive.reduced { up.uniform[19] = 0.0; }
+                let token = if same_data && self.pane_lut.get(&idx) == Some(&lut_gen) && token != 0 { token } else { crate::gpu_metrics::next_upload_token() };
+                up.upload_token = token;
+                self.pane_upload_tokens.insert(idx, token);
                 self.pane_shown.insert(idx, key);
                 self.pane_lut.insert(idx, lut_gen);
                 (Some(up), true)
@@ -12335,56 +12804,47 @@ impl HookEchoApp {
             .find(|definition| definition.name == product_name)
             .cloned()
         else {
+            self.pane_custom_sweep.remove(&idx);
             self.views[idx].error = Some(format!("radar product '{product_name}' was not found"));
             return (None, false);
         };
-        let product = match wxdata::product_dsl::Product::compile(definition.clone()) {
-            Ok(product) => product,
-            Err(error) => {
-                self.views[idx].error = Some(error.to_string());
-                return (None, false);
+        let product = if let Some(product) = self
+            .pane_custom_recipe
+            .get(&idx)
+            .filter(|product| product.definition() == &definition)
+        {
+            std::sync::Arc::clone(product)
+        } else {
+            match wxdata::product_dsl::Product::compile(definition.clone()) {
+                Ok(product) => {
+                    wxdata::stats::bump(wxdata::stats::Counter::CustomCompiles);
+                    let product = std::sync::Arc::new(product);
+                    self.pane_custom_recipe.insert(idx, product.clone());
+                    product
+                }
+                Err(error) => {
+                    self.pane_custom_sweep.remove(&idx);
+                    self.views[idx].error = Some(error.to_string());
+                    return (None, false);
+                }
             }
         };
         let tilt = self.views[idx].tilt;
         let smooth = self.views[idx].smooth;
-        let Some(volume_name) = self.views[data].volume.as_ref().map(|volume| volume.name.clone())
+        let precision = self.views[idx].appearance.precision;
+        let cut_end_ms = self.views[idx].selected_cut_ms();
+        let Some(volume_name) = self.views[data]
+            .volume
+            .as_ref()
+            .map(|volume| volume.name.clone())
         else {
             return (None, true);
         };
-        let sweeps_result = {
-            let Some(volume) = self.views[data].volume.as_mut() else {
-                return (None, true);
-            };
-            product
-                .inputs()
-                .iter()
-                .map(|moment| {
-                    volume
-                        .binned(*moment, tilt, false)
-                        .map(|sweep| (*moment, sweep.clone()))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()
-        };
-        let sweeps = match sweeps_result {
-            Ok(sweeps) => sweeps,
-            Err(error) => {
-                self.views[idx].error = Some(error.to_string());
-                return (None, false);
-            }
-        };
-        let refs: Vec<_> = sweeps.iter().map(|(moment, sweep)| (*moment, sweep)).collect();
-        let sweep = match product.sweep(&refs, Default::default()) {
-            Ok(sweep) => sweep,
-            Err(error) => {
-                self.views[idx].error = Some(error.to_string());
-                return (None, false);
-            }
-        };
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        definition.name.hash(&mut hash);
-        definition.expression.hash(&mut hash);
-        definition.min.to_bits().hash(&mut hash);
-        definition.max.to_bits().hash(&mut hash);
+        // Hash the complete definition, including input/environment declarations and encoding.
+        serde_json::to_vec(&definition)
+            .expect("product definition serializes")
+            .hash(&mut hash);
         let product_hash = hash.finish();
         let key: ShownKey = (
             volume_name,
@@ -12395,22 +12855,132 @@ impl HookEchoApp {
             None,
             false,
             None,
-            None,
+            cut_end_ms,
             Some(product_hash),
+            precision,
         );
-        let lut_gen = self.palettes.gen.wrapping_add(product_hash);
-        let lut_only = self.pane_shown.get(&idx) == Some(&key);
+        let scan = self.views[data]
+            .volume
+            .as_ref()
+            .map(|volume| volume.scan.clone())
+            .unwrap();
+        let reuse = self
+            .pane_custom_input
+            .get(&idx)
+            .is_some_and(|input| input.matches(&scan, tilt, cut_end_ms, precision, product_hash))
+            && self.pane_custom_sweep.contains_key(&idx);
+        if !reuse {
+            let sweeps_result = {
+                let Some(volume) = self.views[data].volume.as_mut() else {
+                    return (None, true);
+                };
+                product
+                    .inputs()
+                    .iter()
+                    .map(|moment| {
+                        volume
+                            .shared_binned_display_at(*moment, tilt, cut_end_ms, precision)
+                            .map(|sweep| (*moment, sweep))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()
+            };
+            let sweeps = match sweeps_result {
+                Ok(sweeps) => sweeps,
+                Err(error) => {
+                    self.pane_custom_sweep.remove(&idx);
+                    self.views[idx].error = Some(error.to_string());
+                    return (None, false);
+                }
+            };
+            let refs: Vec<_> = sweeps
+                .iter()
+                .map(|(moment, sweep)| (*moment, sweep.as_ref()))
+                .collect();
+            let sweep = match product.sweep(&refs, Default::default()) {
+                Ok(sweep) => sweep,
+                Err(error) => {
+                    self.pane_custom_sweep.remove(&idx);
+                    self.views[idx].error = Some(error.to_string());
+                    return (None, false);
+                }
+            };
+            wxdata::stats::bump(wxdata::stats::Counter::CustomEvaluations);
+            let bytes = sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2);
+            const DERIVED_BUDGET: usize = 32 * 1024 * 1024;
+            if bytes > DERIVED_BUDGET {
+                self.pane_custom_sweep.remove(&idx);
+                self.views[idx].error =
+                    Some("Custom product exceeds the 32 MiB display buffer budget".into());
+                return (None, false);
+            }
+            self.pane_custom_sweep.remove(&idx);
+            while self
+                .pane_custom_sweep
+                .values()
+                .map(|s| s.data.len() + s.data16.as_ref().map_or(0, |d| d.len() * 2))
+                .sum::<usize>()
+                + bytes
+                > DERIVED_BUDGET
+            {
+                let oldest = *self.pane_custom_sweep.keys().min().unwrap();
+                self.pane_custom_sweep.remove(&oldest);
+                self.pane_custom_input.remove(&oldest);
+            }
+            self.pane_custom_sweep.insert(idx, sweep);
+            self.pane_custom_input.insert(
+                idx,
+                crate::custom_cache::Input::new(&scan, tilt, cut_end_ms, precision, product_hash),
+            );
+        } else {
+            wxdata::stats::bump(wxdata::stats::Counter::CustomCacheHits);
+        }
+        let sweep = &self.pane_custom_sweep[&idx];
+        let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
+        let lut_gen = self
+            .palettes
+            .gen
+            .wrapping_add(product_hash)
+            .wrapping_add(self.views[idx].appearance.fingerprint(palette_moment))
+            .wrapping_add(u64::from(self.adaptive.reduced));
+        let same_data = reuse && self.pane_shown.get(&idx) == Some(&key);
+        let token = self.pane_upload_tokens.get(&idx).copied().unwrap_or(0);
+        let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
+            self.views[idx].error = None;
             return (None, true);
         }
-        let palette_moment = Moment::from_code(&definition.palette).unwrap_or(Moment::Reflectivity);
-        let table = crate::colormap::effective_table(
-            &self.palettes,
-            palette_moment,
-            self.settings.theme,
-        );
-        let upload = to_upload(&sweep, &table, None, smooth, None, None, lut_only);
-        self.pane_custom_sweep.insert(idx, sweep);
+        let table =
+            self.views[idx]
+                .appearance
+                .table(&self.palettes, palette_moment, self.settings.theme);
+        let mut upload = to_upload(sweep, &table, None, smooth, None, None, lut_only);
+        if self.views[idx].appearance.fade_old_sectors && self.views[idx].timeline.following && cut_end_ms.is_none() {
+            upload.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
+                let status = volume
+                    .live_status
+                    .as_ref()
+                    .filter(|status| status.stream_active)?;
+                let start = status.volume_start_ms?;
+                let mut opacity = [1.0f32; 720];
+                for moment in product.inputs() {
+                    let ages = level2::azimuth_age(&volume.scan, *moment, tilt, start)?;
+                    for (alpha, age) in opacity.iter_mut().zip(ages) {
+                        *alpha = alpha.min(match age {
+                            level2::AzimuthAge::Current => 1.0,
+                            level2::AzimuthAge::Older => 0.35,
+                            level2::AzimuthAge::Missing => 0.0,
+                        });
+                    }
+                }
+                Some(opacity)
+            });
+        }
+        upload.uniform[17] = self.views[idx].appearance.blend_width;
+        upload.uniform[19] =
+            f32::from(self.views[idx].appearance.multipass && !self.adaptive.reduced);
+        let token = if same_data && self.pane_lut.get(&idx) == Some(&lut_gen) && token != 0 { token } else { crate::gpu_metrics::next_upload_token() };
+        upload.upload_token = token;
+        self.pane_upload_tokens.insert(idx, token);
         self.pane_shown.insert(idx, key);
         self.pane_lut.insert(idx, lut_gen);
         self.views[idx].error = None;
@@ -12424,6 +12994,15 @@ impl HookEchoApp {
             .radar_products
             .iter()
             .find(|definition| definition.name == name)?;
+        let view = &self.views[idx];
+        let volume = view.volume.as_ref()?;
+        // A withheld pane or changed recipe must never expose a sweep from its prior inputs.
+        self.pane_custom_recipe.get(&idx).filter(|product| product.definition() == definition)?;
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_vec(definition).ok()?.hash(&mut hash);
+        let recipe = hash.finish();
+        if !self.pane_custom_input.get(&idx)?.matches(&volume.scan, view.tilt, view.selected_cut_ms(), view.appearance.precision, recipe) { return None; }
         let sweep = self.pane_custom_sweep.get(&idx)?;
         let sample = sweep.sample_at(lon, lat)?;
         let value = sample.value.map_or_else(
@@ -12441,22 +13020,19 @@ impl HookEchoApp {
         ))
     }
 
+    fn field_state(&self, pane: usize, layer: crate::render::FieldLayer) -> Option<&FieldState> {
+        if layer.is_native_abi() { self.pane_fields.get(&(pane, layer)) } else { self.fields.get(&layer) }
+    }
+
     fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
         let view = self.views.get(idx)?;
         let (layer, frame) = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|layer| view.fields_on.contains(layer))
-            .and_then(|layer| Some((layer, self.fields.get(&layer)?.frame.as_ref()?)))?;
+            .and_then(|layer| Some((layer, self.field_state(idx, layer)?.frame.as_ref()?)))?;
         let sample = frame.sample(lon, lat);
         sample.value.map(|value| {
-            let display = frame.descriptor.display_value(
-                value,
-                if self.settings.temp_unit == crate::settings::TempUnit::Fahrenheit {
-                    wxdata::field::UnitSystem::Us
-                } else {
-                    wxdata::field::UnitSystem::Metric
-                },
-            );
+            let display = self.settings.field_display_value(frame.descriptor, value);
             let coverage_warning = self
                 .beam_coverage(idx, [lon, lat])
                 .and_then(|coverage| {
@@ -12528,8 +13104,8 @@ impl HookEchoApp {
     }
 
     fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
-        if let Some(probe) = self.custom_radar_probe(idx, lon, lat) {
-            return Some(probe);
+        if let Some(name) = self.views.get(idx).and_then(|view| view.custom_product.as_deref()) {
+            return self.custom_radar_probe(idx, lon, lat).or_else(|| Some(format!("{name}\nCustom sample unavailable")));
         }
         let (sample, site, vcp, moment, tilt) = {
             let view = &self.views[idx];
@@ -12543,7 +13119,7 @@ impl HookEchoApp {
                     lat,
                     view.selected_cut_ms(),
                 )?,
-                view.site.clone().unwrap_or_else(|| "Radar".into()),
+                view.displayed_station().unwrap_or("Radar").to_owned(),
                 volume.vcp.clone(),
                 view.moment,
                 view.tilt,
@@ -12582,8 +13158,12 @@ impl HookEchoApp {
         } else {
             ""
         };
+        let freshness = if self.views[idx].timeline.following {
+            let age = (chrono::Utc::now() - sample.collected_at).num_seconds().max(0);
+            format!(" · age {age}s")
+        } else { String::new() };
         Some(format!(
-            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}",
+            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}{freshness}",
             moment.short_name(),
             sample.elevation_deg,
             sample.azimuth_deg,
@@ -12741,6 +13321,10 @@ impl HookEchoApp {
         placefile_labels: &[PlaceLabel],
     ) {
         crate::prof_scope!("render_pane");
+        self.labels.begin_pane();
+        let trace_started = crate::map_trace::enabled().then(Instant::now);
+        let mut place_label_work = 0;
+        let mut place_label_budget = crate::map_work::LabelBudget::default();
         use crate::tiles::BasemapStyle;
         // This pane's own basemap: panes are independent, the tile caches are keyed by style.
         // `Auto` resolves here rather than where it is stored, so the stored choice keeps
@@ -12749,6 +13333,13 @@ impl HookEchoApp {
         // Hybrid satellite is both: Esri imagery from the raster path, roads and boundaries from
         // the vector one drawn on top of it.
         let is_vector = pane_style.vector_palette().is_some();
+        let palette = pane_style.vector_palette().unwrap_or_default();
+        self.pane_vtiles[idx].set_ctx(ctx.clone());
+        let clear_vector = clear_vector | self.pane_vtiles[idx].set_style(palette)
+            | self.pane_vtiles[idx].set_theme(self.settings.theme)
+            | self.pane_vtiles[idx].set_simplified(
+                self.settings.map_quality == crate::settings::MapQuality::Performance
+                || (self.settings.map_quality == crate::settings::MapQuality::Auto && self.adaptive.reduced));
         let is_raster = pane_style.is_raster();
         let vp = (prect.width(), prect.height());
         let map_input = ui.input(|i| i.pointer.interact_pos())
@@ -12759,12 +13350,23 @@ impl HookEchoApp {
             if map_input { egui::Sense::click_and_drag() } else { egui::Sense::hover() },
         );
 
+        let dt = ctx.input(|i| i.unstable_dt);
+        let reduced = self.settings.reduce_motion;
+        {
+            let view = &mut self.views[idx];
+            view.camera_motion.sync(&view.camera, vp);
+            if !ctx.input(|i| i.viewport().focused.unwrap_or(true))
+                || ctx.input(|i| i.pointer.any_pressed()) {
+                view.camera_motion.cancel();
+            }
+        }
         // --- Input (mutates this pane's camera / selects it active) ---
         // During a multi-touch gesture the first finger still drives the egui pointer, so a pinch
         // would ALSO register as a drag and fight the zoom — the gesture block below owns both
         // pan and zoom while two fingers are down.
         let gesture = ui.input(|i| i.multi_touch());
         if gesture.is_some() {
+            self.views[idx].camera_motion.cancel();
             self.last_gesture_end = Some(wxdata::clock::Instant::now());
         }
         // A finger still down after the other lifted is the tail of a pinch, not a new drag or a
@@ -12791,7 +13393,7 @@ impl HookEchoApp {
         if self.tool == MapTool::Draw && quiet {
             if response.dragged() {
                 self.active = idx;
-                if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(pos) = response.interact_pointer_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()) {
                     let cam = self.views[idx].camera;
                     let px = (pos.x - prect.left(), pos.y - prect.top());
                     let w = cam.screen_to_world(px, vp);
@@ -12805,7 +13407,9 @@ impl HookEchoApp {
                 }
             }
         } else if response.dragged() && quiet {
+            if response.drag_started() { self.views[idx].camera_motion.begin_drag(); }
             self.active = idx;
+            self.views[idx].recenter_on_ready = false;
             let d = response.drag_delta();
             match self.tap_zoom {
                 // Double-tap-drag: the map zoom every phone map has, and the only one you can do
@@ -12818,10 +13422,14 @@ impl HookEchoApp {
                         .zoom_at(-d.y as f64 * 0.01, cursor, vp);
                 }
                 None => {
-                    self.views[idx].camera.pan_pixels(d.x, d.y, vp);
+                    let view = &mut self.views[idx];
+                    view.camera_motion.drag(&mut view.camera, (d.x, d.y), dt, vp, ctx.input(|i| i.time));
                     self.follow_cell = None; // a manual pan takes over the camera
                 }
             }
+        }
+        if response.drag_stopped() {
+            self.views[idx].camera_motion.release(reduced, ctx.input(|i| i.time));
         }
         if cfg!(target_os = "android") {
             if response.drag_started() {
@@ -12844,27 +13452,28 @@ impl HookEchoApp {
         // signal and subtracts from the scroll delta, so the two never double-apply). Horizontal
         // scroll pans: on a trackpad a two-finger swipe is the obvious way to move the map, and on
         // a mouse it is a tilt wheel nobody was using.
-        let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
-        if let Some(pos) = response.hover_pos().filter(|p| prect.contains(*p) && map_input) {
+        let zoom = ui.input(|i| i.zoom_delta());
+        let line_speed = ctx.options(|o| o.input_options.line_scroll_speed);
+        let scroll = ui.input(|i| raw_map_scroll(i, line_speed, vp.1));
+        if let Some(pos) = response.hover_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()).filter(|p| prect.contains(*p) && map_input) {
             let cursor = (pos.x - prect.left(), pos.y - prect.top());
             // `zoom_delta()` reports a live touchscreen pinch too, which the gesture block below
             // already owns (and it is the one that knows about the mobile chrome) — skip it here
             // or a phone pinch zooms twice.
             if gesture.is_none() && (zoom - 1.0).abs() > f32::EPSILON {
                 self.active = idx;
-                self.views[idx]
-                    .camera
-                    .zoom_at((zoom as f64).log2(), cursor, vp);
+                self.views[idx].camera_motion.cancel();
+                self.views[idx].camera.zoom_at((zoom as f64).log2(), cursor, vp);
             }
             if scroll.y.abs() > 0.0 {
                 self.active = idx;
-                self.views[idx]
-                    .camera
-                    .zoom_at(scroll.y as f64 * 0.005, cursor, vp);
+                let view = &mut self.views[idx];
+                view.camera_motion.wheel(&mut view.camera, scroll.y as f64 * 0.005, cursor, vp, reduced);
             }
             if scroll.x.abs() > 0.0 {
                 self.active = idx;
-                self.views[idx].camera.pan_pixels(scroll.x, 0.0, vp);
+                let view = &mut self.views[idx];
+                view.camera_motion.pan_input(&mut view.camera, (scroll.x, 0.0), vp);
                 self.follow_cell = None; // a manual pan takes over the camera
             }
         }
@@ -12907,6 +13516,13 @@ impl HookEchoApp {
                 }
             }
         }
+        {
+            let view = &mut self.views[idx];
+            if view.camera_motion.advance(&mut view.camera, dt, vp, reduced) {
+                self.gesture_live = true;
+                ctx.request_repaint();
+            }
+        }
         // Long-press inspects, whatever tool is armed. A phone has no right-click and no hover,
         // and arming Interrogate first to ask "what is that" is a step nobody discovers — so the
         // press that means "tell me about this" is the press people already try.
@@ -12924,7 +13540,7 @@ impl HookEchoApp {
             } else {
                 self.tool
             };
-            if let Some(pos) = response.interact_pointer_pos() {
+            if let Some(pos) = response.interact_pointer_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()) {
                 // Remember the tap for the double-tap-drag zoom below.
                 self.last_tap = Some((ui.input(|i| i.time), pos));
                 let cam = self.views[idx].camera;
@@ -13053,7 +13669,7 @@ impl HookEchoApp {
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
                     _ if marker_hit.is_some() => {
-                        self.marker_popup = marker_hit;
+                        self.marker_popup = marker_hit.map(|i| self.settings.markers[i].id.clone());
                         self.cell_popup = None;
                         self.detail = None;
                     }
@@ -13097,7 +13713,7 @@ impl HookEchoApp {
                             let frames = crate::render::FieldLayer::draw_order()
                                 .rev()
                                 .filter(|layer| self.views[idx].fields_on.contains(layer))
-                                .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
+                                .filter_map(|layer| self.field_state(idx, layer)?.frame.as_ref())
                                 .filter(|frame| {
                                     !matches!(
                                         frame.descriptor.value_kind,
@@ -13456,76 +14072,79 @@ impl HookEchoApp {
                 .round()
                 .clamp(0.0, bias_cap) as f64
         };
+        let satellite_time = self.prepare_satellite_pane(idx, pane_style);
+        self.tiles.set_goes_time(satellite_time);
+        let is_raster = is_raster && (!pane_style.timed() || satellite_time.is_some());
         let visible = if is_raster {
-            let vis = self.tiles.visible(pane_style, &cam, vp, raster_bias);
+            let vis = self.views[idx].tile_detail.cover(&cam, vp, self.tiles.max_z(pane_style), raster_bias);
             self.tiles.request_missing(pane_style, &vis);
             self.tiles.promote_visible(pane_style, &vis);
             vis
         } else {
             Vec::new()
         };
+        let satellite_status = if pane_style.timed() {
+            let ready = self.tiles.visible_ready(pane_style, &visible);
+            self.goes[idx].imagery_ready = ready;
+            self.goes[idx].imagery_incomplete = self.tiles.visible_failed(pane_style, &visible);
+            let status = if let Some(time) = satellite_time {
+                let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
+                format!("{} satellite {}{}", if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" }, crate::timefmt::fmt_clock(time, self.active_tz(), false), offset)
+            } else { "Satellite frame unavailable".to_owned() };
+            Some(status)
+        } else { None };
         // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
         // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
         // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
         let (visible_vector, vlabels, visible_vector_tiles) = {
-            let vis = self.vtiles.request_view(&cam, vp, self.gesture_live, self.settings.map_quality);
+            let vis = self.pane_vtiles[idx].request_view(&cam, vp, self.gesture_live, if self.adaptive.reduced && self.settings.map_quality == crate::settings::MapQuality::Auto { crate::settings::MapQuality::Performance } else { self.settings.map_quality });
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             // Deep-copying every visible place name every frame (for every pane) showed up at the
             // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
             // a tile's labels finish tessellating — both bump the key below.
             // Compared before it is built: the key holds a `Vec` of every visible tile id, and
             // cloning it to ask "did this change" was itself a per-pane, per-frame allocation.
-            let gen = self.vtiles.label_generation();
+            let gen = self.pane_vtiles[idx].label_generation();
             let stale = self
-                .vlabel_cache
+                .vlabel_cache[idx]
                 .as_ref()
                 .is_none_or(|((k_ids, k_gen), _)| *k_gen != gen || *k_ids != ids);
             if stale {
                 let labels: std::sync::Arc<[crate::vector_tiles::PlaceLabel]> = self
-                    .vtiles
+                    .pane_vtiles[idx]
                     .labels_for(ids.iter())
                     .into_iter()
                     .cloned()
                     .collect();
-                self.vlabel_cache = Some(((ids.clone(), gen), labels));
+                self.vlabel_cache[idx] = Some(((ids.clone(), gen), labels));
             }
             // An `Arc` handle, not a deep copy of every visible place name — the cache existed to
             // stop the *lookup* running every frame, but the copy it returned survived it.
             let labels = self
-                .vlabel_cache
+                .vlabel_cache[idx]
                 .as_ref()
                 .map(|(_, l)| l.clone())
                 .unwrap_or_else(|| Vec::new().into());
             (if is_vector { ids } else { Vec::new() }, labels, vis)
         };
-        // Drain finished fetches once (on the first pane) — they upload into the shared cache.
-        // Eviction lives with the tile manager (it also owns `requested`/`uploaded`), and only
-        // the first pane runs it so a multi-pane frame doesn't evict what a later pane needs.
-        // Eviction runs once per frame, on the last pane — after every pane has promoted its own
-        // visible tiles, so a multi-pane frame can't evict what a pane it already drew still needs.
+        // Raster eviction waits for every pane. Styled vector caches belong to one pane,
+        // so their eviction and ready uploads can run independently.
         let drop_tiles = if last {
             self.tiles.evict_excess()
         } else {
             Vec::new()
         };
-        let drop_vector_tiles = if first {
-            self.vtiles.touch_visible(&visible_vector_tiles);
-            self.vtiles.take_evicted()
-        } else {
-            Vec::new()
+        let drop_vector_tiles = {
+            self.pane_vtiles[idx].touch_visible(&visible_vector_tiles);
+            self.pane_vtiles[idx].take_evicted()
         };
-        let (new_tiles, new_vector_tiles) = if first {
-            let nt = self.tiles.drain_ready();
-            // Drain vtiles regardless of basemap (it populates the label cache); only upload the
-            // geometry to the GPU when a vector basemap will actually draw it.
-            let nv = self.vtiles.drain_ready();
-            if !nt.is_empty() || !nv.is_empty() {
-                ctx.request_repaint();
-            }
-            (nt, if is_vector { nv } else { Vec::new() })
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        let new_tiles = if first { self.tiles.drain_ready_budget(&mut self.map_upload_budget) } else { Vec::new() };
+        let upload_turn = !self.gesture_live || chrome::compact(ctx)
+            || idx == self.frame_nr as usize % self.views.len();
+        let new_vector_tiles = if upload_turn {
+            self.pane_vtiles[idx].drain_ready_budget(&mut self.map_upload_budget)
+        } else { Vec::new() };
+        if !new_tiles.is_empty() || !new_vector_tiles.is_empty() { ctx.request_repaint(); }
 
         // --- Radar (this pane's product, its own volume) ---
         let (radar_upload, mut draw_radar) = self.pane_radar(idx, idx);
@@ -13538,7 +14157,7 @@ impl HookEchoApp {
         // currently-enabled layers.
         // Field textures are evicted the way tiles are: decided here, where the state that knows
         // whether a re-upload will follow lives, and handed to the renderer to free.
-        let drop_fields: Vec<crate::render::FieldLayer> = if first {
+        let mut drop_fields: Vec<crate::render::FieldLayer> = if first {
             let now = Instant::now();
             let on: std::collections::HashSet<crate::render::FieldLayer> = self
                 .views
@@ -13576,7 +14195,18 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let field_uploads: Vec<(crate::render::FieldLayer, crate::render::MrmsUpload)> = if first {
+        let now = Instant::now();
+        for ((pane, layer), state) in self.pane_fields.iter_mut().filter(|((pane, _), _)| *pane == idx) {
+            if self.views[idx].fields_on.contains(layer) { state.off_since = None; }
+            else {
+                self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel(&RequestLane::PaneField(*pane, *layer));
+                if state.off_since.is_some_and(|since| now.duration_since(since) >= FIELD_EVICT) {
+                    state.frame = None; state.metadata = None; state.pending = None; state.last_fetch = None;
+                    drop_fields.push(*layer);
+                } else if state.off_since.is_none() { state.off_since = Some(now); }
+            }
+        }
+        let mut field_uploads: Vec<(crate::render::FieldLayer, crate::render::MrmsUpload)> = if first {
             self.fields
                 .iter_mut()
                 .filter_map(|(k, s)| s.pending.take().map(|u| (*k, u)))
@@ -13584,6 +14214,9 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        field_uploads.extend(self.pane_fields.iter_mut().filter_map(|((pane, layer), state)| {
+            (*pane == idx).then(|| state.pending.take().map(|upload| (*layer, upload))).flatten()
+        }));
         let field_draws: Vec<(crate::render::FieldLayer, f32)> = self.views[idx]
             .fields_on
             .iter()
@@ -13597,17 +14230,33 @@ impl HookEchoApp {
             .collect();
 
         let cam = self.views[idx].camera;
+        let map_hover = response.hover_pos().filter(|pos| cam.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some());
         let (center, scale) = cam.world_to_clip_uniform(vp);
+        if cam.globe {
+            ui.painter().with_clip_rect(prect).circle_filled(prect.center(), cam.globe_radius() as f32, egui::Color32::from_rgb(20, 35, 48));
+        }
         let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
+        if let Some(started) = trace_started.as_ref() {
+            crate::map_trace::record(crate::map_trace::Frame {
+                pane: idx, frame: self.frame_nr, camera: cam, viewport: vp,
+                scroll: ctx.input(|i| i.smooth_scroll_delta.y),
+                pinch: ctx.input(|i| i.zoom_delta()), moving: self.gesture_live,
+                tile_zoom: visible_vector.first().map_or(0, |id| id.0),
+                vector_uploads: new_vector_tiles.len(), raster_uploads: new_tiles.len(),
+                labels: vlabels.len(), prepare_ms: started.elapsed().as_secs_f32() * 1000.0,
+            });
+        }
         let cb = MapCallback {
             pane: idx as u32,
             retain_only_pane: (chrome::compact(ctx) && self.views.len() > 1).then_some(idx as u32),
+            live_pane_count: Some(self.views.len() as u32),
             camera_center: center,
             camera_scale: scale,
+            globe: cam.globe_uniform(vp),
             world_per_pixel: cam.world_per_pixel() as f32,
             new_tiles,
             visible,
-            basemap_key: pane_style.key(),
+            basemap_key: self.tiles.frame_key(pane_style),
             vector_over_raster: pane_style == BasemapStyle::HybridSatellite,
             radar_upload,
             draw_radar,
@@ -13631,6 +14280,26 @@ impl HookEchoApp {
         };
         ui.painter()
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
+        // Captions must follow the opaque GPU callback in paint order.
+        if let Some(previous) = self.views[idx].retained_station.as_deref() {
+            let requested = self.views[idx].site.as_deref().unwrap_or("station");
+            let time = self.views[idx].displayed_time().map_or_else(|| "unknown time".into(), |time| time.format("%H:%M:%SZ").to_string());
+            let state = if self.views[idx].error.is_some() { "Unavailable" } else { "Loading" };
+            let painter = ui.painter().with_clip_rect(prect);
+            let text = painter.layout(format!("{state} {requested} · showing {previous} scan {time}"),
+                egui::FontId::proportional(12.0), egui::Color32::from_rgb(255, 218, 140), (prect.width() - 64.0).max(100.0));
+            let position = egui::pos2((prect.right() - 30.0 - text.size().x).max(prect.left() + 12.0), prect.top() + 68.0);
+            painter.rect_filled(egui::Rect::from_min_size(position - egui::vec2(4.0, 3.0), text.size() + egui::vec2(8.0, 6.0)), 3.0, egui::Color32::from_black_alpha(210));
+            painter.galley(position, text, egui::Color32::WHITE);
+        }
+        if let Some(status) = satellite_status {
+            let painter = ui.painter().with_clip_rect(prect);
+            let text = painter.layout(status, egui::FontId::proportional(12.0), egui::Color32::WHITE, (prect.width() - 50.0).max(100.0));
+            let position = egui::pos2((prect.right() - 30.0 - text.size().x).max(prect.left() + 10.0), prect.top() + 52.0);
+            painter.rect_filled(egui::Rect::from_min_size(position - egui::vec2(3.0, 2.0), text.size() + egui::vec2(6.0, 4.0)), 2.0, egui::Color32::from_black_alpha(190));
+            painter.galley(position, text, egui::Color32::WHITE);
+        }
+
 
         // Per-pane product picker (multi-pane only): set THIS pane's moment directly, without
         // clicking to activate it first. Single-pane keeps using the product pill.
@@ -13667,7 +14336,7 @@ impl HookEchoApp {
             && prect.width() > 700.0
             && !chrome::compact(ctx)
         {
-            let focused = response.hover_pos().and_then(|pos| {
+            let focused = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
@@ -13770,8 +14439,8 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let radar_probe = response.hover_pos().and_then(|pos| {
-            let w = cam.screen_to_world((pos.x - prect.left(), pos.y - prect.top()), vp);
+        let radar_probe = map_hover.and_then(|pos| {
+            let w = cam.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp)?;
             let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
             self.field_probe_at(idx, lon, lat)
                 .or_else(|| self.radar_probe_at(idx, lon, lat))
@@ -13864,14 +14533,6 @@ impl HookEchoApp {
             let z = cam.zoom;
             // Repeat route shields from regional zoom; collision placement still prevents overlap.
             let repeat_shields = z >= 5.0;
-            let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
-                vlabels.iter().filter(|l| {
-                    l.visible_at(z)
-                        && (!(self.gesture_live
-                            && self.settings.map_quality == crate::settings::MapQuality::Auto)
-                            || l.priority() <= 1)
-                        && (vp.0 >= 600.0 || l.priority() <= 2 || z >= 12.0)
-                }).collect();
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
                 let key = crate::labelplace::key(&l.name);
                 if repeat_shields && l.shield != crate::vector_tiles::RoadShield::None {
@@ -13880,6 +14541,16 @@ impl HookEchoApp {
                     key
                 }
             };
+            let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
+                vlabels.iter().filter(|l| {
+                    let returning = self.labels.was_shown(label_key(l));
+                    // Different enter/leave thresholds prevent a label toggling at its minzoom.
+                    l.visible_stable(z, returning)
+                        && (!(self.gesture_live
+                            && self.settings.map_quality == crate::settings::MapQuality::Auto)
+                            || returning || l.city || l.priority() <= 1)
+                        && (vp.0 >= 600.0 || l.priority() <= 2 || z >= 12.0)
+                }).collect();
             // Labels already on screen are offered their slot before newcomers of the same
             // importance; without that a name at the edge of a collision wins and loses on
             // alternate frames, which is exactly the flicker you see while panning.
@@ -13911,6 +14582,15 @@ impl HookEchoApp {
                 if !prect.contains(p) {
                     continue;
                 }
+                // Stable cap: returning labels are offered first and a gesture does not
+                // suddenly reduce their allowance. Weather warnings keep their separate pass.
+                let is_shield = l.shield != crate::vector_tiles::RoadShield::None;
+                if is_shield && placed_shields.iter().any(|(name, shield, position)| {
+                    *name == l.name && *shield == l.shield && position.distance(p) < if z < 8.0 { 160.0 } else { 220.0 }
+                }) { continue; }
+                if place_label_budget.exhausted() { break; }
+                if !place_label_budget.take(is_shield) { continue; }
+                place_label_work += 1;
                 if l.shield != crate::vector_tiles::RoadShield::None {
                     use crate::vector_tiles::RoadShield;
                     let (height, pad, text_color) = match l.shield {
@@ -13929,11 +14609,6 @@ impl HookEchoApp {
                         p,
                         egui::vec2((galley.size().x + pad).max(height), height),
                     );
-                    if placed_shields.iter().any(|(name, shield, position)| {
-                        *name == l.name && *shield == l.shield && position.distance(p) < if z < 8.0 { 160.0 } else { 220.0 }
-                    }) {
-                        continue;
-                    }
                     if !self.labels.place(
                         label_key(l),
                         r.expand(3.0),
@@ -14105,11 +14780,8 @@ impl HookEchoApp {
                 let now = chrono::Utc::now();
                 // Reject off-screen flashes in lon/lat before projecting each one: a GLM feed can
                 // carry tens of thousands of flashes while the pane shows a corner of one state.
-                let corner = |px: (f32, f32)| {
-                    let w = cam.screen_to_world(px, vp);
-                    crate::render::mercator::world_to_lonlat(w.0, w.1)
-                };
-                let (c0, c1) = (corner((0.0, 0.0)), corner((vp.0, vp.1)));
+                let (w0, w1) = cam.visible_bounds(vp);
+                let (c0, c1) = (crate::render::mercator::world_to_lonlat(w0.0, w0.1), crate::render::mercator::world_to_lonlat(w1.0, w1.1));
                 let (lon_lo, lon_hi) = (c0.0.min(c1.0), c0.0.max(c1.0));
                 let (lat_lo, lat_hi) = (c0.1.min(c1.1), c0.1.max(c1.1));
                 for f in feed.flashes() {
@@ -14133,11 +14805,8 @@ impl HookEchoApp {
         // lon/lat prefilter, because the deque is just as long and the pane just as small.
         if self.show_strikes && !self.strikes.is_empty() {
             let now = chrono::Utc::now();
-            let corner = |px: (f32, f32)| {
-                let w = cam.screen_to_world(px, vp);
-                crate::render::mercator::world_to_lonlat(w.0, w.1)
-            };
-            let (c0, c1) = (corner((0.0, 0.0)), corner((vp.0, vp.1)));
+            let (w0, w1) = cam.visible_bounds(vp);
+            let (c0, c1) = (crate::render::mercator::world_to_lonlat(w0.0, w0.1), crate::render::mercator::world_to_lonlat(w1.0, w1.1));
             let (lon_lo, lon_hi) = (c0.0.min(c1.0), c0.0.max(c1.0));
             let (lat_lo, lat_hi) = (c0.1.min(c1.1), c0.1.max(c1.1));
             for &(lon, lat, time) in &self.strikes {
@@ -14203,8 +14872,7 @@ impl HookEchoApp {
             // projecting any points — CAPE/SRH carry thousands of small rings.
             let (vmin_lon, vmin_lat, vmax_lon, vmax_lat) = {
                 use crate::render::mercator::world_to_lonlat;
-                let (wx0, wy0) = cam.screen_to_world((0.0, 0.0), vp);
-                let (wx1, wy1) = cam.screen_to_world((vp.0, vp.1), vp);
+                let ((wx0, wy0), (wx1, wy1)) = cam.visible_bounds(vp);
                 let (lon0, lat0) = world_to_lonlat(wx0, wy0);
                 let (lon1, lat1) = world_to_lonlat(wx1, wy1);
                 (
@@ -14783,7 +15451,7 @@ impl HookEchoApp {
                 let (_, c) = wxdata::tropical::saffir_simpson(kt);
                 painter.circle_filled(p, 2.5, egui::Color32::from_rgb(c[0], c[1], c[2]));
                 let hit = egui::Rect::from_center_size(p, egui::vec2(10.0, 10.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     let fl = o
                         .wspd_kt
                         .map_or_else(|| "\u{2014}".into(), |v| format!("{v:.0} kt"));
@@ -14830,7 +15498,7 @@ impl HookEchoApp {
                 ));
                 // Hover → altitude, aircraft and the raw report, which is what pilots read.
                 let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     let alt = r
                         .alt_ft
                         .map_or_else(|| "—".to_string(), |a| format!("{a} ft"));
@@ -14864,7 +15532,7 @@ impl HookEchoApp {
                     egui::Color32::BLACK,
                 );
                 let hit = egui::Rect::from_center_size(p, egui::vec2(14.0, 14.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     let tz = self.settings.tz_for(self.views[idx].site.as_deref());
                     response.clone().show_tooltip_text(format!(
                         "{}\n{}",
@@ -15129,7 +15797,7 @@ impl HookEchoApp {
                         );
                     }
                     let hit = egui::Rect::from_center_size(p, egui::vec2(24.0, 24.0));
-                    let hovered = response.hover_pos().is_some_and(|hp| hit.contains(hp));
+                    let hovered = map_hover.is_some_and(|hp| hit.contains(hp));
                     if show_labels || hovered || selected {
                         let label = &sp.name;
                         let galley = painter.layout_no_wrap(
@@ -15391,7 +16059,7 @@ impl HookEchoApp {
                 }
                 // Hover → the raw METAR text.
                 let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) && !ob.raw.is_empty() {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) && !ob.raw.is_empty() {
                     // Observation first, then the terminal forecast where the station files one:
                     // what it is doing, then what it is expected to do.
                     let text = match self.tafs.get(&ob.icao) {
@@ -15402,8 +16070,6 @@ impl HookEchoApp {
                 }
             }
         }
-        // ponytail: the station plots follow the Units setting; the gridded contour labels
-        // (K → °F, `field_ramps`) still do not, and want the same treatment when asked.
 
         // River flood gauges (NWPS): category-colored inverted-triangle droplet + stage tooltip.
         // ponytail: hover tooltip carries name/stage/forecast; skipped a click→Detail popup — the
@@ -15464,7 +16130,7 @@ impl HookEchoApp {
                         egui::Stroke::new(1.2, egui::Color32::from_gray(20)),
                     ));
                     let hit = egui::Rect::from_center_size(p, egui::vec2(16.0, 16.0));
-                    if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                    if map_hover.is_some_and(|hp| hit.contains(hp)) {
                         let stage = g
                             .stage_ft
                             .map_or_else(|| "n/a".to_string(), |v| format!("{v:.1} ft"));
@@ -15568,7 +16234,7 @@ impl HookEchoApp {
             }
             if !label.hover.is_empty() {
                 let hit = egui::Rect::from_center_size(p, hit_size);
-                if response.hover_pos().is_some_and(|hp| hit.contains(hp)) {
+                if map_hover.is_some_and(|hp| hit.contains(hp)) {
                     response.clone().show_tooltip_text(&label.hover);
                 }
             }
@@ -15580,7 +16246,7 @@ impl HookEchoApp {
             .fields_on
             .contains(&crate::render::FieldLayer::ModelDiff)
         {
-            if let (Some(grid), Some(hp)) = (self.diff_grid.as_ref(), response.hover_pos()) {
+            if let (Some(grid), Some(hp)) = (self.diff_grid.as_ref(), map_hover) {
                 let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
                 if let Some(v) = grid.sample_bilinear(lon, lat) {
@@ -15594,28 +16260,21 @@ impl HookEchoApp {
                     ));
                 }
             }
-        } else if let Some(hp) = response.hover_pos() {
+        } else if let Some(hp) = map_hover {
             // Sample the same native values the inspector exposes. The GPU texture may be
             // decimated or palette-indexed for display, so reading it back would be scientifically
             // wrong even when it looks identical.
             let frame = crate::render::FieldLayer::draw_order()
                 .rev()
                 .find(|layer| view.fields_on.contains(layer))
-                .and_then(|layer| self.fields.get(&layer))
+                .and_then(|layer| self.field_state(idx, layer))
                 .and_then(|state| state.frame.as_ref());
             if let Some(frame) = frame {
                 let w = cam.screen_to_world((hp.x - prect.left(), hp.y - prect.top()), vp);
                 let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
                 let sample = frame.sample(lon, lat);
                 if let Some(value) = sample.value {
-                    let display = frame.descriptor.display_value(
-                        value,
-                        if self.settings.temp_unit == crate::settings::TempUnit::Fahrenheit {
-                            wxdata::field::UnitSystem::Us
-                        } else {
-                            wxdata::field::UnitSystem::Metric
-                        },
-                    );
+                    let display = self.settings.field_display_value(frame.descriptor, value);
                     response.clone().show_tooltip_text(format!(
                         "{}: {:.1} {}\nValid {} · {:?}",
                         frame.descriptor.short_name,
@@ -15635,6 +16294,9 @@ impl HookEchoApp {
         // a rebuild is in flight the previous rect keeps it registered to the ground.
         if self.show_blockage {
             if let Some((_, tex, world)) = &self.blockage_tex {
+                if cam.globe {
+                    crate::geo::paint_image(&painter, &cam, prect, tex.id(), *world);
+                } else {
                 let a = cam.world_to_screen((world[0], world[1]), vp);
                 let b = cam.world_to_screen((world[2], world[3]), vp);
                 let rect = egui::Rect::from_two_pos(
@@ -15647,6 +16309,7 @@ impl HookEchoApp {
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+                }
             }
         }
 
@@ -15661,13 +16324,8 @@ impl HookEchoApp {
                     egui::pos2(prect.left() + sx, prect.top() + sy)
                 };
                 for km in [50.0, 100.0, 150.0, 200.0] {
-                    let pts: Vec<egui::Pos2> = (0..=72)
-                        .map(|i| {
-                            let p = crate::geo::destination_point(origin, i as f64 * 5.0, km);
-                            to_screen(p[0], p[1])
-                        })
-                        .collect();
-                    painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, col)));
+                    let pts: Vec<_> = (0..=72).map(|i| crate::geo::destination_point(origin, i as f64 * 5.0, km)).collect();
+                    crate::geo::paint_path(&painter, &cam, prect, &pts, egui::Stroke::new(1.0, col));
                     if cam.zoom >= 6.0 {
                         let top = crate::geo::destination_point(origin, 0.0, km);
                         painter.text(
@@ -15681,14 +16339,17 @@ impl HookEchoApp {
                 }
                 for az in (0..360).step_by(45) {
                     let far = crate::geo::destination_point(origin, az as f64, 200.0);
-                    painter.line_segment(
-                        [to_screen(origin[0], origin[1]), to_screen(far[0], far[1])],
-                        egui::Stroke::new(0.6, col.gamma_multiply(0.7)),
-                    );
+                    crate::geo::paint_path(&painter, &cam, prect, &[origin, far], egui::Stroke::new(0.6, col.gamma_multiply(0.7)));
                 }
             }
         }
 
+        if view.timeline.alignment_target.is_some() {
+            let acceptable = view.alignment_acceptable(self.settings.linked_time_limit_seconds);
+            let offset = view.alignment_offset_milliseconds().map_or_else(|| "Awaiting matching scan".into(), |ms| format!("Linked scan offset {:+.3}s{}", ms as f64 / 1000.0, if acceptable { "" } else { " · outside time limit" }));
+            painter.text(prect.left_top() + egui::vec2(12.0, 54.0), egui::Align2::LEFT_TOP, offset,
+                egui::FontId::proportional(12.0), if acceptable { egui::Color32::WHITE } else { egui::Color32::from_rgb(255, 186, 86) });
+        }
         if self.show_scan_progress && view.show_radar {
             if let Some((volume, start)) = view.volume.as_ref().and_then(|volume| {
                 volume.live_status.as_ref()
@@ -15712,7 +16373,7 @@ impl HookEchoApp {
         // Radar lens: spaced bright pins keep the network legible; every site remains clickable.
         if self.show_radar_sites {
             let current = self.views[idx].site.as_deref();
-            let hovered = response.hover_pos().and_then(|pos| {
+            let hovered = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
@@ -15928,24 +16589,12 @@ impl HookEchoApp {
         // Road alternatives, with the provider's preferred route emphasized. This is a route
         // display only; weather exposure is drawn independently and never labels a route safe.
         for (index, route) in self.routes.iter().enumerate().rev() {
-            let points = route
-                .points
-                .iter()
-                .map(|[lon, lat]| {
-                    let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
-                    let (x, y) = cam.world_to_screen(world, vp);
-                    egui::pos2(prect.left() + x, prect.top() + y)
-                })
-                .collect();
             let color = if index == 0 {
                 crate::theme::accent(self.settings.theme)
             } else {
                 egui::Color32::from_rgba_unmultiplied(180, 190, 205, 155)
             };
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(if index == 0 { 4.0 } else { 2.0 }, color),
-            ));
+            crate::geo::paint_path(&painter, &cam, prect, &route.points, egui::Stroke::new(if index == 0 { 4.0 } else { 2.0 }, color));
         }
         for (index, [lon, lat]) in self.route_waypoints.iter().enumerate() {
             let world = crate::render::mercator::lonlat_to_world(*lon, *lat);
@@ -15988,16 +16637,7 @@ impl HookEchoApp {
             if st.points.len() < 2 {
                 continue;
             }
-            let pts: Vec<egui::Pos2> = st
-                .points
-                .iter()
-                .map(|ll| {
-                    let w = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
-                    let (sx, sy) = cam.world_to_screen(w, vp);
-                    egui::pos2(prect.left() + sx, prect.top() + sy)
-                })
-                .collect();
-            painter.add(egui::Shape::line(pts, egui::Stroke::new(2.5, st.color)));
+            crate::geo::paint_path(&painter, &cam, prect, &st.points, egui::Stroke::new(2.5, st.color));
         }
 
         // Saved watch zones, plus the one being clicked out right now.
@@ -16012,7 +16652,8 @@ impl HookEchoApp {
                 if z.ring.len() < 3 {
                     continue;
                 }
-                let pts: Vec<egui::Pos2> = z.ring.iter().map(|&p| screen(p)).collect();
+                let pts = crate::geo::project_ring(&cam, prect, &z.ring);
+                if pts.len() < 3 { continue; }
                 painter.add(egui::Shape::convex_polygon(
                     pts.clone(),
                     egui::Color32::from_rgba_unmultiplied(120, 200, 255, 26),
@@ -16035,12 +16676,9 @@ impl HookEchoApp {
                 }
                 if pts.len() >= 2 {
                     // Closing edge dashed in, so the shape being made is obvious before it is.
-                    let mut loop_pts = pts.clone();
-                    loop_pts.push(pts[0]);
-                    painter.add(egui::Shape::line(
-                        loop_pts,
-                        egui::Stroke::new(1.5, zone_col),
-                    ));
+                    let mut ring = self.zone_pts.clone();
+                    ring.push(ring[0]);
+                    crate::geo::paint_path(&painter, &cam, prect, &ring, egui::Stroke::new(1.5, zone_col));
                 }
             }
         }
@@ -16058,7 +16696,8 @@ impl HookEchoApp {
                     egui::pos2(prect.left() + sx, prect.top() + sy)
                 })
                 .collect();
-            painter.add(egui::Shape::line(pts.clone(), egui::Stroke::new(2.0, col)));
+            let locations: Vec<_> = self.chase_track.points.iter().map(|f| [f.lon, f.lat]).collect();
+            crate::geo::paint_path(&painter, &cam, prect, &locations, egui::Stroke::new(2.0, col));
             for (idx, label) in &self.chase_track.waypoints {
                 if let Some(p) = pts.get(*idx) {
                     painter.circle_filled(*p, 4.0, col);
@@ -16122,7 +16761,7 @@ impl HookEchoApp {
             }
             if self.measure.len() == 2 {
                 let (a, b) = (screen(self.measure[0]), screen(self.measure[1]));
-                painter.line_segment([a, b], egui::Stroke::new(2.0, col));
+                crate::geo::paint_path(&painter, &cam, prect, &self.measure, egui::Stroke::new(2.0, col));
                 let (km, brg) = crate::geo::great_circle(self.measure[0], self.measure[1]);
                 let mut txt = format!(
                     "{}  @ {brg:.0}°",
@@ -16317,8 +16956,8 @@ impl HookEchoApp {
                     &painter,
                     prect,
                     view.moment,
-                    self.palettes.table(view.moment),
-                    view.active_threshold(),
+                    &view.appearance.table(&self.palettes, view.moment, self.settings.theme),
+                    (view.active_threshold(), view.appearance.upper_bounds[view.moment.index()].filter(|_| view.custom_product.is_none())),
                     df,
                     dl,
                 );
@@ -16339,13 +16978,13 @@ impl HookEchoApp {
                 y += if top == crate::render::FieldLayer::ModelDiff {
                     ui::legend::draw_diff(&painter, prect, self.diff_field, y)
                 } else {
-                    ui::legend::draw_field(&painter, prect, top, y)
+                    ui::legend::draw_field(&painter, prect, top, y, &self.settings)
                 };
             }
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
             // call rather than a slot in DRAW_ORDER.
             if self.show_wind && self.wind.is_some() {
-                ui::legend::draw_ramp(&painter, prect, &crate::render::field_ramps::WIND, y);
+                ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
             }
         }
 
@@ -16411,7 +17050,7 @@ impl HookEchoApp {
                     egui::pos2(prect.left() + x, prect.top() + y)
                 })
             } else if self.tool == MapTool::Forecast {
-                response.hover_pos()
+                map_hover
             } else {
                 None
             };
@@ -16443,11 +17082,19 @@ impl HookEchoApp {
                 painter.circle_filled(p, 2.0, white);
             }
         }
+        if let Some(started) = trace_started.as_ref() {
+            crate::map_trace::finish(idx, self.frame_nr, place_label_work, started.elapsed().as_secs_f32() * 1000.0);
+        }
     }
 
     /// Whether a registry-backed observed field answers the instant this pane is showing.
     /// Unmigrated fields retain their existing behavior until they carry a `DataStamp`.
     fn field_aligned(&self, pane: usize, layer: crate::render::FieldLayer) -> bool {
+        if layer.is_native_abi() {
+            let selection = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
+            if !selection.satellite.follow_radar && selection.satellite.time.is_none() { return false; }
+            if self.field_state(pane, layer).is_none_or(|state| state.metadata.is_none()) { return false; }
+        }
         self.field_time_status(pane, layer)
             .is_none_or(|(_, _, _, aligned)| aligned)
     }
@@ -16464,14 +17111,15 @@ impl HookEchoApp {
         bool,
     )> {
         let stamp = self
-            .fields
-            .get(&layer)
+            .field_state(pane, layer)
             .and_then(|state| state.metadata.as_ref())
             .map(|(_, stamp)| stamp)?;
-        let selected_time = self.views[pane]
-            .timeline
-            .selected_time()
-            .or_else(|| self.views[pane].volume.as_ref().map(|volume| volume.time));
+        let selected_time = if layer.is_native_abi() {
+            let view = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
+            if view.satellite.follow_radar { view.displayed_time().or(view.timeline.selected_time()) } else { view.satellite.time }
+        } else {
+            self.views[pane].displayed_time().or(self.views[pane].timeline.selected_time())
+        };
         // A live MRMS mosaic is independent of the site's last completed scan. That scan can
         // lag by ten minutes even while the national field is fresh; archive scrubs still use
         // their selected instant.
@@ -16623,6 +17271,7 @@ impl HookEchoApp {
                 bbox_min,
                 bbox_max,
                 center,
+                globe: cam.globe_uniform(vp),
                 scale,
                 dt: self.wind_dt,
                 // Pixels per world unit is the camera's own scale factor; the particle step is
@@ -16814,6 +17463,91 @@ impl HookEchoApp {
         }
     }
 
+    fn capture_recovery_snapshot(&mut self) -> RecoverySnapshot {
+        RecoverySnapshot {
+            version: 1,
+            session: ModeSession {
+                workspace: self.capture_workspace(),
+                panes: self.views.iter().map(PaneSession::capture).collect(),
+                inspector: self.analyst_inspector_open,
+            },
+            analyst: self.analyst_open,
+            playing: self.views.iter().map(|v| v.timeline.playing).collect(),
+            speed: self.views.iter().map(|v| v.timeline.speed).collect(),
+            loop_enabled: self.views.iter().map(|v| v.timeline.loop_enabled).collect(),
+        }
+    }
+
+    fn record_interaction(&mut self, kind: &'static str) {
+        let view = &self.views[self.active];
+        let station = view.site.as_deref().filter(|site| wxdata::sites::site_by_id(site).is_some());
+        if self.interaction_history.len() == 64 { self.interaction_history.pop_front(); }
+        self.interaction_history.push_back(serde_json::json!({
+            "at": Utc::now(), "action": kind, "pane": self.active,
+            "pane_count": self.views.len(), "station": station,
+            "moment": view.moment, "playing": view.timeline.playing,
+            "requested_time": view.timeline.selected_time(),
+        }));
+    }
+
+    fn push_undo(&mut self, entry: UndoEntry) {
+        if self.undo_suspended { return; }
+        let size = serde_json::to_vec(&entry).map_or(usize::MAX, |bytes| bytes.len());
+        const CAP: usize = 2 * 1024 * 1024;
+        if size > CAP { self.toast(ToastKind::Info, "This layout is too large for Undo"); return; }
+        while self.undo_history.len() >= 16 || self.undo_history.iter().map(|(_, size)| size).sum::<usize>() + size > CAP {
+            self.undo_history.pop_front();
+        }
+        self.undo_history.push_back((entry, size));
+    }
+
+    fn remember_layout(&mut self) {
+        if self.undo_suspended { return; }
+        let entry = UndoEntry::Layout {
+            snapshot: self.capture_recovery_snapshot(),
+            active_workspace: self.active_workspace.clone(),
+        };
+        self.push_undo(entry);
+    }
+
+    fn undo_workspace_action(&mut self, ctx: &egui::Context) {
+        let Some((entry, _)) = self.undo_history.pop_back() else {
+            self.toast(ToastKind::Info, "No workspace action to undo"); return;
+        };
+        self.undo_suspended = true;
+        match entry {
+            UndoEntry::Layout { snapshot, active_workspace } => {
+                self.restore_mode_session(snapshot.session, ctx);
+                self.analyst_open = snapshot.analyst;
+                self.active_workspace = active_workspace;
+                for (i, view) in self.views.iter_mut().enumerate() {
+                    view.timeline.playing = snapshot.playing[i];
+                    view.timeline.speed = snapshot.speed[i];
+                    view.timeline.loop_enabled = snapshot.loop_enabled[i];
+                }
+            }
+            UndoEntry::Marker { marker, index } => {
+                crate::settings::restore_deleted_marker(&mut self.settings.markers, index, marker);
+            }
+        }
+        self.undo_suspended = false;
+        self.record_interaction("undo_workspace_action");
+        self.toast(ToastKind::Success, "Workspace action undone");
+    }
+
+    fn checkpoint_recovery(&mut self) {
+        if self.embed || !self.settings.setup_done { return; }
+        let snapshot = self.capture_recovery_snapshot();
+        if let Ok(json) = serde_json::to_string(&snapshot) {
+            if self.recovery_json.as_ref() != Some(&json) {
+                match crate::recovery::save(&json) {
+                    Ok(()) => self.recovery_json = Some(json),
+                    Err(error) => log::warn!("recovery checkpoint: {error}"),
+                }
+            }
+        }
+    }
+
     /// Restore a saved arrangement. Panes come back empty of data and fill through the normal
     /// poll, exactly as a freshly split pane does.
     fn capture_mode_session(&mut self) -> ModeSession {
@@ -16872,6 +17606,11 @@ impl HookEchoApp {
     }
 
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
+        if ws.panes.is_empty() { return; }
+        self.remember_layout();
+        self.record_interaction("apply_workspace");
+        let suspended = self.undo_suspended;
+        self.undo_suspended = true;
         if self.workspace_return_session.is_none() {
             self.workspace_return_session = Some(self.capture_mode_session());
         }
@@ -16882,6 +17621,7 @@ impl HookEchoApp {
         self.apply_workspace_raw(ws, ctx);
         self.analyst_open = mode == ViewMode::Analyst;
         self.active_workspace = Some(ws.name.clone());
+        self.undo_suspended = suspended;
     }
 
     fn apply_workspace_raw(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
@@ -16898,7 +17638,10 @@ impl HookEchoApp {
             "KTLX"
         };
         let adopted = ws.adopted_site(current_site, default_site);
+        let suspended = self.undo_suspended;
+        self.undo_suspended = true;
         self.set_pane_count(ws.panes.len());
+        self.undo_suspended = suspended;
         for (v, snap) in self.views.iter_mut().zip(&ws.panes) {
             snap.apply(v);
             if v.site.is_none() {
@@ -16946,14 +17689,18 @@ impl HookEchoApp {
 
     fn set_pane_count(&mut self, n: usize) {
         let n = crate::workspace::bounded_pane_count(n);
+        if n < self.views.len() { self.remember_layout(); }
+        if n != self.views.len() { self.record_interaction("change_pane_count"); }
         while self.views.len() < n {
             let src = &self.views[self.active];
-            let (site, camera, basemap, tilt, date) = (
+            let (site, camera, basemap, tilt, date, abi_scene, satellite) = (
                 src.site.clone(),
                 src.camera,
                 src.basemap,
                 src.tilt,
                 src.timeline.date,
+                src.abi_scene,
+                src.satellite.clone(),
             );
             // Split a scrubbed view and the new panes have to land on the same instant, not on
             // live. Without this, splitting an archive view gave one populated pane and three
@@ -16964,6 +17711,8 @@ impl HookEchoApp {
             let mut v = MapView::new(site, camera);
             v.smooth = self.settings.smooth_radar;
             v.basemap = basemap;
+            v.abi_scene = abi_scene;
+            v.satellite = satellite;
             v.tilt = tilt;
             v.timeline.date = date;
             v.timeline.following = seek.is_none();
@@ -16971,7 +17720,27 @@ impl HookEchoApp {
             v.moment = Moment::ALL[self.views.len() % Moment::ALL.len()];
             self.views.push(v);
         }
+        let old_count = self.views.len();
         self.views.truncate(n);
+        for idx in n..old_count {
+            // Replace the receiver as well as its caches: late results from closed panes are
+            // discarded rather than retaining tessellated geometry until the pane reopens.
+            self.pane_vtiles[idx] = crate::vector_tiles::VectorTileManager::new(self.spawner.clone());
+            self.vlabel_cache[idx] = None;
+        }
+        self.pane_custom_sweep.retain(|idx, _| *idx < n);
+        self.pane_custom_input.retain(|idx, _| *idx < n);
+        self.pane_custom_recipe.retain(|idx, _| *idx < n);
+        self.pane_lut.retain(|idx, _| *idx < n);
+        self.pane_upload_tokens.retain(|idx, _| *idx < n);
+        self.goes.truncate(n);
+        self.trim_radar_memory();
+        self.pane_fields.retain(|(pane, layer), _| {
+            if *pane >= n {
+                self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel(&RequestLane::PaneField(*pane, *layer));
+                false
+            } else { true }
+        });
         if self.active >= n {
             self.active = n - 1;
         }
@@ -17535,6 +18304,7 @@ impl HookEchoApp {
         v.camera = crate::render::mercator::Camera {
             center: lonlat_to_world(lon, lat),
             zoom,
+            globe: v.camera.globe,
         };
         v.camera_placed = true;
         if let Some(t) = time {
@@ -17573,7 +18343,7 @@ impl HookEchoApp {
         let frame = crate::render::FieldLayer::draw_order()
             .rev()
             .filter(|layer| self.views[self.active].fields_on.contains(layer))
-            .find_map(|layer| self.fields.get(&layer).and_then(|state| state.frame.clone()));
+            .find_map(|layer| self.field_state(self.active, layer).and_then(|state| state.frame.clone()));
         let Some(frame) = frame else {
             self.toast(ToastKind::Info, "No scalar field is active");
             return;
@@ -17721,7 +18491,7 @@ impl HookEchoApp {
         let active = &self.views[self.active].fields_on;
         let frames: Vec<_> = crate::render::FieldLayer::draw_order()
             .filter(|layer| active.contains(layer))
-            .filter_map(|layer| self.fields.get(&layer)?.frame.as_ref())
+            .filter_map(|layer| self.field_state(self.active, layer)?.frame.as_ref())
             .collect();
         let forecast = frames
             .iter()
@@ -17838,14 +18608,35 @@ impl HookEchoApp {
             .into_iter()
             .map(|(name, value)| (name.to_string(), value.into()))
             .collect();
+        let encoded_scan_bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan).chain(self.views.iter().flat_map(|view| view.retained_scans())));
+        let (gpu_bytes, shadow_bytes) = crate::gpu_metrics::memory();
+        let pane_metrics: Vec<_> = self.views.iter().enumerate().map(|(idx, view)| serde_json::json!({
+            "pane":idx, "binned_bytes":view.binned_cache_bytes(),
+            "radar_upload_requested":self.pane_upload_tokens.get(&idx).copied().unwrap_or(0),
+            "radar_upload_prepared":crate::gpu_metrics::uploads()[idx], "map_gpu_p50_p95_ms":crate::gpu_metrics::percentiles(idx as u32), "skipped_unavailable_frames":view.skipped_frames,
+            "derived_bytes":self.pane_custom_sweep.get(&idx).map_or(0, |sweep| sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2)),
+        })).collect();
+        let (shared_starts, shared_joins, shared_active) = wxdata::shared_read::byte_stats();
         let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-            "schema": "hookecho.diagnostics/v1",
+            "schema": "hookecho.diagnostics/v2",
+            "captured_at": Utc::now(),
             "version": env!("CARGO_PKG_VERSION"),
             "platform": {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
             },
             "renderer": &self.renderer_info,
+            "timeline_availability": self.timeline_frame_statuses(),
+            "recent_interactions": self.interaction_history,
+            "shared_downloads": { "started":shared_starts, "joined":shared_joins, "active_keys":shared_active },
+            "undo_history": { "entries":self.undo_history.len(), "serialized_bytes":self.undo_history.iter().map(|(_, bytes)| bytes).sum::<usize>() },
+            "reproduction": {
+                "active_pane": self.active,
+                "link_cameras": self.link_cameras,
+                "link_times": self.link_times,
+                "panes": self.views.iter().map(MapView::diagnostic_state).collect::<Vec<_>>(),
+                "privacy": "Camera coordinates, markers, user product names, local paths, credentials and raw errors are excluded.",
+            },
             "sources": sources,
             "cache": {
                 "families": cache,
@@ -17853,6 +18644,14 @@ impl HookEchoApp {
                 "storage_error": storage_error.map(|_| "storage unavailable"),
             },
             "performance_counters": counters,
+            "render_metrics": {
+                "map_gpu_timestamps_supported":crate::gpu_metrics::supported(), "nominal_gpu_bytes":gpu_bytes, "cpu_upload_shadow_bytes":shadow_bytes, "encoded_scan_payload_bytes":encoded_scan_bytes, "panes":pane_metrics,
+                "radar_payload_budget_bytes":radar_payload_budget(),
+                "radar_payload_highwater_bytes":self.radar_memory_highwater,
+                "radar_cache_evictions":self.radar_cache_evictions,
+                "radar_payload_over_budget":encoded_scan_bytes > radar_payload_budget(),
+                "scope":"Map draw timing excludes uploads and wind advection. Memory excludes metadata, allocator and driver overhead and framework resources.",
+            },
         }))
         .expect("diagnostics values are serializable");
         match crate::dialog::save_bytes("hookecho-diagnostics.json", "json", &bytes) {
@@ -18558,7 +19357,8 @@ pub(crate) fn to_upload(
     let (wx0, wy0) = lonlat_to_world(lon - dlon, lat + dlat);
     let (wx1, wy1) = lonlat_to_world(lon + dlon, lat - dlat);
     // Premultiply storm motion into raw-index units (raw = 2 + t*253, t over value_span).
-    let per_ms = 253.0 / (s.value_max - s.value_min).max(f32::EPSILON);
+    let code_max = if s.data16.is_some() { 65535.0 } else { 255.0 };
+    let per_ms = (code_max - 2.0) / (s.value_max - s.value_min).max(f32::EPSILON);
     let (srv, me, mn) = match storm_uv {
         Some((e, n)) => (1.0, e * per_ms, n * per_ms),
         None => (0.0, 0.0, 0.0),
@@ -18566,17 +19366,17 @@ pub(crate) fn to_upload(
     // Only reflectivity is tinted: the tint says what kind of precipitation an echo is, and
     // that is not a statement about a velocity or a correlation coefficient.
     let tint = precip.filter(|_| s.moment == Moment::Reflectivity);
-    let base = crate::colormap::bake_lut(table, (s.value_min, s.value_max), threshold);
+    let base = crate::colormap::bake_lut_width(table, (s.value_min, s.value_max), threshold, if s.data16.is_some() { 1024 } else { 256 });
     // Three rows, always. When the tint is off they are identical, which costs 2 KB and keeps
     // the shader and the bind group the same shape in both cases.
-    let mut lut = Vec::with_capacity(1024 * 3);
+    let mut lut = Vec::with_capacity(base.len() * 3);
     lut.extend_from_slice(&base);
     for kind in [
         crate::colormap::PrecipTint::Snow,
         crate::colormap::PrecipTint::Mix,
     ] {
         match tint {
-            Some(_) => lut.extend_from_slice(&crate::colormap::tint_lut(&base, kind)),
+            Some(_) => lut.extend_from_slice(&crate::colormap::tint_lut_width(&base, kind)),
             None => lut.extend_from_slice(&base),
         }
     }
@@ -18598,9 +19398,12 @@ pub(crate) fn to_upload(
     };
 
     RadarUpload {
+        upload_token: 0,
+        sector_opacity: None,
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,
         data: if lut_only { Vec::new() } else { s.data.clone() },
+        data16: s.data16.as_ref().map(|d| if lut_only { Vec::new() } else { d.clone() }),
         uniform: [
             s.radar_lat,
             s.radar_lon,
@@ -18619,8 +19422,8 @@ pub(crate) fn to_upload(
             flag_n,
             flag_e,
             flag_s,
-            0.0,
-            0.0,
+            0.55,
+            code_max,
             0.0,
         ],
         lut,
@@ -18646,6 +19449,22 @@ fn map_gesture_on_map(ctx: &egui::Context, occlusion: &[egui::Rect]) -> bool {
 }
 
 /// Include inertial scrolling and trackpad pinches, which do not hold a pointer down.
+/// Consume the original wheel events once. egui's smoothed tail must not be fed into another
+/// smoother. Ctrl/cmd wheel is already represented by zoom_delta and remains direct.
+fn raw_map_scroll(i: &egui::InputState, line_speed: f32, height: f32) -> egui::Vec2 {
+    i.raw.events.iter().filter_map(|event| {
+        let egui::Event::MouseWheel { unit, delta, modifiers, .. } = event else { return None };
+        if modifiers.ctrl || modifiers.command { return None; }
+        let mut delta = *delta * match unit {
+            egui::MouseWheelUnit::Point => 1.0,
+            egui::MouseWheelUnit::Line => line_speed,
+            egui::MouseWheelUnit::Page => height,
+        };
+        if modifiers.shift { delta = egui::vec2(delta.x + delta.y, 0.0); }
+        Some(delta)
+    }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
+}
+
 fn map_gesture_live(i: &egui::InputState) -> bool {
     i.pointer.any_down()
         || i.any_touches()
@@ -18656,6 +19475,10 @@ fn map_gesture_live(i: &egui::InputState) -> bool {
 /// A zoom-bucket crossing waits for the gesture to end; new geometry does not.
 fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: bool) -> bool {
     geometry_changed || (bucket_changed && !gesture_live)
+}
+
+fn frame_result_is_current(timeline: &crate::timeline::Timeline, name: &str) -> bool {
+    timeline.current().is_some_and(|frame| frame.name() == name)
 }
 
 fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
@@ -19310,16 +20133,9 @@ pub(crate) fn display_units(moment: Moment, settings: &Settings) -> (f32, &'stat
 /// GIBS geostationary layers are 10-minute imagery; half an hour of tolerance covers a gap in the
 /// index or a radar volume from a slow VCP without ever pairing a scan with imagery from another
 /// part of the day. `None` means "leave it on the latest", which is the pre-existing behaviour.
-fn nearest_goes(
-    times: &[chrono::DateTime<chrono::Utc>],
-    t: chrono::DateTime<chrono::Utc>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    const TOLERANCE_MIN: i64 = 30;
-    times
-        .iter()
-        .copied()
-        .min_by_key(|x| (*x - t).num_seconds().abs())
-        .filter(|x| (*x - t).num_minutes().abs() <= TOLERANCE_MIN)
+#[cfg(test)]
+fn nearest_goes(times: &[chrono::DateTime<Utc>], t: chrono::DateTime<Utc>) -> Option<chrono::DateTime<Utc>> {
+    crate::satellite_time::nearest(times, t)
 }
 
 /// Compass point for a bearing in degrees from north (used in alarm text).
@@ -19518,6 +20334,7 @@ fn nearest_tropical_id(
 impl eframe::App for HookEchoApp {
     /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
     fn on_exit(&mut self) {
+        self.checkpoint_recovery();
         // Remember where we were looking, so a relaunch picks up the map where it was left. Only
         // while no explicit startup view is saved — that one is the user's choice, not ours.
         // Written here rather than per-frame: Android's alert service reads this file concurrently.
@@ -19561,6 +20378,7 @@ impl eframe::App for HookEchoApp {
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ui_started = Instant::now();
         crate::profiling::new_frame();
         crate::prof_scope!("ui");
         let ctx = root.ctx().clone();
@@ -19571,7 +20389,14 @@ impl eframe::App for HookEchoApp {
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
         wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
-        self.gesture_live = map_gesture_on_map(ctx, &self.mobile_occlusion);
+        self.gesture_live = map_gesture_on_map(ctx, &self.mobile_occlusion)
+            || self.views.iter().any(|v| v.camera_motion.active());
+        self.map_upload_budget = crate::map_work::UploadBudget::frame(self.gesture_live);
+        if crate::gpu_metrics::device_lost() {
+            egui::Window::new("Graphics device lost").collapsible(false).show(ctx, |ui| {
+                ui.label("Rendering has stopped. Restart HookEcho to restore the graphics device.");
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.perf.tick(ctx);
         #[cfg(debug_assertions)]
@@ -19853,85 +20678,38 @@ impl eframe::App for HookEchoApp {
                 self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
             }
         }
-        // GOES ABI imagery has its own source adapter and arrives every five minutes.
-        let satellite_time = (!self.views[self.active].timeline.following)
-            .then(|| {
-                self.views[self.active]
-                    .timeline
-                    .current()
-                    .and_then(|frame| frame.date_time())
-            })
-            .flatten();
-        for (layer, band) in [
-            (FL::GoesC13, 13),
-            (FL::GoesWaterVapor, 8),
-            (FL::GoesMidWaterVapor, 9),
-            (FL::GoesLongwaveIr, 14),
-            (FL::GoesVisible, 2),
-        ] {
-            let stale = self.field_wanted(layer)
-                && self.fields.get(&layer).is_none_or(|state| {
-                    state.requested_time != Some(satellite_time)
-                        || state.last_fetch.is_none_or(|time| {
-                            time.elapsed().as_secs() >= field_refresh_secs(layer)
-                        })
-                });
-            if stale {
-                let state = self.fields.entry(layer).or_default();
+        // Each pane owns ABI scene, requested instant and request generations.
+        for pane in 0..self.views.len() {
+            let scene = self.views[pane].abi_scene.unwrap_or(self.settings.abi_scene);
+            let selection = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
+            let satellite_time = if selection.satellite.follow_radar {
+                (!selection.timeline.following).then(|| selection.displayed_time().or(selection.timeline.selected_time())).flatten()
+            } else { selection.satellite.time };
+            if !selection.satellite.follow_radar && satellite_time.is_none() { continue; }
+            let layers: Vec<_> = self.views[pane].fields_on.iter().copied().filter(|layer| layer.is_native_abi()).collect();
+            for layer in layers {
+                let state = self.pane_fields.entry((pane, layer)).or_default();
+                let stale = state.requested_time != Some(satellite_time) || state.requested_scene != Some(scene)
+                    || state.last_fetch.is_none_or(|time| time.elapsed().as_secs() >= field_refresh_secs(layer));
+                if !stale { continue; }
+                if state.requested_time != Some(satellite_time) || state.requested_scene != Some(scene) {
+                    state.frame = None;
+                    state.metadata = None;
+                    state.pending = None;
+                }
                 state.last_fetch = Some(Instant::now());
                 state.requested_time = Some(satellite_time);
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::GoesAbi(
-                        layer,
-                        band,
-                        self.settings.abi_scene,
-                        satellite_time,
-                    ),
-                );
-            }
-        }
-        for (index, entry) in wxdata::abi::CATALOG.iter().enumerate() {
-            let layer = FL::GoesCatalog(index as u8);
-            let stale = self.field_wanted(layer)
-                && self.fields.get(&layer).is_none_or(|state| {
-                    state.requested_time != Some(satellite_time)
-                        || state.last_fetch.is_none_or(|time| {
-                            time.elapsed().as_secs() >= field_refresh_secs(layer)
-                        })
-                });
-            if stale {
-                let state = self.fields.entry(layer).or_default();
-                state.last_fetch = Some(Instant::now());
-                state.requested_time = Some(satellite_time);
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::GoesAbi(
-                        layer,
-                        entry.band,
-                        self.settings.abi_scene,
-                        satellite_time,
-                    ),
-                );
-            }
-        }
-        {
-            let layer = FL::GoesTrueColor;
-            let stale = self.field_wanted(layer)
-                && self.fields.get(&layer).is_none_or(|state| {
-                    state.requested_time != Some(satellite_time)
-                        || state.last_fetch.is_none_or(|time| {
-                            time.elapsed().as_secs() >= field_refresh_secs(layer)
-                        })
-                });
-            if stale {
-                let state = self.fields.entry(layer).or_default();
-                state.last_fetch = Some(Instant::now());
-                state.requested_time = Some(satellite_time);
-                self.spawn_overlay(
-                    ctx,
-                    OverlaySource::GoesRgb(self.settings.abi_scene, satellite_time),
-                );
+                state.requested_scene = Some(scene);
+                let source = if layer == FL::GoesTrueColor { OverlaySource::GoesRgb(pane, scene, satellite_time) } else {
+                    let band = match layer {
+                        FL::GoesC13 => 13, FL::GoesWaterVapor => 8, FL::GoesMidWaterVapor => 9,
+                        FL::GoesLongwaveIr => 14, FL::GoesVisible => 2,
+                        FL::GoesCatalog(index) => wxdata::abi::CATALOG[index as usize].band,
+                        _ => unreachable!(),
+                    };
+                    OverlaySource::GoesAbi(pane, layer, band, scene, satellite_time)
+                };
+                self.spawn_overlay(ctx, source);
             }
         }
         // Snow bands: the mosaic and the precipitation-type grid, cut to the banded snow.
@@ -20475,6 +21253,7 @@ impl eframe::App for HookEchoApp {
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
             {
                 self.views[self.active].timeline.toggle_play();
+                self.record_interaction("toggle_playback");
             }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 self.apply_action(BindableAction::ToggleObs, ctx);
@@ -20835,6 +21614,10 @@ impl eframe::App for HookEchoApp {
             &mut self.drawer,
             metric,
         );
+        if let Some((index, marker)) = self.marker_window.deleted.take() {
+            self.push_undo(UndoEntry::Marker { marker, index });
+            self.record_interaction("delete_marker");
+        }
         if let Some((name, lat, lon)) = self.marker_window.chosen.take() {
             self.settings.markers.push(crate::settings::Marker {
                 id: crate::settings::new_marker_id(),
@@ -20859,15 +21642,6 @@ impl eframe::App for HookEchoApp {
                 cam.center = crate::render::mercator::lonlat_to_world(marker.lon, marker.lat);
                 cam.zoom = cam.zoom.max(9.0);
             }
-        }
-        // The map popup indexes into the same list: a delete above it leaves it describing the
-        // wrong marker, which is the one way this UI can lie about which place you are editing.
-        if let (Some(gone), Some(open)) = (self.marker_window.removed, self.marker_popup) {
-            self.marker_popup = match gone.cmp(&open) {
-                std::cmp::Ordering::Less => Some(open - 1),
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(open),
-            };
         }
         if let Some(query) = query {
             self.marker_window.searching = true;
@@ -21144,11 +21918,16 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.show_climatology_window(ctx);
-        // GOES frame times arrived → keep the scrub at latest until the user moves it.
-        if let Some(rx) = &self.goes_times_rx {
-            if let Ok(times) = rx.try_recv() {
-                self.goes_times = times;
-                self.goes_times_rx = None;
+        self.goes.resize_with(self.views.len(), Default::default);
+        self.pane_custom_sweep.retain(|idx, _| *idx < self.views.len());
+        self.pane_custom_input.retain(|idx, _| *idx < self.views.len());
+        self.pane_custom_recipe.retain(|idx, _| *idx < self.views.len());
+        for catalog in &mut self.goes {
+            if let Some(rx) = &catalog.rx {
+                if let Ok(times) = rx.try_recv() {
+                    if !times.is_empty() || catalog.times.is_empty() { catalog.times = times; }
+                    catalog.rx = None;
+                }
             }
         }
         self.goes_time_bar(ctx);
@@ -21333,8 +22112,9 @@ impl eframe::App for HookEchoApp {
             self.vol3d.clip = clip;
             self.build_volume3d();
         }
-        if let Some(i) = self.marker_popup {
-            match self.settings.markers.get_mut(i) {
+        if let Some(id) = self.marker_popup.as_deref() {
+            let index = crate::settings::marker_index(&self.settings.markers, id);
+            match index.and_then(|i| self.settings.markers.get_mut(i)) {
                 // The list shrank under us (the manager window deleted a row this frame).
                 None => self.marker_popup = None,
                 Some(m) => {
@@ -21349,7 +22129,10 @@ impl eframe::App for HookEchoApp {
                         self.watch_stream(name, url);
                     }
                     if r.remove {
-                        self.settings.markers.remove(i);
+                        let index = index.expect("resolved marker");
+                        let marker = self.settings.markers.remove(index);
+                        self.push_undo(UndoEntry::Marker { marker, index });
+                        self.record_interaction("delete_marker");
                         self.marker_popup = None;
                     } else if !r.open {
                         self.marker_popup = None;
@@ -21533,9 +22316,7 @@ impl eframe::App for HookEchoApp {
         }
 
         let placefile_labels = self.placefile_labels_cached();
-        // One occupancy set for the whole frame, across every pane and every label layer. Panes
-        // occupy disjoint screen rects, so sharing it between them costs nothing and saves
-        // resetting it per pane.
+        // Visibility history spans the frame; each clipped pane starts a fresh collision pass.
         self.labels.begin();
         egui::CentralPanel::default().show(root, |ui| {
             let full = ui.available_rect_before_wrap();
@@ -21558,20 +22339,24 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
+            for view in &mut self.views { view.timeline.alignment_target = None; }
             if self.link_times {
                 let active = self.active.min(n - 1);
                 let leader = &self.views[active].timeline;
                 if let Some(source) = leader.current().cloned() {
                     let selected_cut = self.views[active].selected_cut_ms();
+                    let lock_loaded_source = self.lock_source_frame && self.views[active].volume.as_ref().is_some_and(|v| v.name == source.name());
                     if let Some(time) = selected_cut
                         .and_then(chrono::DateTime::from_timestamp_millis)
+                        .or_else(|| self.views[active].displayed_time())
                         .or_else(|| source.date_time())
                     {
                         let (following, playing) = (leader.following, leader.playing);
                         for (i, view) in self.views.iter_mut().enumerate() {
+                            if i != active { view.timeline.alignment_target = Some(time); }
                             if i != active
                                 && (selected_cut.is_some()
-                                    || !self.lock_source_frame
+                                    || !lock_loaded_source
                                     || !view.timeline.align_to_source(
                                         &source, following, playing,
                                     ))
@@ -21583,21 +22368,6 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
-            // Each pane fetches and draws its own `View::basemap` (see `render_pane`). Two things
-            // stay global for now: the GOES frame cursor and the vector palette, both driven by
-            // the active pane.
-            // ponytail: one GOES cursor + one vector palette for all panes; split them when
-            // someone actually wants two satellite times or two vector palettes side by side.
-            use crate::tiles::BasemapStyle;
-            let style = self.views[self.active.min(n - 1)]
-                .basemap
-                .resolve(ctx.theme() == egui::Theme::Dark);
-            let is_vector = style.vector_palette().is_some();
-            let raster_style = if style.is_raster() {
-                style
-            } else {
-                BasemapStyle::None
-            };
             self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
             self.tiles
@@ -21606,72 +22376,13 @@ impl eframe::App for HookEchoApp {
             // Ask for `@2x` tiles where the provider serves them: same tile count, twice the
             // pixels, labels drawn for the density instead of magnified. Off on a metered link —
             // a double-resolution tile is roughly double the bytes.
-            let mut clear_tiles = self
+            let clear_tiles = self
                 .tiles
                 .set_retina(ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered());
-            // GOES sub-hourly scrub: fetch the available frame times when a GOES style becomes
-            // active, and apply the selected frame (None = latest).
-            if raster_style.timed() {
-                // Which hour of imagery to ask for: the pane's own clock when it is replaying an
-                // archive, otherwise the live window ending now. GIBS keeps GeoColor about two
-                // weeks and Band 13 several months, so a replayed event usually has satellite.
-                let radar_time = self.views[self.active.min(n - 1)]
-                    .volume
-                    .as_ref()
-                    .map(|v| v.time);
-                let (hour, from, to) = crate::tiles::goes_window(chrono::Utc::now(), radar_time);
-                if self.goes_times_style != Some(raster_style) || self.goes_hour != hour {
-                    self.goes_times_style = Some(raster_style);
-                    self.goes_hour = hour;
-                    self.goes_times.clear();
-                    self.goes_time_idx = None;
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    self.goes_times_rx = Some(rx);
-                    let http = self.http.clone();
-                    self.spawner.spawn(async move {
-                        let times =
-                            crate::tiles::fetch_frame_times(&http, raster_style, from, to, 48)
-                                .await;
-                        let _ = tx.send(times);
-                    });
-                }
-                // Following the radar is the default: scrubbing back through an event should
-                // take the satellite back with it, which is the whole reason to look at both.
-                // Stepping the GOES arrows by hand drops out of it.
-                let selected = if self.goes_follow_radar {
-                    self.views[self.active.min(n - 1)]
-                        .volume
-                        .as_ref()
-                        .map(|v| v.time)
-                        .and_then(|t| nearest_goes(&self.goes_times, t))
-                } else {
-                    self.goes_time_idx
-                        .and_then(|i| self.goes_times.get(i).copied())
-                };
-                // `None` means GIBS's own default, which is the newest imagery there is — right
-                // for a live pane, three days wrong for one replaying an archive. In an archive
-                // window, fall back to the newest frame *in that window* instead.
-                let selected = match (selected, self.goes_hour) {
-                    (None, Some(_)) => self.goes_times.last().copied(),
-                    (s, _) => s,
-                };
-                clear_tiles |= self.tiles.set_goes_time(selected);
-            } else if self.goes_times_style.is_some() {
-                self.goes_times_style = None;
-                self.goes_hour = None;
-                self.goes_times.clear();
-                clear_tiles |= self.tiles.set_goes_time(None);
+            if self.settings.link_satellite_times {
+                let selection = self.views[self.active.min(n - 1)].satellite.clone();
+                for view in &mut self.views { view.satellite = selection.clone(); }
             }
-            let mut clear_vector = false;
-            if is_vector {
-                clear_vector |= self
-                    .vtiles
-                    .set_style(style.vector_palette().unwrap_or_default());
-                clear_vector |= self.vtiles.set_theme(self.settings.theme);
-            }
-            clear_vector |= self.vtiles.set_simplified(
-                self.settings.map_quality == crate::settings::MapQuality::Performance,
-            );
             self.last_viewport = rects
                 .get(self.active)
                 .map_or((full.width(), full.height()), |r| (r.width(), r.height()));
@@ -21679,14 +22390,14 @@ impl eframe::App for HookEchoApp {
             self.linked_probe = if n > 1 && (self.link_cameras || self.link_times) {
                 ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
                     rects.iter().enumerate().find_map(|(i, rect)| {
-                        rect.contains(pos).then(|| {
-                            let world = self.views[i].camera.screen_to_world(
+                        if !rect.contains(pos) { return None; }
+                        self.views[i].camera.pick_world(
                                 (pos.x - rect.left(), pos.y - rect.top()),
                                 (rect.width(), rect.height()),
-                            );
-                            let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
-                            [lon, lat]
-                        })
+                            ).map(|world| {
+                                let (lon, lat) = crate::render::mercator::world_to_lonlat(world.0, world.1);
+                                [lon, lat]
+                            })
                     })
                 })
             } else {
@@ -21707,7 +22418,7 @@ impl eframe::App for HookEchoApp {
                     i,
                     *prect,
                     clear_tiles && first,
-                    clear_vector && first,
+                    false,
                     first,
                     solo || i + 1 == n,
                     &placefile_labels,
@@ -21741,6 +22452,7 @@ impl eframe::App for HookEchoApp {
             .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
         if due {
             self.settings_checked = Some(Instant::now());
+            self.checkpoint_recovery();
             // Fold the live overlay toggles into the settings so the diff below persists them
             // like any other change — no separate save path, no per-frame churn.
             let on: Vec<String> = OverlayToggle::ALL
@@ -21883,6 +22595,11 @@ impl eframe::App for HookEchoApp {
         {
             self.perf.idle_ms = idle;
         }
+        let moving = self.gesture_live && ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO
+            || i.smooth_scroll_delta != egui::Vec2::ZERO || (i.zoom_delta() - 1.0).abs() > f32::EPSILON);
+        self.adaptive.observe_cadence(ctx.input(|i| i.unstable_dt) * 1000.0, moving);
+        self.adaptive.observe(ui_started.elapsed().as_secs_f32() * 1000.0,
+            self.settings.map_quality == crate::settings::MapQuality::Auto);
         ctx.request_repaint_after(std::time::Duration::from_millis(idle));
     }
 }
@@ -22442,6 +23159,7 @@ mod tests {
     #[test]
     fn a_palette_change_uploads_the_table_and_nothing_else() {
         let sweep = wxdata::level2::BinnedSweep {
+            data16: None,
             moment: wxdata::level2::Moment::Reflectivity,
             az_bins: 360,
             gate_count: 200,
@@ -22998,6 +23716,36 @@ mod request_book_tests {
         RequestLane, SourceHealth,
     };
     use crate::render::FieldLayer;
+
+    #[test]
+    fn late_frame_completion_and_phase_updates_follow_the_current_selection() {
+        let old = wxdata::level2::Identifier::new("KTLX20130520_000000_V06".into());
+        let newest = wxdata::level2::Identifier::new("KTLX20130520_001000_V06".into());
+        let mut timeline = crate::timeline::Timeline::default();
+        timeline.frames = vec![old.clone(), newest.clone()];
+        timeline.following = false;
+        assert!(super::frame_result_is_current(&timeline, old.name()));
+        timeline.playhead = 1;
+        assert!(!super::frame_result_is_current(&timeline, old.name()));
+        assert!(super::frame_result_is_current(&timeline, newest.name()));
+        timeline.playhead = 2; // forecast tail has no radar request to finish
+        assert!(!super::frame_result_is_current(&timeline, newest.name()));
+        timeline.frames.clear();
+        assert!(!super::frame_result_is_current(&timeline, old.name()));
+    }
+
+    #[test]
+    fn abi_request_generations_are_independent_between_panes() {
+        let mut book = RequestBook::default();
+        let a = RequestLane::PaneField(0, FieldLayer::GoesC13);
+        let b = RequestLane::PaneField(1, FieldLayer::GoesC13);
+        let old_a = book.start(a.clone(), 10).unwrap();
+        let current_b = book.start(b.clone(), 20).unwrap();
+        let current_a = book.start(a.clone(), 30).unwrap();
+        assert!(!book.finish(&a, old_a, None, None));
+        assert!(book.finish(&b, current_b, None, None));
+        assert!(book.is_current(&a, current_a));
+    }
 
     #[test]
     fn only_the_latest_request_in_each_lane_is_current() {

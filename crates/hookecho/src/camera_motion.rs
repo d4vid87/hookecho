@@ -1,0 +1,272 @@
+//! Time-based wheel zoom and drag inertia. Touch pinch remains a direct camera operation.
+use crate::render::mercator::Camera;
+
+#[derive(Debug, Default)]
+pub struct Motion {
+    zoom_left: f64,
+    anchor: (f32, f32),
+    velocity: (f32, f32),
+    dragging: bool,
+    fresh_input: bool,
+    last_drag_move: Option<f64>,
+    expected: Option<Camera>,
+    viewport: Option<(f32, f32)>,
+}
+
+impl Motion {
+    pub fn active(&self) -> bool {
+        self.zoom_left.abs() > 1e-5
+            || (!self.dragging && self.velocity.0.hypot(self.velocity.1) >= 8.0)
+    }
+
+    pub fn cancel(&mut self) {
+        self.zoom_left = 0.0;
+        self.velocity = (0.0, 0.0);
+        self.dragging = false;
+        self.fresh_input = false;
+        self.last_drag_move = None;
+        self.expected = None;
+    }
+
+    /// An externally placed camera, projection change, or resized pane takes precedence.
+    pub fn sync(&mut self, cam: &Camera, vp: (f32, f32)) {
+        if self
+            .expected
+            .is_some_and(|e| e.center != cam.center || e.zoom != cam.zoom || e.globe != cam.globe)
+            || self.viewport.is_some_and(|old| old != vp)
+        {
+            self.cancel();
+        }
+        self.viewport = Some(vp);
+        self.expected = Some(*cam);
+    }
+
+    pub fn wheel(
+        &mut self,
+        cam: &mut Camera,
+        delta: f64,
+        anchor: (f32, f32),
+        vp: (f32, f32),
+        reduced: bool,
+    ) {
+        if !delta.is_finite() {
+            return;
+        }
+        self.sync(cam, vp);
+        self.velocity = (0.0, 0.0);
+        self.dragging = false;
+        if reduced {
+            self.zoom_left = 0.0;
+            cam.zoom_at(delta, anchor, vp);
+            self.expected = Some(*cam);
+        } else {
+            self.fresh_input = true;
+            self.anchor = anchor;
+            self.zoom_left = (cam.zoom + self.zoom_left + delta).clamp(-2.0, 20.0) - cam.zoom;
+        }
+    }
+
+    /// A diagonal trackpad gesture can contain pan and zoom in the same frame. Keep its queued
+    /// zoom when applying horizontal movement; treating the pan as an external jump loses it.
+    pub fn pan_input(&mut self, cam: &mut Camera, delta: (f32, f32), vp: (f32, f32)) {
+        self.sync(cam, vp);
+        self.velocity = (0.0, 0.0);
+        cam.pan_pixels(delta.0, delta.1, vp);
+        self.expected = Some(*cam);
+    }
+
+    pub fn begin_drag(&mut self) {
+        self.cancel();
+        self.dragging = true;
+    }
+
+    pub fn drag(&mut self, cam: &mut Camera, delta: (f32, f32), dt: f32, vp: (f32, f32), now: f64) {
+        self.dragging = true;
+        cam.pan_pixels(delta.0, delta.1, vp);
+        if delta.0 != 0.0 || delta.1 != 0.0 {
+            self.last_drag_move = Some(now);
+        }
+        let dt = dt.clamp(0.001, 0.05);
+        let weight = 1.0 - (-dt / 0.035).exp();
+        let x = (delta.0 / dt).clamp(-2000.0, 2000.0);
+        let y = (delta.1 / dt).clamp(-2000.0, 2000.0);
+        self.velocity.0 += (x - self.velocity.0) * weight;
+        self.velocity.1 += (y - self.velocity.1) * weight;
+        self.expected = Some(*cam);
+    }
+
+    pub fn release(&mut self, reduced: bool, now: f64) {
+        self.dragging = false;
+        if reduced || !now.is_finite() || self.last_drag_move.is_none_or(|last| now - last > 0.08) {
+            self.velocity = (0.0, 0.0);
+        }
+    }
+
+    /// Returns true while more camera frames are required. A stalled/backgrounded frame cancels
+    /// motion instead of applying a large catch-up jump when the window resumes.
+    pub fn advance(&mut self, cam: &mut Camera, dt: f32, vp: (f32, f32), reduced: bool) -> bool {
+        self.sync(cam, vp);
+        if !dt.is_finite() || (dt > 0.25 && !self.fresh_input) || reduced {
+            if reduced && self.zoom_left != 0.0 {
+                cam.zoom_at(self.zoom_left, self.anchor, vp);
+            }
+            self.cancel();
+            self.expected = Some(*cam);
+            return false;
+        }
+        let dt = if self.fresh_input && dt > 0.25 {
+            1.0 / 60.0
+        } else {
+            dt.clamp(0.0, 0.05)
+        } as f64;
+        self.fresh_input = false;
+        if self.zoom_left.abs() > 1e-5 {
+            let delta = if self.zoom_left.abs() < 1e-4 {
+                self.zoom_left
+            } else {
+                self.zoom_left * (1.0 - (-dt / 0.045).exp())
+            };
+            cam.zoom_at(delta, self.anchor, vp);
+            self.zoom_left -= delta;
+        }
+        if !self.dragging && self.velocity.0.hypot(self.velocity.1) >= 8.0 {
+            let decay = (-dt * 7.5).exp() as f32;
+            let distance = (1.0 - decay) / 7.5;
+            cam.pan_pixels(self.velocity.0 * distance, self.velocity.1 * distance, vp);
+            self.velocity.0 *= decay;
+            self.velocity.1 *= decay;
+        } else if !self.dragging {
+            self.velocity = (0.0, 0.0);
+        }
+        self.expected = Some(*cam);
+        self.active()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const VP: (f32, f32) = (1000.0, 800.0);
+    #[test]
+    fn wheel_preserves_anchor_and_settles_at_requested_zoom() {
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut m = Motion::default();
+        let anchor = (700.0, 300.0);
+        let world = cam.screen_to_world(anchor, VP);
+        m.wheel(&mut cam, 1.25, anchor, VP, false);
+        assert_eq!(cam.zoom, 7.0);
+        let mut frames = 0;
+        while m.advance(&mut cam, 1.0 / 60.0, VP, false) {
+            frames += 1;
+            assert!(frames < 120);
+        }
+        assert!(frames > 5);
+        assert!((cam.zoom - 8.25).abs() < 1e-4);
+        let at = cam.world_to_screen(world, VP);
+        assert!((at.0 - anchor.0).abs() < 0.01 && (at.1 - anchor.1).abs() < 0.01);
+    }
+    #[test]
+    fn external_camera_and_resize_cancel_old_motion() {
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut m = Motion::default();
+        m.wheel(&mut cam, 1.0, (500.0, 400.0), VP, false);
+        cam = Camera::at_lonlat(-90.0, 40.0, 8.0);
+        assert!(!m.advance(&mut cam, 0.016, VP, false));
+        assert_eq!(cam.zoom, 8.0);
+        m.wheel(&mut cam, 1.0, (500.0, 400.0), VP, false);
+        assert!(!m.advance(&mut cam, 0.016, (800.0, 600.0), false));
+        assert_eq!(cam.zoom, 8.0);
+    }
+    #[test]
+    fn reduced_motion_is_immediate_and_has_no_coast() {
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut m = Motion::default();
+        m.wheel(&mut cam, 1.0, (500.0, 400.0), VP, true);
+        assert_eq!(cam.zoom, 8.0);
+        assert!(!m.active());
+        m.begin_drag();
+        m.drag(&mut cam, (20.0, 0.0), 0.016, VP, 1.0);
+        m.release(true, 1.016);
+        let center = cam.center;
+        m.advance(&mut cam, 0.016, VP, true);
+        assert_eq!(cam.center, center);
+    }
+    #[test]
+    fn drag_coasts_only_after_release_and_stalls_cancel() {
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut m = Motion::default();
+        m.begin_drag();
+        m.drag(&mut cam, (20.0, 0.0), 0.016, VP, 1.0);
+        let center = cam.center;
+        assert!(!m.advance(&mut cam, 0.016, VP, false));
+        assert_eq!(cam.center, center);
+        m.release(false, 1.016);
+        assert!(m.advance(&mut cam, 0.016, VP, false));
+        assert_ne!(cam.center, center);
+        let center = cam.center;
+        assert!(!m.advance(&mut cam, 1.0, VP, false));
+        assert_eq!(cam.center, center);
+    }
+    #[test]
+    fn zoom_curve_is_independent_of_refresh_rate_and_reverses_without_overshoot() {
+        let sample = |dt: f32, frames: usize| {
+            let mut c = Camera::at_lonlat(-97.0, 35.0, 7.0);
+            let mut m = Motion::default();
+            m.wheel(&mut c, 1.0, (600.0, 300.0), VP, false);
+            for _ in 0..frames {
+                m.advance(&mut c, dt, VP, false);
+            }
+            c.zoom
+        };
+        assert!((sample(1.0 / 60.0, 12) - sample(1.0 / 120.0, 24)).abs() < 1e-7);
+        let mut c = Camera::at_lonlat(-97.0, 35.0, 19.8);
+        let mut m = Motion::default();
+        m.wheel(&mut c, 100.0, (500.0, 400.0), VP, false);
+        for _ in 0..60 {
+            m.advance(&mut c, 1.0 / 60.0, VP, false);
+            assert!(c.zoom <= 20.0);
+        }
+        m.wheel(&mut c, -1.0, (500.0, 400.0), VP, false);
+        for _ in 0..60 {
+            m.advance(&mut c, 1.0 / 60.0, VP, false);
+            assert!(c.zoom >= 19.0);
+        }
+        assert!((c.zoom - 19.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_new_wheel_event_after_reactive_sleep_is_not_discarded() {
+        let mut c = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut m = Motion::default();
+        m.wheel(&mut c, 0.5, (500.0, 400.0), VP, false);
+        assert!(m.advance(&mut c, 0.5, VP, false));
+        assert!(c.zoom > 7.0);
+        assert!(!m.advance(&mut c, 0.5, VP, false));
+    }
+
+    #[test]
+    fn holding_a_drag_still_before_release_does_not_throw_the_map() {
+        let mut c = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut m = Motion::default();
+        m.begin_drag();
+        m.drag(&mut c, (20.0, 0.0), 0.016, VP, 1.0);
+        m.release(false, 1.2);
+        let center = c.center;
+        assert!(!m.advance(&mut c, 0.016, VP, false));
+        assert_eq!(c.center, center);
+    }
+
+    #[test]
+    fn diagonal_scroll_does_not_discard_its_zoom_component() {
+        let mut c = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut m = Motion::default();
+        let center = c.center;
+        m.wheel(&mut c, 0.5, (500.0, 400.0), VP, false);
+        m.pan_input(&mut c, (20.0, 0.0), VP);
+        assert_ne!(c.center, center);
+        for _ in 0..60 {
+            m.advance(&mut c, 1.0 / 60.0, VP, false);
+        }
+        assert!((c.zoom - 7.5).abs() < 1e-4);
+    }
+}

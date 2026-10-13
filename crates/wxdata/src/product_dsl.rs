@@ -194,6 +194,7 @@ impl Product {
         anyhow::ensure!(inputs.iter().all(|(_, sweep)| same_grid(base, sweep)), "product inputs are not on the same radar grid");
         let span = self.definition.max - self.definition.min;
         let mut data = Vec::with_capacity(base.data.len());
+        let mut data16 = inputs.iter().any(|(_, s)| s.data16.is_some()).then(|| Vec::with_capacity(base.data.len()));
         for at in 0..base.data.len() {
             let gate = at % base.gate_count;
             let azimuth = at / base.gate_count;
@@ -211,7 +212,14 @@ impl Product {
             for (moment, sweep) in inputs {
                 values.moments[moment.index()] = decode_gate(sweep, at);
             }
-            let encoded = match self.root.eval(&values) {
+            let evaluated = self.root.eval(&values);
+            if let Some(precise) = &mut data16 {
+                precise.push(match &evaluated {
+                    Some(Value::Number(value)) => crate::level2::encode_display16(*value, self.definition.min, self.definition.max),
+                    _ => 0,
+                });
+            }
+            let encoded = match evaluated {
                 Some(Value::Number(value)) if value.is_finite() => {
                     2 + (((value - self.definition.min) / span).clamp(0.0, 1.0) * 253.0).round() as u8
                 }
@@ -220,6 +228,7 @@ impl Product {
             data.push(encoded);
         }
         Ok(BinnedSweep {
+            data16,
             moment: Moment::Reflectivity,
             data,
             value_min: self.definition.min,
@@ -240,6 +249,10 @@ fn same_grid(a: &BinnedSweep, b: &BinnedSweep) -> bool {
 }
 
 fn decode_gate(sweep: &BinnedSweep, at: usize) -> Option<f32> {
+    if let Some(precise) = &sweep.data16 {
+        let raw = *precise.get(at)?;
+        return (raw >= 2).then(|| sweep.value_min + (raw as f32 - 2.0) / 65533.0 * (sweep.value_max - sweep.value_min));
+    }
     let raw = *sweep.data.get(at)?;
     (raw >= 2).then(|| {
         sweep.value_min + (raw as f32 - 2.0) / 253.0 * (sweep.value_max - sweep.value_min)
@@ -714,9 +727,32 @@ mod tests {
     }
 
     #[test]
+    fn precise_product_preserves_sub_byte_values_and_missing_gates() {
+        let mut definition = definition("REF");
+        definition.inputs = vec![Moment::Reflectivity];
+        let product = Product::compile(definition).unwrap();
+        let values = [40.01, 40.09];
+        let input = BinnedSweep {
+            data16: Some(vec![crate::level2::encode_display16(values[0], 0.0, 100.0), crate::level2::encode_display16(values[1], 0.0, 100.0), 1, 0]),
+            moment: Moment::Reflectivity, az_bins: 1, gate_count: 4,
+            data: vec![103, 103, 1, 0], first_gate_km: 1.0,
+            gate_interval_km: 0.25, radar_lat: 35.0, radar_lon: -97.0, elevation_deg: 0.5,
+            value_min: 0.0, value_max: 100.0,
+        };
+        let out = product.sweep(&[(Moment::Reflectivity, &input)], EnvironmentValues::default()).unwrap();
+        let precise = out.data16.unwrap();
+        assert!(precise[1] > precise[0]);
+        for (code, value) in precise.iter().zip(values) {
+            assert!(((*code as f32 - 2.0) / 65533.0 * 100.0 - value).abs() < 0.002);
+        }
+        assert_eq!(&precise[2..], &[0, 0]);
+    }
+
+    #[test]
     fn gate_product_builds_a_renderable_sweep() {
         let product = Product::compile(definition("REF * CC")).unwrap();
         let sweep = |moment, raw, min, max| BinnedSweep {
+            data16: None,
             moment, az_bins: 1, gate_count: 1, data: vec![raw], first_gate_km: 1.0,
             gate_interval_km: 0.25, radar_lat: 35.0, radar_lon: -97.0, elevation_deg: 0.5,
             value_min: min, value_max: max,

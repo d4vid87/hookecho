@@ -919,16 +919,41 @@ pub fn tile_cover(
     zoom_bias: f64,
 ) -> Vec<VisibleTile> {
     let z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
+    tile_cover_at_level(cam, viewport_px, z)
+}
+
+/// Per-pane detail selection with a 0.3-zoom dead band around each rounded boundary.
+/// Crossing a boundary decisively still switches promptly; small reversals keep resident detail.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DetailLevel { level: Option<u8> }
+impl DetailLevel {
+    pub fn cover(&mut self, cam: &Camera, viewport: (f32, f32), max: u8, bias: f64) -> Vec<VisibleTile> {
+        let q = (cam.zoom + bias).clamp(2.0, max as f64);
+        let mut z = self.level.unwrap_or(q.round() as u8).clamp(2, max);
+        while z < max && q > z as f64 + 0.65 { z += 1; }
+        while z > 2 && q < z as f64 - 0.65 { z -= 1; }
+        self.level = Some(z);
+        tile_cover_at_level(cam, viewport, z)
+    }
+}
+
+fn tile_cover_at_level(cam: &Camera, viewport_px: (f32, f32), mut z: u8) -> Vec<VisibleTile> {
+    let ((west, north), (east, south)) = cam.visible_bounds(viewport_px);
+    if cam.globe {
+        while z > 2 {
+            let n = (1u32 << z) as f64;
+            let count = ((east * n).ceil() - (west * n).floor())
+                * ((south * n).ceil() - (north * n).floor());
+            if count <= 512.0 { break; }
+            z -= 1;
+        }
+    }
     let n = 1u32 << z;
     let nf = n as f64;
-    let wpp = cam.world_per_pixel();
-    let half_w = viewport_px.0 as f64 / 2.0 * wpp;
-    let half_h = viewport_px.1 as f64 / 2.0 * wpp;
-    let (cx, cy) = cam.center;
-    let x0 = ((cx - half_w) * nf).floor() as i64;
-    let x1 = ((cx + half_w) * nf).ceil() as i64;
-    let y0 = (((cy - half_h) * nf).floor() as i64).max(0);
-    let y1 = (((cy + half_h) * nf).ceil() as i64).min(n as i64);
+    let x0 = (west * nf).floor() as i64;
+    let x1 = (east * nf).ceil() as i64;
+    let y0 = ((north * nf).floor() as i64).max(0);
+    let y1 = ((south * nf).ceil() as i64).min(n as i64);
 
     let mut out = Vec::new();
     for ty in y0..y1 {
@@ -941,6 +966,7 @@ pub fn tile_cover(
             let wy0 = ty as f32 / nf as f32;
             let wx1 = (tx + 1) as f32 / nf as f32;
             let wy1 = (ty + 1) as f32 / nf as f32;
+            if cam.globe && !globe_tile_may_be_visible(cam, [wx0, wy0], [wx1, wy1]) { continue; }
             out.push(VisibleTile {
                 id,
                 world_min: [wx0, wy0],
@@ -949,6 +975,21 @@ pub fn tile_cover(
         }
     }
     out
+}
+
+/// Conservative angular-cone test: never reject a tile that can cross the horizon.
+fn globe_tile_may_be_visible(cam: &Camera, min: [f32; 2], max: [f32; 2]) -> bool {
+    let (_, center_lat) = crate::render::mercator::world_to_lonlat(cam.center.0, cam.center.1);
+    let latitude = |y: f32| (std::f64::consts::PI * (1.0 - 2.0 * y as f64)).sinh().atan();
+    let south = latitude(max[1]);
+    let north = latitude(min[1]);
+    let lat = (south + north) / 2.0;
+    let dl = ((min[0] as f64 + max[0] as f64) / 2.0 - cam.center.0) * std::f64::consts::TAU;
+    let radius = (north - south).abs() / 2.0 + (max[0] - min[0]).abs() as f64 * std::f64::consts::PI;
+    if radius >= std::f64::consts::FRAC_PI_2 { return true; }
+    let center_lat = center_lat.to_radians();
+    let facing = center_lat.sin() * lat.sin() + center_lat.cos() * lat.cos() * dl.cos();
+    facing >= -radius.sin()
 }
 
 /// Parse the `<Domain>` time list from a GIBS DescribeDomains XML into sorted instants. The
@@ -1114,7 +1155,7 @@ pub async fn fetch_frame_times(
 
 struct FetchedTile {
     id: TileId,
-    style: u8,
+    style: u64,
     rgba: Vec<u8>,
     width: u32,
     height: u32,
@@ -1162,6 +1203,7 @@ pub struct TileManager {
     client: reqwest::Client,
     tx: Sender<TileResult>,
     rx: Receiver<TileResult>,
+    deferred_ready: Option<TileResult>,
     /// Repaint handle. Tile fetches finish on a worker thread; without this the frame that would
     /// show them waits for whatever wakes egui next — on Android an idle heartbeat up to 250 ms
     /// away, per tile.
@@ -1227,6 +1269,7 @@ impl TileManager {
             thumbs: std::collections::HashMap::new(),
             thumb_tx,
             thumb_rx,
+            deferred_ready: None,
             cache_root,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
@@ -1242,9 +1285,13 @@ impl TileManager {
             return false;
         }
         self.goes_time = t;
-        self.requested.clear();
-        self.uploaded.clear();
         true
+    }
+
+    /// Style and exact frame form one texture identity; switching panes does not flush peers.
+    pub fn frame_key(&self, style: BasemapStyle) -> u64 {
+        let time = if style.timed() { self.goes_time.map_or(0, |t| t.timestamp() as u64) } else { 0 };
+        (time << 8) | u64::from(style.key())
     }
 
     /// Turn `@2x` tiles on or off (high-DPI screen, and not on a metered link). Returns true if it
@@ -1347,7 +1394,7 @@ impl TileManager {
                         let (w, h) = rgba.dimensions();
                         FetchedTile {
                             id: (6, 14, 24),
-                            style: key,
+                            style: u64::from(key),
                             rgba: rgba.into_raw(),
                             width: w,
                             height: h,
@@ -1392,7 +1439,7 @@ impl TileManager {
 
     /// Deepest zoom to fetch for `style` — the measured provider cap, except for the custom slot
     /// where only the user knows.
-    fn max_z(&self, style: BasemapStyle) -> u8 {
+    pub(crate) fn max_z(&self, style: BasemapStyle) -> u8 {
         if style == BasemapStyle::CustomXyz {
             self.custom_max_z
         } else {
@@ -1403,7 +1450,8 @@ impl TileManager {
     /// Kick off fetches for any visible tiles not yet requested.
     pub fn request_missing(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
         use std::sync::atomic::Ordering;
-        let skey = style.key();
+        let skey = self.frame_key(style);
+        self.failed.retain(|_, time| time.elapsed() < RETRY_AFTER);
         for v in visible {
             if self.requested.contains(&(skey, v.id)) {
                 continue;
@@ -1444,7 +1492,7 @@ impl TileManager {
                             &format!("/{iso}/GoogleMapsCompatible"),
                         );
                     }
-                    t.format("%Y%m%dT%H%M").to_string()
+                    t.format("%Y%m%dT%H%M%S").to_string()
                 }
                 _ => "default".to_string(),
             };
@@ -1590,12 +1638,18 @@ impl TileManager {
 
     /// Drain finished fetches into upload-ready tiles (each returned exactly once).
     pub fn drain_ready(&mut self) -> Vec<PendingTile> {
+        self.drain_ready_budget(&mut crate::map_work::UploadBudget::legacy_batch())
+    }
+
+    pub fn drain_ready_budget(&mut self, budget: &mut crate::map_work::UploadBudget) -> Vec<PendingTile> {
         let mut ready = Vec::new();
         // Uploading every tile that finished during a network burst turns one otherwise smooth
         // pan frame into a wall of texture allocation. Two matches the vector-tile budget; the
         // caller requests another frame while this batch is non-empty, so the queue still drains.
-        while ready.len() < 2 {
-            let Ok(t) = self.rx.try_recv() else { break };
+        let mut examined = 0;
+        while !budget.exhausted() && examined < 32 {
+            examined += 1;
+            let Some(t) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) else { break };
             let t = match t {
                 Ok(t) => t,
                 Err(id) => {
@@ -1607,6 +1661,10 @@ impl TileManager {
                 }
             };
             let key = (t.style, t.id);
+            if !budget.take(t.width as usize * t.height as usize * 4) {
+                self.deferred_ready = Some(Ok(t));
+                break;
+            }
             self.failed.remove(&key);
             // `push` (not `put`) hands back whatever it evicted, so the renderer can free the
             // texture instead of leaking it.
@@ -1626,6 +1684,9 @@ impl TileManager {
                 height: t.height,
             });
         }
+        if budget.exhausted() || self.deferred_ready.is_some() || examined == 32 {
+            if let Some(ctx) = &self.ctx { ctx.request_repaint(); }
+        }
         ready
     }
 
@@ -1639,11 +1700,21 @@ impl TileManager {
     /// Eviction itself runs once per frame in [`Self::evict_excess`], after every pane has been
     /// counted — evicting mid-frame would drop tiles a later pane still needs.
     pub fn promote_visible(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
-        let skey = style.key();
+        let skey = self.frame_key(style);
         for v in visible {
             self.uploaded.promote(&(skey, v.id));
         }
         self.frame_visible += visible.len();
+    }
+
+    pub fn visible_failed(&self, style: BasemapStyle, visible: &[VisibleTile]) -> bool {
+        let key = self.frame_key(style);
+        visible.iter().any(|tile| self.failed.contains_key(&(key, tile.id)))
+    }
+
+    pub fn visible_ready(&self, style: BasemapStyle, visible: &[VisibleTile]) -> bool {
+        let key = self.frame_key(style);
+        !visible.is_empty() && visible.iter().all(|tile| self.uploaded.contains(&(key, tile.id)))
     }
 
     /// Shrink the cache back to its resting size and return what fell out, so the renderer can
@@ -1712,7 +1783,7 @@ pub async fn fetch_visible(
                     let (w, h) = rgba.dimensions();
                     out.push(PendingTile {
                         id: v.id,
-                        style: style.key(),
+                        style: u64::from(style.key()),
                         rgba: rgba.into_raw(),
                         width: w,
                         height: h,
@@ -1747,20 +1818,17 @@ pub(crate) async fn load_tile_bytes(
     // tile is the next visitor's edge-cache hit. `fetch_url` leaves the keyed providers alone:
     // api.mapbox.com and api.maptiler.com answer CORS themselves, and proxying them would put a
     // user's API key in a shared cache. Native builds get the URL back unchanged.
-    let resp = client
-        .get(wxdata::net::fetch_url(url))
-        // Aborts the fetch, which dropping the future does not: an un-aborted request keeps one
-        // of the browser's six connections to this origin until the tab closes.
-        .timeout(TILE_TIMEOUT)
-        .send()
-        .await?
-        .error_for_status()?;
-    let bytes = resp.bytes().await?.to_vec();
+    let http = client.clone();
+    let request_url = wxdata::net::fetch_url(url);
+    let bytes = wxdata::shared_read::bytes(format!("tile:{request_url}"), async move {
+        Ok(http.get(request_url).timeout(TILE_TIMEOUT).send().await?
+            .error_for_status()?.bytes().await?.to_vec())
+    }).await?;
     if let Some(p) = path {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(p, &bytes);
+        let _ = std::fs::write(p, bytes.as_slice());
         if let Some(root) = crate::paths::cache_dir() {
             for sub in ["tiles", "vector"] {
                 let cache = root.join(sub);
@@ -1770,7 +1838,7 @@ pub(crate) async fn load_tile_bytes(
             }
         }
     }
-    Ok(bytes)
+    Ok(bytes.as_ref().clone())
 }
 
 /// How much GPU memory the uploaded raster tiles may rest at. This is the budget the entry cap
@@ -2067,6 +2135,44 @@ pub fn start_pack_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn globe_tile_culling_keeps_every_sample_that_can_face_the_viewer() {
+        for (lon, lat) in [(0.0, 0.0), (179.0, 70.0), (-97.0, 35.0), (40.0, -75.0)] {
+            let mut camera = Camera::at_lonlat(lon, lat, 1.0); camera.globe = true;
+            for x in 0..16 { for y in 0..16 {
+                let min = [x as f32 / 16.0, y as f32 / 16.0];
+                let max = [(x + 1) as f32 / 16.0, (y + 1) as f32 / 16.0];
+                if !globe_tile_may_be_visible(&camera, min, max) {
+                    for sx in 0..=8 { for sy in 0..=8 {
+                        let world = (min[0] as f64 + sx as f64 / 128.0, min[1] as f64 + sy as f64 / 128.0);
+                        assert!(!camera.world_visible(world), "culled a visible sample");
+                    } }
+                }
+            } }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn frame_switches_keep_separate_resident_and_inflight_identities() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut manager = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let style = BasemapStyle::GoesEast;
+        let first = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        manager.set_goes_time(Some(first));
+        let key = manager.frame_key(style);
+        let id = (4, 3, 5);
+        manager.requested.insert((key, id));
+        manager.uploaded.put((key, id), 16);
+        manager.set_goes_time(Some(first + chrono::Duration::minutes(10)));
+        assert_ne!(manager.frame_key(style), key);
+        assert!(manager.requested.contains(&(key, id)));
+        assert!(manager.uploaded.contains(&(key, id)));
+        assert!(!manager.uploaded.contains(&(manager.frame_key(style), id)));
+        manager.set_goes_time(Some(first));
+        assert_eq!(manager.frame_key(style), key);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -2614,5 +2720,23 @@ mod goes_window_tests {
         // Scrubbing a few minutes inside the same hour must not change the refetch key.
         let (again, ..) = goes_window(now, Some(old + chrono::Duration::minutes(5)));
         assert_eq!(again, hour);
+    }
+}
+
+#[cfg(test)]
+mod detail_transition_tests {
+    use super::*;
+    #[test]
+    fn small_boundary_reversals_do_not_thrash_and_large_moves_still_switch() {
+        let mut level = DetailLevel::default();
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 6.4);
+        let z = |d: &mut DetailLevel, c: &Camera| d.cover(c, (800.0,600.0),18,0.0)[0].id.0;
+        assert_eq!(z(&mut level,&cam),6);
+        for zoom in [6.51,6.49,6.6,6.42] { cam.zoom=zoom;assert_eq!(z(&mut level,&cam),6); }
+        cam.zoom=6.7;assert_eq!(z(&mut level,&cam),7);
+        cam.zoom=6.4;assert_eq!(z(&mut level,&cam),7);
+        cam.zoom=6.3;assert_eq!(z(&mut level,&cam),6);
+        cam.zoom=12.0;assert_eq!(z(&mut level,&cam),12);
+        cam.zoom=20.0;assert_eq!(z(&mut level,&cam),18);
     }
 }

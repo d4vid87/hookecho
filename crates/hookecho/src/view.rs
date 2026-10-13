@@ -60,6 +60,8 @@ const RECENT_VOLUMES: usize = if cfg!(target_os = "android") {
     12
 };
 
+type BinnedKey = (Moment, usize, bool, Option<i64>, bool);
+
 /// A decoded volume plus lazily-binned sweeps for the moments/tilts the user has viewed.
 pub struct Volume {
     /// Shared with the app's decoded-volume LRU: the cache and every pane showing this volume
@@ -76,7 +78,7 @@ pub struct Volume {
     pub cuts: Vec<level2::CutTime>,
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
     pub moments: [bool; Moment::ALL.len()],
-    binned: LruCache<(Moment, usize, bool, Option<i64>), BinnedSweep>,
+    binned: LruCache<BinnedKey, Arc<BinnedSweep>>,
     /// Set once a live chunk has been merged in. Such a volume is still being written — half its
     /// tilts may not have arrived — so it must never be kept and shown again later in place of
     /// the complete archived volume of the same name.
@@ -85,6 +87,10 @@ pub struct Volume {
 }
 
 impl Volume {
+    fn binned_bytes(&self) -> usize {
+        self.binned.iter().map(|(_, s)| s.data.len() + s.data16.as_ref().map_or(0, |v| v.len() * 2)).sum()
+    }
+
     pub fn new(scan: Arc<Scan>, name: String, time: DateTime<Utc>) -> Self {
         let vcp = scan.coverage_pattern_number().to_string();
         let elevations = level2::elevation_angles(&scan);
@@ -133,7 +139,7 @@ impl Volume {
                         .binned
                         .iter()
                         .map(|(k, _)| *k)
-                        .filter(|(_, t, _, _)| *t == idx)
+                        .filter(|(_, t, _, _, _)| *t == idx)
                         .collect();
                     for k in stale {
                         self.binned.pop(&k);
@@ -173,10 +179,28 @@ impl Volume {
         dealias: bool,
         cut_end_ms: Option<i64>,
     ) -> anyhow::Result<&BinnedSweep> {
-        let scan = Arc::clone(&self.scan);
-        self.binned.try_get_or_insert((moment, tilt, dealias, cut_end_ms), || {
-            level2::bin_scan_opts_at(&scan, moment, tilt, dealias, cut_end_ms)
-        })
+        self.binned_display_at(moment, tilt, dealias, cut_end_ms, false)
+    }
+
+    pub fn binned_display_at(&mut self, moment: Moment, tilt: usize, dealias: bool, cut_end_ms: Option<i64>, precision: bool) -> anyhow::Result<&BinnedSweep> {
+        let key = (moment, tilt, dealias, cut_end_ms, precision);
+        if !self.binned.contains(&key) {
+            let sweep = level2::bin_scan_display_at(&self.scan, moment, tilt, dealias, cut_end_ms, precision)?;
+            let bytes = |s: &BinnedSweep| s.data.len() + s.data16.as_ref().map_or(0, |d| d.len() * 2);
+            let budget = BINNED_CACHE * 720 * 1840;
+            let mut retained: usize = self.binned.iter().map(|(_, s)| bytes(s)).sum();
+            while !self.binned.is_empty() && retained + bytes(&sweep) > budget {
+                if let Some((_, old)) = self.binned.pop_lru() { retained -= bytes(&old); }
+            }
+            self.binned.put(key, Arc::new(sweep));
+        }
+        Ok(self.binned.get(&key).expect("inserted display sweep"))
+    }
+
+    /// Immutable shared input for custom products: retaining a moment never copies its gate arrays.
+    pub fn shared_binned_display_at(&mut self, moment: Moment, tilt: usize, cut_end_ms: Option<i64>, precision: bool) -> anyhow::Result<Arc<BinnedSweep>> {
+        self.binned_display_at(moment, tilt, false, cut_end_ms, precision)?;
+        Ok(self.binned.get(&(moment, tilt, false, cut_end_ms, precision)).expect("inserted shared display sweep").clone())
     }
 
     /// All reflectivity tilts as owned sweeps (lowest→highest), for vertical cross-sections.
@@ -195,8 +219,16 @@ impl Volume {
 }
 
 /// One map pane.
+pub(crate) struct RecoveryCut {
+    pub(crate) site: Option<String>,
+    pub(crate) volume_ms: i64,
+    pub(crate) selection: (i64, Moment, usize),
+}
+
 pub struct MapView {
     pub camera: crate::render::mercator::Camera,
+    pub camera_motion: crate::camera_motion::Motion,
+    pub tile_detail: crate::tiles::DetailLevel,
     /// Selected radar site (`None` = Supercell's cleared "None" state).
     pub site: Option<String>,
     pub moment: Moment,
@@ -205,17 +237,34 @@ pub struct MapView {
     pub tilt: usize,
     /// Selected cut within the shown volume; `None` follows its newest matching sweep.
     pub cut_selection: Option<(i64, Moment, usize)>,
+    pub(crate) recovery_cut: Option<RecoveryCut>,
     /// Opt-in live mode: keep this pane on the newest available 0.5° revisit.
     pub follow_low_cut: bool,
     /// Per-moment display threshold (physical units), indexed by [`Moment::index`].
     pub thresholds: [Option<f32>; Moment::ALL.len()],
     pub threshold_enabled: [bool; Moment::ALL.len()],
+    /// Pane-local display controls; never alter native gate measurements.
+    pub appearance: crate::radar_appearance::RadarAppearance,
+    pub satellite: crate::satellite_time::Selection,
+    pub frame_request: crate::frame_request::Request,
+    pub head_request: crate::frame_request::Request,
+    pub list_request: crate::frame_request::Request,
+    pub last_list_failure: Option<Instant>,
+    pub load_phase: Option<level2::LoadPhase>,
+    pub buffering: bool,
+    pub failed_frame: Option<String>,
+    pub frame_history: std::collections::VecDeque<(String, crate::timeline::FrameStatus)>,
+    pub skipped_frames: u64,
+    pub last_skipped_at: Option<wxdata::clock::Instant>,
     pub volume: Option<Volume>,
     /// Volumes the playhead has moved off, with their binned sweeps intact. See
     /// [`RECENT_VOLUMES`]; use [`MapView::show_volume`] rather than touching this.
     recent: LruCache<String, Volume>,
     /// The site the current volume/fetch belongs to; drives site-change detection.
     pub loaded_site: Option<String>,
+    /// Source of the previous scan kept visible while the selected station loads.
+    pub retained_station: Option<String>,
+    pub recenter_on_ready: bool,
     /// Set when the camera was aimed deliberately (Event Library, a bookmark, `HOOKECHO_GOTO`)
     /// rather than by panning. Switching site normally recenters on the radar, which would throw
     /// away the framing the deep link just asked for; this survives exactly one such recenter.
@@ -230,6 +279,7 @@ pub struct MapView {
     pub storm_speed_kt: f32,
     /// Basemap source under the radar (`None` = off).
     pub basemap: crate::tiles::BasemapStyle,
+    pub abi_scene: Option<wxdata::abi::Scene>,
     pub show_radar: bool,
     pub show_legend: bool,
     pub loading: bool,
@@ -252,6 +302,109 @@ pub struct MapView {
 }
 
 impl MapView {
+    /// Public radar state for reproducible reports. Omit camera, user product names, paths,
+    /// error messages and provider selectors: those can contain private locations or keys.
+    pub(crate) fn diagnostic_state(&self) -> serde_json::Value {
+        let public_site = |site: &Option<String>| {
+            site.as_deref().filter(|id| wxdata::sites::site_by_id(id).is_some())
+                .map(str::to_owned)
+        };
+        serde_json::json!({
+            "selected_station": public_site(&self.site),
+            "loaded_station": public_site(&self.loaded_site),
+            "displayed_station": public_site(&self.displayed_station().map(str::to_owned)),
+            "station_transition": self.retained_station.is_some(),
+            "moment": self.moment,
+            "custom_product_selected": self.custom_product.is_some(),
+            "tilt_index": self.tilt,
+            "appearance": {
+                "blend_width": self.appearance.blend_width,
+                "precision": self.appearance.precision,
+                "multipass": self.appearance.multipass,
+                "fade_old_sectors": self.appearance.fade_old_sectors,
+                "upper_bounds": self.appearance.upper_bounds,
+                "pane_palette_count": self.appearance.palettes.len(),
+                "smooth": self.smooth,
+                "globe": self.camera.globe,
+            },
+            "thresholds": self.thresholds,
+            "threshold_enabled": self.threshold_enabled,
+            "volume_time": self.volume.as_ref().map(|volume| volume.time),
+            "archive_date": self.timeline.date,
+            "playhead": self.timeline.playhead,
+            "frame_count": self.timeline.frames.len(),
+            "playing": self.timeline.playing,
+            "following_live": self.timeline.following,
+            "speed": self.timeline.speed,
+            "loop_enabled": self.timeline.loop_enabled,
+            "cut_playback": self.timeline.cut_playback,
+            "cut_index": self.timeline.cut_index,
+            "listing": self.timeline.listing,
+            "loading": self.loading,
+            "buffering": self.buffering,
+            "skipped_frames": self.skipped_frames,
+            "load_failed": self.error.is_some(),
+        })
+    }
+    /// Resident display gate buffers, including this pane's recent-volume cache.
+    pub fn retained_scans(&self) -> impl Iterator<Item = &Arc<Scan>> {
+        self.volume.iter().chain(self.recent.iter().map(|(_, volume)| volume)).map(|volume| &volume.scan)
+    }
+
+    pub fn binned_cache_bytes(&self) -> usize {
+        self.volume.as_ref().map_or(0, Volume::binned_bytes)
+            + self.recent.iter().map(|(_, volume)| volume.binned_bytes()).sum::<usize>()
+    }
+
+    /// Bound binned retention across the displayed and recent volumes, preserving the newest
+    /// display bin. GPU upload shadows are accounted separately by the renderer.
+    pub fn trim_binned_memory(&mut self, cap: usize) {
+        let mut bytes = self.binned_cache_bytes();
+        if bytes <= cap { return; }
+        for (_, volume) in self.recent.iter_mut().rev() {
+            while bytes > cap {
+                let Some((_, sweep)) = volume.binned.pop_lru() else { break; };
+                bytes = bytes.saturating_sub(sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2));
+            }
+        }
+        if let Some(volume) = &mut self.volume {
+            while bytes > cap && volume.binned.len() > 1 {
+                if let Some((_, sweep)) = volume.binned.pop_lru() {
+                    bytes = bytes.saturating_sub(sweep.data.len() + sweep.data16.as_ref().map_or(0, |data| data.len() * 2));
+                }
+            }
+        }
+    }
+
+    /// Station belonging to the scan on screen, distinct from a pending selection.
+    pub fn displayed_station(&self) -> Option<&str> {
+        self.volume.as_ref()?;
+        self.retained_station.as_deref().or(self.loaded_site.as_deref()).or(self.site.as_deref())
+    }
+
+    pub fn displayed_time(&self) -> Option<DateTime<Utc>> {
+        let volume = self.volume.as_ref()?;
+        Some(self.selected_cut_ms().and_then(chrono::DateTime::from_timestamp_millis).unwrap_or(volume.time))
+    }
+
+    /// Compare the scan actually loaded, including a selected cut, with the linked target.
+    /// A pending playhead fetch must not make the previously painted scan appear synchronized.
+    pub fn alignment_offset_seconds(&self) -> Option<i64> {
+        let target = self.timeline.alignment_target?;
+        Some((self.displayed_time()? - target).num_seconds())
+    }
+
+    pub fn alignment_offset_milliseconds(&self) -> Option<i64> {
+        Some((self.displayed_time()? - self.timeline.alignment_target?).num_milliseconds())
+    }
+
+    pub fn alignment_acceptable(&self, limit: Option<u32>) -> bool {
+        match (self.timeline.alignment_target, limit) {
+            (Some(target), Some(limit)) => self.displayed_time().is_some_and(|time| (time - target).abs() <= chrono::Duration::seconds(i64::from(limit))),
+            _ => true,
+        }
+    }
+
     pub fn new(site: Option<String>, camera: crate::render::mercator::Camera) -> Self {
         let mut thresholds = [None; Moment::ALL.len()];
         let mut threshold_enabled = [false; Moment::ALL.len()];
@@ -259,17 +412,34 @@ impl MapView {
         threshold_enabled[Moment::Reflectivity.index()] = true;
         Self {
             camera,
+            camera_motion: crate::camera_motion::Motion::default(),
+            tile_detail: crate::tiles::DetailLevel::default(),
             site,
             moment: Moment::Reflectivity,
             custom_product: None,
             tilt: 0,
             cut_selection: None,
+            recovery_cut: None,
             follow_low_cut: false,
             thresholds,
             threshold_enabled,
+            appearance: Default::default(),
+            satellite: Default::default(),
+            frame_request: Default::default(),
+            head_request: Default::default(),
+            list_request: Default::default(),
+            last_list_failure: None,
+            load_phase: None,
+            buffering: false,
+            failed_frame: None,
+            frame_history: Default::default(),
+            skipped_frames: 0,
+            last_skipped_at: None,
             volume: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,
+            retained_station: None,
+            recenter_on_ready: false,
             camera_placed: false,
             timeline: crate::timeline::Timeline::default(),
             smooth: true,
@@ -277,6 +447,7 @@ impl MapView {
             storm_dir_deg: 240.0,
             storm_speed_kt: 25.0,
             basemap: crate::tiles::BasemapStyle::default(),
+            abi_scene: None,
             show_radar: true,
             show_legend: true,
             loading: false,
@@ -319,7 +490,58 @@ impl MapView {
     ///
     /// `scan` is only used when this pane has never binned that volume; it is an `Arc` from the
     /// app's decoded-volume cache either way, so the two paths hold the same allocation.
+    pub fn note_frame_status(&mut self, name: String, state: crate::timeline::FrameStatus) {
+        self.frame_history.retain(|(previous, _)| previous != &name);
+        if self.frame_history.len() == 64 { self.frame_history.pop_front(); }
+        self.frame_history.push_back((name, state));
+    }
+
+    pub fn has_decoded_frame(&self, name: &str) -> bool {
+        self.volume.as_ref().is_some_and(|volume| volume.name == name) || self.recent.contains(&name.to_owned())
+    }
+
+    pub fn station_ready(&mut self) {
+        self.retained_station = None;
+        if std::mem::take(&mut self.recenter_on_ready) {
+            if let Some(site) = self.site.as_deref() {
+                crate::ui::site_dialog::center_on_site(&mut self.camera, site);
+            }
+        }
+    }
+
+    /// Retain at most one previous scan, with its original station identity. Never use that
+    /// volume as a live-merge base for the new station or put it in the new station's recent LRU.
+    pub fn begin_station_switch(&mut self) {
+        if self.site.is_none() {
+            self.volume = None;
+            self.retained_station = None;
+        } else if self.volume.is_some() && self.retained_station.is_none() {
+            self.retained_station = self.loaded_site.clone();
+        }
+        self.loaded_site = self.site.clone();
+        self.head_request.cancel();
+        self.list_request.cancel();
+        self.timeline.listing = false;
+        self.last_list_failure = None;
+        self.recenter_on_ready = false;
+        self.timeline.frames_key = None;
+        self.frame_history.clear();
+        self.forget_recent();
+        self.cut_selection = None;
+        self.frame_request.cancel();
+        self.load_phase = None;
+        self.failed_frame = None;
+        self.buffering = false;
+    }
+
     pub fn show_volume(&mut self, scan: Arc<Scan>, name: String, time: DateTime<Utc>) {
+        self.frame_history.retain(|(previous, _)| previous != &name);
+        let was_retained = self.retained_station.is_some();
+        self.station_ready();
+        self.frame_request.cancel();
+        self.load_phase = None;
+        self.failed_frame = None;
+        let restored_cut = self.recovery_cut.take();
         self.cut_selection = None;
         let vol = self
             .recent
@@ -327,10 +549,19 @@ impl MapView {
             .unwrap_or_else(|| Volume::new(scan, name, time));
         if let Some(old) = self.volume.replace(vol) {
             // Not a volume still being written, and not a stale copy of the one just shown.
-            if !old.live && old.name != self.volume.as_ref().expect("just set").name {
+            if !was_retained && !old.live && old.name != self.volume.as_ref().expect("just set").name {
                 self.recent.put(old.name.clone(), old);
             }
         }
+        self.cut_selection = restored_cut.filter(|pending| {
+            pending.site == self.site && self.volume.as_ref().is_some_and(|volume| volume.time.timestamp_millis() == pending.volume_ms)
+        }).map(|pending| pending.selection).filter(|(ended, moment, tilt)| {
+            *moment == self.moment && *tilt == self.tilt && self.volume.as_ref().is_some_and(|volume| {
+                volume.cuts.iter().any(|cut| cut.ended_at_ms == *ended
+                    && level2::cut_has_moment(&volume.scan, *cut, *moment)
+                    && volume.elevations.get(*tilt).is_some_and(|elevation| (*elevation - cut.elevation_deg).abs() < 0.15))
+            })
+        });
         self.pin_low_cut();
     }
 
@@ -462,6 +693,24 @@ impl MapView {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn manual_cut_survives_loading_its_volume_after_recovery() {
+        let scan = std::sync::Arc::new(wxdata::level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
+        let mut view = super::MapView::new(Some("KDMX".into()), crate::render::mercator::Camera::at_lonlat(-93.7, 41.7, 6.0));
+        let time = chrono::Utc::now();
+        view.show_volume(scan.clone(), "fixture".into(), time);
+        let cut = view.volume.as_ref().unwrap().cuts.iter().find(|cut| wxdata::level2::cut_has_moment(&scan, **cut, wxdata::level2::Moment::Reflectivity)).copied().unwrap();
+        let tilt = view.volume.as_ref().unwrap().elevations.iter().position(|angle| (*angle - cut.elevation_deg).abs() < 0.15).unwrap();
+        view.volume = None;
+        view.tilt = tilt;
+        view.recovery_cut = Some(super::RecoveryCut { site: view.site.clone(), volume_ms: time.timestamp_millis(), selection: (cut.ended_at_ms, wxdata::level2::Moment::Reflectivity, tilt) });
+        view.show_volume(scan.clone(), "fixture".into(), time);
+        assert_eq!(view.selected_cut_ms(), Some(cut.ended_at_ms));
+        view.recovery_cut = Some(super::RecoveryCut { site: view.site.clone(), volume_ms: time.timestamp_millis(), selection: (cut.ended_at_ms + 1, wxdata::level2::Moment::Reflectivity, tilt) });
+        view.show_volume(scan, "fixture".into(), time);
+        assert_eq!(view.cut_selection, None);
+    }
+
+    #[test]
     fn a_growing_live_volume_keeps_its_binned_tilts() {
         use super::tilts_only_grew;
         // The ordinary case: a chunk lands and appends the next sweep. Every index that already
@@ -552,6 +801,28 @@ mod tests {
     }
 
     #[test]
+    fn custom_product_inputs_share_gate_storage_and_survive_cache_eviction() {
+        let mut volume = Volume::new(scan_at(&[0.5]), "fixture".into(), Utc::now());
+        let first = volume.shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+        let second = volume.shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let bytes = first.data.clone();
+        volume.binned.clear();
+        assert_eq!(first.data, bytes);
+        assert_eq!(second.data, bytes);
+    }
+
+    #[test]
+    fn memory_inventory_counts_shared_scan_payloads_once() {
+        let first = scan_at(&[0.5, 1.5]);
+        let second = scan_at(&[0.5]);
+        let scans = [first.clone(), first.clone(), second.clone()];
+        let mut inventory = crate::radar_memory::Inventory::default();
+        assert_eq!(inventory.bytes(scans.iter()), 3);
+        assert_eq!(inventory.bytes([first].iter()), 2);
+    }
+
+    #[test]
     fn low_cut_follow_is_live_only_and_leaves_missing_tilts_alone() {
         let mut view = MapView::new(
             Some("KTLX".into()),
@@ -570,6 +841,25 @@ mod tests {
         view.timeline.following = true;
         view.show_volume(scan_at(&[1.5, 2.5]), "other".into(), Utc::now());
         assert_eq!(view.tilt, 1, "a radar without a 0.5° cut keeps its tilt");
+    }
+
+    #[test]
+    fn linked_comparison_uses_loaded_scan_instead_of_pending_playhead() {
+        let mut view = MapView::new(None, Camera::at_lonlat(0.0, 0.0, 3.0));
+        let target = chrono::DateTime::from_timestamp_millis(600_000).unwrap();
+        view.timeline.alignment_target = Some(target);
+        assert!(!view.alignment_acceptable(Some(120)));
+        view.volume = Some(Volume::new(scan_at(&[0.5]), "old".into(), target - chrono::Duration::seconds(180)));
+        assert_eq!(view.displayed_time(), Some(target - chrono::Duration::seconds(180)));
+        assert_eq!(view.alignment_offset_seconds(), Some(-180));
+        assert!(!view.alignment_acceptable(Some(120)));
+        view.volume.as_mut().unwrap().time = target - chrono::Duration::seconds(120);
+        assert!(view.alignment_acceptable(Some(120)));
+        view.volume.as_mut().unwrap().time -= chrono::Duration::milliseconds(1);
+        assert_eq!(view.alignment_offset_milliseconds(), Some(-120_001));
+        assert!(!view.alignment_acceptable(Some(120)), "a fractional second beyond the limit is outside the window");
+        view.timeline.alignment_target = None;
+        assert!(view.alignment_acceptable(Some(0)));
     }
 
     #[test]
@@ -615,54 +905,19 @@ mod tests {
             Some("KTLX".into()),
             crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
         );
-        let binned = || {
-            wxdata::stats::snapshot()
-                .into_iter()
-                .find(|(l, _)| *l == "sweeps_binned")
-                .unwrap()
-                .1
-        };
-
+        let sample = |volume: &mut Volume| volume.shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
         view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
-        let before = binned();
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        assert_eq!(binned() - before, 1, "the first look has to do the work");
-
-        // The playhead moves on, then comes back round.
+        assert!(view.volume.as_ref().unwrap().binned.is_empty());
+        let first_a = sample(view.volume.as_mut().unwrap());
+        assert_eq!(view.volume.as_ref().unwrap().binned.len(), 1);
         view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        let after_b = binned();
+        let first_b = sample(view.volume.as_mut().unwrap());
         view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
         assert_eq!(view.volume.as_ref().unwrap().name, "a");
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        assert_eq!(
-            binned(),
-            after_b,
-            "the second lap re-binned a sweep it already had"
-        );
-
-        // A site change is a different piece of sky: nothing kept is worth keeping.
+        assert!(Arc::ptr_eq(&first_a, &sample(view.volume.as_mut().unwrap())), "second lap must retain the actual binned allocation");
         view.forget_recent();
         view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
-        let before = binned();
-        view.volume
-            .as_mut()
-            .unwrap()
-            .binned(Moment::Reflectivity, 0, false)
-            .unwrap();
-        assert_eq!(binned() - before, 1);
+        assert!(!Arc::ptr_eq(&first_b, &sample(view.volume.as_mut().unwrap())), "site reset must discard the old allocation");
 
         // A volume still being written must never be kept: half its tilts may not have arrived,
         // and showing it again later in place of the complete archive volume loses them.
@@ -683,40 +938,29 @@ mod tests {
             "the half-written live volume was kept and shown again"
         );
 
-        // The size of it, both paths measured against each other: ten frames, three laps. The old
-        // path called `Volume::new` on every playhead move, so every frame of every lap re-ran
-        // `bin_scan_opts`. One test, not two: the counter is process-wide and the test threads
-        // share it, so a sibling reading it in parallel would see this one's work.
+        // Retain allocations so pointer reuse cannot hide a re-bin. These assertions are
+        // local to this test, unlike process-wide telemetry shared by parallel test threads.
         let names: Vec<String> = (0..10).map(|i| format!("frame-{i}")).collect();
-        let before = binned();
+        let mut fresh = Vec::new();
         for _ in 0..3 {
             for name in &names {
-                let mut vol = Volume::new(scan_at(&[0.5, 1.5]), name.clone(), now);
-                vol.binned(Moment::Reflectivity, 0, false).unwrap();
+                let mut volume = Volume::new(scan_at(&[0.5, 1.5]), name.clone(), now);
+                fresh.push(sample(&mut volume));
             }
         }
-        assert_eq!(
-            binned() - before,
-            30,
-            "the old path re-bins every frame, every lap"
-        );
-
-        let mut view = MapView::new(
-            Some("KTLX".into()),
-            crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
-        );
-        let before = binned();
+        let unique: std::collections::HashSet<_> = fresh.iter().map(Arc::as_ptr).collect();
+        assert_eq!(unique.len(), 30, "fresh volumes allocate on every lap");
+        let mut view = MapView::new(Some("KTLX".into()), crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0));
+        let mut retained = std::collections::HashMap::new();
         for _ in 0..3 {
             for name in &names {
                 view.show_volume(scan_at(&[0.5, 1.5]), name.clone(), now);
-                view.volume
-                    .as_mut()
-                    .unwrap()
-                    .binned(Moment::Reflectivity, 0, false)
-                    .unwrap();
+                let sweep = sample(view.volume.as_mut().unwrap());
+                if let Some(previous) = retained.get(name) { assert!(Arc::ptr_eq(previous, &sweep)); }
+                else { retained.insert(name.clone(), sweep); }
             }
         }
-        assert_eq!(binned() - before, 10, "one per volume, then two free laps");
+        assert_eq!(retained.len(), 10, "one allocation per volume, then two free laps");
     }
 
     /// A live volume that has only just started has no tilts in it yet. Applying it emptied the
@@ -791,8 +1035,76 @@ mod tests {
     }
 
     #[test]
+    fn station_switch_retains_one_identified_scan_and_replacement_discards_old_site_cache() {
+        let old = scan_at(&[0.5]);
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.loaded_site = view.site.clone();
+        view.show_volume(Arc::clone(&old), "old".into(), Utc::now());
+        view.site = Some("KDMX".into());
+        view.begin_station_switch();
+        assert!(Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &old));
+        assert_eq!(view.retained_station.as_deref(), Some("KTLX"));
+        assert_eq!(view.displayed_station(), Some("KTLX"));
+        view.site = Some("KOUN".into());
+        view.begin_station_switch();
+        assert_eq!(view.retained_station.as_deref(), Some("KTLX"));
+        view.show_volume(scan_at(&[0.5]), "replacement".into(), Utc::now());
+        assert!(view.retained_station.is_none());
+        assert_eq!(view.displayed_station(), Some("KOUN"));
+        assert!(!view.has_decoded_frame("old"), "old station must not enter new station's recent LRU");
+        view.site = None;
+        view.begin_station_switch();
+        assert!(view.volume.is_none());
+        assert_eq!(view.displayed_station(), None);
+    }
+
+    #[test]
+    fn binned_budget_evicts_old_tilts_but_preserves_the_newest_display_bin() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.show_volume(scan_at(&[0.5, 1.5]), "fixture".into(), Utc::now());
+        let volume = view.volume.as_mut().unwrap();
+        volume.binned_display_at(Moment::Reflectivity, 0, false, None, false).unwrap();
+        volume.binned_display_at(Moment::Reflectivity, 1, false, None, false).unwrap();
+        let bytes = view.binned_cache_bytes();
+        view.trim_binned_memory(1);
+        let volume = view.volume.as_ref().unwrap();
+        assert_eq!(volume.binned.len(), 1);
+        assert_eq!(volume.binned.iter().next().unwrap().0.1, 1);
+        assert!(view.binned_cache_bytes() < bytes);
+    }
+
+    #[test]
+    fn unavailable_frame_history_is_bounded_and_success_removes_failure() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        for frame in 0..100 { view.note_frame_status(frame.to_string(), crate::timeline::FrameStatus::Unavailable); }
+        assert_eq!(view.frame_history.len(), 64);
+        view.note_frame_status("99".into(), crate::timeline::FrameStatus::Skipped);
+        assert_eq!(view.frame_history.len(), 64);
+        view.show_volume(scan_at(&[0.5]), "99".into(), Utc::now());
+        assert!(!view.frame_history.iter().any(|(name, _)| name == "99"));
+    }
+
+    #[test]
     fn new_views_ship_with_the_reflectivity_floor() {
         let v = MapView::new(None, Camera::at_lonlat(-97.0, 35.0, 8.0));
         assert_eq!(v.active_threshold(), Some(16.0));
+    }
+
+    #[test]
+    fn diagnostic_state_preserves_public_reproduction_without_private_selectors() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.123456, 35.654321, 8.0));
+        view.loaded_site = Some("private-provider-token".into());
+        view.custom_product = Some("private-product-name".into());
+        view.error = Some("https://private.example/?key=secret".into());
+        view.timeline.playing = true;
+        let report = view.diagnostic_state();
+        assert_eq!(report["selected_station"], "KTLX");
+        assert!(report["loaded_station"].is_null());
+        assert_eq!(report["playing"], true);
+        assert_eq!(report["custom_product_selected"], true);
+        let text = report.to_string();
+        for private in ["private-provider-token", "private-product-name", "private.example", "secret", "97.123456", "35.654321"] {
+            assert!(!text.contains(private), "diagnostic leaked {private}");
+        }
     }
 }

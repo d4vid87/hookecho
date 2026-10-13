@@ -316,6 +316,7 @@ mod tests {
         elevs
             .iter()
             .map(|&e| BinnedSweep {
+            data16: None,
                 moment: Moment::Reflectivity,
                 az_bins: 360,
                 gate_count: 200,

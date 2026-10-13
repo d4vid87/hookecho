@@ -199,6 +199,7 @@ mod tests {
         }
         let (value_min, value_max) = Moment::Reflectivity.value_range();
         BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins,
             gate_count,

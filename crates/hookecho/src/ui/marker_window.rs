@@ -35,12 +35,13 @@ pub struct MarkerWindow {
     pub searching: bool,
     pub status: Option<String>,
     pub removed: Option<usize>,
+    pub deleted: Option<(usize, crate::settings::Marker)>,
     pub focus: Option<usize>,
     pub pending_name: Option<String>,
     pub pending_icon: Option<String>,
     pub results: Vec<(String, String, f64, f64)>,
     pub chosen: Option<(String, f64, f64)>,
-    selected: Option<usize>,
+    selected: Option<String>,
     adding: bool,
     new_name: String,
     new_address: String,
@@ -126,7 +127,7 @@ impl MarkerWindow {
                             .show(ui, |ui| { ui.label("No places saved yet. Search above or add a place below."); });
                     }
                     for (i, marker) in settings.markers.iter().enumerate() {
-                        let selected = self.selected == Some(i);
+                        let selected = self.selected.as_deref() == Some(marker.id.as_str());
                         let icon = builtin_icon(marker.icon.as_deref(), marker.home)
                             .unwrap_or(egui_phosphor::regular::MAP_PIN);
                         let fill = if selected { Color32::from_rgb(33, 76, 114) } else { CARD };
@@ -154,8 +155,8 @@ impl MarkerWindow {
                                     });
                                 });
                             });
-                        if ui.interact(card.response.rect, ui.id().with(("marker_card", i)), egui::Sense::click()).clicked() {
-                            self.selected = Some(i);
+                        if ui.interact(card.response.rect, ui.id().with(("marker_card", &marker.id)), egui::Sense::click()).clicked() {
+                            self.selected = Some(marker.id.clone());
                             self.focus = Some(i);
                         }
                         ui.add_space(5.0);
@@ -194,7 +195,7 @@ impl MarkerWindow {
                                     }
                                 }
                             });
-                    } else if let Some(i) = self.selected.filter(|i| *i < settings.markers.len()) {
+                    } else if let Some(i) = self.selected.as_deref().and_then(|id| crate::settings::marker_index(&settings.markers, id)) {
                         ui.add_space(10.0);
                         let marker = &mut settings.markers[i];
                         if marker_editor(ui, marker, i, icon_tex, metric, &mut self.removed) {
@@ -213,7 +214,7 @@ impl MarkerWindow {
             }
         }
         if let Some(i) = self.removed {
-            settings.markers.remove(i);
+            self.deleted = Some((i, settings.markers.remove(i)));
             self.selected = None;
         }
         self.open = open;
@@ -251,7 +252,7 @@ fn marker_editor(ui: &mut egui::Ui, marker: &mut Marker, i: usize, icon_tex: &Ic
         .corner_radius(10.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new("PLACE DETAILS").monospace().size(10.0).color(MUTED));
-            ui.add(egui::TextEdit::singleline(&mut marker.name).desired_width(ui.available_width()));
+            ui.add(egui::TextEdit::singleline(&mut marker.name).id(egui::Id::new(("marker-manager-name", &marker.id))).desired_width(ui.available_width()));
             ui.add_space(7.0);
             ui.horizontal(|ui| {
                 ui.label("Latitude");
@@ -271,7 +272,7 @@ fn marker_editor(ui: &mut egui::Ui, marker: &mut Marker, i: usize, icon_tex: &Ic
                 make_home = true;
             }
             ui.label(RichText::new("Video stream URL").size(11.0).color(MUTED));
-            ui.add(egui::TextEdit::singleline(&mut marker.video_url).hint_text("Optional HLS or MJPEG URL").desired_width(ui.available_width()));
+            ui.add(egui::TextEdit::singleline(&mut marker.video_url).id(egui::Id::new(("marker-manager-video", &marker.id))).hint_text("Optional HLS or MJPEG URL").desired_width(ui.available_width()));
             ui.add_space(7.0);
             let mut choice = marker.icon.as_deref().and_then(|v| v.strip_prefix("builtin:"))
                 .unwrap_or(if marker.icon.is_some() { "" } else if marker.home { "home" } else { "place" }).to_string();
@@ -311,5 +312,91 @@ mod tests {
         assert_eq!(builtin_icon(Some("builtin:car"), false), Some(egui_phosphor::regular::CAR));
         assert_eq!(builtin_icon(None, true), Some(egui_phosphor::regular::HOUSE));
         assert_eq!(builtin_icon(Some("photo.png"), false), None);
+    }
+}
+
+#[cfg(test)]
+mod identity_ui_tests {
+    use super::*;
+
+    #[test]
+    fn remove_place_emits_the_exact_marker_for_undo() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::base());
+        let mut settings = Settings { markers: serde_json::from_str(r#"[
+            {"id":"a","name":"First","lat":40.0,"lon":-95.0},
+            {"id":"b","name":"Target","lat":41.0,"lon":-94.0}]
+        "#).unwrap(), ..Default::default() };
+        let original = settings.markers.clone();
+        let mut window = MarkerWindow { open: true, selected: Some("b".into()), ..Default::default() };
+        let mut drawer = crate::ui::drawer::Drawer::default();
+        let textures = IconTextures::default();
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 1000.0))), events, ..Default::default()
+            }, |ui| {
+                drawer.begin_frame(ui.ctx());
+                let _ = window.show(ui.ctx(), &mut settings, &textures, &mut drawer, false);
+            })
+        };
+        let _ = frame(vec![]);
+        let output = frame(vec![]);
+        let position = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text.contains("Remove place") => Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        }).expect("remove control is drawn");
+        let _ = frame(vec![egui::Event::PointerMoved(position),
+            egui::Event::PointerButton { pos: position, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            egui::Event::PointerButton { pos: position, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]);
+        assert_eq!(settings.markers.len(), 1);
+        let (index, deleted) = window.deleted.take().expect("UI retains deletion for Undo");
+        assert_eq!(index, 1);
+        assert_eq!(deleted, original[1]);
+        assert!(crate::settings::restore_deleted_marker(&mut settings.markers, index, deleted));
+        assert_eq!(settings.markers, original);
+    }
+
+    #[test]
+    fn editor_keeps_target_when_an_earlier_marker_is_deleted() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::base());
+        let mut settings = Settings { markers: serde_json::from_str(r#"[
+            {"id":"a","name":"Same","lat":40.0,"lon":-95.0},
+            {"id":"b","name":"Same","lat":41.0,"lon":-94.0}]
+        "#).unwrap(), ..Default::default() };
+        let mut window = MarkerWindow { open: true, selected: Some("b".into()), ..Default::default() };
+        let mut drawer = crate::ui::drawer::Drawer::default();
+        let textures = IconTextures::default();
+        settings.markers.remove(0);
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 1000.0))),
+                events,
+                ..Default::default()
+            }, |ui| {
+                let ctx = ui.ctx();
+                drawer.begin_frame(ctx);
+                let _ = window.show(ctx, &mut settings, &textures, &mut drawer, false);
+            })
+        };
+        let _ = frame(vec![]);
+        let output = frame(vec![]);
+        let text_position = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Same" => Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        }).next_back().expect("selected marker name is drawn");
+        let _ = frame(vec![
+            egui::Event::PointerMoved(text_position),
+            egui::Event::PointerButton { pos: text_position, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            egui::Event::PointerButton { pos: text_position, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        ]);
+        let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let _ = frame(vec![
+            egui::Event::Key { key: egui::Key::A, physical_key: Some(egui::Key::A), pressed: true, repeat: false, modifiers },
+            egui::Event::Text("Renamed target".into()),
+        ]);
+        assert_eq!(settings.markers.len(), 1);
+        assert_eq!(settings.markers[0].id, "b");
+        assert_eq!(settings.markers[0].name, "Renamed target");
     }
 }

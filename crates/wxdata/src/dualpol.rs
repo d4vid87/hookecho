@@ -418,6 +418,7 @@ mod tests {
         }
         let (lo, hi) = moment.value_range();
         BinnedSweep {
+            data16: None,
             moment,
             az_bins,
             gate_count,

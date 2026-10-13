@@ -314,6 +314,7 @@ struct Cluster {
 struct ViewKey {
     center: (f64, f64),
     zoom: f64,
+    globe: bool,
     clip: Rect,
     scale: f32,
     ppp: f32,
@@ -470,10 +471,10 @@ impl Cache {
         let cam = Camera {
             center: key.center,
             zoom: key.zoom,
+            globe: key.globe,
         };
         let vp = (key.clip.width(), key.clip.height());
-        let lo = cam.screen_to_world((-10.0, -10.0), vp);
-        let hi = cam.screen_to_world((vp.0 + 10.0, vp.1 + 10.0), vp);
+        let (lo, hi) = cam.visible_bounds((vp.0 + 20.0, vp.1 + 20.0));
         let project = |p| {
             let (x, y) = cam.world_to_screen(p, vp);
             key.clip.min + egui::vec2(x, y)
@@ -491,14 +492,15 @@ impl Cache {
                 if x1 < lo.0 || y1 < lo.1 || x0 > hi.0 || y0 > hi.1 {
                     continue;
                 }
-                if key.zoom < CLUSTER_ZOOM && !p.style.emergency {
+                if key.globe || (key.zoom < CLUSTER_ZOOM && !p.style.emergency) {
                     let stroke = Stroke::new(1.1 * key.scale, p.style.color());
                     for i in 0..ring.points.len() {
                         if !ring.exterior[i] {
                             continue;
                         }
-                        let a = project(ring.points[i]);
-                        let b = project(ring.points[(i + 1) % ring.points.len()]);
+                        let Some((a, b)) = cam.project_segment(ring.points[i], ring.points[(i + 1) % ring.points.len()], vp) else { continue; };
+                        let a = key.clip.min + egui::vec2(a.0, a.1);
+                        let b = key.clip.min + egui::vec2(b.0, b.1);
                         if let Some(edge) = clip_segment(a, b, key.clip.expand(8.0)) {
                             if p.style.warning {
                                 boundary_shapes(&mut shapes, &edge, key.clip, p.style, key.scale * 0.5);
@@ -526,7 +528,14 @@ impl Cache {
                         boundary_shapes(&mut shapes, &pts, key.clip, p.style, key.scale);
                     }
                 }
-                let bounds = Rect::from_two_pos(project((x0, y0)), project((x1, y1)));
+                let bounds = if key.globe {
+                    let mut bounds = Rect::NOTHING;
+                    for &point in &ring.points {
+                        if cam.world_visible(point) { bounds.extend_with(project(point)); }
+                    }
+                    if !bounds.is_positive() { continue; }
+                    bounds
+                } else { Rect::from_two_pos(project((x0, y0)), project((x1, y1))) };
                 let visible = bounds.intersect(key.clip);
                 let anchor = visible.center();
                 let f = &features[p.index];
@@ -632,6 +641,7 @@ impl Cache {
         let key = ViewKey {
             center: cam.center,
             zoom: cam.zoom,
+            globe: cam.globe,
             clip,
             scale,
             ppp: ui.ctx().pixels_per_point(),

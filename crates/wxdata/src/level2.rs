@@ -11,6 +11,15 @@ use std::path::PathBuf;
 /// Re-exported so the app can name decoded volumes without depending on `nexrad-model`.
 pub use nexrad_model::data::Scan;
 
+/// Retained encoded gate payload bytes, excluding radial/sweep metadata and allocator overhead.
+pub fn scan_gate_bytes(scan: &Scan) -> usize {
+    scan.sweeps().iter().flat_map(|sweep| sweep.radials()).map(|radial| {
+        [radial.reflectivity(), radial.velocity(), radial.spectrum_width(), radial.differential_reflectivity(), radial.differential_phase(), radial.correlation_coefficient()]
+            .into_iter().flatten().map(|moment| moment.raw_values().len()).sum::<usize>()
+            + radial.clutter_filter_power().map_or(0, |moment| moment.raw_values().len())
+    }).sum()
+}
+
 /// Which radar moment to extract from a sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Moment {
@@ -111,6 +120,12 @@ impl Moment {
     }
 }
 
+/// Encode native physical data without first quantizing to the 8-bit display band.
+pub fn encode_display16(value: f32, min: f32, max: f32) -> u16 {
+    if !value.is_finite() || !min.is_finite() || !max.is_finite() || max <= min { return 0; }
+    2 + (((value - min) / (max - min)).clamp(0.0, 1.0) * 65533.0).round() as u16
+}
+
 /// A sweep resampled onto a fixed azimuth grid, ready for GPU upload.
 ///
 /// `data` is row-major `[az_bin][gate]`, one `u8` per gate:
@@ -122,6 +137,8 @@ pub struct BinnedSweep {
     pub az_bins: usize,
     pub gate_count: usize,
     pub data: Vec<u8>,
+    /// Optional display encoding from native physical values: 0 missing, 1 folded.
+    pub data16: Option<Vec<u16>>,
     pub first_gate_km: f32,
     pub gate_interval_km: f32,
     pub radar_lat: f32,
@@ -422,10 +439,15 @@ impl BinnedSweep {
         let gate = gate as usize;
         let az = bearing.rem_euclid(360.0);
         let bin = ((az / 360.0 * self.az_bins as f64) as usize) % self.az_bins;
-        let code = *self.data.get(bin * self.gate_count + gate)?;
-        // 0 and 1 are the two sentinel codes the binner writes; 2..=255 is the value band.
+        let at = bin * self.gate_count + gate;
+        let (code, span) = if let Some(precise) = &self.data16 {
+            (*precise.get(at)?, 65533.0)
+        } else {
+            (*self.data.get(at)? as u16, 253.0)
+        };
+        // Both encodings reserve 0 and 1 for missing and folded data.
         let value = (code >= 2).then(|| {
-            let t = (code - 2) as f32 / 253.0;
+            let t = (code - 2) as f32 / span;
             self.value_min + t * (self.value_max - self.value_min)
         });
         Some(GateSample {
@@ -561,15 +583,27 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
         }
     }
     crate::stats::bump(crate::stats::Counter::DayListMisses);
-    let mut ids = archive::list_files(site, &date)
-        .await
-        .map_err(|e| anyhow::anyhow!("list_files({site}, {date}): {e}"))?;
+    // Catalog names use the same byte-flight machinery as object downloads. Keeping one
+    // shared payload type avoids a second async coordination implementation in the web bundle.
+    let owned_site = site.to_owned();
+    let body = crate::shared_read::bytes(format!("catalog:{site}:{date}"), async move {
+        let ids = archive::list_files(&owned_site, &date).await
+            .map_err(|e| anyhow::anyhow!("list_files({owned_site}, {date}): {e}"))?;
+        Ok(serde_json::to_vec(&ids.iter().map(Identifier::name).collect::<Vec<_>>())?)
+    }).await?;
+    let names: Vec<String> = serde_json::from_slice(&body)?;
+    let mut ids: Vec<Identifier> = names.into_iter().map(Identifier::new).collect();
     ids.retain(|id| is_volume(id.name()));
     ids.sort_by_key(|id| id.date_time());
     if let Ok(mut map) = cache.lock() {
         // Scrubbing a week of dates across a few sites left every one of those listings here for
         // the life of the process; an expired entry can never be read, so drop it as we pass.
         map.retain(|_, (at, _)| at.elapsed() < DAY_LIST_TTL);
+        while map.len() >= 64 {
+            let oldest = map.iter().max_by_key(|(_, (at, _))| at.elapsed()).map(|(key, _)| key.clone());
+            let Some(oldest) = oldest else { break; };
+            map.remove(&oldest);
+        }
         map.insert(key, (crate::clock::Instant::now(), ids.clone()));
     }
     Ok(ids)
@@ -621,16 +655,20 @@ pub fn scan_from_wire(bytes: &[u8]) -> anyhow::Result<Scan> {
 
 /// Raw Archive II bytes for one volume, straight from the bucket.
 pub async fn volume_bytes(id: Identifier) -> anyhow::Result<Vec<u8>> {
-    let f = nexrad_data::aws::archive::download_file(id)
-        .await
-        .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
-    crate::stats::net(f.data().len());
-    Ok(f.data().to_vec())
+    let key = format!("volume:{}", id.name());
+    let bytes = crate::shared_read::bytes(key, async move {
+        let f = nexrad_data::aws::archive::download_file(id).await
+            .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
+        crate::stats::net(f.data().len());
+        Ok(f.data().to_vec())
+    }).await?;
+    Ok(bytes.as_ref().clone())
 }
 
 /// Decode raw Archive II bytes that came from somewhere other than the bucket — a browser's
 /// offline pack, say. Same decode path (and the same Web Worker hop) `download_scan` uses.
 pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Result<Scan> {
+    let _decode_timer = crate::stats::DecodeTimer::default();
     let file = nexrad_data::volume::File::new(bytes);
     #[cfg(not(target_arch = "wasm32"))]
     let scan = crate::task::blocking(move || decode_file(file)).await??;
@@ -653,8 +691,15 @@ pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Resul
 /// read instead of a download. Raw bytes rather than a decoded scan because they're smaller, need
 /// no serialization of their own, and go back through the same decode path either way. Pass `None`
 /// at the live head, where the newest object may still be mid-write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadPhase { Downloading, Decoding }
+
 pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow::Result<Scan> {
-    use nexrad_data::aws::archive;
+    download_scan_with_progress(id, cache_dir, |_| {}).await
+}
+
+pub async fn download_scan_with_progress(id: Identifier, cache_dir: Option<PathBuf>, progress: impl Fn(LoadPhase) + Send) -> anyhow::Result<Scan> {
+    progress(LoadPhase::Downloading);
     let name = id.name().to_string();
     let cache_file = cache_dir.map(|d| d.join("volumes").join(&name));
     let cached = cache_file
@@ -664,10 +709,7 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
     let file = match cached {
         Some(f) => f,
         None => {
-            let f = archive::download_file(id)
-                .await
-                .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
-            crate::stats::net(f.data().len());
+            let f = nexrad_data::volume::File::new(volume_bytes(id).await?);
             if let Some(p) = &cache_file {
                 if let Some(dir) = p.parent() {
                     let _ = std::fs::create_dir_all(dir);
@@ -677,6 +719,8 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
             f
         }
     };
+    progress(LoadPhase::Decoding);
+    let _decode_timer = crate::stats::DecodeTimer::default();
     // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
     // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
     // feature of nexrad-data then spreads the decode itself across rayon.
@@ -922,6 +966,10 @@ pub fn bin_scan_opts_at(
     dealias: bool,
     cut_end_ms: Option<i64>,
 ) -> anyhow::Result<BinnedSweep> {
+    bin_scan_display_at(scan, moment, tilt, dealias, cut_end_ms, false)
+}
+
+pub fn bin_scan_display_at(scan: &Scan, moment: Moment, tilt: usize, dealias: bool, cut_end_ms: Option<i64>, precision: bool) -> anyhow::Result<BinnedSweep> {
     crate::stats::bump(crate::stats::Counter::SweepsBinned);
     let sweep = selected_sweep_at(scan, moment, tilt, cut_end_ms)
         .ok_or_else(|| anyhow::anyhow!("no sweep carries requested moment at this tilt"))?;
@@ -931,7 +979,7 @@ pub fn bin_scan_opts_at(
         .map(|s| (s.latitude(), s.longitude()))
         .ok_or_else(|| anyhow::anyhow!("scan has no site metadata"))?;
 
-    bin_sweep_opts(sweep, moment, lat, lon, dealias)
+    bin_sweep_display(sweep, moment, lat, lon, dealias, precision)
 }
 
 /// Bin the lowest-elevation sweep of `scan` for `moment`.
@@ -1000,6 +1048,10 @@ pub fn bin_sweep_opts(
     radar_lon: f32,
     dealias: bool,
 ) -> anyhow::Result<BinnedSweep> {
+    bin_sweep_display(sweep, moment, radar_lat, radar_lon, dealias, false)
+}
+
+pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lon: f32, dealias: bool, precision: bool) -> anyhow::Result<BinnedSweep> {
     let radials = sweep.radials();
     // Azimuth resolution: 0.5-degree (720 bins) covers both super-res and legacy;
     // legacy 1-degree radials fill the two adjacent bins they span.
@@ -1069,6 +1121,7 @@ pub fn bin_sweep_opts(
     };
 
     let mut data = vec![0u8; AZ_BINS * gate_count];
+    let mut data16 = precision.then(|| vec![0u16; AZ_BINS * gate_count]);
     if moment == Moment::SpecificDifferentialPhase {
         // KDP is the range derivative of ΦDP, so it has to be taken on the physical field:
         // the u8 band quantizes 0..360 deg into 253 steps (~1.4 deg), which is the same order
@@ -1090,6 +1143,7 @@ pub fn bin_sweep_opts(
         for (i, v) in kdp.iter().enumerate() {
             if let Some(v) = v {
                 data[i] = normalize(*v);
+                if let Some(precise) = &mut data16 { precise[i] = encode_display16(*v, value_min, value_max); }
             }
         }
     } else if dealias && moment == Moment::Velocity {
@@ -1135,6 +1189,7 @@ pub fn bin_sweep_opts(
         for (i, v) in unfolded.iter().enumerate() {
             if let Some(v) = v {
                 data[i] = normalize(*v);
+                if let Some(precise) = &mut data16 { precise[i] = encode_display16(*v, value_min, value_max); }
             }
         }
     } else {
@@ -1165,7 +1220,25 @@ pub fn bin_sweep_opts(
         }
     }
 
+    if moment != Moment::SpecificDifferentialPhase && !(dealias && moment == Moment::Velocity) {
+        if let Some(precise) = &mut data16 {
+            for (bin, row) in precise.chunks_mut(gate_count).enumerate() {
+                for radial in &by_bin[bin] {
+                    if let Some(m) = moment.select(radial) {
+                        for (g, value) in m.iter().enumerate().take(gate_count) {
+                            row[g] = match value {
+                                MomentValue::BelowThreshold => 0,
+                                MomentValue::RangeFolded => 1,
+                                MomentValue::Value(v) => encode_display16(v, value_min, value_max),
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
     Ok(BinnedSweep {
+        data16,
         moment,
         az_bins: AZ_BINS,
         gate_count,
@@ -1194,6 +1267,7 @@ mod tests {
     fn sampling_a_gate_inverts_the_binning() {
         let (az_bins, gate_count) = (720, 200);
         let mut sweep = BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins,
             gate_count,
@@ -1333,6 +1407,7 @@ mod tests {
     #[test]
     fn below_threshold_and_range_folded_are_not_values() {
         let mut sweep = BinnedSweep {
+            data16: None,
             moment: Moment::Velocity,
             az_bins: 720,
             gate_count: 10,
@@ -1362,6 +1437,7 @@ mod tests {
     #[test]
     fn a_point_beyond_the_last_gate_has_no_sample() {
         let sweep = BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins: 720,
             gate_count: 10,
@@ -1437,6 +1513,30 @@ mod tests {
         assert!(decode_volume(Vec::new()).is_err());
         assert!(decode_volume(vec![0u8; 23]).is_err());
         assert!(decode_volume(b"AR2V0006.".to_vec()).is_err());
+    }
+
+    #[test]
+    fn precise_display_preserves_sub_byte_values_and_classifications() {
+        let raw = vec![0, 1, 107, 108];
+        let moment = MomentData::from_fixed_point(4, 2125, 250, 8, 4.0, 66.0, raw);
+        let radial = Radial::new(0, 90, 90.0, 0.5,
+            nexrad_model::data::RadialStatus::ScanStart, 1, 0.5,
+            Some(moment), None, None, None, None, None, None);
+        let sweep = Sweep::new(1, vec![radial]);
+        let legacy = bin_sweep(&sweep, Moment::Reflectivity, 35.33, -97.28).unwrap();
+        let precise = bin_sweep_display(&sweep, Moment::Reflectivity, 35.33, -97.28, false, true).unwrap();
+        let row = 180 * 4;
+        assert!(legacy.data16.is_none());
+        assert_eq!(legacy.data, precise.data);
+        assert_eq!(legacy.data[row + 2], legacy.data[row + 3]);
+        let values = precise.data16.unwrap();
+        assert_eq!(&values[row..row + 2], &[0, 1]);
+        assert_ne!(values[row + 2], values[row + 3]);
+        for (code, value) in [(values[row + 2], 10.25), (values[row + 3], 10.5)] {
+            let recovered = -32.0 + (code as f32 - 2.0) / 65533.0 * 127.0;
+            assert!((recovered - value).abs() < 0.001);
+        }
+        assert_eq!(encode_display16(f32::NAN, -32.0, 95.0), 0);
     }
 
     // Build a one-radial sweep with a known reflectivity ramp and confirm binning

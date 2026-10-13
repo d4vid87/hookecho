@@ -101,6 +101,7 @@ pub(crate) fn show(
     lightning_minutes: &mut u16,
     show_glm: bool,
     glm_goes_west: &mut bool,
+    temp_unit: crate::settings::TempUnit,
     abi_scene: &mut wxdata::abi::Scene,
     // Spotter Network dots: on-state, and how far from the radar to draw them (0 = whole feed).
     show_spotters: bool,
@@ -498,20 +499,20 @@ pub(crate) fn show(
                     ui.strong("HookEcho objective analysis");
                     ui.horizontal_wrapped(|ui| {
                         if let Some(value) = blend.temperature_k {
-                            ui.label(format!("Temperature {:.1} °C", value - 273.15));
+                            ui.label(format!("Temperature {:.1} {}", temp_unit.from_c(value - 273.15), temp_unit.label()));
                         }
                         if let Some(value) = blend.dewpoint_k {
-                            ui.label(format!("Dewpoint {:.1} °C", value - 273.15));
+                            ui.label(format!("Dewpoint {:.1} {}", temp_unit.from_c(value - 273.15), temp_unit.label()));
                         }
                     });
                     ui.weak(format!("{} · {:.0} km · {:.0}% observation weight",
                         blend.station, blend.distance_km, blend.weight * 100.0));
                     ui.horizontal_wrapped(|ui| {
                         if let Some(residual) = blend.temperature_residual_k {
-                            ui.label(format!("Station − analysis: T {residual:+.1} °C"));
+                            ui.label(format!("Station − analysis: T {:+.1} {}", temp_unit.delta_from_c(residual), temp_unit.label()));
                         }
                         if let Some(residual) = blend.dewpoint_residual_k {
-                            ui.label(format!("Td {residual:+.1} °C"));
+                            ui.label(format!("Td {:+.1} {}", temp_unit.delta_from_c(residual), temp_unit.label()));
                         }
                     });
                     ui.weak("Nearest surface observation, ≤90 min old, 75 km decay; not an official SPC analysis.");

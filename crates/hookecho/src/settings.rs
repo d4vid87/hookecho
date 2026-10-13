@@ -648,6 +648,12 @@ pub struct Settings {
     pub tile_disk_cache_mb: u32,
     #[serde(default)]
     pub map_quality: MapQuality,
+    #[serde(default)]
+    pub appearance_presets: BTreeMap<String, crate::radar_appearance::AppearancePreset>,
+    #[serde(default)]
+    pub linked_time_limit_seconds: Option<u32>,
+    #[serde(default)]
+    pub link_satellite_times: bool,
 }
 
 /// Where the dual-pol signature detectors and the GLM flash-extent grid draw their lines.
@@ -1136,6 +1142,19 @@ pub struct Marker {
     pub home: bool,
 }
 
+/// Resolve an editor's saved identity against the current marker order.
+pub fn marker_index(markers: &[Marker], id: &str) -> Option<usize> {
+    markers.iter().position(|marker| marker.id == id)
+}
+
+/// Restore a deletion by stable identity without overwriting newer edits or creating two homes.
+pub fn restore_deleted_marker(markers: &mut Vec<Marker>, index: usize, mut marker: Marker) -> bool {
+    if marker_index(markers, &marker.id).is_some() { return false; }
+    if marker.home && markers.iter().any(|marker| marker.home) { marker.home = false; }
+    markers.insert(index.min(markers.len()), marker);
+    true
+}
+
 /// A fresh marker id: 8 hex characters from the system's randomness, which is plenty for a list
 /// a person types by hand.
 pub fn new_marker_id() -> String {
@@ -1192,6 +1211,11 @@ impl TempUnit {
             TempUnit::Fahrenheit => "°F",
             TempUnit::Celsius => "°C",
         }
+    }
+
+    /// Temperature differences have a scale but no freezing-point offset.
+    pub fn delta_from_c(self, delta: f32) -> f32 {
+        match self { Self::Fahrenheit => delta * 1.8, Self::Celsius => delta }
     }
 
     /// Convert an observation's Celsius into this unit.
@@ -1252,6 +1276,9 @@ impl Default for Settings {
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
             map_quality: MapQuality::Auto,
+            appearance_presets: BTreeMap::new(),
+            linked_time_limit_seconds: None,
+            link_satellite_times: false,
             share_card: true,
             broadcast_safe_margin: default_broadcast_margin(),
             broadcast_clock_source: true,
@@ -1378,6 +1405,26 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Probe presentation follows the same independent temperature and velocity preferences
+    /// as radar labels; scientific values and export units remain native.
+    pub fn field_display_value(&self, descriptor: &wxdata::field::FieldDescriptor, value: f32) -> wxdata::field::DisplayValue {
+        if let Some(ramp) = crate::render::FieldLayer::from_stable_id(descriptor.id.0)
+            .and_then(crate::render::field_ramps::ramp_for)
+        {
+            if matches!(ramp.scale, crate::render::field_ramps::FieldScale::Ramp { .. }) {
+                let (value, units) = ramp.label_value(ramp.display(value), self);
+                return wxdata::field::DisplayValue { value, units };
+            }
+        }
+        if descriptor.units == "m s-1" || descriptor.units == "m/s" {
+            wxdata::field::DisplayValue { value: value * self.velocity_unit.factor_from_ms(), units: self.velocity_unit.label() }
+        } else if descriptor.units == "Pa" {
+            wxdata::field::DisplayValue { value: value / 100.0, units: "hPa" }
+        } else {
+            descriptor.display_value(value, if self.temp_unit == TempUnit::Fahrenheit { wxdata::field::UnitSystem::Us } else { wxdata::field::UnitSystem::Metric })
+        }
+    }
+
     /// Where settings.json lives. Web has no filesystem — it persists to `localStorage` instead.
     #[cfg(not(target_arch = "wasm32"))]
     fn path() -> Option<PathBuf> {
@@ -1788,6 +1835,48 @@ mod tests {
     }
 
     #[test]
+    fn field_probe_wind_units_are_independent_of_temperature_units() {
+        let mut settings = Settings { temp_unit: TempUnit::Celsius, velocity_unit: VelocityUnit::Knots, ..Default::default() };
+        let descriptor = crate::render::FieldLayer::RtmaGust10m.descriptor().unwrap();
+        let value = settings.field_display_value(descriptor, 10.0);
+        assert_eq!(value.units, "kt");
+        assert!((value.value - 19.43844).abs() < 0.001);
+        settings.temp_unit = TempUnit::Fahrenheit;
+        settings.velocity_unit = VelocityUnit::MetersPerSecond;
+        let value = settings.field_display_value(descriptor, 10.0);
+        assert_eq!(value.units, "m/s");
+        assert_eq!(value.value, 10.0);
+    }
+
+    #[test]
+    fn physical_field_probes_share_legend_conversions() {
+        let mut settings = Settings::default();
+        let mesh = crate::render::FieldLayer::Mesh.descriptor().unwrap();
+        let hail = settings.field_display_value(mesh, 25.4);
+        assert_eq!(hail.units, "in");
+        assert!((hail.value - 1.0).abs() < 0.001);
+        settings.temp_unit = TempUnit::Celsius;
+        let visibility = crate::render::FieldLayer::RtmaVisibility.descriptor().unwrap();
+        let value = settings.field_display_value(visibility, 1000.0);
+        assert_eq!(value.units, "km");
+        assert!((value.value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn marker_editor_identity_survives_reordering_and_deletion() {
+        let mut markers: Vec<Marker> = serde_json::from_str(
+            r#"[{"id":"a","name":"Home","lat":35.0,"lon":-97.0},
+                {"id":"b","name":"Home","lat":36.0,"lon":-96.0}]"#,
+        ).unwrap();
+        assert_eq!(marker_index(&markers, "b"), Some(1));
+        markers.swap(0, 1);
+        assert_eq!(marker_index(&markers, "b"), Some(0));
+        markers.remove(0);
+        assert_eq!(marker_index(&markers, "b"), None);
+        assert_eq!(marker_index(&markers, "a"), Some(0));
+    }
+
+    #[test]
     fn quiet_pending_round_trips_and_defaults_empty() {
         let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
         assert!(old.quiet_pending.is_empty());
@@ -1875,6 +1964,9 @@ mod tests {
             volume_cache_mb: 0,
             tile_disk_cache_mb: 0,
             map_quality: MapQuality::Auto,
+            appearance_presets: BTreeMap::new(),
+            linked_time_limit_seconds: None,
+            link_satellite_times: false,
             workspaces: Vec::new(),
             seeded_workspaces: false,
             smooth_radar: false,
@@ -2250,5 +2342,21 @@ mod tests {
         old.priority_rules.track_age_min = 5;
         assert!(!old.priority_rules.migrate_track_age_default());
         assert_eq!(old.priority_rules.track_age_min, 5);
+    }
+}
+
+#[cfg(test)]
+mod deletion_undo_tests {
+    use super::*;
+    #[test]
+    fn restored_marker_keeps_identity_and_other_markers_edits() {
+        let mut settings = Settings::from_json_lossy(r#"{"markers":[{"id":"a","name":"First","lat":35.0,"lon":-97.0},{"id":"b","name":"Second","lat":36.0,"lon":-98.0}]}"#);
+        let deleted = settings.markers.remove(0);
+        settings.markers[0].name = "Edited after deletion".into();
+        assert!(restore_deleted_marker(&mut settings.markers, 0, deleted.clone()));
+        assert_eq!(settings.markers[0], deleted);
+        assert_eq!(settings.markers[1].name, "Edited after deletion");
+        assert!(!restore_deleted_marker(&mut settings.markers, 0, deleted));
+        assert_eq!(settings.markers.len(), 2);
     }
 }

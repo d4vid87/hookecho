@@ -29,8 +29,6 @@ pub enum Decision {
 pub struct Rollup {
     /// (arrival, short title) within the window, oldest first.
     recent: VecDeque<(Instant, String)>,
-    /// Everything folded into the current summary, in arrival order.
-    folded: Vec<String>,
     /// When the summary last went out, so it updates at most once a minute.
     last_summary: Option<Instant>,
 }
@@ -58,11 +56,9 @@ impl Rollup {
         self.recent.push_back((now, title.to_string()));
         if self.recent.len() < threshold.max(2) {
             // Out of outbreak mode: the next one starts a fresh summary.
-            self.folded.clear();
             self.last_summary = None;
             return Decision::Send;
         }
-        self.folded.push(title.to_string());
         let due = self
             .last_summary
             .is_none_or(|t| now.duration_since(t) >= SUMMARY_EVERY);
@@ -79,15 +75,15 @@ impl Rollup {
         let mins = window.as_secs().div_ceil(60);
         let mut s = format!(
             "{} alerts in the last {mins} min:\n",
-            self.recent.len().max(self.folded.len())
+            self.recent.len()
         );
-        for t in self.folded.iter().rev().take(MAX_LINES) {
+        for (_, t) in self.recent.iter().rev().take(MAX_LINES) {
             s.push_str("• ");
             s.push_str(t);
             s.push('\n');
         }
-        if self.folded.len() > MAX_LINES {
-            s.push_str(&format!("…and {} more", self.folded.len() - MAX_LINES));
+        if self.recent.len() > MAX_LINES {
+            s.push_str(&format!("…and {} more", self.recent.len() - MAX_LINES));
         }
         s.trim_end().to_string()
     }
@@ -152,6 +148,20 @@ mod tests {
             panic!("summary should refresh after a minute");
         };
         assert!(text.contains("Flash Flood Warning"), "{text}");
+    }
+
+    #[test]
+    fn continuous_outbreak_summary_drops_expired_titles_and_counts() {
+        let mut rollup = Rollup::default();
+        let start = Instant::now();
+        for minute in 0..=20 {
+            rollup.offer(start + Duration::from_secs(minute * 60), &format!("Alert {minute}"), 2, win());
+        }
+        let Decision::Rollup(text) = rollup.offer(start + Duration::from_secs(21 * 60), "Latest alert", 2, win()) else { panic!("summary due"); };
+        assert!(text.starts_with("11 alerts in the last 10 min:"), "{text}");
+        assert!(!text.contains("Alert 0"));
+        assert!(text.contains("Latest alert"));
+        assert_eq!(rollup.recent.len(), 11);
     }
 
     #[test]

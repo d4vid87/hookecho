@@ -348,6 +348,7 @@ mod tests {
             }
         }
         BinnedSweep {
+            data16: None,
             moment: Moment::Reflectivity,
             az_bins,
             gate_count,

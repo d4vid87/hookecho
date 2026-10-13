@@ -28,6 +28,8 @@ struct Wind {
     /// Layer opacity, and one particle's size in pixels.
     opacity: f32,
     point_px: f32,
+    globe: vec4<f32>,
+    trail: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> w: Wind;
@@ -121,12 +123,16 @@ fn fs_advect(in: FsIn) -> @location(0) vec4<f32> {
 /// one point per particle per frame instead of a twelve-vertex ribbon.
 @fragment
 fn fs_fade(in: FsIn) -> @location(0) vec4<f32> {
-    return textureSampleLevel(src_tex, smp, in.uv, 0.0) * 0.94;
+    return textureSampleLevel(src_tex, smp, in.uv, 0.0) * w.trail.x;
 }
 
 /// Draw the trail buffer over the pane.
 @fragment
 fn fs_composite(in: FsIn) -> @location(0) vec4<f32> {
+    if (w.globe.z != 0.0) {
+        let ndc = vec2<f32>(2.0 * in.uv.x - 1.0, 1.0 - 2.0 * in.uv.y) / w.globe.zw;
+        if (dot(ndc, ndc) > 1.0) { discard; }
+    }
     let c = textureSampleLevel(src_tex, smp, in.uv, 0.0);
     return vec4<f32>(c.rgb, c.a * w.opacity);
 }
@@ -136,6 +142,7 @@ fn fs_composite(in: FsIn) -> @location(0) vec4<f32> {
 struct PointOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) horizon: f32,
 };
 
 /// One quad per particle, sized in pixels. The vertex shader reads the position texture directly
@@ -151,7 +158,16 @@ fn vs_points(
     let p = decode_pos(textureLoad(pos_tex, texel, 0));
 
     let world = w.bbox_min + p * (w.bbox_max - w.bbox_min);
-    let base = (world - w.center) * w.scale;
+    var base = (world - w.center) * w.scale;
+    out.horizon = 1.0;
+    if (w.globe.z != 0.0) {
+        let pi = 3.14159265358979;
+        let lat = atan(sinh(pi * (1.0 - 2.0 * world.y)));
+        let dl = (world.x - w.center.x) * 2.0 * pi;
+        let sl = sin(lat); let cl = cos(lat);
+        base = vec2<f32>(w.globe.z * cl * sin(dl), w.globe.w * (w.globe.y * sl - w.globe.x * cl * cos(dl)));
+        out.horizon = w.globe.x * sl + w.globe.y * cl * cos(dl);
+    }
     var corner = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
         vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
@@ -168,5 +184,6 @@ fn vs_points(
 
 @fragment
 fn fs_points(in: PointOut) -> @location(0) vec4<f32> {
+    if (in.horizon < 0.0) { discard; }
     return in.color;
 }
