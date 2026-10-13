@@ -90,6 +90,10 @@ impl PlaceLabel {
                 .parse::<u16>().is_ok_and(|n| n < 100))
     }
 
+    pub fn visible_stable(&self, zoom: f64, returning: bool) -> bool {
+        self.visible_at(if returning { zoom + 0.12 } else { zoom - 0.12 })
+    }
+
     pub fn priority(&self) -> u8 {
         if self.city && self.rank <= 3 { 0 }
         else if self.shield == RoadShield::Interstate { 1 }
@@ -867,10 +871,12 @@ pub(crate) fn build_worker_tile(payload: &[u8]) -> Result<Vec<u8>, postcard::Err
 
 /// Async vector-tile manager for the GUI (mirrors [`crate::tiles::TileManager`]).
 pub struct VectorTileManager {
+    detail_level: std::cell::Cell<crate::tiles::DetailLevel>,
     spawner: crate::rt::Spawner,
     client: reqwest::Client,
     tx: Sender<(u64, Result<FetchedVector, TileId>)>,
     rx: Receiver<(u64, Result<FetchedVector, TileId>)>,
+    deferred_ready: Option<(u64, Result<FetchedVector, TileId>)>,
     render_generation: u64,
     /// Fetches out. Bounded by `MAX_INFLIGHT`, and given back on every path including a timeout.
     inflight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -936,6 +942,8 @@ impl VectorTileManager {
             template_requested: false,
             template_failed: None,
             speculative: None,
+            deferred_ready: None,
+            detail_level: std::cell::Cell::new(crate::tiles::DetailLevel::default()),
         }
     }
 
@@ -993,7 +1001,10 @@ impl VectorTileManager {
     }
 
     pub fn visible(&self, cam: &Camera, viewport_px: (f32, f32)) -> Vec<VisibleTile> {
-        tile_cover(cam, viewport_px, MAX_VECTOR_Z, label_detail_bias(cam.zoom))
+        let mut detail = self.detail_level.get();
+        let cover = detail.cover(cam, viewport_px, MAX_VECTOR_Z, label_detail_bias(cam.zoom));
+        self.detail_level.set(detail);
+        cover
     }
 
     fn centered(mut tiles: Vec<VisibleTile>, cam: &Camera) -> Vec<VisibleTile> {
@@ -1008,12 +1019,23 @@ impl VectorTileManager {
         tiles
     }
 
+    fn backdrop(cam: &Camera, viewport: (f32, f32), full: &[VisibleTile]) -> Vec<VisibleTile> {
+        let z = full.first().map_or(2, |tile| tile.id.0.saturating_sub(2).max(2));
+        Self::centered(tile_cover(cam, viewport, z, 0.0), cam)
+    }
+
     /// A low-detail geographic backdrop arrives before fine streets. Existing renderer parent
     /// fallback draws these tiles while requested children are still loading.
     pub fn request_view(&mut self, cam: &Camera, viewport: (f32, f32), moving: bool,
         _quality: crate::settings::MapQuality) -> Vec<VisibleTile> {
         let full = Self::centered(self.visible(cam, viewport), cam);
         let full_ready = full.iter().all(|tile| self.uploaded.contains(&tile.id));
+        if !full_ready {
+            // First fill a small backdrop instead of spending every request slot on streets.
+            // Coarse parents cover both the present view and nearby zoom-out positions.
+            let backdrop = Self::backdrop(cam, viewport, &full);
+            self.request_missing(&backdrop);
+        }
         self.request_missing(&full);
         if full_ready && !moving {
             let mut preload = Self::centered(tile_cover(cam, viewport, MAX_VECTOR_Z,
@@ -1196,11 +1218,17 @@ impl VectorTileManager {
 
     /// Drain finished tessellations into upload-ready tiles (each returned once).
     pub fn drain_ready(&mut self) -> Vec<PendingVectorTile> {
+        self.drain_ready_budget(&mut crate::map_work::UploadBudget::legacy_batch())
+    }
+
+    pub fn drain_ready_budget(&mut self, budget: &mut crate::map_work::UploadBudget) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
         // Bound upload batches rather than allowing completed downloads to monopolize one
         // render frame. Leave the remainder queued and explicitly schedule the next frame.
-        while ready.len() < 2 {
-            let Ok((generation, f)) = self.rx.try_recv() else { break };
+        let mut examined = 0;
+        while !budget.exhausted() && examined < 32 {
+            examined += 1;
+            let Some((generation, f)) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) else { break };
             let completed_id = match &f { Ok(tile) => tile.id, Err(id) => *id };
             if self.speculative == Some(completed_id) { self.speculative = None; }
             if generation != self.render_generation {
@@ -1218,6 +1246,12 @@ impl VectorTileManager {
             };
             if self.uploaded.peek(&f.id) == Some(&generation) {
                 continue; // already resident at this generation
+            }
+            let bytes = (f.vertices.len() + f.foreground_vertices.len()) * std::mem::size_of::<OverlayVertex>()
+                + (f.indices.len() + f.foreground_indices.len()) * std::mem::size_of::<u32>();
+            if !budget.take(bytes) {
+                self.deferred_ready = Some((generation, Ok(f)));
+                break;
             }
             match self.uploaded.push(f.id, generation) {
                 Some((id, _)) if id == f.id => {} // refreshed in place
@@ -1240,7 +1274,7 @@ impl VectorTileManager {
                 foreground_indices: f.foreground_indices,
             });
         }
-        if ready.len() == 2 {
+        if budget.exhausted() || self.deferred_ready.is_some() || examined == 32 {
             if let Some(ctx) = &self.ctx {
                 ctx.request_repaint();
             }
@@ -1337,6 +1371,8 @@ mod tests {
             template_requested: false,
             template_failed: None,
             speculative: None,
+            deferred_ready: None,
+            detail_level: std::cell::Cell::new(crate::tiles::DetailLevel::default()),
         }
     }
 
@@ -1360,6 +1396,43 @@ mod tests {
         manager.labels.remove(&parent);
         assert_eq!(manager.labels_for([&parent].into_iter())[0].name, "new left",
             "zoom-out retains child labels while its parent loads");
+    }
+
+    #[tokio::test]
+    async fn byte_budget_defers_a_tile_without_loss_and_discards_a_stale_deferred_generation() {
+        let queue = |m: &mut VectorTileManager| {
+            for x in 0..2 {
+                m.tx.send((m.render_generation, Ok(FetchedVector {
+                    id:(4,x,5),vertices:vec![OverlayVertex { world:[0.0,0.0],color:[1.0;4],offset:[0.0;3] };3],
+                    indices:if x==1 { (0..(3<<20)/4).map(|i| i%3).collect() } else { vec![0,1,2] },
+                    foreground_vertices:Vec::new(),foreground_indices:Vec::new(),labels:Vec::new(),
+                }))).unwrap();
+            }
+        };
+        let mut m=test_manager();queue(&mut m);
+        let first=m.drain_ready_budget(&mut crate::map_work::UploadBudget::frame(true));
+        assert_eq!(first.len(),1);assert_eq!(first[0].id,(4,0,5));assert!(m.deferred_ready.is_some());
+        let next=m.drain_ready_budget(&mut crate::map_work::UploadBudget::frame(true));
+        assert_eq!(next.len(),1);assert_eq!(next[0].id,(4,1,5));assert!(m.deferred_ready.is_none());
+        let mut m=test_manager();queue(&mut m);
+        assert_eq!(m.drain_ready_budget(&mut crate::map_work::UploadBudget::frame(true)).len(),1);
+        m.set_simplified(true);
+        assert!(m.drain_ready_budget(&mut crate::map_work::UploadBudget::frame(true)).is_empty());
+        assert!(!m.uploaded.contains(&(4,1,5)));
+    }
+
+    #[test]
+    fn backdrop_parents_cover_the_requested_view_before_fine_tiles() {
+        let camera = Camera::at_lonlat(-93.72, 41.73, 7.4);
+        let full = tile_cover(&camera, (1440.0,1000.0), MAX_VECTOR_Z, 0.0);
+        let parents = VectorTileManager::backdrop(&camera,(1440.0,1000.0),&full);
+        assert!(parents.len()<full.len());
+        for tile in &full {
+            assert!(parents.iter().any(|parent| {
+                let shift=tile.id.0-parent.id.0;
+                (tile.id.1>>shift,tile.id.2>>shift)==(parent.id.1,parent.id.2)
+            }));
+        }
     }
 
     #[tokio::test]
@@ -1629,4 +1702,15 @@ mod tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod label_transition_tests {
+    use super::*;
+    #[test]
+    fn label_keeps_its_visibility_until_zoom_decisively_leaves_the_threshold() {
+        let l=PlaceLabel { world:[0.2,0.2],name:"Test town".into(),rank:1,city:true,shield:RoadShield::None,min_zoom:9.0 };
+        assert!(!l.visible_stable(9.01,false));assert!(l.visible_stable(9.13,false));
+        assert!(l.visible_stable(8.9,true));assert!(!l.visible_stable(8.87,true));
+    }
 }

@@ -3736,6 +3736,7 @@ pub struct HookEchoApp {
     /// A drag, touch, scroll or pinch is active this frame. Read at the top of `ui`, because the overlay
     /// tessellation asks it before any pane has drawn.
     gesture_live: bool,
+    map_upload_budget: crate::map_work::UploadBudget,
     /// Perf readout state: whether `HOOKECHO_PERF=1` asked for the window, the frame count and
     /// mark the frames-per-minute number is derived from, and the last idle interval requested.
     #[cfg(not(target_arch = "wasm32"))]
@@ -4571,6 +4572,7 @@ impl HookEchoApp {
             embed_live: false,
             last_input: Instant::now(),
             gesture_live: false,
+            map_upload_budget: crate::map_work::UploadBudget::frame(false),
             #[cfg(not(target_arch = "wasm32"))]
             perf: PerfReadout::new(),
             renderer_info,
@@ -13319,6 +13321,10 @@ impl HookEchoApp {
         placefile_labels: &[PlaceLabel],
     ) {
         crate::prof_scope!("render_pane");
+        self.labels.begin_pane();
+        let trace_started = crate::map_trace::enabled().then(Instant::now);
+        let mut place_label_work = 0;
+        let mut place_label_budget = crate::map_work::LabelBudget::default();
         use crate::tiles::BasemapStyle;
         // This pane's own basemap: panes are independent, the tile caches are keyed by style.
         // `Auto` resolves here rather than where it is stored, so the stored choice keeps
@@ -13344,12 +13350,23 @@ impl HookEchoApp {
             if map_input { egui::Sense::click_and_drag() } else { egui::Sense::hover() },
         );
 
+        let dt = ctx.input(|i| i.unstable_dt);
+        let reduced = self.settings.reduce_motion;
+        {
+            let view = &mut self.views[idx];
+            view.camera_motion.sync(&view.camera, vp);
+            if !ctx.input(|i| i.viewport().focused.unwrap_or(true))
+                || ctx.input(|i| i.pointer.any_pressed()) {
+                view.camera_motion.cancel();
+            }
+        }
         // --- Input (mutates this pane's camera / selects it active) ---
         // During a multi-touch gesture the first finger still drives the egui pointer, so a pinch
         // would ALSO register as a drag and fight the zoom — the gesture block below owns both
         // pan and zoom while two fingers are down.
         let gesture = ui.input(|i| i.multi_touch());
         if gesture.is_some() {
+            self.views[idx].camera_motion.cancel();
             self.last_gesture_end = Some(wxdata::clock::Instant::now());
         }
         // A finger still down after the other lifted is the tail of a pinch, not a new drag or a
@@ -13390,6 +13407,7 @@ impl HookEchoApp {
                 }
             }
         } else if response.dragged() && quiet {
+            if response.drag_started() { self.views[idx].camera_motion.begin_drag(); }
             self.active = idx;
             self.views[idx].recenter_on_ready = false;
             let d = response.drag_delta();
@@ -13404,10 +13422,14 @@ impl HookEchoApp {
                         .zoom_at(-d.y as f64 * 0.01, cursor, vp);
                 }
                 None => {
-                    self.views[idx].camera.pan_pixels(d.x, d.y, vp);
+                    let view = &mut self.views[idx];
+                    view.camera_motion.drag(&mut view.camera, (d.x, d.y), dt, vp, ctx.input(|i| i.time));
                     self.follow_cell = None; // a manual pan takes over the camera
                 }
             }
+        }
+        if response.drag_stopped() {
+            self.views[idx].camera_motion.release(reduced, ctx.input(|i| i.time));
         }
         if cfg!(target_os = "android") {
             if response.drag_started() {
@@ -13430,7 +13452,9 @@ impl HookEchoApp {
         // signal and subtracts from the scroll delta, so the two never double-apply). Horizontal
         // scroll pans: on a trackpad a two-finger swipe is the obvious way to move the map, and on
         // a mouse it is a tilt wheel nobody was using.
-        let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
+        let zoom = ui.input(|i| i.zoom_delta());
+        let line_speed = ctx.options(|o| o.input_options.line_scroll_speed);
+        let scroll = ui.input(|i| raw_map_scroll(i, line_speed, vp.1));
         if let Some(pos) = response.hover_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()).filter(|p| prect.contains(*p) && map_input) {
             let cursor = (pos.x - prect.left(), pos.y - prect.top());
             // `zoom_delta()` reports a live touchscreen pinch too, which the gesture block below
@@ -13438,19 +13462,18 @@ impl HookEchoApp {
             // or a phone pinch zooms twice.
             if gesture.is_none() && (zoom - 1.0).abs() > f32::EPSILON {
                 self.active = idx;
-                self.views[idx]
-                    .camera
-                    .zoom_at((zoom as f64).log2(), cursor, vp);
+                self.views[idx].camera_motion.cancel();
+                self.views[idx].camera.zoom_at((zoom as f64).log2(), cursor, vp);
             }
             if scroll.y.abs() > 0.0 {
                 self.active = idx;
-                self.views[idx]
-                    .camera
-                    .zoom_at(scroll.y as f64 * 0.005, cursor, vp);
+                let view = &mut self.views[idx];
+                view.camera_motion.wheel(&mut view.camera, scroll.y as f64 * 0.005, cursor, vp, reduced);
             }
             if scroll.x.abs() > 0.0 {
                 self.active = idx;
-                self.views[idx].camera.pan_pixels(scroll.x, 0.0, vp);
+                let view = &mut self.views[idx];
+                view.camera_motion.pan_input(&mut view.camera, (scroll.x, 0.0), vp);
                 self.follow_cell = None; // a manual pan takes over the camera
             }
         }
@@ -13491,6 +13514,13 @@ impl HookEchoApp {
                     self.views[idx].camera.pan_pixels(t.x, t.y, vp);
                     self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
                 }
+            }
+        }
+        {
+            let view = &mut self.views[idx];
+            if view.camera_motion.advance(&mut view.camera, dt, vp, reduced) {
+                self.gesture_live = true;
+                ctx.request_repaint();
             }
         }
         // Long-press inspects, whatever tool is armed. A phone has no right-click and no hover,
@@ -14046,7 +14076,7 @@ impl HookEchoApp {
         self.tiles.set_goes_time(satellite_time);
         let is_raster = is_raster && (!pane_style.timed() || satellite_time.is_some());
         let visible = if is_raster {
-            let vis = self.tiles.visible(pane_style, &cam, vp, raster_bias);
+            let vis = self.views[idx].tile_detail.cover(&cam, vp, self.tiles.max_z(pane_style), raster_bias);
             self.tiles.request_missing(pane_style, &vis);
             self.tiles.promote_visible(pane_style, &vis);
             vis
@@ -14108,8 +14138,12 @@ impl HookEchoApp {
             self.pane_vtiles[idx].touch_visible(&visible_vector_tiles);
             self.pane_vtiles[idx].take_evicted()
         };
-        let new_tiles = if first { self.tiles.drain_ready() } else { Vec::new() };
-        let new_vector_tiles = self.pane_vtiles[idx].drain_ready();
+        let new_tiles = if first { self.tiles.drain_ready_budget(&mut self.map_upload_budget) } else { Vec::new() };
+        let upload_turn = !self.gesture_live || chrome::compact(ctx)
+            || idx == self.frame_nr as usize % self.views.len();
+        let new_vector_tiles = if upload_turn {
+            self.pane_vtiles[idx].drain_ready_budget(&mut self.map_upload_budget)
+        } else { Vec::new() };
         if !new_tiles.is_empty() || !new_vector_tiles.is_empty() { ctx.request_repaint(); }
 
         // --- Radar (this pane's product, its own volume) ---
@@ -14202,6 +14236,16 @@ impl HookEchoApp {
             ui.painter().with_clip_rect(prect).circle_filled(prect.center(), cam.globe_radius() as f32, egui::Color32::from_rgb(20, 35, 48));
         }
         let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
+        if let Some(started) = trace_started.as_ref() {
+            crate::map_trace::record(crate::map_trace::Frame {
+                pane: idx, frame: self.frame_nr, camera: cam, viewport: vp,
+                scroll: ctx.input(|i| i.smooth_scroll_delta.y),
+                pinch: ctx.input(|i| i.zoom_delta()), moving: self.gesture_live,
+                tile_zoom: visible_vector.first().map_or(0, |id| id.0),
+                vector_uploads: new_vector_tiles.len(), raster_uploads: new_tiles.len(),
+                labels: vlabels.len(), prepare_ms: started.elapsed().as_secs_f32() * 1000.0,
+            });
+        }
         let cb = MapCallback {
             pane: idx as u32,
             retain_only_pane: (chrome::compact(ctx) && self.views.len() > 1).then_some(idx as u32),
@@ -14489,14 +14533,6 @@ impl HookEchoApp {
             let z = cam.zoom;
             // Repeat route shields from regional zoom; collision placement still prevents overlap.
             let repeat_shields = z >= 5.0;
-            let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
-                vlabels.iter().filter(|l| {
-                    l.visible_at(z)
-                        && (!(self.gesture_live
-                            && self.settings.map_quality == crate::settings::MapQuality::Auto)
-                            || l.priority() <= 1)
-                        && (vp.0 >= 600.0 || l.priority() <= 2 || z >= 12.0)
-                }).collect();
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
                 let key = crate::labelplace::key(&l.name);
                 if repeat_shields && l.shield != crate::vector_tiles::RoadShield::None {
@@ -14505,6 +14541,16 @@ impl HookEchoApp {
                     key
                 }
             };
+            let mut labels: Vec<&crate::vector_tiles::PlaceLabel> =
+                vlabels.iter().filter(|l| {
+                    let returning = self.labels.was_shown(label_key(l));
+                    // Different enter/leave thresholds prevent a label toggling at its minzoom.
+                    l.visible_stable(z, returning)
+                        && (!(self.gesture_live
+                            && self.settings.map_quality == crate::settings::MapQuality::Auto)
+                            || returning || l.city || l.priority() <= 1)
+                        && (vp.0 >= 600.0 || l.priority() <= 2 || z >= 12.0)
+                }).collect();
             // Labels already on screen are offered their slot before newcomers of the same
             // importance; without that a name at the edge of a collision wins and loses on
             // alternate frames, which is exactly the flicker you see while panning.
@@ -14536,6 +14582,15 @@ impl HookEchoApp {
                 if !prect.contains(p) {
                     continue;
                 }
+                // Stable cap: returning labels are offered first and a gesture does not
+                // suddenly reduce their allowance. Weather warnings keep their separate pass.
+                let is_shield = l.shield != crate::vector_tiles::RoadShield::None;
+                if is_shield && placed_shields.iter().any(|(name, shield, position)| {
+                    *name == l.name && *shield == l.shield && position.distance(p) < if z < 8.0 { 160.0 } else { 220.0 }
+                }) { continue; }
+                if place_label_budget.exhausted() { break; }
+                if !place_label_budget.take(is_shield) { continue; }
+                place_label_work += 1;
                 if l.shield != crate::vector_tiles::RoadShield::None {
                     use crate::vector_tiles::RoadShield;
                     let (height, pad, text_color) = match l.shield {
@@ -14554,11 +14609,6 @@ impl HookEchoApp {
                         p,
                         egui::vec2((galley.size().x + pad).max(height), height),
                     );
-                    if placed_shields.iter().any(|(name, shield, position)| {
-                        *name == l.name && *shield == l.shield && position.distance(p) < if z < 8.0 { 160.0 } else { 220.0 }
-                    }) {
-                        continue;
-                    }
                     if !self.labels.place(
                         label_key(l),
                         r.expand(3.0),
@@ -17032,6 +17082,9 @@ impl HookEchoApp {
                 painter.circle_filled(p, 2.0, white);
             }
         }
+        if let Some(started) = trace_started.as_ref() {
+            crate::map_trace::finish(idx, self.frame_nr, place_label_work, started.elapsed().as_secs_f32() * 1000.0);
+        }
     }
 
     /// Whether a registry-backed observed field answers the instant this pane is showing.
@@ -19396,6 +19449,22 @@ fn map_gesture_on_map(ctx: &egui::Context, occlusion: &[egui::Rect]) -> bool {
 }
 
 /// Include inertial scrolling and trackpad pinches, which do not hold a pointer down.
+/// Consume the original wheel events once. egui's smoothed tail must not be fed into another
+/// smoother. Ctrl/cmd wheel is already represented by zoom_delta and remains direct.
+fn raw_map_scroll(i: &egui::InputState, line_speed: f32, height: f32) -> egui::Vec2 {
+    i.raw.events.iter().filter_map(|event| {
+        let egui::Event::MouseWheel { unit, delta, modifiers, .. } = event else { return None };
+        if modifiers.ctrl || modifiers.command { return None; }
+        let mut delta = *delta * match unit {
+            egui::MouseWheelUnit::Point => 1.0,
+            egui::MouseWheelUnit::Line => line_speed,
+            egui::MouseWheelUnit::Page => height,
+        };
+        if modifiers.shift { delta = egui::vec2(delta.x + delta.y, 0.0); }
+        Some(delta)
+    }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
+}
+
 fn map_gesture_live(i: &egui::InputState) -> bool {
     i.pointer.any_down()
         || i.any_touches()
@@ -20320,7 +20389,9 @@ impl eframe::App for HookEchoApp {
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
         wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
-        self.gesture_live = map_gesture_on_map(ctx, &self.mobile_occlusion);
+        self.gesture_live = map_gesture_on_map(ctx, &self.mobile_occlusion)
+            || self.views.iter().any(|v| v.camera_motion.active());
+        self.map_upload_budget = crate::map_work::UploadBudget::frame(self.gesture_live);
         if crate::gpu_metrics::device_lost() {
             egui::Window::new("Graphics device lost").collapsible(false).show(ctx, |ui| {
                 ui.label("Rendering has stopped. Restart HookEcho to restore the graphics device.");
@@ -22245,9 +22316,7 @@ impl eframe::App for HookEchoApp {
         }
 
         let placefile_labels = self.placefile_labels_cached();
-        // One occupancy set for the whole frame, across every pane and every label layer. Panes
-        // occupy disjoint screen rects, so sharing it between them costs nothing and saves
-        // resetting it per pane.
+        // Visibility history spans the frame; each clipped pane starts a fresh collision pass.
         self.labels.begin();
         egui::CentralPanel::default().show(root, |ui| {
             let full = ui.available_rect_before_wrap();

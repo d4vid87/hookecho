@@ -918,7 +918,26 @@ pub fn tile_cover(
     max_z: u8,
     zoom_bias: f64,
 ) -> Vec<VisibleTile> {
-    let mut z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
+    let z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
+    tile_cover_at_level(cam, viewport_px, z)
+}
+
+/// Per-pane detail selection with a 0.3-zoom dead band around each rounded boundary.
+/// Crossing a boundary decisively still switches promptly; small reversals keep resident detail.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DetailLevel { level: Option<u8> }
+impl DetailLevel {
+    pub fn cover(&mut self, cam: &Camera, viewport: (f32, f32), max: u8, bias: f64) -> Vec<VisibleTile> {
+        let q = (cam.zoom + bias).clamp(2.0, max as f64);
+        let mut z = self.level.unwrap_or(q.round() as u8).clamp(2, max);
+        while z < max && q > z as f64 + 0.65 { z += 1; }
+        while z > 2 && q < z as f64 - 0.65 { z -= 1; }
+        self.level = Some(z);
+        tile_cover_at_level(cam, viewport, z)
+    }
+}
+
+fn tile_cover_at_level(cam: &Camera, viewport_px: (f32, f32), mut z: u8) -> Vec<VisibleTile> {
     let ((west, north), (east, south)) = cam.visible_bounds(viewport_px);
     if cam.globe {
         while z > 2 {
@@ -1184,6 +1203,7 @@ pub struct TileManager {
     client: reqwest::Client,
     tx: Sender<TileResult>,
     rx: Receiver<TileResult>,
+    deferred_ready: Option<TileResult>,
     /// Repaint handle. Tile fetches finish on a worker thread; without this the frame that would
     /// show them waits for whatever wakes egui next — on Android an idle heartbeat up to 250 ms
     /// away, per tile.
@@ -1249,6 +1269,7 @@ impl TileManager {
             thumbs: std::collections::HashMap::new(),
             thumb_tx,
             thumb_rx,
+            deferred_ready: None,
             cache_root,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
@@ -1418,7 +1439,7 @@ impl TileManager {
 
     /// Deepest zoom to fetch for `style` — the measured provider cap, except for the custom slot
     /// where only the user knows.
-    fn max_z(&self, style: BasemapStyle) -> u8 {
+    pub(crate) fn max_z(&self, style: BasemapStyle) -> u8 {
         if style == BasemapStyle::CustomXyz {
             self.custom_max_z
         } else {
@@ -1617,12 +1638,18 @@ impl TileManager {
 
     /// Drain finished fetches into upload-ready tiles (each returned exactly once).
     pub fn drain_ready(&mut self) -> Vec<PendingTile> {
+        self.drain_ready_budget(&mut crate::map_work::UploadBudget::legacy_batch())
+    }
+
+    pub fn drain_ready_budget(&mut self, budget: &mut crate::map_work::UploadBudget) -> Vec<PendingTile> {
         let mut ready = Vec::new();
         // Uploading every tile that finished during a network burst turns one otherwise smooth
         // pan frame into a wall of texture allocation. Two matches the vector-tile budget; the
         // caller requests another frame while this batch is non-empty, so the queue still drains.
-        while ready.len() < 2 {
-            let Ok(t) = self.rx.try_recv() else { break };
+        let mut examined = 0;
+        while !budget.exhausted() && examined < 32 {
+            examined += 1;
+            let Some(t) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) else { break };
             let t = match t {
                 Ok(t) => t,
                 Err(id) => {
@@ -1634,6 +1661,10 @@ impl TileManager {
                 }
             };
             let key = (t.style, t.id);
+            if !budget.take(t.width as usize * t.height as usize * 4) {
+                self.deferred_ready = Some(Ok(t));
+                break;
+            }
             self.failed.remove(&key);
             // `push` (not `put`) hands back whatever it evicted, so the renderer can free the
             // texture instead of leaking it.
@@ -1652,6 +1683,9 @@ impl TileManager {
                 width: t.width,
                 height: t.height,
             });
+        }
+        if budget.exhausted() || self.deferred_ready.is_some() || examined == 32 {
+            if let Some(ctx) = &self.ctx { ctx.request_repaint(); }
         }
         ready
     }
@@ -2686,5 +2720,23 @@ mod goes_window_tests {
         // Scrubbing a few minutes inside the same hour must not change the refetch key.
         let (again, ..) = goes_window(now, Some(old + chrono::Duration::minutes(5)));
         assert_eq!(again, hour);
+    }
+}
+
+#[cfg(test)]
+mod detail_transition_tests {
+    use super::*;
+    #[test]
+    fn small_boundary_reversals_do_not_thrash_and_large_moves_still_switch() {
+        let mut level = DetailLevel::default();
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 6.4);
+        let z = |d: &mut DetailLevel, c: &Camera| d.cover(c, (800.0,600.0),18,0.0)[0].id.0;
+        assert_eq!(z(&mut level,&cam),6);
+        for zoom in [6.51,6.49,6.6,6.42] { cam.zoom=zoom;assert_eq!(z(&mut level,&cam),6); }
+        cam.zoom=6.7;assert_eq!(z(&mut level,&cam),7);
+        cam.zoom=6.4;assert_eq!(z(&mut level,&cam),7);
+        cam.zoom=6.3;assert_eq!(z(&mut level,&cam),6);
+        cam.zoom=12.0;assert_eq!(z(&mut level,&cam),12);
+        cam.zoom=20.0;assert_eq!(z(&mut level,&cam),18);
     }
 }

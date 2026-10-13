@@ -10,6 +10,7 @@ export async function fixtureRadar(page, options = {}) {
   const url = new URL(request.url());
   if (url.href.includes("nexrad-level2.s3.amazonaws.com")) counts.radarRequests.push(url.href);
   if(options.networkState?.offline && (url.pathname.startsWith("/proxy/") || !["127.0.0.1", "localhost"].includes(url.hostname))) { counts.aborted.push(url.href); await request.abort("internetdisconnected"); return; }
+  if(options.vectorResponse && url.href.includes('tiles.openfreemap.org')) { counts.vectorRequests.push(url.href); await request.respond(await options.vectorResponse(url)); return; }
   if(options.vector && (url.href.includes('tiles.openfreemap.org') || url.pathname.startsWith('/vector-fixture/'))) {
    counts.vectorRequests.push(url.href);
    if(url.href.includes('tiles.openfreemap.org')) await request.respond({status:200,contentType:'application/json',body:JSON.stringify({tiles:['http://127.0.0.1:8765/vector-fixture/{z}/{x}/{y}.pbf']})});
