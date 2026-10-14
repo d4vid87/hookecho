@@ -3,6 +3,8 @@
 
 pub mod field_ramps;
 pub mod mercator;
+mod radar_surface;
+pub use radar_surface::radar_surface_supported;
 
 use std::collections::HashMap;
 
@@ -610,6 +612,8 @@ pub struct MapCallback {
     pub vector_over_raster: bool,
     pub radar_upload: Option<RadarUpload>,
     pub draw_radar: bool,
+    /// Raised reflectivity-value visualization; never a meteorological altitude.
+    pub radar_surface: bool,
     /// `Some` only when the overlay geometry changed (else the last upload is reused).
     pub overlay_upload: Option<OverlayUpload>,
     pub draw_overlay: bool,
@@ -721,6 +725,7 @@ struct PaneGpu {
     tile_capacity: u64,
     radar_vbuf: wgpu::Buffer,
     radar: Option<RadarGpu>,
+    surface: Option<radar_surface::Target>,
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
     frame_visible: Vec<(TileKey, std::ops::Range<u32>)>,
@@ -744,6 +749,7 @@ struct PaneGpu {
 pub struct RenderResources {
     tile_pipeline: wgpu::RenderPipeline,
     radar_pipeline: wgpu::RenderPipeline,
+    surface_renderer: radar_surface::Renderer,
     overlay_pipeline: wgpu::RenderPipeline,
     mrms_pipeline: wgpu::RenderPipeline,
     camera_bgl: wgpu::BindGroupLayout,
@@ -826,7 +832,7 @@ impl RenderResources {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -836,7 +842,7 @@ impl RenderResources {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -846,7 +852,7 @@ impl RenderResources {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -858,7 +864,7 @@ impl RenderResources {
                 // and 1×1 when the tint is off.
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -1060,7 +1066,9 @@ impl RenderResources {
             ..Default::default()
         });
 
+        let surface_renderer = radar_surface::Renderer::new(device, target_format, &camera_bgl, &radar_bgl, &radar_shader);
         Self {
+            surface_renderer,
             tile_pipeline,
             radar_pipeline,
             overlay_pipeline,
@@ -1122,6 +1130,7 @@ impl RenderResources {
                 tile_capacity: 512 * 6,
                 radar_vbuf,
                 radar: None,
+                surface: None,
                 frame_visible: Vec::new(),
                 quads_key: None,
                 frame_visible_vector: Vec::new(),
@@ -1861,11 +1870,15 @@ impl RenderResources {
         self.draw_fields(pane, pass, true);
         if pane.frame_draw_radar {
             if let Some(radar) = &pane.radar {
-                pass.set_pipeline(&self.radar_pipeline);
-                pass.set_bind_group(0, cam, &[]);
-                pass.set_bind_group(1, &radar.bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.radar_vbuf.slice(..));
-                pass.draw(0..6, 0..1);
+                if let Some(surface) = &pane.surface {
+                    self.surface_renderer.draw(surface, pass);
+                } else {
+                    pass.set_pipeline(&self.radar_pipeline);
+                    pass.set_bind_group(0, cam, &[]);
+                    pass.set_bind_group(1, &radar.bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.radar_vbuf.slice(..));
+                    pass.draw(0..6, 0..1);
+                }
             }
         }
         // Only the small major-road subset is repeated here. Town labels and route shields are
@@ -1945,6 +1958,7 @@ impl RenderResources {
             self.gpu_timers.retain(|id, _| *id == visible);
         }
         self.upload_frame(device, queue, cb);
+        self.surface_renderer.prepare(device, queue, self.panes.get_mut(&cb.pane).unwrap(), cb);
         if let std::collections::hash_map::Entry::Vacant(entry) = self.gpu_timers.entry(cb.pane) {
             if let Some(timer) = crate::gpu_metrics::Timer::new(device) { entry.insert(timer); }
         }
@@ -1997,6 +2011,7 @@ impl RenderResources {
         let mut shadows = 0;
         for pane in self.panes.values() {
             gpu += pane.camera_buf.size() + pane.tile_vbuf.size() + pane.radar_vbuf.size();
+            if let Some(surface) = &pane.surface { gpu += surface.memory_bytes(); }
             if let Some(radar) = &pane.radar {
                 gpu += texture(&radar.tex)
                     + texture(&radar.flag)

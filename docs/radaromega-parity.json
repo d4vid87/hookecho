@@ -450,10 +450,11 @@
       "status": "partial",
       "observed_scope": "2D/3D toggle observed at runtime; selecting 3D visibly raises the radar surface. Retained client source uses building height/base_height for gray extrusion and a separate polar radar mesh whose height follows squared normalized value; this depicts radar values rather than atmospheric altitude.",
       "observation_type": "runtime-screenshot+static-client",
-      "hookecho_implementation": "Independent Mercator perspective tilt (0–60 degrees) and compass bearing, plus existing orthographic globe. Shared CPU/GPU transforms cover tiles, radar, gridded fields, vectors, picking, labels and wind. Workspace snapshots save orientation. At tilted close zoom, OpenMapTiles render_height and render_min_height now raise building roofs and walls in the vector foreground.",
+      "hookecho_implementation": "Independent Mercator perspective tilt (0–60 degrees) and compass bearing, plus existing orthographic globe. Shared CPU/GPU transforms cover tiles, radar, gridded fields, vectors, picking, labels and wind. Workspace snapshots save orientation. At tilted close zoom, OpenMapTiles render_height and render_min_height now raise building roofs and walls in the vector foreground. Pitched non-globe panes now render single-site reflectivity as an independent squared-normalized-value polar surface. It reuses R8/R16 sweep textures, palettes, filtering and sector opacity, resolves self-occlusion in a per-pane depth target, and caches unchanged views. The 2D path is retained.",
       "remaining_gaps": [
-        "An on-map radar-value surface remains absent; tilted ground-plane data and the separate volume window are distinct capabilities. Building extrusion is painter ordered without depth-buffer occlusion and needs a matched visual acceptance pass.",
-        "Shared-link orientation encoding is not implemented; full-world edge cases and all overlay combinations need broader acceptance."
+        "Radar surface is reflectivity-only in the UI, with an independent visual height scale and a bounded 360-by-256-cell mesh that can omit small echoes. No claim of matching reference geometry, exact heights, all products or volumetric radar. Globe surface shader is not exposed by the application and is not behaviorally verified.",
+        "Surface depth resolves its own folds only; buildings, roads, labels and overlays retain existing map draw ordering without shared depth occlusion. Building extrusion is painter ordered and still needs matched visual acceptance.",
+        "Shared-link orientation encoding is not implemented. Interrogation still uses the ground-plane geographic point, not ray picking of the raised mesh. Full-world edge cases, live/browser surface interaction and all overlay combinations need broader acceptance."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/render/mercator.rs",
@@ -462,7 +463,10 @@
         "crates/hookecho/src/shaders/overlay.wgsl",
         "crates/hookecho/src/vector_tiles.rs",
         "crates/hookecho/src/workspace.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs"
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/render/radar_surface.rs",
+        "crates/hookecho/src/shaders/radar_surface_composite.wgsl",
+        "crates/hookecho/src/headless.rs"
       ],
       "observation_evidence_ids": [
         "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6",
@@ -470,7 +474,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP07",
       "acceptance": "Switch display with preserved site/product/time and verify overlay placement.",
-      "runtime_verification": "16 camera and 9 motion tests, tile-cover/workspace tests, WGSL/WebGL2 translation and hardware GPU raster/field/radar/stroke alignment plus wind regression passed. Browser tilt/bearing controls and persistence verified using a local radar fixture. Height-field synthetic tile test and hardware GPU roof-lift/flat-cull test pass for building extrusion. On-map radar-value surface remains absent."
+      "runtime_verification": "16 camera and 9 motion tests, tile-cover/workspace tests, WGSL/WebGL2 translation and hardware GPU raster/field/radar/stroke alignment plus wind regression passed. Browser tilt/bearing controls and persistence verified using a local radar fixture. Height-field synthetic tile test and hardware GPU roof-lift/flat-cull test pass for building extrusion. Three hardware GPU synthetic surface tests passed: visible displacement, unchanged-frame cache, independent panes/exact 2D restoration, R8/R16 height consistency, alpha preservation, and transparent missing/range-fold/filtered data. 39 focused renderer tests including WGSL/WebGL2 translation passed; native clippy with warnings denied passed; wasm library check passed with pre-existing warnings. Evidence: outputs/ro-parity/radar-surface/implementation.json. Retained reference screenshot ev_a2c7326cb52673cd05789cbb0cae8b884b2f7dbe602aa920911a075ef41a0478 establishes raised geometry, not visual equality; the reference debug endpoint was unavailable during implementation."
     },
     {
       "id": "RAD01",

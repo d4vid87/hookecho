@@ -93,6 +93,8 @@ struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) world: vec2<f32>,
     @location(1) ndc: vec2<f32>,
+    @location(2) @interpolate(flat) surface: u32,
+    @location(3) visible: f32,
 };
 
 @vertex
@@ -104,6 +106,8 @@ fn vs_main(in: VsIn, @builtin(vertex_index) index: u32) -> VsOut {
             vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, -1.0));
         p = corners[index % 6u];
     }
+    out.surface = 0u;
+    out.visible = 1.0;
     out.ndc = p;
     out.clip = vec4<f32>(p, 0.0, 1.0);
     if (camera.globe.z == 0.0) { out.clip = planar_clip(in.world); }
@@ -157,10 +161,10 @@ fn display_gate(gx: i32, gy: i32, nbins: i32) -> f32 {
     return radial_sum / radial_weight;
 }
 
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn radar_color(in: VsOut) -> vec4<f32> {
+    if (in.visible < 0.999) { discard; }
     var world = in.world;
-    if (camera.globe.z != 0.0) {
+    if (camera.globe.z != 0.0 && in.surface == 0u) {
         let picked = globe_world(in.ndc);
         if (picked.z < 0.0) { discard; }
         world = picked.xy;
@@ -279,4 +283,71 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     color.a *= radar.sector_opacity[sector / 4u][sector % 4u];
     if (color.a == 0.0) { discard; }
     return color;
+}
+
+// Independent bounded polar surface. Height encodes reflectivity intensity only;
+// 0.001 world units is a visual exaggeration, not an atmospheric height estimate.
+// Gate centres join as triangles; missing/filtered vertices cut holes rather than
+// creating peaks from the reserved no-data/range-fold codes.
+@vertex
+fn vs_surface(@builtin(vertex_index) vertex: u32) -> VsOut {
+    let cols = min(u32(radar.gate_count) - 1u, 256u);
+    let rows = min(u32(radar.az_bins), 360u);
+    let cell = vertex / 6u;
+    let corner = array<vec2<u32>, 6>(vec2<u32>(0u,0u), vec2<u32>(1u,0u),
+        vec2<u32>(0u,1u), vec2<u32>(0u,1u), vec2<u32>(1u,0u), vec2<u32>(1u,1u))[vertex % 6u];
+    let grid = vec2<u32>(cell % cols, cell / cols) + corner;
+    let gate = u32(round(f32(grid.x) * (radar.gate_count - 1.0) / f32(cols)));
+    let radial = u32(round(f32(grid.y) * radar.az_bins / f32(rows))) % u32(radar.az_bins);
+    let raw = display_gate(i32(gate), i32(radial), i32(radar.az_bins));
+    let normalized = clamp((raw - 2.0) / (code_max() - 2.0), 0.0, 1.0);
+    let height = normalized * normalized * 0.001;
+    let azimuth = (f32(radial) + 0.5) / radar.az_bins * 2.0 * PI;
+    let distance = (radar.first_gate_km + (f32(gate) + 0.5) * radar.gate_interval_km) / R_EARTH_KM;
+    let lat0 = radians(radar.radar_lat);
+    let lat = asin(clamp(sin(lat0) * cos(distance) + cos(lat0) * sin(distance) * cos(azimuth), -1.0, 1.0));
+    let lon = radians(radar.radar_lon) + atan2(sin(azimuth) * sin(distance) * cos(lat0),
+        cos(distance) - sin(lat0) * sin(lat));
+    var world = vec2<f32>(lon / (2.0 * PI) + 0.5,
+        0.5 - log((1.0 + sin(lat)) / (1.0 - sin(lat))) / (4.0 * PI));
+    world.x -= round(world.x - camera.center.x);
+    var out: VsOut;
+    out.world = world;
+    out.ndc = vec2<f32>(0.0);
+    out.surface = 1u;
+    let last = f32(textureDimensions(lut_tex).x - 1u);
+    let index = i32(round(2.0 + normalized * (last - 2.0)));
+    let alpha = textureLoad(lut_tex, vec2<i32>(index, 0), 0).a;
+    out.visible = select(0.0, 1.0, raw >= 2.0 && alpha > 0.0);
+    if (camera.globe.z != 0.0) {
+        let projected = project_world(world);
+        // Radial displacement away from the sphere; backside remains hidden.
+        let factor = 1.0 + height * 2.0 * PI * cos(lat);
+        out.clip = vec4<f32>(projected.xy * factor, clamp(0.5 - projected.z * factor * 0.49, 0.0, 1.0), 1.0);
+        if (projected.z <= 0.0) { out.visible = 0.0; }
+    } else {
+        let q = (world - camera.center) / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+        let rotated = vec2<f32>(camera.planar.x * q.x - camera.planar.y * q.y,
+            camera.planar.y * q.x + camera.planar.x * q.y);
+        let cp = camera.planar.z;
+        let sp = sqrt(max(0.0, 1.0 - cp * cp));
+        let viewport_height = 2.0 / abs(camera.scale.y * camera.world_per_pixel);
+        let focal = viewport_height / (2.0 * tan(PI / 8.0));
+        let z = height / camera.world_per_pixel;
+        let w = 1.0 + (rotated.y * sp - z * cp) / focal;
+        let xy = vec2<f32>(rotated.x, rotated.y * cp + z * sp);
+        let scale = camera.scale * camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+        out.clip = vec4<f32>(xy * scale, w * 1.00001 - 0.0100001, w);
+    }
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    return radar_color(in);
+}
+@fragment
+fn fs_surface(in: VsOut) -> @location(0) vec4<f32> {
+    let color = radar_color(in);
+    return vec4<f32>(color.rgb * color.a, color.a);
 }

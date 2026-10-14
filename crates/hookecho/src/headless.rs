@@ -508,6 +508,7 @@ pub fn run(
         radar_upload: Some(crate::app::to_upload(
             &sweep, &table, None, smooth, storm_uv, None, false,
         )),
+        radar_surface: false,
         draw_radar: true,
         draw_overlay: overlay.is_some(),
         overlay_upload: overlay,
@@ -567,6 +568,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             radar_upload: Some(crate::app::to_upload(
                 &sweep, &table, None, false, None, None, false,
             )),
+            radar_surface: false,
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
@@ -1239,6 +1241,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         radar_upload: Some(crate::app::to_upload(
             &sweep, &table, None, false, None, None, false,
         )),
+        radar_surface: false,
         draw_radar: true,
         overlay_upload: None,
         draw_overlay: false,
@@ -1326,6 +1329,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         new_tiles: Vec::new(),
         visible: Vec::new(),
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: Some(OverlayUpload {
             vertices: geom.vertices,
@@ -1392,6 +1396,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: Some(OverlayUpload {
             vertices: geom.vertices,
@@ -1519,6 +1524,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         draw_overlay: overlay.is_some(),
         overlay_upload: overlay,
@@ -1580,6 +1586,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -1657,6 +1664,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -1772,6 +1780,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -1892,6 +1901,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -2221,6 +2231,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -2300,6 +2311,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -2490,6 +2502,7 @@ pub fn run_hrrr_layer(
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -2532,6 +2545,7 @@ fn render_field_png(
         new_tiles,
         visible,
         radar_upload: None,
+        radar_surface: false,
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
@@ -3324,6 +3338,7 @@ mod golden_tests {
             radar_upload: Some(crate::app::to_upload(
                 sweep, table, None, smooth, None, None, false,
             )),
+            radar_surface: false,
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
@@ -3340,6 +3355,100 @@ mod golden_tests {
             wind: None,
         }
     }
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_radar_value_surface_is_raised_cached_and_pane_local() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let target = new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let mut camera = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        camera.set_orientation(45.0, 25.0);
+        let mut cb = performance_callback(&sweep, &table, camera, false);
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let render = |resources: &mut RenderResources, cb: &MapCallback| {
+            resources.render_once(&device, &queue, &view, cb, wgpu::Color::TRANSPARENT);
+            read_target(&device, &queue, &target, GOLDEN_SIZE)
+        };
+        let flat = render(&mut resources, &cb);
+        cb.radar_surface = true;
+        let raised = render(&mut resources, &cb);
+        let changes = flat.as_chunks::<4>().0.iter().zip(raised.as_chunks::<4>().0.iter()).filter(|(a,b)| a != b).count();
+        assert!(changes > 200, "value surface must displace visible radar: {changes}");
+        assert!(raised.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count() > 100);
+        cb.radar_upload = None;
+        assert_eq!(raised, render(&mut resources, &cb), "unchanged frames reuse the depth-resolved image");
+        let mut other = performance_callback(&sweep, &table, camera, false);
+        other.pane = 1;
+        assert_eq!(flat, render(&mut resources, &other), "a second pane retains its flat mode");
+        assert_eq!(raised, render(&mut resources, &cb), "second pane must not overwrite the surface");
+        cb.radar_surface = false;
+        assert_eq!(flat, render(&mut resources, &cb), "2D restoration is exact with retained data");
+        if let Ok(dir) = std::env::var("HOOKECHO_SURFACE_TEST_OUTPUT") {
+            std::fs::create_dir_all(&dir).unwrap();
+            for (name, pixels) in [("flat", &flat), ("surface", &raised)] {
+                image::save_buffer(std::path::Path::new(&dir).join(format!("{name}.png")), pixels, GOLDEN_SIZE, GOLDEN_SIZE, image::ColorType::Rgba8).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_radar_value_surface_precision_height_and_alpha_agree() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let target = new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let mut camera = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        camera.set_orientation(45.0, 0.0);
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut centroids = Vec::new();
+        for (raw, precision) in [(128u8, false), (128, true), (255, false)] {
+            let mut sweep = synthetic_sweep();
+            sweep.data.fill(0);
+            for az in 40..80 { for gate in 40..80 { sweep.data[az * sweep.gate_count + gate] = raw; } }
+            if precision { sweep.data16 = Some(sweep.data.iter().map(|&r| if r < 2 {u16::from(r)} else { (2.0 + (f32::from(r) - 2.0) / 253.0 * 65533.0).round() as u16 }).collect()); }
+            let mut cb = performance_callback(&sweep, &table, camera, false);
+            cb.radar_surface = true;
+            for rgba in cb.radar_upload.as_mut().unwrap().lut.as_chunks_mut::<4>().0 { rgba.copy_from_slice(&[255,255,255,128]); }
+            resources.render_once(&device, &queue, &view, &cb, wgpu::Color::TRANSPARENT);
+            let image = read_target(&device, &queue, &target, GOLDEN_SIZE);
+            let pixels: Vec<_> = image.as_chunks::<4>().0.iter().enumerate().filter(|(_,p)| p[3] > 100).collect();
+            assert!(pixels.len() > 8, "valid patch missing");
+            assert!(pixels.iter().all(|(_,p)| (126..=129).contains(&p[3])), "opacity was squared or compounded");
+            centroids.push(pixels.iter().map(|(i,_)| (i / GOLDEN_SIZE as usize) as f32).sum::<f32>() / pixels.len() as f32);
+        }
+        assert!((centroids[0] - centroids[1]).abs() < 0.5, "R8/R16 normalized heights disagree: {centroids:?}");
+        assert!(centroids[2] + 12.0 < centroids[0], "stronger values must rise farther: {centroids:?}");
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_radar_value_surface_clips_missing_folded_and_filtered_gates() {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let target = new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let mut camera = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        camera.set_orientation(45.0, 0.0);
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        for (raw, precision, transparent) in [(0, false, false), (1, false, false), (0, true, false), (1, true, false), (200, false, true), (200, true, true)] {
+            let mut sweep = synthetic_sweep();
+            sweep.data.fill(raw);
+            if precision { sweep.data16 = Some(vec![u16::from(raw); sweep.data.len()]); }
+            let mut cb = performance_callback(&sweep, &table, camera, false);
+            cb.radar_surface = true;
+            if transparent { for rgba in cb.radar_upload.as_mut().unwrap().lut.as_chunks_mut::<4>().0 { rgba[3] = 0; } }
+            resources.render_once(&device, &queue, &view, &cb, wgpu::Color::TRANSPARENT);
+            let image = read_target(&device, &queue, &target, GOLDEN_SIZE);
+            assert!(image.as_chunks::<4>().0.iter().all(|p| p[3] == 0), "reserved/filtered data created geometry: raw={raw} precision={precision}");
+        }
+    }
+
     #[test]
     #[ignore = "gpu"]
     fn gpu_satellite_frames_with_the_same_tile_id_remain_independent() {
@@ -3653,6 +3762,7 @@ mod golden_tests {
             radar_upload: Some(crate::app::to_upload(
                 &sweep, &table, None, false, None, None, false,
             )),
+            radar_surface: false,
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
@@ -3748,6 +3858,7 @@ mod golden_tests {
             world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
             new_tiles: Vec::new(), visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None, None, false)),
+            radar_surface: false,
             draw_radar: true, overlay_upload: None, draw_overlay: false,
             field_uploads: Vec::new(), field_draws: Vec::new(), clear_tiles: false, drop_tiles: Vec::new(),
             drop_fields: Vec::new(), new_vector_tiles: Vec::new(), visible_vector: Vec::new(), clear_vector: false,
@@ -3798,6 +3909,7 @@ mod golden_tests {
             world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
             new_tiles: Vec::new(), visible: Vec::new(),
             radar_upload: None,
+            radar_surface: false,
             draw_radar: false, overlay_upload: None, draw_overlay: false,
             field_uploads: Vec::new(), field_draws: Vec::new(), clear_tiles: false, drop_tiles: Vec::new(),
             drop_fields: Vec::new(), new_vector_tiles: Vec::new(), visible_vector: Vec::new(), clear_vector: false,
@@ -3940,6 +4052,7 @@ mod golden_tests {
                 radar_upload: Some(crate::app::to_upload(
                     &sweep, &table, None, false, None, None, lut_only,
                 )),
+                radar_surface: false,
                 draw_radar: true,
                 overlay_upload: None,
                 draw_overlay: false,
@@ -3988,6 +4101,7 @@ mod golden_tests {
             new_tiles: Vec::new(),
             visible: Vec::new(),
             radar_upload: None,
+            radar_surface: false,
             draw_radar: false,
             overlay_upload: None,
             draw_overlay: true,
@@ -4110,6 +4224,7 @@ mod golden_tests {
             radar_upload: Some(crate::app::to_upload(
                 &sweep, &table, None, false, None, None, false,
             )),
+            radar_surface: false,
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
