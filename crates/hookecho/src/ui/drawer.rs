@@ -19,12 +19,21 @@ use egui::{pos2, vec2, Rect};
 /// The drawer's geometry on a desktop-sized screen. On a phone it takes the whole content rect,
 /// which is Material 3's answer for the compact width class and what the old `phone_surface` did.
 const X: f32 = 10.0;
-// Clear both Quick Launch rows; the drawer close button must never sit under them.
+// Minimum clearance; grouped radar controls can reserve more space for this pass.
 const TOP: f32 = 120.0;
 const WIDTH: f32 = 380.0;
 /// Room along the bottom edge for the floating scrubber.
 const BOTTOM_CLEARANCE: f32 = 96.0;
 const HEADER_H: f32 = 44.0;
+
+/// Keep drawer controls below the actual navigation, including retained-scan explanations.
+pub(crate) fn avoid_toolbar(ctx: &egui::Context, toolbar: Rect) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| data.insert_temp(
+        egui::Id::new("drawer_toolbar_bottom"),
+        (pass, toolbar.bottom() + 8.0),
+    ));
+}
 
 #[derive(Default)]
 pub struct Drawer {
@@ -289,14 +298,17 @@ impl Drawer {
 /// Header and body rectangles for the current screen.
 fn rects(ctx: &egui::Context, width: f32, expanded: bool) -> (Rect, Rect) {
     let full = ctx.content_rect();
+    let chrome_top = ctx.data(|data| data.get_temp::<(u64, f32)>(egui::Id::new("drawer_toolbar_bottom")))
+        .filter(|(pass, _)| *pass == ctx.cumulative_pass_nr())
+        .map_or(full.top() + TOP, |(_, bottom)| bottom.max(full.top() + TOP));
     let (x, w, top, bottom) = if cfg!(target_os = "android") || expanded {
-        (full.left(), full.width(), full.top() + if cfg!(target_os = "android") { 0.0 } else { TOP }, full.bottom())
+        (full.left(), full.width(), if cfg!(target_os = "android") { full.top() } else { chrome_top }, full.bottom())
     } else {
         (
             full.left() + X,
             width.min(full.width() - 2.0 * X),
-            full.top() + TOP,
-            (full.bottom() - BOTTOM_CLEARANCE).max(full.top() + TOP + 200.0),
+            chrome_top,
+            (full.bottom() - BOTTOM_CLEARANCE).max(chrome_top + 200.0),
         )
     };
     let head = Rect::from_min_size(pos2(x, top), vec2(w, HEADER_H));
@@ -307,6 +319,25 @@ fn rects(ctx: &egui::Context, width: f32, expanded: bool) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_os = "android"))]
+    fn drawer_clears_tall_radar_controls_on_desktop_and_phone() {
+        let ctx = egui::Context::default();
+        for size in [vec2(1440.0, 1000.0), vec2(390.0, 844.0)] {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)), ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| {
+                let toolbar = Rect::from_min_max(pos2(16.0, 16.0), pos2(330.0, 264.0));
+                avoid_toolbar(ui.ctx(), toolbar);
+                for expanded in [false, true] {
+                    let (header, body) = rects(ui.ctx(), 460.0, expanded);
+                    assert!(header.top() >= toolbar.bottom() + 8.0);
+                    assert!(body.top() > header.bottom());
+                    assert!(body.bottom() <= size.y);
+                }
+            });
+        }
+    }
 
     #[test]
     #[cfg(not(target_os = "android"))]

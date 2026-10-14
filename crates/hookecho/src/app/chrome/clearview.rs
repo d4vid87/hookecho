@@ -101,6 +101,7 @@ impl HookEchoApp {
                     });
             });
         self.mobile_occlusion.push(toolbar.response.rect);
+        crate::ui::drawer::avoid_toolbar(ctx, toolbar.response.rect);
         self.tour_anchors.menu = Some(toolbar.response.rect);
         let mut custom_locations = false;
         let mut point_forecast = false;

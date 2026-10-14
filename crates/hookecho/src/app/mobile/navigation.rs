@@ -198,6 +198,7 @@ impl HookEchoApp {
                 }
             });
         self.mobile_occlusion.push(header.response.rect);
+        crate::ui::drawer::avoid_toolbar(ctx, header.response.rect);
         self.tour_anchors.product = product_anchor;
         self.tour_anchors.menu = menu_anchor;
 
