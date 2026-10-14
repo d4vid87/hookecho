@@ -206,6 +206,24 @@ fn dvl_rejects_a_negative_log_breakpoint() {
     assert_eq!(nexrad_level3::dvl_value(100, &thr), None);
 }
 
+#[test]
+fn live_daa_and_dsa_decode_with_header_scales_and_no_data() {
+    let daa = decode(include_bytes!("data/daa_tlx.l3")).expect("decode public DAA 170");
+    let dsa = decode(include_bytes!("data/dsa_tlx.l3")).expect("decode public DSA 172");
+    assert_eq!((daa.code, dsa.code), (170, 172));
+    for product in [&daa, &dsa] {
+        let radial = product.radial.as_ref().expect("digital precipitation is radial");
+        assert_eq!((radial.nbins, radial.radials.len()), (920, 360));
+        assert_eq!(nexrad_level3::accumulation_mm(0, &product.thresholds), None);
+    }
+    // NOAA ICD 2620001: the header floats encode hundredths of an inch. These observed TLX
+    // headers give DAA scale=1.2524655/offset=0.8747535 and DSA scale=0.2/offset=0.
+    let daa_mm = nexrad_level3::accumulation_mm(25, &daa.thresholds).unwrap();
+    let dsa_mm = nexrad_level3::accumulation_mm(50, &dsa.thresholds).unwrap();
+    assert!((daa_mm - 4.8926).abs() < 0.001);
+    assert!((dsa_mm - 63.5).abs() < 0.001);
+}
+
 /// TDWR terminal-radar base reflectivity (product 180). The packet-16 reader is product-agnostic,
 /// so the interesting part is that the TDWR flavour of the PDB decodes the same way — including
 /// the elevation angle, which is the only place a TDWR tilt announces itself.

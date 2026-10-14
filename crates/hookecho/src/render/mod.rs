@@ -100,6 +100,10 @@ pub enum FieldLayer {
     Qpe6h,
     Qpe12h,
     Qpe24h,
+    /// Single-site Level III digital one-hour accumulation.
+    Daa,
+    /// Single-site Level III digital storm-total accumulation.
+    Dsa,
     /// HRRR surface CAPE (environment suite).
     Cape,
     /// HRRR storm-relative helicity (environment suite).
@@ -219,7 +223,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const BASE_DRAW_ORDER: [FieldLayer; 71] = [
+    pub const BASE_DRAW_ORDER: [FieldLayer; 73] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -275,6 +279,8 @@ impl FieldLayer {
         FieldLayer::Qpe6h,
         FieldLayer::Qpe12h,
         FieldLayer::Qpe24h,
+        FieldLayer::Daa,
+        FieldLayer::Dsa,
         FieldLayer::FlashFlood,
         FieldLayer::HailSwath,
         FieldLayer::CompositeLocal,
@@ -340,6 +346,8 @@ impl FieldLayer {
             FieldLayer::Qpe6h => "qpe6h",
             FieldLayer::Qpe12h => "qpe12h",
             FieldLayer::Qpe24h => "qpe24h",
+            FieldLayer::Daa => "daa",
+            FieldLayer::Dsa => "dsa",
             FieldLayer::Cape => "cape",
             FieldLayer::Srh => "srh",
             FieldLayer::PrecipType => "preciptype",
@@ -415,6 +423,8 @@ impl FieldLayer {
             FL::Qpe6h => &wxdata::mrms::QPE_06H_DESCRIPTOR,
             FL::Qpe12h => &wxdata::mrms::QPE_12H_DESCRIPTOR,
             FL::Qpe24h => &wxdata::mrms::QPE_24H_DESCRIPTOR,
+            FL::Daa => &wxdata::level3::DAA_DESCRIPTOR,
+            FL::Dsa => &wxdata::level3::DSA_DESCRIPTOR,
             FL::PrecipRate => &wxdata::mrms::PRECIP_RATE_DESCRIPTOR,
             FL::PrecipType => &wxdata::mrms::PRECIP_TYPE_DESCRIPTOR,
             FL::FlashFlood => &wxdata::mrms::FLASH_ARI30_DESCRIPTOR,

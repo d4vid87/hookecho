@@ -452,6 +452,28 @@ pub fn n0g_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
     n0b_value(level, thr)
 }
 
+/// Decode DAA (170) or DSA (172) to millimetres. The header carries two big-endian IEEE-754
+/// floats: `scale` in HW31-32 and `offset` in HW33-34. The ICD defines the result as hundredths
+/// of an inch, and level zero as NO_DATA; the other levels use `(level - offset) / scale`.
+pub fn accumulation_mm(level: u8, thr: &[i16; 16]) -> Option<f32> {
+    let leading = thr[6].clamp(1, 255) as u8;
+    let max_level = thr[5].clamp(1, 255) as u8;
+    let trailing = thr[7].clamp(0, 254) as u8;
+    if level < leading || level > max_level.saturating_sub(trailing) {
+        return None;
+    }
+    let read_float = |a: i16, b: i16| {
+        f32::from_bits((u32::from(a as u16) << 16) | u32::from(b as u16))
+    };
+    let scale = read_float(thr[0], thr[1]);
+    let offset = read_float(thr[2], thr[3]);
+    if !scale.is_finite() || scale <= 0.0 || !offset.is_finite() {
+        return None;
+    }
+    let hundredths_inch = (f32::from(level) - offset) / scale;
+    (hundredths_inch >= 0.0 && hundredths_inch.is_finite()).then_some(hundredths_inch * 0.254)
+}
+
 /// Decode an Enhanced Echo Tops (product 135) data level to (kft, topped-flag), via the threshold
 /// table. Levels 0/1 are below-threshold / flagged → `None`.
 pub fn eet_value(level: u8, thr: &[i16; 16]) -> Option<(f32, bool)> {

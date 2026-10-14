@@ -81,6 +81,8 @@ impl HookEchoApp {
                         | FL::Qpe6h
                         | FL::Qpe12h
                         | FL::Qpe24h
+                        | FL::Daa
+                        | FL::Dsa
                         | FL::PrecipType
                         | FL::FlashFlood
                         | FL::SnowBands
@@ -492,6 +494,20 @@ impl HookEchoApp {
                 "National",
                 "Water aloft (VIL, L3)",
                 "How much water the storm is holding aloft",
+                false,
+            ),
+            (
+                FL::Daa,
+                "Radar site",
+                "Digital Accumulation Array (DAA)",
+                "One-hour digital precipitation accumulation from the selected radar",
+                false,
+            ),
+            (
+                FL::Dsa,
+                "Radar site",
+                "Storm Total Precipitation (DSA)",
+                "Digital storm-total precipitation from the selected radar",
                 false,
             ),
             (

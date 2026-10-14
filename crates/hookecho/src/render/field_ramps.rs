@@ -848,6 +848,8 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::HailSwath => &HAIL_SWATH,
         FL::PrecipRate => &PRECIP_RATE,
         FL::Qpe1h => &QPE_1H,
+        FL::Daa => &QPE_1H,
+        FL::Dsa => &QPE_24H,
         FL::Qpe3h | FL::Qpe6h | FL::Qpe12h => &QPE_24H,
         FL::Qpe24h => &QPE_24H,
         FL::Cape => &CAPE,

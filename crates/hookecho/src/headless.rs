@@ -2170,14 +2170,16 @@ pub fn run_contours(kind_token: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fetch a gridded L3 product (DVL/EET), print stats, render centered on the site (feature X).
+/// Fetch a gridded L3 product, print stats, render centered on the site.
 pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> {
     use crate::render::FieldLayer as FL;
     let layer = match kind {
         "dvl" => FL::Vil,
         "eet" => FL::EchoTops,
         "hhc" => FL::Hca,
-        other => anyhow::bail!("unknown l3grid kind '{other}' (dvl|eet|hhc)"),
+        "daa" => FL::Daa,
+        "dsa" => FL::Dsa,
+        other => anyhow::bail!("unknown l3grid kind '{other}' (dvl|eet|hhc|daa|dsa)"),
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2187,6 +2189,8 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         match layer {
             FL::Vil => wxdata::level3::fetch_dvl(&client, site).await,
             FL::Hca => wxdata::level3::fetch_hhc(&client, site).await,
+            FL::Daa => wxdata::level3::fetch_daa_frame(&client, site).await.map(|f| f.field().clone()),
+            FL::Dsa => wxdata::level3::fetch_dsa_frame(&client, site).await.map(|f| f.field().clone()),
             _ => wxdata::level3::fetch_eet(&client, site).await,
         }
     });

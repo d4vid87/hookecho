@@ -156,7 +156,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # startup limits remain unchanged.
 # Timestamped TDWR archive playback measured 4,523,808 gzip bytes with binaryen 130.
 # Allow 6,192 bytes of margin above that measured result; lite/startup caps are unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4530000}"
+# Public Level III DAA/DSA accumulation adds two real radar products to the first-load bundle.
+# The measured optimized main WASM is 4,531,260 bytes gzip; retain under 0.2% headroom.
+budget="${HOOKECHO_WASM_BUDGET:-4540000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
