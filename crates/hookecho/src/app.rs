@@ -1366,6 +1366,28 @@ pub(crate) fn draw_append(
     }
 }
 
+/// Remove complete strokes touched by an eraser drag, using a constant screen-pixel radius.
+fn erase_strokes_at(strokes: &mut Vec<Stroke2d>, cam: &crate::render::mercator::Camera, vp: (f32, f32), cursor: (f32, f32)) -> bool {
+    let before = strokes.len();
+    let radius_sq = 11.0_f32.powi(2);
+    strokes.retain(|stroke| {
+        let hit = stroke.points.windows(2).any(|pair| {
+            let screen = |ll: [f64; 2]| {
+                let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                cam.world_to_screen(world, vp)
+            };
+            let a = screen(pair[0]);
+            let b = screen(pair[1]);
+            let dx = b.0 - a.0;
+            let dy = b.1 - a.1;
+            let t = (((cursor.0 - a.0) * dx + (cursor.1 - a.1) * dy) / (dx * dx + dy * dy).max(0.001)).clamp(0.0, 1.0);
+            (cursor.0 - a.0 - t * dx).powi(2) + (cursor.1 - a.1 - t * dy).powi(2) <= radius_sq
+        });
+        !hit
+    });
+    strokes.len() != before
+}
+
 fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
     let features: Vec<_> = strokes
         .iter()
@@ -3270,6 +3292,10 @@ pub struct HookEchoApp {
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
+    draw_eraser: bool,
+    draw_undo: Vec<Vec<Stroke2d>>,
+    draw_redo: Vec<Vec<Stroke2d>>,
+    draw_gesture_active: bool,
     /// Clicked start/waypoints/destination and provider-returned road alternatives.
     route_waypoints: Vec<[f64; 2]>,
     routes: Vec<wxdata::route::Route>,
@@ -4320,6 +4346,10 @@ impl HookEchoApp {
             detector_history: std::collections::VecDeque::new(),
             detector_history_key: None,
             strokes: Vec::new(),
+            draw_eraser: false,
+            draw_undo: Vec::new(),
+            draw_redo: Vec::new(),
+            draw_gesture_active: false,
             route_waypoints: Vec::new(),
             routes: Vec::new(),
             route_rx: None,
@@ -13473,6 +13503,7 @@ impl HookEchoApp {
         }
         // The draw tool takes the drag away from the pan, the same deal the measure tool makes
         // with the click: while it's armed, a drag draws. Disarm it (Esc / another tool) to pan.
+        if !ctx.input(|i| i.pointer.primary_down()) { self.draw_gesture_active = false; }
         if self.tool == MapTool::Draw && quiet {
             if response.dragged() {
                 self.active = idx;
@@ -13481,12 +13512,26 @@ impl HookEchoApp {
                     let px = (pos.x - prect.left(), pos.y - prect.top());
                     let w = cam.screen_to_world(px, vp);
                     let ll = crate::render::mercator::world_to_lonlat(w.0, w.1);
-                    draw_append(
-                        &mut self.strokes,
-                        [ll.0, ll.1],
-                        self.draw_color,
-                        response.drag_started(),
-                    );
+                    if self.draw_eraser {
+                        let before = (!self.draw_gesture_active).then(|| self.strokes.clone());
+                        if erase_strokes_at(&mut self.strokes, &cam, vp, px)
+                            && !self.draw_gesture_active
+                        {
+                            self.draw_undo.push(before.expect("new eraser gesture has a snapshot"));
+                            if self.draw_undo.len() > 16 { self.draw_undo.remove(0); }
+                            self.draw_redo.clear();
+                            self.draw_gesture_active = true;
+                        }
+                    } else {
+                        let new_stroke = !self.draw_gesture_active;
+                        if new_stroke {
+                            self.draw_undo.push(self.strokes.clone());
+                            if self.draw_undo.len() > 16 { self.draw_undo.remove(0); }
+                            self.draw_redo.clear();
+                            self.draw_gesture_active = true;
+                        }
+                        draw_append(&mut self.strokes, [ll.0, ll.1], self.draw_color, new_stroke);
+                    }
                 }
             }
         } else if response.dragged() && quiet {
@@ -18921,6 +18966,9 @@ impl HookEchoApp {
                             ),
                         })
                         .collect();
+                    self.draw_undo.clear();
+                    self.draw_redo.clear();
+                    self.draw_gesture_active = false;
                     for bookmark in case.bookmarks {
                         if !self.settings.bookmarks.contains(&bookmark) {
                             self.settings.bookmarks.push(bookmark);
@@ -23655,6 +23703,22 @@ mod tests {
         strokes.pop(); // Undo
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].color, red);
+    }
+
+    #[test]
+    fn eraser_hits_screen_segments_and_leaves_other_strokes() {
+        let cam = crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let vp = (800.0, 600.0);
+        let middle = cam.world_to_screen(crate::render::mercator::lonlat_to_world(-97.0, 35.0), vp);
+        let mut strokes = vec![
+            Stroke2d { points: vec![[-97.1, 35.0], [-96.9, 35.0]], color: DRAW_COLORS[0] },
+            Stroke2d { points: vec![[-98.0, 36.0], [-97.9, 36.0]], color: DRAW_COLORS[2] },
+        ];
+        let before = strokes.clone();
+        assert!(erase_strokes_at(&mut strokes, &cam, vp, middle));
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0], before[1]);
+        assert!(!erase_strokes_at(&mut strokes, &cam, vp, middle));
     }
 
     #[test]

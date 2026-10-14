@@ -276,7 +276,7 @@ impl HookEchoApp {
             MapTool::Chase => (ph::CROSSHAIR, "Chase", "click your location"),
             MapTool::Route => (ph::PATH, "Route", "click start, waypoints, destination"),
             MapTool::Climatology => (ph::TORNADO, "Climatology", "click a point"),
-            MapTool::Draw => (ph::PENCIL_SIMPLE, "Draw", "drag to scribble"),
+            MapTool::Draw => (ph::PENCIL_SIMPLE, "Draw", "drag to draw or erase"),
             MapTool::AlertZone => (
                 ph::POLYGON,
                 "Watch zone",
@@ -326,6 +326,13 @@ impl HookEchoApp {
                             return;
                         }
                         ui.separator();
+                        if ui.selectable_label(!self.draw_eraser, "Pencil").clicked() {
+                            self.draw_eraser = false;
+                        }
+                        if ui.selectable_label(self.draw_eraser, "Eraser").on_hover_text("Drag across a drawing to remove its stroke").clicked() {
+                            self.draw_eraser = true;
+                        }
+                        ui.add_enabled_ui(!self.draw_eraser, |ui| {
                         for c in DRAW_COLORS {
                             let sel = self.draw_color == c;
                             let (rect, resp) = ui
@@ -343,17 +350,31 @@ impl HookEchoApp {
                                 self.draw_color = c;
                             }
                         }
+                        });
                         ui.separator();
                         if ui
-                            .add_enabled(!self.strokes.is_empty(), egui::Button::new("Undo"))
+                            .add_enabled(!self.draw_undo.is_empty(), egui::Button::new("Undo"))
                             .clicked()
                         {
-                            self.strokes.pop();
+                            if let Some(previous) = self.draw_undo.pop() {
+                                self.draw_redo.push(std::mem::replace(&mut self.strokes, previous));
+                            }
+                        }
+                        if ui
+                            .add_enabled(!self.draw_redo.is_empty(), egui::Button::new("Redo"))
+                            .clicked()
+                        {
+                            if let Some(next) = self.draw_redo.pop() {
+                                self.draw_undo.push(std::mem::replace(&mut self.strokes, next));
+                            }
                         }
                         if ui
                             .add_enabled(!self.strokes.is_empty(), egui::Button::new("Clear"))
                             .clicked()
                         {
+                            self.draw_undo.push(self.strokes.clone());
+                            if self.draw_undo.len() > 16 { self.draw_undo.remove(0); }
+                            self.draw_redo.clear();
                             self.strokes.clear();
                         }
                         if ui

@@ -1513,14 +1513,16 @@
       "status": "partial",
       "observed_scope": "Pencil, eraser, undo, redo and clear controls.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Workspace pencil routes to existing session drawing.",
+      "hookecho_implementation": "Workspace drawing chip offers pencil with four colors, stroke eraser, 16-step drawing undo/redo, clear and GeoJSON export. Freehand annotations stay anchored to geographic coordinates during pan and zoom. Eraser drag removes whole touched strokes within an 11-pixel screen radius; each draw or erase drag is one history step.",
       "remaining_gaps": [
-        "Full vendor pencil/eraser/undo/redo/export behavior is not established as equivalent."
+        "RadarOmega eraser granularity, history depth and export format have not been verified as equivalent. HookEcho eraser removes whole strokes, not portions of strokes."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/clearview.rs",
         "crates/hookecho/src/app/chrome/overlay.rs",
-        "crates/hookecho/src/app/chrome/radar_identity.rs"
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/app/chrome/chips.rs",
+        "crates/hookecho/src/app.rs"
       ],
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN04",
