@@ -28,6 +28,7 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Runtime;
 use wxdata::alerts::{self};
@@ -3667,6 +3668,7 @@ pub struct HookEchoApp {
     ppef_last_fetch: Option<Instant>,
     dotcam_bounds: Option<(f64, f64, f64, f64)>,
     dotcam_last_fetch: Option<Instant>,
+    dotcam_detail_last_fetch: Option<Instant>,
     /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
     /// in the drawer.
     #[cfg(not(target_arch = "wasm32"))]
@@ -4598,6 +4600,7 @@ impl HookEchoApp {
             ppef_last_fetch: None,
             dotcam_bounds: None,
             dotcam_last_fetch: None,
+            dotcam_detail_last_fetch: None,
             #[cfg(not(target_arch = "wasm32"))]
             nwr: None,
             nwr_pick: String::new(),
@@ -11124,19 +11127,28 @@ impl HookEchoApp {
         let capability = if cam.stream_url.is_some() { "Stream URL available" } else { "Still image only" };
         self.detail = Some(Detail {
             title: format!("{} camera", cam.agency),
-            body: format!("{title}{place}\n{capability}\nCapture time is not supplied by the camera catalog.\nPublic fixed highway camera; not a chaser feed."),
+            body: format!("{title}{place}\n{capability}\nChecks for a new still about once a minute while open. Capture time is not supplied by the camera catalog.\nPublic fixed highway camera; not a chaser feed."),
             color: [91, 220, 206, 255],
             image: image.clone(),
             link: cam.image_url.as_ref()
                 .map(|url| ("Open image from Caltrans".to_string(), url.clone())),
             stream: cam.stream_url.clone(),
         });
+        self.dotcam_detail_last_fetch = Some(Instant::now());
+        ctx.request_repaint_after(Duration::from_secs(60));
         let (Some(key), Some(url)) = (image, cam.image_url.clone()) else { return; };
-        if self.pf_icon_tex.contains_key(&key) { return; }
-        self.pf_icon_tex.insert(key.clone(), None);
+        self.pf_icon_tex.entry(key.clone()).or_insert(None);
+        self.fetch_dotcam_still(key, url, ctx);
+    }
+
+    fn fetch_dotcam_still(&self, key: String, url: String, ctx: &egui::Context) {
         let (http, tx, ctx2) = (self.http.clone(), self.pf_icon_tx.clone(), ctx.clone());
+        // The JPEG URL stays fixed while its bytes change. A shared minute bucket bypasses older
+        // browser-cache entries without making every viewer use a unique proxy cache key.
+        let separator = if url.contains('?') { '&' } else { '?' };
+        let request_url = format!("{url}{separator}he_still={}", Utc::now().timestamp() / 60);
         self.spawner.spawn(async move {
-            match crate::stationlayer::fetch_image(&http, &url).await {
+            match crate::stationlayer::fetch_image(&http, &request_url).await {
                 Ok(image) => {
                     let _ = tx.send((key, image));
                     ctx2.request_repaint();
@@ -11144,6 +11156,26 @@ impl HookEchoApp {
                 Err(e) => log::warn!("highway camera still {url}: {e}"),
             }
         });
+    }
+
+    fn refresh_open_dotcam(&mut self, ctx: &egui::Context) {
+        let Some(detail) = self.detail.as_ref().filter(|detail| {
+            detail.image.as_deref().is_some_and(|key| key.starts_with("dotcam:"))
+        }) else {
+            self.dotcam_detail_last_fetch = None;
+            return;
+        };
+        let Some((_, url)) = detail.link.as_ref() else { return; };
+        let Some(key) = detail.image.as_ref() else { return; };
+        let elapsed = self.dotcam_detail_last_fetch.map(|time| time.elapsed()).unwrap_or_default();
+        if elapsed < Duration::from_secs(60) {
+            ctx.request_repaint_after(Duration::from_secs(60) - elapsed);
+            return;
+        }
+        let (key, url) = (key.clone(), url.clone());
+        self.dotcam_detail_last_fetch = Some(Instant::now());
+        self.fetch_dotcam_still(key, url, ctx);
+        ctx.request_repaint_after(Duration::from_secs(60));
     }
 
     /// The weather-radio rows: pick a configured relay, play or stop it, and see honestly whether
@@ -21649,6 +21681,7 @@ impl eframe::App for HookEchoApp {
         }
         self.sync_placefiles(ctx);
         self.sync_pf_icons(ctx);
+        self.refresh_open_dotcam(ctx);
         // Bindings are polled once, globally: a hotkey works the same in OBS mode, on mobile, and
         // with the drawer open. `capture_key` suppresses the table while the Hotkeys tab is
         // listening for the next keypress.

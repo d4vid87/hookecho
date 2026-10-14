@@ -88,6 +88,7 @@ test("the TTL table is the one the app's cadences were chosen against", () => {
   assert.equal(cacheSeconds("maps.dwd.de", "?TIME=2026"), 300);
   assert.equal(cacheSeconds("maps.dwd.de", "?LAYERS=rv"), 15);
   assert.equal(cacheSeconds("tgftp.nws.noaa.gov", ""), 300);
+  assert.equal(cacheSeconds("cwwp2.dot.ca.gov", ""), 60);
 });
 
 test("the trust boundary is unchanged", async () => {

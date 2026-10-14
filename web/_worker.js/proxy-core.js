@@ -126,6 +126,9 @@ export const LIVE_HOSTS = new Set([
 const ARCHIVE_BUCKET = "unidata-nexrad-level2.s3.amazonaws.com";
 
 export const cacheSeconds = (host, search = "") => {
+  // Caltrans still URLs are stable while the JPEG changes. Keep the proxy's cached copy no older
+  // than the open camera card's one-minute refresh interval.
+  if (host === "cwwp2.dot.ca.gov") return 60;
   // A bucket listing is how the app finds the newest volume — cache that like a live feed or the
   // loop stops advancing.
   if (search.includes("list-type=")) return 15;

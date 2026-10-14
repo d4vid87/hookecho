@@ -1500,6 +1500,10 @@ const ARCHIVE_BUCKET: &str = "unidata-nexrad-level2.s3.amazonaws.com";
 /// one answer from the Pages deployment and a different one from `--serve` is a bug that only
 /// shows up as a loop that will not advance.
 fn cache_seconds(host: &str, query: &str) -> u64 {
+    // Caltrans still URLs stay fixed while the image changes; match the open-card refresh cycle.
+    if host == "cwwp2.dot.ca.gov" {
+        return 60;
+    }
     // A bucket listing is how the app finds the newest volume — cache that like a live feed or
     // the loop stops advancing.
     if query.contains("list-type=") {
@@ -2237,6 +2241,7 @@ mod tests {
         assert_eq!(cache_seconds("api.weather.gov", ""), 15);
         assert_eq!(cache_seconds("opendata.dwd.de", ""), 15);
         assert_eq!(cache_seconds("tgftp.nws.noaa.gov", ""), 300);
+        assert_eq!(cache_seconds("cwwp2.dot.ca.gov", ""), 60);
         assert_eq!(cache_seconds("basemaps.cartocdn.com", ""), 300);
     }
 
