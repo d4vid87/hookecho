@@ -12416,7 +12416,7 @@ impl HookEchoApp {
                 self.cells_site = None;
                 self.cell_trends.clear();
                 self.cell_popup = None;
-                if let Some(site) = self.views[idx].site.clone() {
+                if let Some(site) = self.views[idx].site.clone().filter(|site| wxdata::sites::is_nexrad(site)) {
                     self.spawn_overlay(ctx, OverlaySource::Cells(site));
                 }
             }
@@ -16648,10 +16648,19 @@ impl HookEchoApp {
                 if !prect.contains(p) { continue; }
                 let selected = current == Some(s.id);
                 let bright = selected || hovered == Some(s.id) || strong.contains(s.id);
-                painter.circle_filled(p, if bright { 5.4 } else { 2.4 },
-                    if bright { egui::Color32::from_rgb(31, 108, 212) }
+                // TDWR sites are omitted from the wide-area NEXRAD spacing pass above. At a
+                // city-scale zoom, do not leave their opt-in map layer as almost invisible dots.
+                let tdwr = wxdata::sites::network(s.id) == wxdata::sites::Network::Tdwr;
+                let prominent = bright || (tdwr && cam.zoom >= 8.0);
+                let color = if tdwr && !selected {
+                    egui::Color32::from_rgb(20, 149, 178)
+                } else {
+                    egui::Color32::from_rgb(31, 108, 212)
+                };
+                painter.circle_filled(p, if prominent { 5.4 } else { 2.4 },
+                    if prominent { color }
                     else { egui::Color32::from_rgba_unmultiplied(139, 184, 213, 110) });
-                if bright {
+                if prominent {
                     painter.circle_stroke(p, 5.4, egui::Stroke::new(1.4, egui::Color32::from_rgb(194, 231, 255)));
                     painter.circle_filled(p, 1.5, egui::Color32::WHITE);
                 }
