@@ -3349,8 +3349,8 @@ pub struct HookEchoApp {
     snapshot_push: Option<String>,
     /// Per-location cooldown for the rotation-near-a-watched-place alert.
     rotation_alerted: std::collections::HashMap<String, Instant>,
-    /// Volume start time of the last new-scan chime (see `scan_chime`).
-    last_chime: Option<chrono::DateTime<Utc>>,
+    /// Site and volume start time of the last new-scan chime (see `scan_chime`).
+    last_chime: Option<(String, chrono::DateTime<Utc>)>,
     /// Pushes held back by quiet hours, replayed as one summary when the window ends.
     ///
     /// A `Mutex` because `notify_alert` takes `&self` (ten call sites); a lock beats threading
@@ -3881,6 +3881,23 @@ fn analysis_station_bbox(lon: f64, lat: f64) -> (f64, f64, f64, f64) {
     let dlat = 1.5;
     let dlon = dlat / lat.to_radians().cos().abs().max(0.25);
     (lat - dlat, lon - dlon, lat + dlat, lon + dlon)
+}
+
+/// Consume a live volume once per site and start time. Changing stations establishes a new
+/// baseline without sounding an alert for the scan that the user explicitly requested.
+fn advance_scan_chime(
+    last: &mut Option<(String, chrono::DateTime<Utc>)>,
+    site: &str,
+    time: chrono::DateTime<Utc>,
+) -> bool {
+    let sound = matches!(last, Some((previous_site, previous_time))
+        if previous_site == site && time > *previous_time);
+    if last.as_ref().is_none_or(|(previous_site, previous_time)|
+        previous_site != site || time > *previous_time)
+    {
+        *last = Some((site.to_owned(), time));
+    }
+    sound
 }
 
 impl HookEchoApp {
@@ -5507,12 +5524,8 @@ impl HookEchoApp {
         {
             return;
         }
-        let first = self.last_chime.is_none();
-        if self.last_chime.is_some_and(|t| t >= time) {
-            return;
-        }
-        self.last_chime = Some(time);
-        if !first {
+        let Some(site) = self.views[view].site.as_deref() else { return; };
+        if advance_scan_chime(&mut self.last_chime, site, time) {
             self.play_alert(&self.settings.scan_sound.clone());
         }
     }
@@ -23073,6 +23086,19 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scan_chime_sounds_once_per_new_volume_and_resets_on_station_change() {
+        let mut last = None;
+        let time = chrono::Utc::now();
+        assert!(!super::advance_scan_chime(&mut last, "KEAX", time));
+        assert!(!super::advance_scan_chime(&mut last, "KEAX", time));
+        assert!(!super::advance_scan_chime(&mut last, "KEAX", time - chrono::Duration::minutes(1)));
+        assert!(super::advance_scan_chime(&mut last, "KEAX", time + chrono::Duration::minutes(4)));
+        assert!(!super::advance_scan_chime(&mut last, "KFWS", time + chrono::Duration::minutes(6)));
+        assert!(!super::advance_scan_chime(&mut last, "KFWS", time + chrono::Duration::minutes(6)));
+        assert!(super::advance_scan_chime(&mut last, "KFWS", time + chrono::Duration::minutes(10)));
+    }
+
     #[test]
     fn severe_chime_preserves_other_and_emergency_sound_choices() {
         use crate::settings::{AlertSound, Settings};

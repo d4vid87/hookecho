@@ -12,9 +12,9 @@
     "not-verified": "Insufficient evidence to map the observed feature to an actual working equivalent."
   },
   "status_counts": {
-    "partial": 28,
+    "partial": 29,
     "implemented-related": 26,
-    "not-verified": 3,
+    "not-verified": 2,
     "external-service": 3,
     "missing": 1
   },
@@ -732,22 +732,22 @@
       "category": "radar",
       "title": "Velocity units and audible new scan",
       "priority": 1,
-      "status": "not-verified",
+      "status": "partial",
       "observed_scope": "Velocity unit selector and new-scan audible alert.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Related display/unit and alert settings exist.",
+      "hookecho_implementation": "Velocity readouts convert internal m/s to knots, m/s or mph using the saved selection. A configurable scan sound is gated by mute/quiet hours and enabled only for a new live volume on the active pane; the first volume for each selected station is silent, and duplicate/backfilled volumes are ignored.",
       "remaining_gaps": [
-        "Exact velocity-unit choices and once-per-new-scan audio behavior have not been mapped or exercised in this run."
+        "RadarOmega's exact velocity-unit choices and audio waveform have not been verified against a live reference session; HookEcho audio output has not been exercised on hardware."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/radar_identity.rs",
-        "crates/hookecho/src/products.rs",
-        "crates/hookecho/src/view.rs"
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
       ],
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD12",
       "acceptance": "Unit conversion affects display consistently; alert occurs once per new scan and can be disabled.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "Focused scan-transition test confirms silence on initial/site-switched volume, one decision per newer volume, and rejection of duplicate/older volumes. Unit conversion tests exist in settings.rs. Audible hardware output and reference equivalence remain unverified."
     },
     {
       "id": "TIME01",
