@@ -8,8 +8,9 @@ use crate::ui::a11y::Named as _;
 use egui::{vec2, Color32, RichText, Stroke};
 
 /// Category order in the panel (anything else falls to the bottom, in registry order).
-pub(crate) const CATEGORIES: [&str; 9] = [
+pub(crate) const CATEGORIES: [&str; 10] = [
     "Radar",
+    "Radar site",
     "National",
     "Severe",
     "Obs",
@@ -72,6 +73,7 @@ const ROW_H: f32 = 32.0;
 fn category_name(category: &str) -> &'static str {
     match category {
         "Radar" => "Radar products",
+        "Radar site" => "Site radar products",
         "National" => "National weather",
         "Severe" => "Severe weather",
         "Obs" => "Observations",
@@ -86,7 +88,7 @@ fn category_name(category: &str) -> &'static str {
 fn category_glyph(category: &str) -> &'static str {
     use egui_phosphor::regular as ph;
     match category {
-        "Radar" => ph::BROADCAST,
+        "Radar" | "Radar site" => ph::BROADCAST,
         "National" => ph::GLOBE,
         "Severe" => ph::WARNING,
         "Obs" => ph::THERMOMETER,
@@ -144,7 +146,7 @@ pub(crate) fn glyph(e: &PaletteEntry) -> &'static str {
         _ if has("camera") || has("webcam") => ph::CAMERA,
         _ if has("setting") || has("preference") => ph::GEAR,
         _ => match e.category {
-            "Radar" => ph::RADIO_BUTTON,
+            "Radar" | "Radar site" => ph::RADIO_BUTTON,
             "National" => ph::GLOBE,
             "Severe" => ph::WARNING,
             "Obs" => ph::THERMOMETER,
@@ -370,7 +372,7 @@ fn active_row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32) -> Option<Pa
 /// Focused Context-bar catalog; shares actions, source health and glossary with the full browser.
 pub(crate) fn context_catalog(ui: &mut egui::Ui, entries: &[PaletteEntry], tools: bool, accent: Color32) -> Option<PaletteAction> {
     let mut chosen = None;
-    let categories: &[&str] = if tools { &["Tools"] } else { &["National", "Severe", "Obs", "Models", "Reference", "MRMS"] };
+    let categories: &[&str] = if tools { &["Tools"] } else { &["Radar site", "National", "Severe", "Obs", "Models", "Reference", "MRMS"] };
     for &cat in categories {
         let mut rows: Vec<_> = entries.iter().filter(|e| e.category == cat).collect();
         rows.sort_by_key(|e| (!e.favorite, !e.common));
@@ -638,7 +640,7 @@ pub(crate) fn body(
                 }
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical().id_salt("split_library_categories").max_height(340.0).min_scrolled_height(340.0).show(ui, |ui| {
-                    for cat in ["National", "Severe", "Obs", "Models", "Reference", "Tools", "Radar", "MRMS", "Settings"]
+                    for cat in ["National", "Severe", "Obs", "Models", "Reference", "Tools", "Radar", "Radar site", "MRMS", "Settings"]
                         .into_iter().filter(|cat| entries.iter().any(|e| e.category == *cat)) {
                         if cat == "Radar" {
                             ui.add_space(8.0);

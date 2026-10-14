@@ -197,7 +197,7 @@ impl HookEchoApp {
                             hide = true;
                         }
                         let hits = crate::ui::layers_panel::matches(&entries, &query);
-                        for (group, category) in [("Radar sites and products", "Radar"), ("Layers", "National"), ("Severe weather", "Severe"), ("Tools", "Tools")] {
+                        for (group, category) in [("Radar sites and products", "Radar"), ("Site radar products", "Radar site"), ("Layers", "National"), ("Severe weather", "Severe"), ("Tools", "Tools")] {
                             let group_hits: Vec<_> = hits.iter().copied().filter(|&i| entries[i].category == category).take(8).collect();
                             if !group_hits.is_empty() { ui.label(group); }
                             for i in group_hits {
@@ -209,7 +209,7 @@ impl HookEchoApp {
                             }
                         }
                         // Remaining catalog families stay reachable without adding another menu.
-                        for i in hits.into_iter().filter(|&i| !["Radar", "National", "Severe", "Tools"].contains(&entries[i].category)).take(8) {
+                        for i in hits.into_iter().filter(|&i| !["Radar", "Radar site", "National", "Severe", "Tools"].contains(&entries[i].category)).take(8) {
                             if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}", entries[i].category, entries[i].label))).clicked() {
                                 chosen = Some(entries[i].action);
                                 focus_search = false;

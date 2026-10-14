@@ -492,9 +492,9 @@ impl HookEchoApp {
             ),
             (
                 FL::Vil,
-                "National",
+                "Radar site",
                 "Water aloft (VIL, L3)",
-                "How much water the storm is holding aloft",
+                "Level III water content from the selected radar",
                 false,
             ),
             (
@@ -520,16 +520,16 @@ impl HookEchoApp {
             ),
             (
                 FL::EchoTops,
-                "National",
+                "Radar site",
                 "Storm-top height (echo tops, L3)",
-                "How tall the storm is",
+                "Level III echo-top height from the selected radar",
                 false,
             ),
             (
                 FL::Hca,
-                "National",
+                "Radar site",
                 "What the radar is seeing (hydrometeor class, L3)",
-                "What the radar thinks it's seeing: rain, hail, debris",
+                "Level III hydrometeor classification from the selected radar",
                 false,
             ),
             (
