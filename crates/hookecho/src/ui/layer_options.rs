@@ -24,6 +24,8 @@ pub struct UiActions {
     pub outlook_kind_changed: bool,
     /// NOAA SPC fire-weather day or category changed.
     pub fire_weather_changed: bool,
+    /// CPC period or variable changed; clear old polygons and fetch selected NOAA layer.
+    pub cpc_changed: bool,
     /// The WSSI day changed; the app must clear + refetch it.
     pub wssi_day_changed: bool,
     /// The Excessive Rainfall Outlook day changed; the app must clear + refetch it.
@@ -673,6 +675,31 @@ pub(crate) fn show(
                     }
                 });
             });
+
+        ui.separator();
+        ui.label(egui::RichText::new("Climate outlook · NOAA CPC").strong());
+        ui.weak("Temperature or precipitation probability compared with normal.");
+        egui::ComboBox::from_id_salt("cpc_period")
+            .width(ui.available_width() - 8.0)
+            .selected_text(filters.cpc_period.map_or("Off", wxdata::cpc::Period::label))
+            .show_ui(ui, |ui| {
+                if ui.selectable_value(&mut filters.cpc_period, None, "Off").changed() { actions.cpc_changed = true; changed = true; }
+                for period in wxdata::cpc::Period::ALL {
+                    if ui.selectable_value(&mut filters.cpc_period, Some(period), period.label()).changed() {
+                        actions.cpc_changed = true; changed = true;
+                    }
+                }
+            });
+        if filters.cpc_period.is_some() {
+            ui.horizontal(|ui| {
+                for variable in [wxdata::cpc::Variable::Temperature, wxdata::cpc::Variable::Precipitation] {
+                    if ui.selectable_value(&mut filters.cpc_variable, variable, variable.label()).changed() {
+                        actions.cpc_changed = true; changed = true;
+                    }
+                }
+            });
+            ui.weak("Select a colored area for issue date, valid period, and probability. Public CPC GIS data.");
+        }
 
         ui.add_space(8.0);
         ui.label(egui::RichText::new("SPC Fire Weather Outlook").strong());

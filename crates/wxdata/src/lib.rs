@@ -10,6 +10,7 @@ pub mod banding;
 pub mod cellscore;
 pub mod celltrack;
 pub mod clock;
+pub mod cpc;
 pub mod contour;
 pub mod dat;
 pub mod dealias;

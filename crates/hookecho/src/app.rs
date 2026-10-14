@@ -174,6 +174,9 @@ pub struct OverlayFilters {
     /// Public NOAA SPC fire-weather outlook (0 = off, 1–8 = forecast day).
     pub fire_weather_day: u8,
     pub fire_weather_kind: wxdata::fire_weather::Kind,
+    /// Public NOAA CPC temperature/precipitation outlook. None keeps it off.
+    pub cpc_period: Option<wxdata::cpc::Period>,
+    pub cpc_variable: wxdata::cpc::Variable,
     pub show_mds: bool,
     /// SPC tornado and severe thunderstorm watches in effect.
     pub show_watches: bool,
@@ -210,6 +213,8 @@ impl Default for OverlayFilters {
             outlook_kind: wxdata::spc::OutlookKind::Categorical,
             fire_weather_day: 0,
             fire_weather_kind: wxdata::fire_weather::Kind::Conditions,
+            cpc_period: None,
+            cpc_variable: wxdata::cpc::Variable::Temperature,
             wssi_day: 0, // off by default, like the SPC outlook
             ero_day: 0,
 
@@ -246,6 +251,7 @@ enum OverlayMsg {
     Fronts(wxdata::fronts::SurfaceAnalysis),
     Outlook(u8, Vec<GeoFeature>),
     FireWeather(u8, wxdata::fire_weather::Kind, Vec<GeoFeature>),
+    Cpc(wxdata::cpc::Period, wxdata::cpc::Variable, Vec<GeoFeature>),
     Mds(Vec<GeoFeature>),
     Watches(Vec<GeoFeature>),
     /// WPC Winter Storm Severity Index polygons for a day.
@@ -371,6 +377,7 @@ enum OverlaySource {
     Recon,
     Outlook(u8, wxdata::spc::OutlookKind),
     FireWeather(u8, wxdata::fire_weather::Kind),
+    Cpc(wxdata::cpc::Period, wxdata::cpc::Variable),
     Cells(String),
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
@@ -646,6 +653,7 @@ impl OverlaySource {
             Self::Recon => RequestLane::Feed("Hurricane reconnaissance"),
             Self::Outlook(..) => RequestLane::Feed("SPC outlook"),
             Self::FireWeather(..) => RequestLane::Feed("SPC fire weather"),
+            Self::Cpc(..) => RequestLane::Feed("CPC outlook"),
             Self::Cells(..) => RequestLane::Feed("Storm cells"),
             Self::Placefile(url) => RequestLane::Placefile(url.clone()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -746,6 +754,9 @@ impl OverlaySource {
             }
             OverlaySource::FireWeather(day, kind) => {
                 OverlayMsg::FireWeather(day, kind, wxdata::fire_weather::fetch(http, day, kind).await?)
+            }
+            OverlaySource::Cpc(period, variable) => {
+                OverlayMsg::Cpc(period, variable, wxdata::cpc::fetch(http, period, variable).await?)
             }
             OverlaySource::Cells(site) => {
                 let cells = level3::fetch_cells(http, &site).await;
@@ -3167,6 +3178,7 @@ pub struct HookEchoApp {
     /// One slot per SPC outlook day, 1..=8 (Days 4–8 are the experimental probability layer).
     outlook_features: [Vec<GeoFeature>; 8],
     fire_weather_features: Vec<GeoFeature>,
+    cpc_features: Vec<GeoFeature>,
     md_features: Vec<GeoFeature>,
     /// Watch boxes in effect, one feature per county row the service returns.
     watch_features: Vec<GeoFeature>,
@@ -4282,6 +4294,7 @@ impl HookEchoApp {
             arch_lsr_shown: None,
             outlook_features: std::array::from_fn(|_| Vec::new()),
             fire_weather_features: Vec::new(),
+            cpc_features: Vec::new(),
             md_features: Vec::new(),
             watch_features: Vec::new(),
             wssi_features: Vec::new(),
@@ -5276,6 +5289,9 @@ impl HookEchoApp {
         }
         if (1..=8).contains(&self.filters.fire_weather_day) {
             self.spawn_overlay(ctx, OverlaySource::FireWeather(self.filters.fire_weather_day, self.filters.fire_weather_kind));
+        }
+        if let Some(period) = self.filters.cpc_period {
+            self.spawn_overlay(ctx, OverlaySource::Cpc(period, self.filters.cpc_variable));
         }
         // Storm cells for the active view's site (Level 3 products are per-site). Terminal and
         // DWD radars don't publish the storm-cell algorithms under their four-letter id.
@@ -8793,6 +8809,12 @@ impl HookEchoApp {
                 self.spawn_overlay(ctx, OverlaySource::FireWeather(self.filters.fire_weather_day, self.filters.fire_weather_kind));
             }
         }
+        if actions.cpc_changed {
+            self.cpc_features.clear();
+            if let Some(period) = self.filters.cpc_period {
+                self.spawn_overlay(ctx, OverlaySource::Cpc(period, self.filters.cpc_variable));
+            }
+        }
         if actions.ero_day_changed {
             self.ero_features.clear();
             if (1..=3).contains(&self.filters.ero_day) {
@@ -10009,6 +10031,11 @@ impl HookEchoApp {
                 OverlayMsg::FireWeather(day, kind, f) => {
                     if day == self.filters.fire_weather_day && kind == self.filters.fire_weather_kind {
                         self.fire_weather_features = f;
+                    }
+                }
+                OverlayMsg::Cpc(period, variable, f) => {
+                    if self.filters.cpc_period == Some(period) && self.filters.cpc_variable == variable {
+                        self.cpc_features = f;
                     }
                 }
                 OverlayMsg::Cells(site, cells) => {
@@ -11356,6 +11383,9 @@ impl HookEchoApp {
         }
         if (1..=8).contains(&self.filters.fire_weather_day) {
             v.extend(self.fire_weather_features.iter().cloned());
+        }
+        if self.filters.cpc_period.is_some() {
+            v.extend(self.cpc_features.iter().cloned());
         }
         if self.filters.show_mds {
             v.extend(self.md_features.iter().cloned());

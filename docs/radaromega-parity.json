@@ -12,9 +12,9 @@
     "not-verified": "Insufficient evidence to map the observed feature to an actual working equivalent."
   },
   "status_counts": {
-    "partial": 30,
+    "partial": 32,
     "implemented-related": 26,
-    "not-verified": 2,
+    "not-verified": 0,
     "external-service": 3,
     "missing": 0
   },
@@ -1213,25 +1213,26 @@
       "category": "overlays",
       "title": "Climatological outlooks",
       "priority": 2,
-      "status": "not-verified",
-      "observed_scope": "Sidebar destination observed: Climatological Outlooks.",
-      "observation_type": "runtime-controls",
-      "hookecho_implementation": "Weather models and historical climatology tools exist.",
+      "status": "partial",
+      "observed_scope": "Extracted RadarOmega client exposes temperature and precipitation toggles for 6–10 day, 8–14 day, 3–4 week, 1 month, and 3 month outlooks, plus display opacity controls. Private backend request uses type and period keys.",
+      "observation_type": "static-client-code + runtime-controls",
+      "hookecho_implementation": "NOAA CPC public ArcGIS GeoJSON polygons for 6–10 day, 8–14 day, monthly, and first-season (3-month) temperature and precipitation outlooks. Selector is in Outlooks layer options; polygon detail shows category, probability, issue and valid dates, and source.",
       "remaining_gaps": [
-        "Historical tornado climatology is not the observed climatological-outlook feature; exact outlook products need audit and implementation mapping."
+        "3–4 week CPC outlook is not yet wired to a public vector feed.",
+        "RadarOmega offers 3–4 week and a discussion popup. The extracted client uses radio-like toggle logic, so only one period/variable displays at a time; HookEcho matches that single-selection behavior but has no discussion text.",
+        "RadarOmega's exact private categories, geometry styling, and opacity slider have not been matched; NOAA CPC feed is an independently styled public-data alternative."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/fielddiff.rs",
-        "crates/hookecho/src/render/mod.rs",
-        "crates/hookecho/src/ui/sounding_window.rs",
-        "docs/DATA.md"
+        "crates/wxdata/src/cpc.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/app.rs"
       ],
       "observation_evidence_ids": [
         "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV08",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "NOAA public endpoints and sample schemas checked live on 2026-10-14; integrated UI/browser smoke remains pending"
     },
     {
       "id": "OV09",
