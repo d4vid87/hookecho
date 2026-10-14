@@ -93,6 +93,11 @@ impl HookEchoApp {
         let l3_site = self.l3grid_site.clone();
         let tz = self.active_tz();
         let mosaic = self.mosaic_status();
+        let cpc_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("CPC outlook"));
+        let cpc_feature_count = self.cpc_features.len();
         let analysis_point = crate::render::mercator::world_to_lonlat(
             self.views[self.active].camera.center.0,
             self.views[self.active].camera.center.1,
@@ -362,6 +367,8 @@ impl HookEchoApp {
                             Some(mosaic.as_str()),
                             self.gefs_distribution.as_ref(),
                             self.gefs_postage.as_ref(),
+                            &cpc_health,
+                            cpc_feature_count,
                             &mut opts,
                         );
                     } else {
@@ -477,6 +484,8 @@ impl HookEchoApp {
                                     Some(mosaic.as_str()),
                                     self.gefs_distribution.as_ref(),
                                     self.gefs_postage.as_ref(),
+                                    &cpc_health,
+                                    cpc_feature_count,
                                     &mut opts,
                                 );
                             });

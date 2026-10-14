@@ -123,6 +123,8 @@ pub(crate) fn show(
     mosaic: Option<&str>,
     gefs_distribution: Option<&wxdata::global::GefsPointPlume>,
     gefs_postage: Option<&wxdata::global::GefsPostageStamps>,
+    cpc_health: &crate::app::SourceHealth,
+    cpc_feature_count: usize,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -693,6 +695,21 @@ pub(crate) fn show(
                 }
             });
         if filters.cpc_period.is_some() {
+            let (status, color) = match cpc_health.state() {
+                crate::app::HealthState::Fetching => ("Loading NOAA CPC outlook…", egui::Color32::LIGHT_BLUE),
+                crate::app::HealthState::Failed if cpc_feature_count > 0 =>
+                    ("NOAA CPC refresh failed; showing previously loaded polygons.", egui::Color32::YELLOW),
+                crate::app::HealthState::Failed =>
+                    ("NOAA CPC outlook unavailable. Try refreshing the layer.", egui::Color32::YELLOW),
+                crate::app::HealthState::Stale =>
+                    ("NOAA CPC source refresh overdue; displayed polygons may be old.", egui::Color32::YELLOW),
+                crate::app::HealthState::Fresh if cpc_feature_count == 0 =>
+                    ("NOAA CPC returned no outlook polygons for this selection.", egui::Color32::YELLOW),
+                crate::app::HealthState::Waiting =>
+                    ("Waiting for NOAA CPC outlook data…", egui::Color32::LIGHT_BLUE),
+                crate::app::HealthState::Fresh => ("NOAA CPC outlook loaded.", egui::Color32::LIGHT_GREEN),
+            };
+            ui.colored_label(color, egui::RichText::new(status).small());
             ui.horizontal(|ui| {
                 for variable in [wxdata::cpc::Variable::Temperature, wxdata::cpc::Variable::Precipitation] {
                     if ui.selectable_value(&mut filters.cpc_variable, variable, variable.label()).changed() {
