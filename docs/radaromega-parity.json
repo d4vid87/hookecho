@@ -1417,11 +1417,11 @@
       "title": "NEXRAD hail history",
       "priority": 2,
       "status": "partial",
-      "observed_scope": "Nexrad History settings offer 1/2/3-inch-plus hail categories and time intervals, with magnitude/VIL details.",
+      "observed_scope": "Retained Nexrad History client offers 1/2/3-inch-plus hail categories and 30-minute/1/3/6/12/24-hour intervals. Its report popup carries storm id, valid time, magnitude in inches and VIL.",
       "observation_type": "runtime-menu+static-client",
-      "hookecho_implementation": "Independent public MRMS MESH maximum-estimated-hail-size swaths support 30-minute, 1-, 2-, 6- and 24-hour windows. Layer options filter display to all, 1+, 2+ or 3+ inch estimated size without refetching or altering native values; point interrogation shows the native magnitude, accumulation window and valid time. Existing hail attributes and storm-track tools remain separate.",
+      "hookecho_implementation": "Independent public MRMS MESH maximum-estimated-hail-size swaths support 30-minute, 1-, 2-, 6- and 24-hour windows. The active swath has a compact transport menu for all, 1+, 2+ or 3+ inch estimated-size display filters and window selection. A size change uses the retained native grid without refetching or altering native values; point interrogation shows the native magnitude, accumulation window and valid time. Existing hail attributes and storm-track tools remain separate.",
       "remaining_gaps": [
-        "MRMS rolling-max swaths are a public-data alternative to the observed NEXRAD history layer, not its tracks or per-cell event archive. The grid does not identify the exact time of the maximum at a point, and historical VIL from the same hail event is not joined. UI and live-data visual acceptance remain pending."
+        "MRMS rolling-max swaths are a public-data alternative to the observed NEXRAD event layer, not its storm-id reports or exact 3- and 12-hour intervals. The grid does not identify the exact time of the maximum at a point, and historical VIL from the same hail event is not joined. A nonzero live MESH swath and its map appearance remain unverified in the browser."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
@@ -1436,7 +1436,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV16",
       "acceptance": "Filter historical hail tracks and inspect magnitude, VIL and time.",
-      "runtime_verification": "Focused native-value threshold test passed for all/1+/2+/3+ inch display classes; 642 native library tests, strict Clippy and wasm library check passed. A live hail-swath frame and the controls have not yet been accepted in the browser."
+      "runtime_verification": "Focused native-value threshold test passed for all/1+/2+/3+ inch display classes; 642 native library tests and strict Clippy passed. Optimized web build passed at 4,497,214/4,500,000 gzip bytes. Browser showed a valid public MRMS hail-swath frame, selected 1+ inch and 6-hour menu states, and no console errors or warnings; the frame was hidden outside the selected radar-time tolerance, so nonzero swath pixels were not visually accepted. Screenshot: outputs/ro-parity/hail-history/browser-hail-controls.png."
     },
     {
       "id": "AN01",

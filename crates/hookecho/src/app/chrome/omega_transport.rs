@@ -127,7 +127,43 @@ impl HookEchoApp {
                                 }
                             }).0.named("Open radar history and playback settings").on_hover_text("History & playback");
                             if radar_visible { self.radar_product_controls(ui, true); }
-                            else { ui.label(egui::RichText::new(field_name).size(12.0).color(accent)); }
+                            else {
+                                ui.label(egui::RichText::new(field_name).size(12.0).color(accent));
+                                if field == Some(crate::render::FieldLayer::HailSwath) {
+                                    let size = if self.hail_threshold_inches == 0 {
+                                        "All".to_owned()
+                                    } else {
+                                        format!("{}+ in", self.hail_threshold_inches)
+                                    };
+                                    ui.menu_button(format!("Hail: {size} ▾"), |ui| {
+                                        ui.strong("Public MRMS estimated hail size");
+                                        ui.label("Size filter");
+                                        let mut changed = false;
+                                        for (inches, label) in [(0, "All"), (1, "1+ in"), (2, "2+ in"), (3, "3+ in")] {
+                                            changed |= ui.selectable_value(&mut self.hail_threshold_inches, inches, label).changed();
+                                        }
+                                        if changed {
+                                            if let Some(state) = self.fields.get_mut(&crate::render::FieldLayer::HailSwath) {
+                                                if let Some(frame) = state.frame.as_ref() {
+                                                    state.pending = Some(crate::app::field_upload_indexed_filtered(
+                                                        crate::render::FieldLayer::HailSwath,
+                                                        frame.field(), self.hail_threshold_inches,
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        ui.separator();
+                                        ui.label("Maximum over");
+                                        for (minutes, label) in [(30, "30m"), (60, "1h"), (120, "2h"), (360, "6h"), (1440, "24h")] {
+                                            if ui.selectable_value(&mut self.hail_minutes, minutes, label).changed() {
+                                                if let Some(state) = self.fields.get_mut(&crate::render::FieldLayer::HailSwath) {
+                                                    state.last_fetch = None;
+                                                }
+                                            }
+                                        }
+                                    }).response.named("Hail swath size and time window");
+                                }
+                            }
                         });
                         ui.horizontal(|ui| {
                             let t = &self.views[idx].timeline;
