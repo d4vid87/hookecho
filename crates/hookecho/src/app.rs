@@ -2095,6 +2095,8 @@ pub(crate) enum PaletteAction {
     OpenOutlooks,
     /// Open display and projection controls for the active pane.
     OpenMapSettings,
+    /// Open the public Spotter Network's range and active-time controls.
+    OpenSpotterSettings,
     /// Show Day 1 SPC outlook, or hide the selected outlook.
     ToggleOutlook,
     SetOutlookDay(u8),
@@ -9839,6 +9841,19 @@ impl HookEchoApp {
                 self.drawer.show_search();
                 ctx.data_mut(|d| {
                     d.insert_temp(egui::Id::new("panel_settings_page"), Some("Map settings"));
+                    d.insert_temp(egui::Id::new("context_all_controls"), false);
+                });
+            }
+            PaletteAction::OpenSpotterSettings => {
+                self.show_spotters = true;
+                self.panel_open = true;
+                self.show_alert_panel = false;
+                self.sidebar_focus_search = false;
+                self.layers_query.clear();
+                self.panel_section = PanelSection::Tools;
+                self.drawer.show_search();
+                ctx.data_mut(|d| {
+                    d.insert_temp(egui::Id::new("panel_settings_page"), Some("Spotters"));
                     d.insert_temp(egui::Id::new("context_all_controls"), false);
                 });
             }

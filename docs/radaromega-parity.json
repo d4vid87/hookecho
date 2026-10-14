@@ -1402,9 +1402,9 @@
       "status": "partial",
       "observed_scope": "Layer toggle and active time windows 5/15/30/60 minutes; detail popup has last-updated and supplied profile fields.",
       "observation_type": "runtime-menu+static-client",
-      "hookecho_implementation": "Existing public spotter positions/cards plus new settings route provide an independent workflow.",
+      "hookecho_implementation": "A public Spotter Network feed supplies positions and source timestamps. The Weather layers catalog exposes the toggle and a separate settings action for All/5/15/30/60-minute active windows and radar-centered distance filtering; older positions are visually muted, and marker cards show available status and update time.",
       "remaining_gaps": [
-        "Full 5/15/30/60-minute filtering equivalence, reporting/login, personal fields and live video are not established; video association absent.",
+        "Reporting/login, vendor profile fields and spotter-linked live video are absent. The public feed is not proof of exact vendor filtering or update cadence equivalence.",
         "User accepted separate public weather/highway camera alternatives, not a claim of spotter-linked live video. A Caltrans still and independent camera pin were browser-verified; chaser-linked live video remains absent."
       ],
       "hookecho_sources": [
@@ -1420,7 +1420,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV15",
       "acceptance": "Filter active spotters, inspect allowed details and make stale positions visibly distinct.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "Local browser verified Weather layers > Observations > Spotter Network settings opens the control panel, and choosing 15 min changes the selected window. Native tests verify age boundaries and future reports are excluded. The live public feed rendered spotter markers; exact vendor parity remains unverified."
     },
     {
       "id": "OV16",

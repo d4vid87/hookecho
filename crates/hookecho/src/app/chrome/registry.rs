@@ -1073,6 +1073,16 @@ impl HookEchoApp {
                 PaletteAction::ToggleOverlay(t),
                 Some(on),
             );
+            if t == T::Spotters {
+                push(
+                    "Spotter Network settings",
+                    "Obs",
+                    "Choose active report window and distance from the selected radar",
+                    false,
+                    PaletteAction::OpenSpotterSettings,
+                    None,
+                );
+            }
         }
         push(
             "SPC convective outlook",
