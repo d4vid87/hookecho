@@ -159,7 +159,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: browser-reliability
-          path: outputs/reliability
+          path: |
+            outputs/reliability
+            outputs/usability
 
   # Golden-image test for the wgpu radar pipeline. Runs on the software rasterizer
   # (mesa lavapipe) via HOOKECHO_GPU_FALLBACK=1 so the render is deterministic across
