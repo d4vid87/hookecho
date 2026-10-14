@@ -701,6 +701,11 @@ pub(crate) fn show(
                 }
             });
             ui.weak("Select a colored area for issue date, valid period, and probability. Public CPC GIS data.");
+            ui.horizontal(|ui| {
+                ui.label("Opacity");
+                if ui.add(egui::Slider::new(&mut filters.cpc_opacity_pct, 0..=100).suffix("%"))
+                    .changed() { actions.overlays_changed = true; changed = true; }
+            });
             if ui.button("Read NOAA forecast discussion").clicked() { actions.cpc_discussion = true; }
         }
 

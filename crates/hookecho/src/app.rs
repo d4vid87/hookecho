@@ -177,6 +177,8 @@ pub struct OverlayFilters {
     /// Public NOAA CPC temperature/precipitation outlook. None keeps it off.
     pub cpc_period: Option<wxdata::cpc::Period>,
     pub cpc_variable: wxdata::cpc::Variable,
+    /// Display opacity for CPC outlook polygons, 0–100 percent.
+    pub cpc_opacity_pct: u8,
     pub show_mds: bool,
     /// SPC tornado and severe thunderstorm watches in effect.
     pub show_watches: bool,
@@ -215,6 +217,7 @@ impl Default for OverlayFilters {
             fire_weather_kind: wxdata::fire_weather::Kind::Conditions,
             cpc_period: None,
             cpc_variable: wxdata::cpc::Variable::Temperature,
+            cpc_opacity_pct: 100,
             wssi_day: 0, // off by default, like the SPC outlook
             ero_day: 0,
 
@@ -11413,8 +11416,13 @@ impl HookEchoApp {
         if (1..=8).contains(&self.filters.fire_weather_day) {
             v.extend(self.fire_weather_features.iter().cloned());
         }
-        if self.filters.cpc_period.is_some() {
-            v.extend(self.cpc_features.iter().cloned());
+        if self.filters.cpc_period.is_some() && self.filters.cpc_opacity_pct > 0 {
+            for mut feature in self.cpc_features.iter().cloned() {
+                for alpha in [&mut feature.fill[3], &mut feature.stroke[3]] {
+                    *alpha = ((*alpha as u16 * self.filters.cpc_opacity_pct as u16) / 100) as u8;
+                }
+                v.push(feature);
+            }
         }
         if self.filters.show_mds {
             v.extend(self.md_features.iter().cloned());
