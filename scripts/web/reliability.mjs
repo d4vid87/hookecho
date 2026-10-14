@@ -23,10 +23,11 @@ try {
  },{setup_done:true,seeded_workspaces:true,default_site:'KDMX',radar_feed:'ArchiveOnly',workspaces:[workspace(2,'KDMX'),workspace(4,'KDMX'),workspace(2,'KTLX')],mapbox_key:'private-provider-secret',markers:[{id:'private-marker-id',name:'private-marker-name',lat:41.712345,lon:-93.654321,home:false}]});
  await page.goto(process.env.HOOKECHO_BASE_URL??'http://127.0.0.1:8765/',{waitUntil:'domcontentloaded'});
  await page.waitForFunction(()=>!document.getElementById('boot'),{timeout:90000});await page.waitForFunction(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.panes[0]?.time,{timeout:90000});await wait(3000);
- // Fixed 1440×1000 viewport: use the Search button and focus its text field explicitly.
- // Keyboard chords sent before the canvas/text field owns focus can become map hotkeys.
+ // Focus the canvas, then use the search shortcut; toolbar coordinates change with layout.
+ // CommandSearch requests text-field focus, so no fixed drawer coordinates are needed.
  async function command(text){
-  await page.mouse.click(248,38);await wait(500);await page.mouse.click(200,269);await wait(200);
+  await page.mouse.click(702,202);await wait(200);
+  await page.keyboard.down('Control');await page.keyboard.press('K',{delay:150});await page.keyboard.up('Control');await wait(700);
   await page.keyboard.down('Control');await page.keyboard.press('A',{delay:150});await page.keyboard.up('Control');
   await page.keyboard.type(text,{delay:30});await wait(600);await page.keyboard.press('Enter',{delay:150});await wait(700);
   await page.mouse.click(702,202);await wait(250);

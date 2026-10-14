@@ -78,27 +78,54 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 16.0))
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 252)
-                    .inner_margin(egui::Margin::symmetric(8, 5))
+                let expanded_id = egui::Id::new("radar_capsule_expanded");
+                let mut expanded = ctx.data_mut(|d| d.get_temp::<bool>(expanded_id).unwrap_or(false));
+                let v = &self.views[self.active];
+                let site = v.site.as_deref().unwrap_or("Choose radar");
+                let code = v.custom_product.as_deref().unwrap_or_else(|| {
+                    if v.srv && v.moment == Moment::Velocity { "SRV" }
+                    else { crate::products::info(v.moment).short }
+                });
+                let elevation = v.volume.as_ref().and_then(|vol| vol.elevations.get(v.tilt))
+                    .map_or_else(|| "…".to_owned(), |a| format!("{a:.1}°"));
+                let summary = format!("{site} · {code} · {elevation}");
+                let full_name = self.pane_identity(self.active);
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(18, 37, 56, 240))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(82, 117, 143)))
+                    .inner_margin(egui::Margin::symmetric(6, 4))
                     .corner_radius(10.0)
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.x = 7.0;
-                        ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
+                        ui.set_max_width(280.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(5.0, 4.0);
+                        ui.spacing_mut().button_padding = egui::vec2(7.0, 4.0);
+                        let widgets = &mut ui.visuals_mut().widgets;
+                        widgets.inactive.bg_fill = egui::Color32::from_rgb(20, 49, 72);
+                        widgets.inactive.weak_bg_fill = widgets.inactive.bg_fill;
+                        widgets.hovered.bg_fill = egui::Color32::from_rgb(32, 76, 113);
+                        widgets.hovered.weak_bg_fill = widgets.hovered.bg_fill;
+                        widgets.active.bg_fill = egui::Color32::from_rgb(45, 110, 209);
+                        widgets.active.weak_bg_fill = widgets.active.bg_fill;
                         ui.horizontal(|ui| {
-                            ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(25.0, 25.0)));
-                            ui.label(egui::RichText::new("HookEcho").size(18.0).strong());
-                            menu = ui.add(egui::Button::new(egui::RichText::new(format!("{} Menu", ph::SQUARES_FOUR)).color(egui::Color32::WHITE))
-                                .fill(egui::Color32::from_rgb(40, 83, 151))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(117, 162, 225)))
-                                .min_size(egui::vec2(0.0, 34.0)))
-                                .named_toggle("Quick Launch menu", self.panel_open && home && !self.drawer.is_open()).clicked();
-                            search = ui.add_sized([34.0, 34.0], egui::Button::new(ph::MAGNIFYING_GLASS))
-                                .named("Search places, layers and tools").on_hover_text("Search").clicked();
-                            settings = ui.add_sized([34.0, 34.0], egui::Button::new(ph::SLIDERS_HORIZONTAL))
-                                .named("Open settings").on_hover_text("Settings").clicked();
+                            ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(22.0, 22.0)));
+                            if ui.add(egui::Button::new(format!("{summary} {}", if expanded { ph::CARET_UP } else { ph::CARET_DOWN }))
+                                .min_size(egui::vec2(0.0, 32.0)))
+                                .named_toggle("Expand radar controls", expanded)
+                                .on_hover_text(full_name).clicked() { expanded = !expanded; }
+                            ui.menu_button(ph::DOTS_THREE, |ui| {
+                                menu = ui.button(format!("{} Menu", ph::SQUARES_FOUR)).clicked();
+                                search = ui.button(format!("{} Search", ph::MAGNIFYING_GLASS)).clicked();
+                                settings = ui.button(format!("{} Settings", ph::SLIDERS_HORIZONTAL)).clicked();
+                                if menu || search || settings { ui.close(); }
+                            }).response.named("Radar toolbar menu");
                         });
-                        self.radar_identity_controls(ui);
+                        if expanded {
+                            self.radar_identity_controls(ui);
+                        } else if let Some(previous) = &self.views[self.active].retained_station {
+                            ui.label(egui::RichText::new(format!("Showing {previous} while radar loads")).size(11.0));
+                        }
                     });
+                ctx.data_mut(|d| d.insert_temp(expanded_id, expanded));
             });
         self.mobile_occlusion.push(toolbar.response.rect);
         crate::ui::drawer::avoid_toolbar(ctx, toolbar.response.rect);
