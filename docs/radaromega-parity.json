@@ -1533,7 +1533,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN04",
       "acceptance": "Create annotations, undo/redo/clear and exit without unintended map actions.",
-      "runtime_verification": "2026-10-14: targeted native unit tests verify partial-stroke clipping at an 11-pixel screen radius, preservation of an untouched stroke, continuous erasure along a fast pointer movement, stroke width retention, GeoJSON width export and backward-compatible case-file import. Integrated map interaction and reference equivalence remain unverified."
+      "runtime_verification": "2026-10-14: targeted native unit tests verify partial-stroke clipping at an 11-pixel screen radius, preservation of an untouched stroke, continuous erasure along a fast pointer movement, stroke width retention, GeoJSON width export and backward-compatible case-file import. The optimized browser build passed at 4,529,399/4,530,000 gzip bytes. In the local browser UI, the Pen menu opened, blue selection visibly updated, the slider changed from 6.0 to 9.0 px, a thick blue stroke appeared across the map, and an eraser drag removed its middle while both ends remained visible. Exact reference brush mechanics and export equivalence remain unverified."
     },
     {
       "id": "AN05",
