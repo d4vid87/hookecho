@@ -109,7 +109,7 @@ impl HookEchoApp {
         let modes = (!self.drawer.is_open() && !self.panel_open).then(|| egui::Area::new("context_modes".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 186.0))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, toolbar.response.rect.bottom() - self.chrome_rect.top() + 8.0))
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgba_unmultiplied(18, 37, 56, 240))
