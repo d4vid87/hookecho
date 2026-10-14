@@ -173,6 +173,7 @@ fn sweep_from(
     elevation_number: u8,
     gate_len_m: u16,
     velocity: bool,
+    collection_timestamp_ms: i64,
 ) -> Option<Sweep> {
     let ra = p.radial.as_ref()?;
     let elevation = p.elevation_deg?;
@@ -204,7 +205,7 @@ fn sweep_from(
                 (Some(data), None)
             };
             Radial::new(
-                0,
+                collection_timestamp_ms,
                 i as u16,
                 r.start_deg,
                 spacing,
@@ -282,7 +283,8 @@ pub async fn fetch_volume(
             };
             // Elevation numbers must be unique per sweep; reflectivity and velocity at one tilt
             // stay separate sweeps, which the split-cut-aware binning already handles.
-            let sweep = sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"));
+            let timestamp = crate::level3::product_time(&p).or_else(|| key_time(&key))?;
+            let sweep = sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"), timestamp.timestamp_millis());
             Some((n, sweep, key))
         });
     }
@@ -421,7 +423,9 @@ mod tests {
             thresholds,
             elevation_deg: Some(0.5),
         };
-        let sweep = sweep_from(&p, 1, 150, false).expect("sweep");
+        let timestamp = 1_791_842_420_000;
+        let sweep = sweep_from(&p, 1, 150, false, timestamp).expect("sweep");
+        assert_eq!(sweep.radials()[0].collection_timestamp(), timestamp);
         let site = Site::new(*b"TOKC", 35.276, -97.51, 398, 0);
         let vcp = VolumeCoveragePattern::new(
             80,

@@ -829,7 +829,7 @@ pub fn radial_to_field(
     })
 }
 
-fn product_time(p: &Level3Product) -> Option<chrono::DateTime<chrono::Utc>> {
+pub(crate) fn product_time(p: &Level3Product) -> Option<chrono::DateTime<chrono::Utc>> {
     if p.seconds_since_midnight >= 86_400 {
         return None;
     }
