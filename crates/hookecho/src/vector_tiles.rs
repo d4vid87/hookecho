@@ -132,6 +132,86 @@ fn prop(props: &Option<HashMap<String, Value>>, key: &str) -> String {
     }
 }
 
+fn number_prop(props: &Option<HashMap<String, Value>>, key: &str) -> Option<f32> {
+    let value = props.as_ref()?.get(key)?;
+    let number = match value {
+        Value::Int(v) | Value::SInt(v) => *v as f32,
+        Value::UInt(v) => *v as f32,
+        Value::Float(v) => *v,
+        Value::Double(v) => *v as f32,
+        _ => return None,
+    };
+    number.is_finite().then_some(number)
+}
+
+/// OpenMapTiles supplies render heights in metres. A missing height stays flat rather than
+/// inventing a tower, and corrupt/outlier values cannot stretch a tile across the screen.
+fn building_heights(props: &Option<HashMap<String, Value>>) -> Option<(f32, f32)> {
+    let top = number_prop(props, "render_height")
+        .or_else(|| number_prop(props, "height"))?
+        .clamp(0.0, 450.0);
+    let base = number_prop(props, "render_min_height")
+        .or_else(|| number_prop(props, "min_height"))
+        .unwrap_or(0.0)
+        .clamp(0.0, top);
+    (top > base + 0.5).then_some((base, top))
+}
+
+/// Negative offset.z marks an elevated vertex in the shared overlay shader. One metre is
+/// reserved for the marker, so a zero-metre wall base is distinct from ordinary fill geometry.
+fn building_vertex(world: [f32; 2], metres: f32, rgba: [u8; 4]) -> OverlayVertex {
+    OverlayVertex { world, color: color(rgba), offset: [0.0, 0.0, -(metres + 1.0)] }
+}
+
+fn append_building_walls(
+    out: &mut VertexBuffers<OverlayVertex, u32>,
+    geometry: &geo_types::Geometry<f32>,
+    tile: (f64, f64, f64, f64),
+    base_height: f32,
+    roof_height: f32,
+) {
+    let (tx, ty, n, extent) = tile;
+    let mut wall = |ring: &geo_types::LineString<f32>| {
+        let mut edge = |a: geo_types::Coord<f32>, b: geo_types::Coord<f32>| {
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let length = dx.hypot(dy);
+            if length < 0.5 { return; }
+            let light = ((dy * -0.5 - dx * -0.8) / length).clamp(-1.0, 1.0);
+            let shade = (0.62 + 0.22 * light).clamp(0.40, 0.84);
+            let grey = (170.0 * shade) as u8;
+            let rgba = [grey, grey, grey, 153];
+            let world = |p: geo_types::Coord<f32>| {
+                [((tx + p.x as f64 / extent) / n) as f32,
+                    ((ty + p.y as f64 / extent) / n) as f32]
+            };
+            let (a, b) = (world(a), world(b));
+            let first = out.vertices.len() as u32;
+            out.vertices.extend_from_slice(&[
+                building_vertex(a, base_height, rgba),
+                building_vertex(b, base_height, rgba),
+                building_vertex(b, roof_height, rgba),
+                building_vertex(a, roof_height, rgba),
+            ]);
+            out.indices.extend_from_slice(&[
+                first, first + 1, first + 2, first, first + 2, first + 3,
+            ]);
+        };
+        for pair in ring.0.windows(2) { edge(pair[0], pair[1]); }
+        if let (Some(first), Some(last)) = (ring.0.first(), ring.0.last()) {
+            if first != last { edge(*last, *first); }
+        }
+    };
+    let mut polygon = |p: &geo_types::Polygon<f32>| {
+        wall(p.exterior());
+        for ring in p.interiors() { wall(ring); }
+    };
+    match geometry {
+        geo_types::Geometry::Polygon(p) => polygon(p),
+        geo_types::Geometry::MultiPolygon(mp) => { for p in &mp.0 { polygon(p); } }
+        _ => {}
+    }
+}
+
 /// Tile-local `(lx, ly)` in `0..extent` -> normalized mercator world point for tile `(z,x,y)`.
 fn tw(lx: f32, ly: f32, n: f64, tx: f64, ty: f64, extent: f64) -> lyon::math::Point {
     let wx = (tx + lx as f64 / extent) / n;
@@ -227,6 +307,7 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
     let mut indices: Vec<u32> = Vec::new();
     let mut foreground_verts = Vec::new();
     let mut foreground_indices = Vec::new();
+    let mut buildings: VertexBuffers<OverlayVertex, u32> = VertexBuffers::new();
 
     // Background land quad covering the whole tile — skipped entirely by the overlay palette,
     // which draws on top of raster imagery and must not hide it.
@@ -282,7 +363,9 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
         let extent = extent_of(i);
         let feats = reader.get_features(i).unwrap_or_default();
         for f in &feats {
-            if *layer == "building" && tess_zoom < 14.0 {
+            if *layer == "building"
+                && tess_zoom < if details.extrude_buildings { 13.0 } else { 14.0 }
+            {
                 continue;
             }
             let cls = prop(&f.properties, key);
@@ -332,6 +415,18 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                     }
                 }),
             );
+            if *layer == "building" && details.extrude_buildings {
+                if let Some((base, top)) = building_heights(&f.properties) {
+                    for vertex in &mut buf.vertices {
+                        *vertex = building_vertex(vertex.world, top, [170, 170, 170, 153]);
+                    }
+                    append(&mut buildings.vertices, &mut buildings.indices, buf);
+                    append_building_walls(
+                        &mut buildings, &f.geometry, (txf, tyf, n, extent), base, top,
+                    );
+                    continue;
+                }
+            }
             append(&mut verts, &mut indices, buf);
         }
     }
@@ -427,6 +522,10 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
             append(&mut verts, &mut indices, buf);
         }
     }
+
+    // Buildings stand above the ground and radar. Keeping them in the foreground geometry also
+    // avoids rebuilding a separate GPU pipeline; the shader culls them in flat/globe views.
+    append(&mut foreground_verts, &mut foreground_indices, buildings);
 
     let labels = if details.show_city_roads {
         extract_labels(&reader, &names, n, txf, tyf, simplified)
@@ -1367,6 +1466,59 @@ impl VectorTileManager {
 mod tests {
     use super::*;
 
+    /// A single square building with OpenMapTiles render-height fields. Keep the source bytes
+    /// independent of the vector decoder and the geometry builder exercised below.
+    fn building_fixture() -> Vec<u8> {
+        fn varint(mut value: u64) -> Vec<u8> {
+            let mut out = Vec::new();
+            while value >= 128 { out.push((value as u8) | 128); value >>= 7; }
+            out.push(value as u8); out
+        }
+        fn scalar(tag: u8, value: u64) -> Vec<u8> {
+            let mut out = vec![tag << 3]; out.extend(varint(value)); out
+        }
+        fn bytes(tag: u8, value: &[u8]) -> Vec<u8> {
+            let mut out = vec![(tag << 3) | 2];
+            out.extend(varint(value.len() as u64)); out.extend(value); out
+        }
+        let geometry: Vec<u8> = [9, 2000, 2000, 26, 2000, 0, 0, 2000, 1999, 0, 15]
+            .into_iter().flat_map(varint).collect();
+        let mut feature = bytes(2, &[0, 0, 1, 1, 2, 2]);
+        feature.extend(scalar(3, 3)); // Polygon
+        feature.extend(bytes(4, &geometry));
+        let mut layer = bytes(1, b"building");
+        layer.extend(bytes(2, &feature));
+        for key in ["class", "render_height", "render_min_height"] {
+            layer.extend(bytes(3, key.as_bytes()));
+        }
+        layer.extend(bytes(4, &bytes(1, b"residential")));
+        layer.extend(bytes(4, &scalar(4, 32)));
+        layer.extend(bytes(4, &scalar(4, 4)));
+        layer.extend(scalar(5, 4096));
+        layer.extend(scalar(15, 2));
+        bytes(3, &layer)
+    }
+
+    #[test]
+    fn pitched_buildings_use_source_heights_and_flat_view_does_not_upload_walls() {
+        let bytes = building_fixture();
+        let id = (14, 4203, 6089);
+        let default = basemap_style::MapDetailStyle::default();
+        let flat = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 14.0,
+            crate::settings::Theme::Dark, false, default);
+        assert!(flat.0.len() > 4 && flat.1.len() >= 6, "building footprint decoded");
+        assert!(flat.2.is_empty(), "flat view keeps no building wall/roof payload");
+
+        let raised = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 14.0,
+            crate::settings::Theme::Dark, false,
+            basemap_style::MapDetailStyle { extrude_buildings: true, ..default });
+        assert_eq!(raised.0.len(), 4, "footprint moves to the elevated draw band");
+        assert!(raised.2.len() >= 8 && raised.3.len() >= 12);
+        assert!(raised.2.iter().any(|v| v.offset[2] == -33.0), "32-metre roof");
+        assert!(raised.2.iter().any(|v| v.offset[2] == -5.0), "4-metre base");
+        assert!(raised.3.iter().all(|&i| i < raised.2.len() as u32));
+    }
+
     fn test_manager() -> VectorTileManager {
         let (tx, rx) = std::sync::mpsc::channel();
         let (template_tx, template_rx) = std::sync::mpsc::channel();
@@ -1446,6 +1598,7 @@ mod tests {
             states: basemap_style::BoundaryAppearance { enabled: false, ..Default::default() },
             counties: basemap_style::BoundaryAppearance { enabled: false, ..Default::default() },
             show_city_roads: false,
+            extrude_buildings: false,
         };
         let nothing = build_tile_detail(&bytes, id, palette, 8.0, theme, false, hidden);
         assert_eq!(nothing.0.len(), 4, "only the land quad remains");

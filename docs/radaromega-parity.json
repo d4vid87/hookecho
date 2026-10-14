@@ -448,11 +448,11 @@
       "title": "2D/3D display",
       "priority": 1,
       "status": "partial",
-      "observed_scope": "2D/3D toggle observed at runtime; selecting 3D visibly raises the radar surface. This does not identify the height algorithm.",
+      "observed_scope": "2D/3D toggle observed at runtime; selecting 3D visibly raises the radar surface. Retained client source uses building height/base_height for gray extrusion and a separate polar radar mesh whose height follows squared normalized value; this depicts radar values rather than atmospheric altitude.",
       "observation_type": "runtime-screenshot+static-client",
-      "hookecho_implementation": "Independent Mercator perspective tilt (0–60 degrees) and compass bearing, plus existing orthographic globe. Shared CPU/GPU transforms cover tiles, radar, gridded fields, vectors, picking, labels and wind. Workspace snapshots save orientation.",
+      "hookecho_implementation": "Independent Mercator perspective tilt (0–60 degrees) and compass bearing, plus existing orthographic globe. Shared CPU/GPU transforms cover tiles, radar, gridded fields, vectors, picking, labels and wind. Workspace snapshots save orientation. At tilted close zoom, OpenMapTiles render_height and render_min_height now raise building roofs and walls in the vector foreground.",
       "remaining_gaps": [
-        "3D building extrusion and an on-map radar-value surface remain absent; tilted ground-plane data and the separate volume window are distinct capabilities.",
+        "An on-map radar-value surface remains absent; tilted ground-plane data and the separate volume window are distinct capabilities. Building extrusion is painter ordered without depth-buffer occlusion and needs a matched visual acceptance pass.",
         "Shared-link orientation encoding is not implemented; full-world edge cases and all overlay combinations need broader acceptance."
       ],
       "hookecho_sources": [
@@ -460,6 +460,7 @@
         "crates/hookecho/src/shaders/radar.wgsl",
         "docs/rea-integration.md",
         "crates/hookecho/src/shaders/overlay.wgsl",
+        "crates/hookecho/src/vector_tiles.rs",
         "crates/hookecho/src/workspace.rs",
         "crates/hookecho/src/app/chrome/omega_workspace.rs"
       ],
@@ -469,7 +470,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP07",
       "acceptance": "Switch display with preserved site/product/time and verify overlay placement.",
-      "runtime_verification": "16 camera and 9 motion tests, tile-cover/workspace tests, WGSL/WebGL2 translation and hardware GPU raster/field/radar/stroke alignment plus wind regression passed. Browser tilt/bearing controls and persistence verified using a local radar fixture. Building extrusion and radar-value surfaces remain absent."
+      "runtime_verification": "16 camera and 9 motion tests, tile-cover/workspace tests, WGSL/WebGL2 translation and hardware GPU raster/field/radar/stroke alignment plus wind regression passed. Browser tilt/bearing controls and persistence verified using a local radar fixture. Height-field synthetic tile test and hardware GPU roof-lift/flat-cull test pass for building extrusion. On-map radar-value surface remains absent."
     },
     {
       "id": "RAD01",

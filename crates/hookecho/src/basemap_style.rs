@@ -106,6 +106,7 @@ impl MapDetailSettings {
                 CityRoadVisibility::WithoutRadarSites => !show_radar_sites,
                 CityRoadVisibility::Hidden => false,
             },
+            extrude_buildings: false,
         }
     }
 }
@@ -117,6 +118,8 @@ pub struct MapDetailStyle {
     pub states: BoundaryAppearance,
     pub counties: BoundaryAppearance,
     pub show_city_roads: bool,
+    /// Request height geometry only while a pane uses the pitched vector map.
+    pub extrude_buildings: bool,
 }
 
 impl Default for MapDetailStyle {
@@ -541,6 +544,7 @@ mod tests {
             states: BoundaryAppearance { enabled: false, ..Default::default() },
             counties: BoundaryAppearance { enabled: true, color: Some([40, 90, 150]), width: Some(2.5) },
             show_city_roads: false,
+            extrude_buildings: false,
         };
         for class in ["3", "4"] { assert!(stroke_with_details(Palette::Presentation, "boundary", class, details).is_none()); }
         assert_eq!(stroke_with_details(Palette::Presentation, "boundary", "6", details), Some(([40,90,150,255], 2.5)));

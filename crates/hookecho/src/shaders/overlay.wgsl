@@ -63,6 +63,7 @@ struct VsOut {
     // Homogeneous pixel extrusion and its width. Clipping a triangulated stroke across
     // W=0 can otherwise extend its diagonal outside the intended screen-space strip.
     @location(2) stroke: vec4<f32>,
+    @location(3) @interpolate(flat) building: f32,
 };
 
 @vertex
@@ -71,12 +72,25 @@ fn vs_main(in: VsIn) -> VsOut {
     let projected = project_world(in.world);
     out.horizon = projected.z;
     out.stroke = vec4<f32>(0.0, 0.0, 1.0, 0.0);
+    out.building = select(0.0, 1.0, in.offset.z <= -1.0);
     let p = projected.xy
         + in.offset.xy * mix(1.0, camera.road_scale, in.offset.z)
         * camera.world_per_pixel * camera.scale;
     out.clip = vec4<f32>(p, 0.0, 1.0);
     if (camera.globe.z == 0.0) {
         out.clip = planar_clip(in.world);
+        if (out.building > 0.5 && camera.planar.w != 0.0) {
+            // The map plane uses homogeneous W. A height in metres must move both its clip Y
+            // and W; moving only Y would make roofs drift relative to the tilted footprint.
+            let lat = atan(sinh(G_PI * (1.0 - 2.0 * in.world.y)));
+            let metres_per_world = 40075017.0 * max(cos(lat), 0.08);
+            let height_px = max(0.0, -in.offset.z - 1.0)
+                / (metres_per_world * camera.world_per_pixel);
+            let sin_pitch = sqrt(max(0.0, 1.0 - camera.planar.z * camera.planar.z));
+            let clip_px = camera.scale * camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+            out.clip.y += height_px * sin_pitch * clip_px.y;
+            out.clip.w -= height_px * camera.planar.z * camera.planar.w / sin_pitch;
+        }
         let width = length(in.offset.xy);
         if (width > 0.0) {
             // Transform the stroke normal with inverse-transpose of the local projection
@@ -101,6 +115,7 @@ fn vs_main(in: VsIn) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    if (in.building > 0.5 && (camera.globe.z != 0.0 || camera.planar.w == 0.0)) { discard; }
     if (camera.globe.z != 0.0 && in.horizon < 0.0) { discard; }
     if (camera.globe.z == 0.0 && camera.planar.w != 0.0 && in.stroke.w > 0.0
         && length(in.stroke.xy / max(in.stroke.z, 1e-8)) > in.stroke.w + 0.01) { discard; }
@@ -113,6 +128,7 @@ fn gamma_from_linear(c: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main_gamma(in: VsOut) -> @location(0) vec4<f32> {
+    if (in.building > 0.5 && (camera.globe.z != 0.0 || camera.planar.w == 0.0)) { discard; }
     if (camera.globe.z == 0.0 && camera.planar.w != 0.0 && in.stroke.w > 0.0
         && length(in.stroke.xy / max(in.stroke.z, 1e-8)) > in.stroke.w + 0.01) { discard; }
     return vec4<f32>(gamma_from_linear(in.color.rgb), in.color.a);

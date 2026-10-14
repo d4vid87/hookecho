@@ -4030,6 +4030,60 @@ mod golden_tests {
         }
     }
 
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_building_height_lifts_roof_and_flat_mode_culls_it() {
+        use crate::render::{OverlayUpload, OverlayVertex};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (device, queue, _) = init_gpu(&rt).expect("no wgpu adapter");
+        let size = GOLDEN_SIZE;
+        let target = new_target(&device, wgpu::TextureFormat::Rgba8UnormSrgb, size);
+        let view = target.create_view(&Default::default());
+        let mut resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut camera = Camera::at_lonlat(-87.6278, 41.8819, 17.0);
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let mut cb = performance_callback(&sweep, &table, camera, false);
+        cb.radar_upload = None;
+        cb.draw_radar = false;
+        cb.draw_overlay = true;
+        let mut centroid = |metres: f32, pitch: f64| {
+            camera.set_orientation(pitch, 0.0);
+            let (center, scale) = camera.world_to_clip_uniform((size as f32, size as f32));
+            cb.camera_center = center;
+            cb.camera_scale = scale;
+            cb.planar = camera.planar_uniform((size as f32, size as f32));
+            cb.world_per_pixel = camera.world_per_pixel() as f32;
+            let r = camera.world_per_pixel() as f32 * 10.0;
+            let mark = -(metres + 1.0);
+            let points = [(-r,-r),(r,-r),(r,r),(-r,r)];
+            cb.overlay_upload = Some(OverlayUpload {
+                vertices: points.into_iter().map(|(x,y)| OverlayVertex {
+                    world: [center[0]+x,center[1]+y],
+                    color: [1.0;4], offset: [0.0,0.0,mark],
+                }).collect(),
+                indices: vec![0,1,2,0,2,3],
+            });
+            resources.render_once(&device, &queue, &view, &cb, wgpu::Color::BLACK);
+            let pixels = read_target(&device, &queue, &target, size);
+            let mut total_y = 0.0;
+            let mut lit = 0;
+            for y in 0..size as usize {
+                for x in 0..size as usize {
+                    if pixels[(y * size as usize + x) * 4] > 180 {
+                        total_y += y as f32;
+                        lit += 1;
+                    }
+                }
+            }
+            (lit > 0).then_some(total_y / lit as f32)
+        };
+        let ground = centroid(0.0, 45.0).expect("pitched ground footprint");
+        let roof = centroid(30.0, 45.0).expect("pitched 30-metre roof");
+        assert!(roof < ground - 10.0, "roof must rise: ground={ground}, roof={roof}");
+        assert!(centroid(30.0, 0.0).is_none(), "flat mode culls extrusion geometry");
+    }
+
     /// Golden-image test for the radar render pipeline. Run with
     /// `HOOKECHO_GPU_FALLBACK=1 cargo test -p hookecho -- --ignored gpu` so the
     /// software (lavapipe) adapter is used — the golden is authored under lavapipe.

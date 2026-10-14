@@ -13381,8 +13381,14 @@ impl HookEchoApp {
         let is_vector = pane_style.vector_palette().is_some();
         let palette = pane_style.vector_palette().unwrap_or_default();
         self.pane_vtiles[idx].set_ctx(ctx.clone());
+        let mut map_details = self.settings.map_details.resolve(self.show_radar_sites);
+        map_details.extrude_buildings = is_vector
+            && !self.views[idx].camera.globe
+            && self.views[idx].camera.pitch_deg > 1.0
+            && self.views[idx].camera.zoom >= 12.0
+            && self.settings.map_quality != crate::settings::MapQuality::Performance;
         let clear_vector = clear_vector | self.pane_vtiles[idx].set_style(palette)
-            | self.pane_vtiles[idx].set_details(self.settings.map_details.resolve(self.show_radar_sites))
+            | self.pane_vtiles[idx].set_details(map_details)
             | self.pane_vtiles[idx].set_theme(self.settings.theme)
             | self.pane_vtiles[idx].set_simplified(
                 self.settings.map_quality == crate::settings::MapQuality::Performance
