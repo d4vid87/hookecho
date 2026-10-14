@@ -36,6 +36,7 @@ export const ALLOWED_HOSTS = [
   "tgftp.nws.noaa.gov",
   "mapservices.weather.noaa.gov",
   "ftp.cpc.ncep.noaa.gov",
+  "www.cpc.ncep.noaa.gov",
   "www.spc.noaa.gov",
   "www.nhc.noaa.gov",
   "www.ndbc.noaa.gov",

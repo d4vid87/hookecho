@@ -6,6 +6,68 @@ use crate::alerts::USER_AGENT;
 use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
 
 const BASE: &str = "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks";
+const DISCUSSION_BASE: &str = "https://www.cpc.ncep.noaa.gov/products/predictions";
+
+#[derive(Debug, Clone)]
+pub struct Discussion {
+    pub period: Period,
+    pub text: String,
+    pub source_url: &'static str,
+}
+
+pub fn discussion_url(period: Period) -> &'static str {
+    match period {
+        Period::Day6To10 | Period::Day8To14 => "https://www.cpc.ncep.noaa.gov/products/predictions/610day/fxus06.html",
+        Period::Week3To4 => "https://www.cpc.ncep.noaa.gov/products/predictions/WK34/texts/week34fcst.txt",
+        Period::Month1 => "https://www.cpc.ncep.noaa.gov/products/predictions/90day/fxus07.html",
+        Period::Month3 => "https://www.cpc.ncep.noaa.gov/products/predictions/90day/fxus05.html",
+    }
+}
+
+fn plain_text(markup: &str) -> String {
+    let mut out = String::with_capacity(markup.len());
+    let mut tag = String::new();
+    let mut in_tag = false;
+    for ch in markup.chars() {
+        match ch {
+            '<' => { in_tag = true; tag.clear(); }
+            '>' if in_tag => {
+                if tag.trim().to_ascii_lowercase().starts_with("br") { out.push('\n'); }
+                in_tag = false;
+            }
+            _ if in_tag => tag.push(ch),
+            _ => out.push(ch),
+        }
+    }
+    let out = out.replace("&nbsp;", " ").replace("&amp;", "&")
+        .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+        .replace("&#39;", "'").replace("&deg;", "°");
+    out.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_owned()
+}
+
+pub fn parse_discussion(body: &str, period: Period) -> anyhow::Result<Discussion> {
+    anyhow::ensure!(body.len() <= 1024 * 1024, "CPC discussion exceeds 1 MB");
+    let selected = if period == Period::Week3To4 {
+        body
+    } else {
+        let lower = body.to_ascii_lowercase();
+        let start = lower.find("<pre").ok_or_else(|| anyhow::anyhow!("CPC discussion body missing"))?;
+        let body_start = lower[start..].find('>').ok_or_else(|| anyhow::anyhow!("CPC discussion body malformed"))? + start + 1;
+        let end = lower[body_start..].find("</pre>").ok_or_else(|| anyhow::anyhow!("CPC discussion body incomplete"))? + body_start;
+        &body[body_start..end]
+    };
+    let text = plain_text(selected);
+    anyhow::ensure!(text.starts_with("Prognostic Discussion") && text.len() > 100, "CPC discussion text unavailable");
+    Ok(Discussion { period, text, source_url: discussion_url(period) })
+}
+
+pub async fn fetch_discussion(client: &reqwest::Client, period: Period) -> anyhow::Result<Discussion> {
+    let url = discussion_url(period);
+    debug_assert!(url.starts_with(DISCUSSION_BASE));
+    let body = client.get(crate::net::fetch_url(url)).timeout(crate::net::FEED_TIMEOUT)
+        .header("User-Agent", USER_AGENT).send().await?.error_for_status()?.text().await?;
+    parse_discussion(&body, period)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variable { Temperature, Precipitation }
@@ -170,6 +232,24 @@ mod tests {
             assert!(features.len() > 10);
             assert!(features.iter().any(|feature| feature.detail.contains("Issued: 20")));
             assert!(features.iter().all(|feature| !feature.rings.is_empty()));
+        }
+    }
+    #[test]
+    fn discussion_parser_extracts_only_the_forecast_product() {
+        let html = "<html><h1>Navigation</h1><PRE>Prognostic Discussion for Monthly Outlook <br>NWS Climate Prediction Center<br>Issued today. Forecast details follow.</PRE><footer>Unrelated page footer</footer></html>";
+        let discussion = parse_discussion(html, Period::Month1).unwrap();
+        assert!(discussion.text.contains("NWS Climate Prediction Center\nIssued today"));
+        assert!(!discussion.text.contains("Unrelated page footer"));
+        let text = "Prognostic Discussion for Week 3-4 Temperature and Precipitation Outlooks<br>NWS Climate Prediction Center<br>Forecast details follow through the valid period.";
+        assert!(parse_discussion(text, Period::Week3To4).unwrap().text.contains("\nNWS Climate"));
+    }
+    #[tokio::test]
+    #[ignore = "queries live NOAA CPC discussion products"]
+    async fn public_discussions_cover_every_period() {
+        let client = reqwest::Client::new();
+        for period in Period::ALL {
+            let discussion = fetch_discussion(&client, period).await.unwrap();
+            assert!(discussion.text.len() > 1000);
         }
     }
 }

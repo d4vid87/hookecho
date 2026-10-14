@@ -1216,22 +1216,23 @@
       "status": "partial",
       "observed_scope": "Extracted RadarOmega client exposes temperature and precipitation toggles for 6–10 day, 8–14 day, 3–4 week, 1 month, and 3 month outlooks, plus display opacity controls. Private backend request uses type and period keys.",
       "observation_type": "static-client-code + runtime-controls",
-      "hookecho_implementation": "NOAA CPC public ArcGIS GeoJSON polygons for 6–10 day, 8–14 day, monthly, and first-season (3-month) temperature and precipitation outlooks, plus NOAA's public KML polygons for Week 3–4. Selector is in Outlooks layer options; polygon detail shows category, probability, issue and valid dates, and source.",
+      "hookecho_implementation": "NOAA CPC public ArcGIS GeoJSON polygons for 6–10 day, 8–14 day, monthly, and first-season (3-month) temperature and precipitation outlooks, plus NOAA's public KML polygons for Week 3–4. Selector is in Outlooks layer options; polygon detail shows category, probability, issue and valid dates, and source. The selected period has an in-app NOAA forecast-discussion reader with refresh and a source link.",
       "remaining_gaps": [
-        "RadarOmega offers a discussion popup. The extracted client uses radio-like toggle logic, so only one period/variable displays at a time; HookEcho matches that single-selection behavior but has no discussion text.",
-        "RadarOmega's exact private categories, geometry styling, and opacity slider have not been matched; NOAA CPC feed is an independently styled public-data alternative."
+        "The extracted client uses radio-like toggle logic, so only one period/variable displays at a time; HookEcho matches that selection behavior. The public NOAA discussion reader is independent of RadarOmega's private popup hierarchy.",
+        "RadarOmega's exact private categories, geometry styling, and opacity slider have not been matched; NOAA CPC feed is an independently styled public-data alternative. Empty/stale-source messaging remains to be verified."
       ],
       "hookecho_sources": [
         "crates/wxdata/src/cpc.rs",
         "crates/hookecho/src/ui/layer_options.rs",
-        "crates/hookecho/src/app.rs"
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/cpc_discussion_window.rs"
       ],
       "observation_evidence_ids": [
         "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV08",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "All eight NOAA ArcGIS endpoints and both public Week 3–4 KML products checked live on 2026-10-14; the Week 3–4 Rust parser test inspected polygons and issue dates from both live files. The optimized browser build rendered a 6–10 day Temperature polygon over Chicago and both Week 3–4 variants over California. Week 3–4 temperature detail showed Above, 40%, issued 2026-10-09, valid 2026-10-24 to 2026-11-06; precipitation showed Above, 33% with the same dates and NOAA CPC source. Screenshots: outputs/ro-parity/cpc/browser-week34-temperature.png and browser-week34-precipitation.png. No browser console warnings or errors."
+      "runtime_verification": "All eight NOAA ArcGIS endpoints, both public Week 3–4 KML products and all five period discussion requests checked live on 2026-10-14. The optimized browser build rendered 6–10 day Temperature and both Week 3–4 variants; polygon detail showed category, probability, issue/valid dates and source. The in-app discussion reader displayed Week 3–4 and long-lead seasonal NOAA text with source link, and showed loading state when switching periods. Screenshots: outputs/ro-parity/cpc/browser-week34-temperature.png, browser-week34-precipitation.png, browser-discussion-week34.png and browser-discussion-seasonal.png. No browser console warnings or errors."
     },
     {
       "id": "OV09",

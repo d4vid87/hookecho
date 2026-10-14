@@ -3555,6 +3555,8 @@ pub struct HookEchoApp {
     afd_error: Option<String>,
     afd_busy: bool,
     afd_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::afd::Afd, String>>>,
+    cpc_discussion: ui::cpc_discussion_window::CpcDiscussionWindow,
+    cpc_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::cpc::Discussion, String>>>,
     /// NHC public advisory / forecast discussion reader.
     tropical_window: ui::tropical_window::TropicalWindow,
     tropical_text_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
@@ -4526,6 +4528,8 @@ impl HookEchoApp {
             afd_error: None,
             afd_busy: false,
             afd_rx: None,
+            cpc_discussion: ui::cpc_discussion_window::CpcDiscussionWindow::default(),
+            cpc_discussion_rx: None,
             tropical_window: ui::tropical_window::TropicalWindow::default(),
             tropical_text_rx: None,
             show_range_rings: false,
@@ -8814,6 +8818,11 @@ impl HookEchoApp {
             if let Some(period) = self.filters.cpc_period {
                 self.spawn_overlay(ctx, OverlaySource::Cpc(period, self.filters.cpc_variable));
             }
+            if self.cpc_discussion.open { self.fetch_cpc_discussion(); }
+        }
+        if actions.cpc_discussion {
+            self.cpc_discussion.open = true;
+            self.fetch_cpc_discussion();
         }
         if actions.ero_day_changed {
             self.ero_features.clear();
@@ -10622,6 +10631,26 @@ impl HookEchoApp {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
+        });
+    }
+
+    fn fetch_cpc_discussion(&mut self) {
+        let Some(period) = self.filters.cpc_period else {
+            self.cpc_discussion.discussion = None;
+            self.cpc_discussion.error = Some("Select a CPC outlook period first.".to_owned());
+            self.cpc_discussion.busy = false;
+            return;
+        };
+        self.cpc_discussion.period = Some(period);
+        self.cpc_discussion.discussion = None;
+        self.cpc_discussion.error = None;
+        self.cpc_discussion.busy = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.cpc_discussion_rx = Some(rx);
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::cpc::fetch_discussion(&http, period).await.map_err(|e| e.to_string());
+            let _ = tx.send(result);
         });
     }
 
@@ -22010,6 +22039,19 @@ impl eframe::App for HookEchoApp {
             if refresh {
                 self.fetch_afd();
             }
+        }
+        if let Some(rx) = &self.cpc_discussion_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.cpc_discussion_rx = None;
+                self.cpc_discussion.busy = false;
+                match result {
+                    Ok(discussion) => self.cpc_discussion.discussion = Some(discussion),
+                    Err(error) => self.cpc_discussion.error = Some(error),
+                }
+            }
+        }
+        if self.cpc_discussion.open && self.cpc_discussion.show(ctx, &mut self.drawer) {
+            self.fetch_cpc_discussion();
         }
         // NHC text products: poll the fetch, then draw the reader.
         if let Some(rx) = &self.tropical_text_rx {

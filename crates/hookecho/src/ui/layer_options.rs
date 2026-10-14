@@ -26,6 +26,8 @@ pub struct UiActions {
     pub fire_weather_changed: bool,
     /// CPC period or variable changed; clear old polygons and fetch selected NOAA layer.
     pub cpc_changed: bool,
+    /// Open the NOAA CPC forecast reasoning for the selected period.
+    pub cpc_discussion: bool,
     /// The WSSI day changed; the app must clear + refetch it.
     pub wssi_day_changed: bool,
     /// The Excessive Rainfall Outlook day changed; the app must clear + refetch it.
@@ -699,6 +701,7 @@ pub(crate) fn show(
                 }
             });
             ui.weak("Select a colored area for issue date, valid period, and probability. Public CPC GIS data.");
+            if ui.button("Read NOAA forecast discussion").clicked() { actions.cpc_discussion = true; }
         }
 
         ui.add_space(8.0);
