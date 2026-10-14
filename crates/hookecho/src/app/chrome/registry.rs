@@ -46,7 +46,7 @@ impl HookEchoApp {
         use crate::render::FieldLayer as FL;
         use OverlayToggle as T;
         if let PaletteAction::ToggleField(layer) = action {
-            if layer.is_native_abi() { return Some(self.request_health(RequestLane::PaneField(self.active, layer))); }
+            if layer.is_pane_field() { return Some(self.request_health(RequestLane::PaneField(self.active, layer))); }
         }
         let lane = match action {
             PaletteAction::SetMoment(..) => return Some(self.radar_health()),

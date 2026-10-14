@@ -309,6 +309,14 @@ impl FieldLayer {
         matches!(self, Self::GoesC13 | Self::GoesWaterVapor | Self::GoesMidWaterVapor | Self::GoesLongwaveIr | Self::GoesVisible | Self::GoesTrueColor | Self::GoesCatalog(_))
     }
 
+    pub fn is_l3_grid(self) -> bool {
+        matches!(self, Self::Vil | Self::EchoTops | Self::Hca | Self::Daa | Self::Oha | Self::Dsa)
+    }
+
+    pub fn is_pane_field(self) -> bool {
+        self.is_native_abi() || self.is_l3_grid()
+    }
+
     pub fn draw_order() -> impl DoubleEndedIterator<Item = FieldLayer> {
         Self::BASE_DRAW_ORDER
             .into_iter()
@@ -483,6 +491,19 @@ impl FieldLayer {
 #[cfg(test)]
 mod field_slug_tests {
     use super::FieldLayer;
+
+    #[test]
+    fn site_radar_grids_and_satellite_grids_have_pane_local_gpu_keys() {
+        for layer in [
+            FieldLayer::Vil, FieldLayer::EchoTops, FieldLayer::Hca,
+            FieldLayer::Daa, FieldLayer::Oha, FieldLayer::Dsa,
+        ] {
+            assert!(layer.is_l3_grid() && layer.is_pane_field());
+            assert!(!layer.is_native_abi());
+        }
+        assert!(FieldLayer::GoesC13.is_pane_field());
+        assert!(!FieldLayer::Mrms.is_pane_field());
+    }
 
     #[test]
     fn every_layer_has_a_slug_that_parses_back() {
@@ -1561,17 +1582,17 @@ impl RenderResources {
         // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
         // here, before any drawing.
         for layer in &cb.drop_fields {
-            self.fields.remove(&(layer.is_native_abi().then_some(cb.pane), *layer));
+            self.fields.remove(&(layer.is_pane_field().then_some(cb.pane), *layer));
         }
         for (layer, up) in &cb.field_uploads {
             let gpu = self.build_field_layer(device, queue, up);
-            self.fields.insert((layer.is_native_abi().then_some(cb.pane), *layer), gpu);
+            self.fields.insert((layer.is_pane_field().then_some(cb.pane), *layer), gpu);
         }
         // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
         // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
         let mut field_draws = Vec::new();
         for (layer, opacity) in &cb.field_draws {
-            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(cb.pane), *layer)) {
+            if let Some(f) = self.fields.get(&(layer.is_pane_field().then_some(cb.pane), *layer)) {
                 queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
                 field_draws.push(*layer);
             }
@@ -1847,7 +1868,7 @@ impl RenderResources {
             if layer.below_radar() != below || !pane.field_draws.contains(&layer) {
                 continue;
             }
-            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(pane.id), layer)) {
+            if let Some(f) = self.fields.get(&(layer.is_pane_field().then_some(pane.id), layer)) {
                 pass.set_pipeline(&self.mrms_pipeline);
                 pass.set_bind_group(0, cam, &[]);
                 pass.set_bind_group(1, &f.bind_group, &[]);

@@ -280,8 +280,8 @@ enum OverlayMsg {
         wxdata::field::FieldFrame,
         Option<wxdata::mrms::MrmsField>,
     ),
-    /// A direct RGBA satellite composite.
-    PaneAbi(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
+    /// A registry-backed grid owned by one pane (satellite or single-site radar).
+    PaneField(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
     PaneRgb(usize, crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
@@ -427,8 +427,8 @@ enum OverlaySource {
     /// One model's field minus another's, at a forecast hour. Which two models is implied by the
     /// field (see `fielddiff::DiffField::pair`).
     ModelDiff(crate::fielddiff::DiffField, u16),
-    /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
-    L3Grid(crate::render::FieldLayer, String),
+    /// Gridded L3 product for one pane's selected radar site.
+    L3Grid(usize, crate::render::FieldLayer, String),
     /// Melting-level and −20 °C heights at `(lon, lat)`, for the derived hail grids.
     FreezingLevels(f64, f64),
     /// NOHRSC observed snowfall analysis over an accumulation window (hours).
@@ -666,8 +666,7 @@ impl OverlaySource {
             | Self::Env(layer, ..)
             | Self::HrrrLayer(layer, ..)
             | Self::Global(layer, ..)
-            | Self::Rtma(layer, ..)
-            | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
+            | Self::Rtma(layer, ..) => RequestLane::Field(*layer),
             Self::GefsDistribution(..) => RequestLane::Feed("GEFS plume"),
             Self::GefsPostage(..) => RequestLane::Feed("GEFS postage stamps"),
             Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
@@ -683,6 +682,7 @@ impl OverlaySource {
             Self::Fronts => RequestLane::Feed("Surface analysis"),
             Self::GoesAbi(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
             Self::GoesRgb(pane, ..) => RequestLane::PaneField(*pane, crate::render::FieldLayer::GoesTrueColor),
+            Self::L3Grid(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
             Self::Obs { .. } => RequestLane::Feed("Radar observations"),
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
@@ -812,7 +812,7 @@ impl OverlaySource {
                 let frame = image.into_frame(received)?;
                 let mut frame = frame;
                 frame.stamp.received_time = Utc::now();
-                OverlayMsg::PaneAbi(pane, layer, frame, None)
+                OverlayMsg::PaneField(pane, layer, frame, None)
             }
             OverlaySource::GoesRgb(pane, scene, at) => OverlayMsg::PaneRgb(
                 pane,
@@ -1065,7 +1065,7 @@ impl OverlaySource {
                     .ok_or_else(|| anyhow::anyhow!("unregistered environment field {layer:?}"))?;
                 OverlayMsg::RegisteredField(layer, fc.into_frame(descriptor, model), None)
             }
-            OverlaySource::L3Grid(layer, site) => {
+            OverlaySource::L3Grid(pane, layer, site) => {
                 use crate::render::FieldLayer as FL;
                 let field = match layer {
                     FL::Vil => wxdata::level3::fetch_dvl_frame(http, &site).await,
@@ -1077,7 +1077,7 @@ impl OverlaySource {
                     _ => None,
                 };
                 match field {
-                    Some(f) => OverlayMsg::RegisteredField(layer, f, None),
+                    Some(f) => OverlayMsg::PaneField(pane, layer, f, None),
                     None => anyhow::bail!("no L3 grid for {site}"),
                 }
             }
@@ -2336,9 +2336,22 @@ pub(crate) struct FieldState {
     /// Analysis time used by the current native-satellite request (`None` inside = live).
     pub requested_time: Option<Option<DateTime<Utc>>>,
     pub requested_scene: Option<wxdata::abi::Scene>,
+    /// Station selector for a pane-local Level III grid.
+    pub requested_site: Option<String>,
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
     pub off_since: Option<Instant>,
+}
+
+impl FieldState {
+    fn select_site(&mut self, site: Option<&str>) {
+        if self.requested_site.as_deref() == site { return; }
+        self.frame = None;
+        self.metadata = None;
+        self.pending = None;
+        self.last_fetch = None;
+        self.requested_site = site.map(str::to_owned);
+    }
 }
 
 struct RegionAnalysis {
@@ -3541,9 +3554,6 @@ pub struct HookEchoApp {
     /// Where the environment fields and contours come from: the HRRR forecast, or the RAP f00
     /// analysis (13 km, observation-assimilated — "mesoanalysis"). Changing it refetches both.
     env_model: wxdata::hrrr::Model,
-    /// The site the L3 gridded products (DVL/EET) were last fetched for (feature X); refetch on
-    /// site change.
-    l3grid_site: Option<String>,
     /// What the locally derived products (VIL/VILD/echo tops) were last computed from:
     /// `(volume name, echo-top threshold, enabled-layer mask, melting level)`. Any of them moving
     /// recomputes.
@@ -4552,7 +4562,6 @@ impl HookEchoApp {
             hail_threshold_inches: 0,
             env_cape_ml: false,
             env_srh_km: 3,
-            l3grid_site: None,
             derived_key: None,
             snow_hours: 24,
             snow_fetched: None,
@@ -5327,9 +5336,9 @@ impl HookEchoApp {
                             let display = registered_display_field(&frame, cap);
                             OverlayMsg::RegisteredField(layer, frame, display)
                         }
-                        OverlayMsg::PaneAbi(pane, layer, frame, _) => {
+                        OverlayMsg::PaneField(pane, layer, frame, _) => {
                             let display = registered_display_field(&frame, cap);
-                            OverlayMsg::PaneAbi(pane, layer, frame, display)
+                            OverlayMsg::PaneField(pane, layer, frame, display)
                         }
                         other => other,
                     })
@@ -10063,7 +10072,7 @@ impl HookEchoApp {
                     result,
                 } => {
                     let data_time = match &result {
-                        Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneAbi(_, _, frame, _)) => {
+                        Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneField(_, _, frame, _)) => {
                             Some(frame.stamp.valid_time)
                         }
                         _ => None,
@@ -10262,7 +10271,7 @@ impl HookEchoApp {
                         s.frame = Some(frame);
                     }
                 }
-                OverlayMsg::PaneAbi(pane, layer, frame, display) => {
+                OverlayMsg::PaneField(pane, layer, frame, display) => {
                     if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
                     let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
                     let state = self.pane_fields.entry((pane, layer)).or_default();
@@ -13397,7 +13406,7 @@ impl HookEchoApp {
     }
 
     fn field_state(&self, pane: usize, layer: crate::render::FieldLayer) -> Option<&FieldState> {
-        if layer.is_native_abi() { self.pane_fields.get(&(pane, layer)) } else { self.fields.get(&layer) }
+        if layer.is_pane_field() { self.pane_fields.get(&(pane, layer)) } else { self.fields.get(&layer) }
     }
 
     fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
@@ -17627,6 +17636,12 @@ impl HookEchoApp {
             if !selection.satellite.follow_radar && selection.satellite.time.is_none() { return false; }
             if self.field_state(pane, layer).is_none_or(|state| state.metadata.is_none()) { return false; }
         }
+        if layer.is_l3_grid() && self.pane_fields.get(&(pane, layer)).is_none_or(|state| {
+            state.metadata.is_none()
+                || state.requested_site.as_deref() != self.views[pane].site.as_deref()
+        }) {
+            return false;
+        }
         self.field_time_status(pane, layer)
             .is_none_or(|(_, _, _, aligned)| aligned)
     }
@@ -21631,33 +21646,24 @@ impl eframe::App for HookEchoApp {
         self.recompute_derived(ctx);
         // Beam-blockage raster: rebuilt when the camera, site, or tilt moves (DEM tiles are cached).
         self.update_blockage(ctx);
-        // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
-        let l3_site = self.views[self.active].site.clone();
-        let site_changed = self.l3grid_site != l3_site;
-        for layer in [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa] {
-            let on = self.field_wanted(layer);
-            if !on {
-                continue;
-            }
-            let stale = self.fields.get(&layer).is_some_and(|s| {
-                s.last_fetch
-                    .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
-            });
-            if let Some(site) = &l3_site {
-                if stale || site_changed {
-                    if let Some(s) = self.fields.get_mut(&layer) {
-                        s.last_fetch = Some(Instant::now());
-                    }
-                    self.spawn_overlay(ctx, OverlaySource::L3Grid(layer, site.clone()));
+        // Each pane's Level III grid belongs to its own station. A station change clears the
+        // old frame before fetching so one pane cannot show another pane's precipitation.
+        for pane in 0..self.views.len() {
+            let site = self.views[pane].site.clone();
+            for layer in [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa] {
+                if !self.views[pane].fields_on.contains(&layer) { continue; }
+                let state = self.pane_fields.entry((pane, layer)).or_default();
+                state.select_site(site.as_deref());
+                let Some(site) = &site else {
+                    self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .cancel(&RequestLane::PaneField(pane, layer));
+                    continue;
+                };
+                if state.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)) {
+                    state.last_fetch = Some(Instant::now());
+                    self.spawn_overlay(ctx, OverlaySource::L3Grid(pane, layer, site.clone()));
                 }
             }
-        }
-        if site_changed
-            && [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa]
-                .iter()
-                .any(|l| self.field_wanted(*l))
-        {
-            self.l3grid_site = l3_site;
         }
         // HRRR future radar: fetch when enabled and the forecast hour changed or the run refreshed
         // (~10-min throttle; a new run posts hourly).
@@ -24462,6 +24468,32 @@ mod request_book_tests {
         assert!(!book.finish(&a, old_a, None, None));
         assert!(book.finish(&b, current_b, None, None));
         assert!(book.is_current(&a, current_a));
+    }
+
+    #[test]
+    fn level3_site_changes_invalidate_only_that_panes_request_and_field() {
+        let mut book = RequestBook::default();
+        let first = super::OverlaySource::L3Grid(0, FieldLayer::Daa, "KTLX".into());
+        let second = super::OverlaySource::L3Grid(1, FieldLayer::Daa, "KFWS".into());
+        let a = first.lane();
+        let b = second.lane();
+        assert_ne!(a, b);
+        let old_a = book.start(a.clone(), first.identity()).unwrap();
+        let current_b = book.start(b.clone(), second.identity()).unwrap();
+        let changed = super::OverlaySource::L3Grid(0, FieldLayer::Daa, "KOUN".into());
+        let new_a = book.start(a.clone(), changed.identity()).unwrap();
+        assert!(!book.finish(&a, old_a, None, None));
+        assert!(book.is_current(&a, new_a));
+        assert!(book.finish(&b, current_b, None, None));
+
+        let mut state = super::FieldState::default();
+        state.select_site(Some("KTLX"));
+        state.last_fetch = Some(std::time::Instant::now());
+        state.select_site(Some("KTLX"));
+        assert!(state.last_fetch.is_some());
+        state.select_site(Some("KOUN"));
+        assert_eq!(state.requested_site.as_deref(), Some("KOUN"));
+        assert!(state.last_fetch.is_none());
     }
 
     #[test]

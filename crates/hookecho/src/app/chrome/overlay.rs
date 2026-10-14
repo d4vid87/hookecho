@@ -90,7 +90,7 @@ impl HookEchoApp {
         let mut export_alerts = false;
         // Read before the panel closure: the Layer options callback runs inside a `&mut self`
         // borrow and can only touch plain fields, not `&self` methods.
-        let l3_site = self.l3grid_site.clone();
+        let l3_site = self.views[self.active].site.clone();
         let tz = self.active_tz();
         let mosaic = self.mosaic_status();
         let cpc_health = self.overlay_requests
