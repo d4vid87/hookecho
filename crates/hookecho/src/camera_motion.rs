@@ -52,6 +52,9 @@ impl Motion {
         if !delta.is_finite() {
             return;
         }
+        // Some browsers report a Page wheel unit as a whole viewport per event. A multi-page
+        // burst can otherwise jump from a regional map to world view in a single frame.
+        let delta = delta.clamp(-2.0, 2.0);
         self.sync(cam, vp);
         self.velocity = (0.0, 0.0);
         self.dragging = false;
@@ -172,6 +175,16 @@ mod tests {
         assert!((cam.zoom - 8.25).abs() < 1e-4);
         let at = cam.world_to_screen(world, VP);
         assert!((at.0 - anchor.0).abs() < 0.01 && (at.1 - anchor.1).abs() < 0.01);
+    }
+    #[test]
+    fn oversized_page_wheel_stays_regional() {
+        let mut cam = Camera::at_lonlat(-120.4, 34.8, 7.0);
+        let mut motion = Motion::default();
+        motion.wheel(&mut cam, -13.0, (570.0, 400.0), VP, false);
+        for _ in 0..90 { motion.advance(&mut cam, 1.0 / 60.0, VP, false); }
+        assert!((cam.zoom - 5.0).abs() < 1e-4);
+        let (_, lat) = crate::render::mercator::world_to_lonlat(cam.center.0, cam.center.1);
+        assert!((lat - 34.8).abs() < 5.0);
     }
     #[test]
     fn external_camera_and_resize_cancel_old_motion() {

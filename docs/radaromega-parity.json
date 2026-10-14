@@ -427,7 +427,7 @@
       "status": "implemented-related",
       "observed_scope": "Captured Mapbox wrapper sets fadeDuration 0, zoom rate 0.02, wheel zoom rate 0.004444.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Cursor anchored easing, drag inertia, direct pinch, detail hysteresis, retained geography and bounded gesture work.",
+      "hookecho_implementation": "Cursor anchored easing, drag inertia, direct pinch, detail hysteresis, retained geography and bounded gesture work. Each wheel event is capped at two zoom levels so a browser Page-unit scroll cannot jump directly from a regional map to world scale.",
       "remaining_gaps": [
         "No claim of equal smoothness: prior cross-app measurements do not rank engines and matched fresh performance trials remain needed."
       ],
@@ -441,7 +441,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP06",
       "acceptance": "Measure matched pan/wheel tasks for frame time, interaction latency, label stability and tile completion.",
-      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking; HookEcho camera response was not directly sampled. No presented-frame or input-latency claim."
+      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking. A later HookEcho browser regression reproduced an oversized Page-unit scroll jumping from California zoom 7 toward world scale; after the two-level per-event cap, the same scroll settled at zoom 5 near California with no console errors. The focused native camera test and strict Clippy passed. No cross-app presented-frame or input-latency claim."
     },
     {
       "id": "MAP07",
