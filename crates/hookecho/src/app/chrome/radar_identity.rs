@@ -31,19 +31,20 @@ impl HookEchoApp {
             .unwrap_or_default();
         let tilt = self.views[idx].tilt;
         let phone = compact(ui.ctx());
-        ui.spacing_mut().interact_size.y = 44.0;
+        ui.spacing_mut().interact_size.y = if phone { 44.0 } else { 32.0 };
         if !phone
             && ui
                 .add(
                     egui::Button::new(format!(
                         "{site}{} {}",
-                        place.map_or(String::new(), |p| format!(" · {p}")),
+                        String::new(),
                         egui_phosphor::regular::CARET_DOWN
                     ))
                     .wrap()
-                    .min_size(egui::vec2(0.0, 44.0)),
+                    .min_size(egui::vec2(0.0, 32.0)),
                 )
                 .named("Choose radar station")
+                .on_hover_text(place.unwrap_or_else(|| site.clone()))
                 .clicked()
         {
             self.apply_palette(PaletteAction::OpenWindow(AppWindow::Site), ui.ctx());
@@ -51,7 +52,7 @@ impl HookEchoApp {
         ui.horizontal(|ui| {
             let mut pick = None;
             let menu = ui.menu_button(
-                format!("{product} {}", egui_phosphor::regular::CARET_DOWN),
+                format!("{} {}", if phone { product.as_str() } else if self.views[idx].srv && self.views[idx].moment == Moment::Velocity { "SRV" } else { self.views[idx].custom_product.as_deref().unwrap_or(crate::products::info(self.views[idx].moment).short) }, egui_phosphor::regular::CARET_DOWN),
                 |ui| {
                     ui.set_min_width(220.0);
                     ui.spacing_mut().interact_size.y = 44.0;
@@ -130,7 +131,7 @@ impl HookEchoApp {
                 },
             );
             self.tour_anchors.product = Some(menu.response.rect);
-            menu.response.named("Choose radar product");
+            menu.response.named("Choose radar product").on_hover_text(&product);
             if let Some((m, srv)) = pick {
                 self.apply_palette(PaletteAction::SetMoment(m, srv), ui.ctx());
             }
