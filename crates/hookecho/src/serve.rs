@@ -1435,6 +1435,7 @@ const ALLOWED_HOSTS: &[&str] = &[
     "api.weather.gov",
     "tgftp.nws.noaa.gov",
     "mapservices.weather.noaa.gov",
+    "ftp.cpc.ncep.noaa.gov",
     "www.spc.noaa.gov",
     "www.nhc.noaa.gov",
     "www.ndbc.noaa.gov",
@@ -1791,7 +1792,7 @@ async fn fetch_capped(
 fn proxy_content_type(upstream: &str) -> &'static str {
     match upstream.split(';').next().unwrap_or("").trim() {
         "application/json" | "application/geo+json" => "application/json",
-        "application/xml" | "text/xml" => "application/xml",
+        "application/xml" | "text/xml" | "application/vnd.google-earth.kml+xml" => "application/xml",
         "text/plain" => "text/plain; charset=utf-8",
         // HTML is deliberately downgraded: proxied bytes are served from our own origin, and no
         // feed on the list needs a page that a browser will execute.

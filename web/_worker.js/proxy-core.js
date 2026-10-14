@@ -35,6 +35,7 @@ export const ALLOWED_HOSTS = [
   "api.weather.gov",
   "tgftp.nws.noaa.gov",
   "mapservices.weather.noaa.gov",
+  "ftp.cpc.ncep.noaa.gov",
   "www.spc.noaa.gov",
   "www.nhc.noaa.gov",
   "www.ndbc.noaa.gov",
@@ -153,6 +154,7 @@ export function contentType(upstream) {
       return "application/json";
     case "application/xml":
     case "text/xml":
+    case "application/vnd.google-earth.kml+xml":
       return "application/xml";
     case "text/plain":
       return "text/plain; charset=utf-8";

@@ -15,15 +15,15 @@ impl Variable {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Period { Day6To10, Day8To14, Month1, Month3 }
+pub enum Period { Day6To10, Day8To14, Week3To4, Month1, Month3 }
 
 impl Period {
-    pub const ALL: [Self; 4] = [Self::Day6To10, Self::Day8To14, Self::Month1, Self::Month3];
-    pub fn label(self) -> &'static str { match self { Self::Day6To10 => "6–10 day", Self::Day8To14 => "8–14 day", Self::Month1 => "1 month", Self::Month3 => "3 month" } }
+    pub const ALL: [Self; 5] = [Self::Day6To10, Self::Day8To14, Self::Week3To4, Self::Month1, Self::Month3];
+    pub fn label(self) -> &'static str { match self { Self::Day6To10 => "6–10 day", Self::Day8To14 => "8–14 day", Self::Week3To4 => "3–4 week", Self::Month1 => "1 month", Self::Month3 => "3 month" } }
 }
 
-fn service(period: Period, variable: Variable) -> (&'static str, u8) {
-    match (period, variable) {
+fn service(period: Period, variable: Variable) -> Option<(&'static str, u8)> {
+    Some(match (period, variable) {
         (Period::Day6To10, Variable::Temperature) => ("cpc_6_10_day_outlk", 0),
         (Period::Day6To10, Variable::Precipitation) => ("cpc_6_10_day_outlk", 1),
         (Period::Day8To14, Variable::Temperature) => ("cpc_8_14_day_outlk", 0),
@@ -32,7 +32,8 @@ fn service(period: Period, variable: Variable) -> (&'static str, u8) {
         (Period::Month1, Variable::Precipitation) => ("cpc_mthly_precip_outlk", 0),
         (Period::Month3, Variable::Temperature) => ("cpc_sea_temp_outlk", 0),
         (Period::Month3, Variable::Precipitation) => ("cpc_sea_precip_outlk", 0),
-    }
+        (Period::Week3To4, _) => return None,
+    })
 }
 
 fn category_color(category: &str, variable: Variable) -> [u8; 3] {
@@ -75,11 +76,60 @@ pub fn parse(json: &str, period: Period, variable: Variable) -> anyhow::Result<V
     Ok(out)
 }
 
+fn kml_cell(description: &str, key: &str) -> Option<String> {
+    let field = format!("<td>{key}</td>");
+    let after = description.split_once(&field)?.1;
+    let value = after.split_once("<td>")?.1.split_once("</td>")?.0.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn kml_date(value: Option<String>) -> String {
+    value.and_then(|raw| chrono::NaiveDate::parse_from_str(&raw, "%m/%d/%Y").ok())
+        .map(|day| day.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "not reported".to_owned())
+}
+
+/// CPC publishes its Week 3–4 outlooks as KML rather than on the NWS ArcGIS service.
+/// The placemark description carries the category, probability and forecast dates.
+pub fn parse_week34(kml: &str, variable: Variable) -> anyhow::Result<Vec<GeoFeature>> {
+    anyhow::ensure!(kml.len() <= 8 * 1024 * 1024, "CPC Week 3–4 KML exceeds 8 MB");
+    let mut out = Vec::new();
+    for placemark in crate::gis::xml_elements(kml, "Placemark") {
+        let Some(description) = crate::gis::xml_elements(placemark, "description").first().map(|d| crate::gis::xml_text(d)) else { continue };
+        let Some(category) = kml_cell(&description, "Category") else { continue };
+        let probability = kml_cell(&description, "Probability").unwrap_or_else(|| "not reported".to_owned());
+        let issued = kml_date(kml_cell(&description, "Fcst Date"));
+        let start = kml_date(kml_cell(&description, "Start Date"));
+        let end = kml_date(kml_cell(&description, "End Date"));
+        let rgb = category_color(&category, variable);
+        let title = format!("CPC 3–4 week {}: {}", variable.label(), category);
+        let detail = format!("NOAA CPC 3–4 week {} outlook\nCategory: {}\nProbability: {}%\nIssued: {}\nValid: {} to {}\nSource: NOAA/NWS Climate Prediction Center", variable.label(), category, probability, issued, start, end);
+        for polygon in crate::gis::xml_elements(placemark, "Polygon") {
+            let rings: Vec<_> = crate::gis::xml_elements(polygon, "LinearRing")
+                .into_iter().map(crate::gis::xml_coordinates).filter(|ring| ring.len() >= 3).collect();
+            if !rings.is_empty() {
+                out.push(GeoFeature { rings, fill: [rgb[0], rgb[1], rgb[2], 55], stroke: [rgb[0], rgb[1], rgb[2], 215],
+                    kind: FeatureKind::Outlook, title: title.clone(), detail: detail.clone(), alert: None });
+            }
+        }
+    }
+    anyhow::ensure!(!out.is_empty(), "CPC Week 3–4 KML has no outlook polygons");
+    Ok(out)
+}
+
 pub async fn fetch(client: &reqwest::Client, period: Period, variable: Variable) -> anyhow::Result<Vec<GeoFeature>> {
-    let (service, layer) = service(period, variable);
+    if period == Period::Week3To4 {
+        let product = match variable { Variable::Temperature => "temp", Variable::Precipitation => "prcp" };
+        let url = format!("https://ftp.cpc.ncep.noaa.gov/GIS/us_tempprcpfcst/wk34{product}_latest.kml");
+        let body = client.get(crate::net::fetch_url(&url)).timeout(crate::net::FEED_TIMEOUT)
+            .header("User-Agent", USER_AGENT).send().await?.error_for_status()?.text().await?;
+        return parse_week34(&body, variable);
+    }
+    let (service, layer) = service(period, variable).ok_or_else(|| anyhow::anyhow!("CPC period has no ArcGIS service"))?;
     let fields = match period {
         Period::Day6To10 | Period::Day8To14 => "cat,prob,fcst_date,start_date,end_date",
         Period::Month1 | Period::Month3 => "cat,prob,fcst_date,valid_seas",
+        Period::Week3To4 => unreachable!("handled above"),
     };
     let url = format!("{BASE}/{service}/MapServer/{layer}/query?where=1%3D1&outFields={fields}&geometryPrecision=3&maxAllowableOffset=0.03&outSR=4326&f=geojson");
     let body = client.get(crate::net::fetch_url(&url)).timeout(crate::net::FEED_TIMEOUT)
@@ -100,5 +150,26 @@ mod tests {
         assert!(f[0].detail.contains("Valid: 2026-10-19 to 2026-10-23"));
         assert_eq!(f[0].fill[..3], [230, 103, 72]);
         assert_ne!(category_color("Above", Variable::Temperature), category_color("Above", Variable::Precipitation));
+    }
+    #[test]
+    fn parses_week34_kml_placemark_metadata_and_geometry() {
+        let kml = r#"<kml><Placemark><description>&lt;td&gt;Fcst Date&lt;/td&gt;&lt;td&gt;10/9/2026&lt;/td&gt;&lt;td&gt;Start Date&lt;/td&gt;&lt;td&gt;10/24/2026&lt;/td&gt;&lt;td&gt;End Date&lt;/td&gt;&lt;td&gt;11/6/2026&lt;/td&gt;&lt;td&gt;Probability&lt;/td&gt;&lt;td&gt;40&lt;/td&gt;&lt;td&gt;Category&lt;/td&gt;&lt;td&gt;Above&lt;/td&gt;</description><MultiGeometry><Polygon><outerBoundaryIs><LinearRing><coordinates>-100,35,0 -99,35,0 -99,36,0 -100,35,0</coordinates></LinearRing></outerBoundaryIs></Polygon></MultiGeometry></Placemark></kml>"#;
+        let features = parse_week34(kml, Variable::Temperature).unwrap();
+        assert_eq!(features.len(), 1);
+        assert_eq!(features[0].title, "CPC 3–4 week Temperature: Above");
+        assert!(features[0].detail.contains("Probability: 40%"));
+        assert!(features[0].detail.contains("Valid: 2026-10-24 to 2026-11-06"));
+        assert_eq!(features[0].rings[0].len(), 4);
+    }
+    #[tokio::test]
+    #[ignore = "queries live NOAA CPC products"]
+    async fn public_week34_products_have_inspectable_polygons() {
+        let client = reqwest::Client::new();
+        for variable in [Variable::Temperature, Variable::Precipitation] {
+            let features = fetch(&client, Period::Week3To4, variable).await.unwrap();
+            assert!(features.len() > 10);
+            assert!(features.iter().any(|feature| feature.detail.contains("Issued: 20")));
+            assert!(features.iter().all(|feature| !feature.rings.is_empty()));
+        }
     }
 }
