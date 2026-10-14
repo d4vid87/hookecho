@@ -97,9 +97,11 @@ impl HookEchoApp {
                             settings = ui.add_sized([34.0, 34.0], egui::Button::new(ph::SLIDERS_HORIZONTAL))
                                 .named("Open settings").on_hover_text("Settings").clicked();
                         });
+                        self.radar_identity_controls(ui);
                     });
             });
         self.mobile_occlusion.push(toolbar.response.rect);
+        crate::ui::drawer::avoid_toolbar(ctx, toolbar.response.rect);
         self.tour_anchors.menu = Some(toolbar.response.rect);
         let mut custom_locations = false;
         let mut point_forecast = false;
@@ -108,7 +110,7 @@ impl HookEchoApp {
         let modes = (!self.drawer.is_open() && !self.panel_open).then(|| egui::Area::new("context_modes".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 76.0))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, toolbar.response.rect.bottom() - self.chrome_rect.top() + 8.0))
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgba_unmultiplied(18, 37, 56, 240))
@@ -166,7 +168,8 @@ impl HookEchoApp {
                         if self.analyst_open {
                             ui.separator();
                             ui.menu_button("◫  Analysis options ▾", |ui| {
-                                ui.label(format!("Active pane {}", self.active + 1));
+                                ui.label(format!("Editing {}", self.pane_identity(self.active)));
+                                ui.weak("Products and elevations: this pane. Linked map/time controls apply to linked panes.");
                                 ui.horizontal(|ui| {
                                     ui.label("Panes");
                                     for n in [1, 2, 4] {

@@ -200,7 +200,7 @@ impl HookEchoApp {
             });
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(active, format!("Pane {}", i + 1)).clicked() {
+                    if ui.selectable_label(active, format!("{} · {}", i + 1, self.pane_identity(i))).clicked() {
                         self.active = i;
                     }
                     ui.weak(&site);

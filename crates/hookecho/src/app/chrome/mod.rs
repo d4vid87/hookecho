@@ -3,12 +3,15 @@
 //! control column and the panels that slide over the map.
 
 mod chips;
+mod issues;
+pub(super) use issues::RadarIssueLog;
 mod clearview;
 mod priority;
 mod overlay;
 mod permalink;
 pub(crate) use overlay::compact;
 mod registry;
+mod radar_identity;
 mod scrubber;
 mod state;
 pub(crate) use state::PrimarySurface;

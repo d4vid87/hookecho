@@ -40,7 +40,14 @@ try {
  assert(four.timeline_availability.includes('Ready'));report.checks.readyTimeline=true;
  await command('Jump to live');
  let diag=await diagnostics();if(diag.reproduction.panes[0].playing){await page.keyboard.press('Space');await wait(500);}
- await page.keyboard.press('ArrowLeft');await wait(500);await page.keyboard.press('ArrowLeft');await wait(1500);
+ // Listings may contain duplicate timestamps; choose the failing time rather than assuming
+ // two backward steps always reach it. Keep the unavailable-frame assertion below unchanged.
+ for(let step=0;step<24;step++){
+  const cp=await checkpoint();if(cp.session.panes[0].time?.includes('T17:03:00'))break;
+  await page.keyboard.press('ArrowLeft');await wait(1200);
+ }
+ assert((await checkpoint()).session.panes[0].time?.includes('T17:03:00'),'must select the deliberately failing radar frame');
+ await wait(1500);
  const unavailable=await diagnostics();assert(unavailable.timeline_availability.includes('Unavailable'),'failed selected frame must be marked unavailable');report.unavailable=unavailable;await page.screenshot({path:output+'/timeline-unavailable.png'});
  await page.keyboard.press('Space');await wait(2000);const skipped=await diagnostics();assert(skipped.timeline_availability.includes('Skipped'),'playback must identify skipped unavailable frame');report.skipped=skipped;report.checks.unavailableAndSkippedTimeline=true;
  await command('Jump to live');await wait(500);

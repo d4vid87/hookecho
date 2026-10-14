@@ -177,7 +177,7 @@ pub(crate) fn reorder(pref: &mut Vec<String>, seq: &[String], drag: &str, before
 /// What a row click did: toggled the layer, or asked what the label's abbreviation means.
 struct Hit {
     clicked: bool,
-    favorite: Option<crate::render::FieldLayer>,
+    favorite: Option<PaletteAction>,
     /// Index into [`crate::ui::glossary::ENTRIES`], when the ⓘ was the thing clicked.
     explain: Option<usize>,
     resp: egui::Response,
@@ -255,166 +255,52 @@ fn health_popup(ui: &mut egui::Ui, health: &SourceHealth) {
 
 fn row(ui: &mut egui::Ui, e: &PaletteEntry, accent: Color32, draggable: bool, glass: bool) -> Hit {
     let on = e.on.unwrap_or(false);
-    let (fg, bg) = if on {
-        (
-            accent,
-            Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 24),
-        )
-    } else {
-        (ui.visuals().text_color(), ui.visuals().faint_bg_color)
+    let height = if ui.ctx().content_rect().width() < 600.0 { 44.0 } else { ROW_H };
+    let favorite_action = match e.action {
+        PaletteAction::ToggleField(layer) if layer.descriptor().is_some() => Some(PaletteAction::ToggleFavorite(layer)),
+        PaletteAction::SetMoment(moment, relative) => Some(PaletteAction::ToggleRadarFavorite(moment, relative)),
+        _ => None,
     };
-    let icon = RichText::new(glyph(e)).size(14.0).color(if on {
-        accent
-    } else {
-        ui.visuals().weak_text_color()
-    });
-    let mut clicked = false;
-    let outer = egui::Frame::new()
-        .fill(if glass {
-            ui.visuals().faint_bg_color
-        } else {
-            Color32::TRANSPARENT
-        })
-        .stroke(if glass {
-            Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
-        } else {
-            Stroke::NONE
-        })
-        .corner_radius(if glass { 12.0 } else { 0.0 })
-        .inner_margin(if glass { 6 } else { 0 })
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-            // The icon doubles as the grip: a separate handle column costs width the label needs,
-            // and dragging from the label itself would fight the click that toggles the layer.
-            if draggable {
-                ui.dnd_drag_source(
-                    egui::Id::new(("layer_drag", &e.label)),
-                    e.label.clone(),
-                    |ui| ui.label(icon),
-                )
-                .response
-                .on_hover_cursor(egui::CursorIcon::Grab)
-                .on_hover_text("Drag to reorder");
-            } else {
-                ui.label(icon);
-            }
-            let w = ui.available_width();
-            // A justified child layout, not a plain `add`: inside a horizontal row egui centers a
-            // button's text, and a column of centered labels is unreadable.
-            let mut resp = ui
-                .allocate_ui_with_layout(
-                    vec2(w, ROW_H),
-                    egui::Layout::top_down_justified(egui::Align::LEFT),
-                    |ui| {
-                        ui.add(
-                            egui::Button::new(RichText::new(&e.label).size(13.0).color(fg))
-                                .min_size(vec2(w, ROW_H))
-                                .fill(if glass && !on { Color32::TRANSPARENT } else { bg })
-                                .corner_radius(if glass { 9.0 } else { 7.0 })
-                                .stroke(if on {
-                                    Stroke::new(1.0, accent.gamma_multiply(0.7))
-                                } else {
-                                    Stroke::NONE
-                                }),
-                        )
-                    },
-                )
-                .inner;
-            if let Some(key) = &e.key {
-                resp = resp.on_hover_text(format!("{}\nShortcut: {key}", e.desc));
-            } else if !e.desc.is_empty() {
-                resp = resp.on_hover_text(e.desc);
-            }
-            clicked = resp.clicked();
-            resp
-            })
-            .inner
-        })
-        .inner;
-    // The button's rect, not the whole strip: it's what the chips are drawn against and what a
-    // drop is tested on, and it covers everything but the grip.
-    let resp = outer;
     let mut favorite = None;
-    if let PaletteAction::ToggleField(layer) = e.action {
-        if layer.descriptor().is_some() {
-            resp.context_menu(|ui| {
-                let label = if e.favorite {
-                    "Remove from favorites"
-                } else {
-                    "Add to favorites"
-                };
-                if ui.button(label).clicked() {
-                    favorite = Some(layer);
-                    ui.close();
+    let mut explain = None;
+    let resp = ui.push_id(("catalog_row", &e.label), |ui| egui::Frame::new().fill(if glass { ui.visuals().faint_bg_color } else { Color32::TRANSPARENT })
+        .corner_radius(if glass { 12.0 } else { 0.0 }).inner_margin(if glass { 6 } else { 0 })
+        .show(ui, |ui| ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if draggable {
+                ui.dnd_drag_source(egui::Id::new(("layer_drag", &e.label)), e.label.clone(), |ui| ui.label(glyph(e)))
+                    .response.on_hover_text("Drag to reorder");
+            } else { ui.label(glyph(e)); }
+            let controls = 72.0 + if favorite_action.is_some() { height + 4.0 } else { 0.0 };
+            let width = (ui.available_width() - controls - 8.0).max(60.0);
+            let response = ui.add_sized([width, height], egui::Button::new(RichText::new(&e.label).size(13.0).color(if on { accent } else { ui.visuals().text_color() })).wrap()
+                .fill(if on { accent.gamma_multiply(0.12) } else { Color32::TRANSPARENT })
+                .stroke(if on { Stroke::new(1.0, accent.gamma_multiply(0.7)) } else { Stroke::NONE }))
+                .on_hover_text(format!("{}{}", e.desc, e.key.as_ref().map_or(String::new(), |k| format!("\nShortcut: {k}"))));
+            if let Some(action) = favorite_action {
+                if ui.add_sized([height, height], egui::Button::new(egui_phosphor::regular::STAR).selected(e.favorite))
+                    .named_toggle(&format!("Favorite {}", e.label), e.favorite)
+                    .on_hover_text(if e.favorite { "Remove from favorites" } else { "Add to favorites" }).clicked() { favorite = Some(action); }
+            }
+            let details = ui.add_sized([68.0, height], egui::Button::new("Details"))
+                .named(&format!("Details for {}", e.label));
+            egui::Popup::menu(&details).show(|ui| {
+                ui.set_width((ui.ctx().content_rect().width() - 48.0).clamp(200.0, 320.0));
+                ui.strong(&e.label);
+                if !e.desc.is_empty() { ui.label(e.desc); }
+                if let Some(key) = &e.key { ui.weak(format!("Shortcut: {key}")); }
+                if let Some(term) = crate::ui::glossary::explains(&e.label) {
+                    ui.separator(); ui.label(crate::ui::glossary::ENTRIES[term].body);
+                    if ui.add_sized([0.0, 44.0], egui::Button::new("Open glossary")).clicked() { explain = Some(term); ui.close(); }
+                }
+                if let Some(health) = &e.health { ui.separator(); health_popup(ui, health); }
+                if let Some(action) = favorite_action {
+                    if ui.add_sized([0.0, 44.0], egui::Button::new(if e.favorite { "Remove from favorites" } else { "Add to favorites" })).clicked() { favorite = Some(action); ui.close(); }
                 }
             });
-            if e.favorite {
-                ui.painter().text(
-                    resp.rect.right_center() + vec2(-46.0, 0.0),
-                    egui::Align2::CENTER_CENTER,
-                    egui_phosphor::regular::STAR,
-                    egui::FontId::proportional(12.0),
-                    accent,
-                );
-            }
-        }
-    }
-    // ⓘ for a row whose label names a term the glossary defines, drawn over the button the same
-    // way the state dot is. Clicking it explains instead of toggling: the
-    // person who doesn't know what MESH is is not the person who wants it turned on yet.
-    let mut explain = None;
-    if let Some(term) = crate::ui::glossary::explains(&e.label) {
-        let has_state = e.on.is_some() || e.health.is_some();
-        let at = resp.rect.right_center() + vec2(if has_state { -30.0 } else { -12.0 }, 0.0);
-        ui.painter().text(
-            at,
-            egui::Align2::CENTER_CENTER,
-            egui_phosphor::regular::INFO,
-            egui::FontId::proportional(13.0),
-            Color32::from_gray(150),
-        );
-        let hit = egui::Rect::from_center_size(at, vec2(18.0, ROW_H));
-        if clicked
-            && ui
-                .ctx()
-                .input(|i| i.pointer.interact_pos())
-                .is_some_and(|p| hit.contains(p))
-        {
-            clicked = false;
-            explain = Some(term);
-        }
-    }
-    // Network health replaces the ordinary on-dot. Age and errors live in the click popup instead
-    // of making every row carry a miniature status report.
-    if let Some(health) = &e.health {
-        let state = health.state();
-        let (_, color) = health_look(state);
-        let dot = resp.rect.right_center() + vec2(-10.0, 0.0);
-        ui.painter().circle_filled(dot, 3.5, color);
-        let hit_rect = egui::Rect::from_min_max(
-            egui::pos2(resp.rect.right() - 24.0, resp.rect.top()),
-            resp.rect.right_bottom(),
-        );
-        let health_resp = ui
-            .interact(hit_rect, resp.id.with("health"), egui::Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("Source freshness — click for details");
-        if health_resp.clicked() {
-            clicked = false;
-        }
-        egui::Popup::menu(&health_resp).show(|ui| health_popup(ui, health));
-    } else if on {
-        // Only enabled rows need a state dot; gray dots on every disabled row were visual noise.
-        ui.painter()
-            .circle_filled(resp.rect.right_center() + vec2(-10.0, 0.0), 3.5, accent);
-    }
-    Hit {
-        clicked,
-        favorite,
-        explain,
-        resp,
-    }
+            response
+        }).inner).inner).inner;
+    Hit { clicked: resp.clicked(), favorite, explain, resp }
 }
 
 /// Registry selection also describes tools and layouts; those are not visible map layers.
@@ -495,7 +381,7 @@ pub(crate) fn context_catalog(ui: &mut egui::Ui, entries: &[PaletteEntry], tools
                 let hit = row(ui, entry, accent, false, false);
                 if hit.clicked { chosen = Some(entry.action); }
                 if let Some(term) = hit.explain { chosen = Some(PaletteAction::Explain(term)); }
-                if let Some(layer) = hit.favorite { chosen = Some(PaletteAction::ToggleFavorite(layer)); }
+                if let Some(layer) = hit.favorite { chosen = Some(layer); }
                 ui.add_space(4.0);
             }
         };
@@ -797,7 +683,7 @@ pub(crate) fn body(
                             let hit = row(ui, &entries[i], Color32::from_rgb(120, 186, 255), false, true);
                             if hit.clicked { chosen = Some(entries[i].action); }
                             if let Some(t) = hit.explain { chosen = Some(PaletteAction::Explain(t)); }
-                            if let Some(layer) = hit.favorite { chosen = Some(PaletteAction::ToggleFavorite(layer)); }
+                            if let Some(layer) = hit.favorite { chosen = Some(layer); }
                             ui.add_space(4.0);
                         }
                         if query.is_empty() && !active_only && selected == "Radar" {
@@ -855,7 +741,7 @@ pub(crate) fn body(
                         chosen = Some(entries[*i].action);
                     }
                     if let Some(layer) = hit.favorite {
-                        chosen = Some(PaletteAction::ToggleFavorite(layer));
+                        chosen = Some(layer);
                     }
                     if let Some(t) = hit.explain {
                         chosen = Some(PaletteAction::Explain(t));
@@ -975,7 +861,7 @@ pub(crate) fn body(
                         chosen = Some(PaletteAction::Explain(t));
                     }
                     if let Some(layer) = favorite {
-                        chosen = Some(PaletteAction::ToggleFavorite(layer));
+                        chosen = Some(layer);
                     }
                     // Insertion line above the row the pointer is over, so a drop lands
                     // where the preview says it will.

@@ -26,18 +26,24 @@
       }
       /* Only ever visible when the browser has said the app is installable, and only for a few
          seconds — it floats over the map, and a permanent button there is a permanent dead zone. */
-      #install {
+      #install-prompt {
         position: absolute; left: 12px; bottom: 12px; display: none;
-        padding: 8px 14px; border: 0; border-radius: 999px; cursor: pointer;
+        align-items: center; gap: 4px; padding: 4px; border-radius: 12px; z-index: 10;
         background: #2b2b36; color: #e6e6ee; font: 13px system-ui, sans-serif;
         box-shadow: 0 2px 10px #0008;
       }
+      #install-prompt button { min-height: 44px; padding: 8px 12px; border: 0; border-radius: 8px; cursor: pointer; background: transparent; color: inherit; font: inherit; }
+      #dismiss-install { min-width: 44px; }
+      @media (max-width: 600px) { #install-prompt { left: 50%; right: auto; transform: translateX(-50%); bottom: calc(264px + env(safe-area-inset-bottom)); max-width: calc(100% - 24px); } }
     </style>
   </head>
   <body>
     <canvas id="hookecho"></canvas>
     <div id="boot">Loading HookEcho…</div>
-    <button id="install" type="button">Install HookEcho</button>
+    <div id="install-prompt" role="region" aria-label="Install HookEcho">
+      <button id="install" type="button">Install HookEcho</button>
+      <button id="dismiss-install" type="button" aria-label="Dismiss installation suggestion">×</button>
+    </div>
     <!-- Which radar to open on comes from the edge, and nothing about it depends on the app being
          loaded. Fired here, before the module graph is even parsed, it is almost always already
          resolved by the time Rust asks — the app's opening site costs no round trip at all. -->
@@ -70,16 +76,18 @@
       addEventListener("beforeinstallprompt", (e) => {
         e.preventDefault();
         const btn = document.getElementById("install");
-        btn.style.display = "block";
-        setTimeout(() => (btn.style.display = "none"), 15000);
+        const banner = document.getElementById("install-prompt");
+        banner.style.display = "flex";
+        document.getElementById("dismiss-install").onclick = () => { banner.style.display = "none"; };
+        setTimeout(() => (banner.style.display = "none"), 15000);
         btn.onclick = async () => {
-          btn.style.display = "none";
+          banner.style.display = "none";
           e.prompt();
           await e.userChoice;
         };
       });
       addEventListener("appinstalled", () => {
-        document.getElementById("install").style.display = "none";
+        document.getElementById("install-prompt").style.display = "none";
       });
     </script>
     <script type="module">

@@ -74,11 +74,11 @@ impl Tour {
     fn body(&self, sig: Signals, phone: bool) -> String {
         match self.step {
             0 => if phone {
-                "Drag the scrubber to walk back through the storm, or tap Live to snap to the \
+                "Drag the scrubber to walk back through the storm, or tap Return to live to snap to the \
                  newest scan. Every overlay — warnings, reports, lightning — follows you back in \
                  time."
             } else {
-                "Drag the scrubber along the bottom to walk back through the storm, or click LIVE \
+                "Drag the scrubber along the bottom to walk back through the storm, or click Return to live \
                  to snap to the newest scan. Every overlay — warnings, reports, lightning — \
                  follows you back in time."
             }
@@ -97,10 +97,10 @@ impl Tour {
                 )
             }
             2 => if phone {
-                "The bottom bar opens Radar, Layers, Alerts, and More. Tap the search icon above \
+                "The bottom bar opens Radar, Layers, Alerts, and Tools. Tap the search icon above \
                  the map to find places, sites, products, and tools. Tap a section again to close it."
             } else {
-                "Open the menu for Radar, Overlays, Alerts, and Tools. Press Ctrl+S to search \
+                "Open the menu for Radar, Layers, Alerts, and Tools. Press Ctrl+S to search \
                  products, tools, and places. Settings is always in the top bar; Escape closes \
                  the menu."
             }.to_string(),

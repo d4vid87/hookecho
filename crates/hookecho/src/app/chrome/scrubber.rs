@@ -89,6 +89,7 @@ impl HookEchoApp {
             .as_deref()
             .is_some_and(wxdata::sites::is_nexrad);
         let mut go_head = false;
+        let mut history_popup = None;
         // Offline chase packs are a browser-only idea: on desktop the volumes are already on disk.
         #[cfg(target_arch = "wasm32")]
         let mut save_pack = false;
@@ -276,26 +277,14 @@ impl HookEchoApp {
                         (
                             egui::Color32::from_rgb(217, 231, 255),
                             if compact_live { "Archive".to_string() } else { format!("Archive {}", t.date.format("%m/%d")) },
-                            "Scrubbed to an archive day. Click to jump back to live.",
+                            "Browsing older data. Use Return to live to follow the latest scan.",
                         )
                     };
-                    let badge = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new(format!("● {text}"))
-                                .size(if corner { 10.0 } else { 12.0 })
-                                .strong()
-                                .color(col),
-                        )
-                        .fill(egui::Color32::from_rgb(24, 60, 112))
-                        .corner_radius(9.0),
-                    )
-                    .named(hint);
-                    if badge.clicked() {
-                        go_head = true;
-                    }
+                    let badge = ui.label(egui::RichText::new(format!("● {text}")).size(if corner { 10.0 } else { 12.0 }).strong().color(col)).on_hover_text(hint);
                     // Right-click the badge, or use the calendar button, for archive and playback
                     // settings. Both open this one existing menu.
                     let timeline_popup = egui::Popup::default_response_id(&badge);
+                    history_popup = Some(timeline_popup);
                     egui::Popup::context_menu(&badge)
                         .anchor(&badge)
                         .align(egui::RectAlign::TOP_START)
@@ -410,24 +399,6 @@ impl HookEchoApp {
                             }
                         });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let archive = ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(ph::DOTS_THREE)
-                                        .size(18.0)
-                                        .color(egui::Color32::from_gray(225)),
-                                )
-                                .min_size(egui::vec2(
-                                    if compact_live { 24.0 } else { 30.0 },
-                                    if compact_live { 24.0 } else { 30.0 },
-                                ))
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE),
-                            )
-                            .named("Archive and playback settings");
-                        if archive.clicked() {
-                            egui::Popup::toggle_id(ui.ctx(), timeline_popup);
-                        }
                         // "15.1y ago" next to an ARCHIVE 04/27 badge is the same fact twice, and
                         // on a phone the two of them plus the clock overrun the row and draw on
                         // top of each other. Scrubbed to the archive, the badge already carries
@@ -455,6 +426,13 @@ impl HookEchoApp {
                 if let Some(rect) = &mut scrub_rect {
                     *rect = rect.union(row.response.rect);
                 }
+                let actions = ui.horizontal(|ui| {
+                    if let Some(popup) = history_popup {
+                        if ui.add_sized([88.0, 44.0], egui::Button::new("History")).named("Open radar history and playback settings").clicked() { egui::Popup::toggle_id(ui.ctx(), popup); }
+                    }
+                    if (!t.following || t.cut_playback) && ui.add_sized([132.0, 44.0], egui::Button::new("Return to live")).named("Follow the latest radar scan").clicked() { go_head = true; }
+                });
+                if let Some(rect) = &mut scrub_rect { *rect = rect.union(actions.response.rect); }
                 if compact_live {
                     let status = if !t.following {
                         t.date.format("%Y-%m-%d").to_string()
@@ -567,9 +545,17 @@ impl HookEchoApp {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let status = if let Some(previous) = &retained_station { format!("Showing {previous}") }
                                     else if !t.following { "Archive radar".into() } else if fresh { "Live radar".into() } else { "Radar stale".into() };
-                                if ui.add(egui::Button::new(egui::RichText::new(status).size(13.0).strong().color(egui::Color32::WHITE))
-                                    .fill(egui::Color32::TRANSPARENT).stroke(egui::Stroke::NONE)).named("Jump to latest radar").clicked() {
-                                    go_head = true;
+                                ui.label(egui::RichText::new(status).size(13.0).strong().color(egui::Color32::WHITE));
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().interact_size.y = 44.0;
+                            if (!t.following || t.cut_playback) && ui.button("Return to live").clicked() { go_head = true; }
+                            ui.menu_button("History", |ui| {
+                                ui.label("Archive date (UTC)");
+                                if let Some(date) = archive_day_input(ui, t.date) {
+                                    t.date = date.clamp(wxdata::level2::ARCHIVE_START, Utc::now().date_naive());
+                                    t.following = t.date >= Utc::now().date_naive();
                                 }
                             });
                         });
