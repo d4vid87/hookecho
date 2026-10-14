@@ -1516,23 +1516,24 @@
       "title": "Drawing",
       "priority": 1,
       "status": "partial",
-      "observed_scope": "Pencil, eraser, undo, redo and clear controls.",
+      "observed_scope": "Pencil, eraser, undo, redo, clear, color and size controls. The retained drawing-mapbox.js constructs a DrawingBoard canvas with Color and Size controls and a default size of 6.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Workspace drawing chip offers pencil with four colors, a segment eraser, 16-step drawing undo/redo, clear and GeoJSON export. Freehand annotations stay anchored to geographic coordinates during pan and zoom. An eraser drag cuts only the portion inside an 11-pixel screen-radius brush, splitting surviving geographic strokes at the brush boundary; each draw or erase drag is one history step.",
+      "hookecho_implementation": "Workspace drawing chip offers pencil with four quick colors plus a custom color picker, a 1–12 px pen-size control (6 px initial size), segment eraser, 16-step drawing undo/redo, clear and GeoJSON export. Each geographic stroke retains its own color and width through erasing, export and case-file round trips; older case files default to 2.5 px. Freehand annotations stay anchored to geographic coordinates during pan and zoom. An eraser drag cuts only the portion inside an 11-pixel screen-radius brush, splitting surviving strokes at the brush boundary; each draw or erase drag is one history step.",
       "remaining_gaps": [
-        "RadarOmega's canvas eraser brush size, history depth and export format have not been verified as equivalent. HookEcho's geographic vector annotations and four-color palette differ from the reference canvas drawing board's color and size controls."
+        "RadarOmega's exact Size dropdown choices, canvas eraser brush size, history depth and export format have not been verified as equivalent. HookEcho's geographic vector annotations differ from the reference canvas drawing board."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/clearview.rs",
         "crates/hookecho/src/app/chrome/overlay.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs",
         "crates/hookecho/src/app/chrome/chips.rs",
-        "crates/hookecho/src/app.rs"
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/casefile.rs"
       ],
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN04",
       "acceptance": "Create annotations, undo/redo/clear and exit without unintended map actions.",
-      "runtime_verification": "2026-10-14: targeted native unit tests verify partial-stroke clipping at an 11-pixel screen radius, preservation of an untouched stroke, and continuous erasure along a fast pointer movement. Integrated map interaction, reference brush sizing and drawing export equivalence remain unverified."
+      "runtime_verification": "2026-10-14: targeted native unit tests verify partial-stroke clipping at an 11-pixel screen radius, preservation of an untouched stroke, continuous erasure along a fast pointer movement, stroke width retention, GeoJSON width export and backward-compatible case-file import. Integrated map interaction and reference equivalence remain unverified."
     },
     {
       "id": "AN05",

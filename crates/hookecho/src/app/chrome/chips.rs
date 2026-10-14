@@ -333,23 +333,25 @@ impl HookEchoApp {
                             self.draw_eraser = true;
                         }
                         ui.add_enabled_ui(!self.draw_eraser, |ui| {
-                        for c in DRAW_COLORS {
-                            let sel = self.draw_color == c;
-                            let (rect, resp) = ui
-                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
-                            let p = ui.painter_at(rect);
-                            p.circle_filled(rect.center(), 7.0, c);
-                            if sel {
-                                p.circle_stroke(
-                                    rect.center(),
-                                    8.5,
-                                    egui::Stroke::new(1.5, egui::Color32::WHITE),
-                                );
-                            }
-                            if resp.clicked() {
-                                self.draw_color = c;
-                            }
-                        }
+                            ui.menu_button("Pen", |ui| {
+                                ui.horizontal(|ui| {
+                                    for c in DRAW_COLORS {
+                                        let sel = self.draw_color == c;
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(24.0, 24.0), egui::Sense::click(),
+                                        );
+                                        let p = ui.painter_at(rect);
+                                        p.circle_filled(rect.center(), 8.0, c);
+                                        if sel {
+                                            p.circle_stroke(rect.center(), 10.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+                                        }
+                                        if resp.clicked() { self.draw_color = c; }
+                                    }
+                                });
+                                ui.label("Custom color");
+                                ui.color_edit_button_srgba(&mut self.draw_color);
+                                ui.add(egui::Slider::new(&mut self.draw_width, 1.0..=12.0).text("Size").suffix(" px"));
+                            });
                         });
                         ui.separator();
                         if ui

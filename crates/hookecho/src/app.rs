@@ -1355,11 +1355,12 @@ impl OverlaySource {
     }
 }
 
-/// One freehand annotation stroke: a lon/lat polyline and the colour it was drawn in.
+/// One freehand annotation stroke: a lon/lat polyline and its screen-space pen style.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Stroke2d {
     pub points: Vec<[f64; 2]>,
     pub color: egui::Color32,
+    pub width: f32,
 }
 
 /// The four annotation colours, picked to stay legible over both radar and satellite basemaps.
@@ -1370,17 +1371,19 @@ pub(crate) const DRAW_COLORS: [egui::Color32; 4] = [
     egui::Color32::WHITE,
 ];
 
-/// Append `pt` to the newest stroke, or start one in `color` when `new_stroke`.
+/// Append `pt` to the newest stroke, or start one in the chosen pen style.
 pub(crate) fn draw_append(
     strokes: &mut Vec<Stroke2d>,
     pt: [f64; 2],
     color: egui::Color32,
+    width: f32,
     new_stroke: bool,
 ) {
     if new_stroke || strokes.is_empty() {
         strokes.push(Stroke2d {
             points: vec![pt],
             color,
+            width,
         });
         return;
     }
@@ -1460,7 +1463,7 @@ fn erase_strokes_at(strokes: &mut Vec<Stroke2d>, cam: &crate::render::mercator::
         if current.len() >= 2 { kept.push(current); }
         if stroke_changed {
             changed = true;
-            result.extend(kept.into_iter().map(|points| Stroke2d { points, color: stroke.color }));
+            result.extend(kept.into_iter().map(|points| Stroke2d { points, color: stroke.color, width: stroke.width }));
         } else {
             result.push(stroke);
         }
@@ -1502,6 +1505,7 @@ fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
                     "source": "HookEcho annotation",
                     "stroke": format!("#{r:02x}{g:02x}{b:02x}"),
                     "stroke-opacity": f64::from(a) / 255.0,
+                    "stroke-width": stroke.width,
                 }
             }))
         })
@@ -3402,6 +3406,8 @@ pub struct HookEchoApp {
     route_rx: Option<std::sync::mpsc::Receiver<Result<Vec<wxdata::route::Route>, String>>>,
     /// The colour the next stroke gets.
     draw_color: egui::Color32,
+    /// Screen-space width of the next annotation stroke.
+    draw_width: f32,
     marker_window: ui::marker_window::MarkerWindow,
     event_window: ui::event_window::EventWindow,
     chase_replay: ui::chase_replay::ChaseReplay,
@@ -4460,6 +4466,7 @@ impl HookEchoApp {
             routes: Vec::new(),
             route_rx: None,
             draw_color: DRAW_COLORS[0],
+            draw_width: 6.0,
             marker_window: Default::default(),
             event_window: Default::default(),
             chase_replay: Default::default(),
@@ -13809,7 +13816,7 @@ impl HookEchoApp {
                             self.draw_redo.clear();
                             self.draw_gesture_active = true;
                         }
-                        draw_append(&mut self.strokes, [ll.0, ll.1], self.draw_color, new_stroke);
+                        draw_append(&mut self.strokes, [ll.0, ll.1], self.draw_color, self.draw_width, new_stroke);
                     }
                 }
             }
@@ -17155,7 +17162,7 @@ impl HookEchoApp {
             if st.points.len() < 2 {
                 continue;
             }
-            crate::geo::paint_path(&painter, &cam, prect, &st.points, egui::Stroke::new(2.5, st.color));
+            crate::geo::paint_path(&painter, &cam, prect, &st.points, egui::Stroke::new(st.width, st.color));
         }
 
         // Saved watch zones, plus the one being clicked out right now.
@@ -17879,6 +17886,7 @@ impl HookEchoApp {
             .map(|stroke| crate::casefile::CaseStroke {
                 points: stroke.points.clone(),
                 rgba: stroke.color.to_srgba_unmultiplied(),
+                width: stroke.width,
             })
             .collect();
         crate::casefile::CaseManifest::new(
@@ -19328,6 +19336,7 @@ impl HookEchoApp {
                                 stroke.rgba[2],
                                 stroke.rgba[3],
                             ),
+                            width: stroke.width,
                         })
                         .collect();
                     self.draw_undo.clear();
@@ -24086,16 +24095,18 @@ mod tests {
         let red = DRAW_COLORS[0];
         let cyan = DRAW_COLORS[2];
         let mut strokes = Vec::new();
-        draw_append(&mut strokes, [-97.0, 35.0], red, true);
-        draw_append(&mut strokes, [-97.1, 35.1], red, false);
+        draw_append(&mut strokes, [-97.0, 35.0], red, 4.0, true);
+        draw_append(&mut strokes, [-97.1, 35.1], red, 4.0, false);
         // A repeated point (a still finger during a drag) adds nothing.
-        draw_append(&mut strokes, [-97.1, 35.1], red, false);
+        draw_append(&mut strokes, [-97.1, 35.1], red, 4.0, false);
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].points.len(), 2);
+        assert_eq!(strokes[0].width, 4.0);
 
-        draw_append(&mut strokes, [-98.0, 36.0], cyan, true);
+        draw_append(&mut strokes, [-98.0, 36.0], cyan, 7.0, true);
         assert_eq!(strokes.len(), 2);
         assert_eq!(strokes[1].color, cyan);
+        assert_eq!(strokes[1].width, 7.0);
 
         strokes.pop(); // Undo
         assert_eq!(strokes.len(), 1);
@@ -24108,14 +24119,16 @@ mod tests {
         let vp = (800.0, 600.0);
         let middle = cam.world_to_screen(crate::render::mercator::lonlat_to_world(-97.0, 35.0), vp);
         let mut strokes = vec![
-            Stroke2d { points: vec![[-97.1, 35.0], [-96.9, 35.0]], color: DRAW_COLORS[0] },
-            Stroke2d { points: vec![[-98.0, 36.0], [-97.9, 36.0]], color: DRAW_COLORS[2] },
+            Stroke2d { points: vec![[-97.1, 35.0], [-96.9, 35.0]], color: DRAW_COLORS[0], width: 4.0 },
+            Stroke2d { points: vec![[-98.0, 36.0], [-97.9, 36.0]], color: DRAW_COLORS[2], width: 2.5 },
         ];
         let before = strokes.clone();
         assert!(erase_strokes_at(&mut strokes, &cam, vp, middle));
         assert_eq!(strokes.len(), 3, "the touched line is split on both sides of the eraser");
         assert_eq!(strokes[0].color, before[0].color);
         assert_eq!(strokes[1].color, before[0].color);
+        assert_eq!(strokes[0].width, before[0].width);
+        assert_eq!(strokes[1].width, before[0].width);
         assert_eq!(strokes[2], before[1]);
         assert_eq!(strokes[0].points.first(), before[0].points.first());
         assert_eq!(strokes[1].points.last(), before[0].points.last());
@@ -24136,6 +24149,7 @@ mod tests {
         let mut strokes = vec![Stroke2d {
             points: vec![[-97.1, 35.0], [-96.9, 35.0]],
             color: DRAW_COLORS[0],
+            width: 2.5,
         }];
         assert!(erase_strokes_along(
             &mut strokes,
@@ -24152,6 +24166,7 @@ mod tests {
         let strokes = vec![Stroke2d {
             points: vec![[-97.5, 35.2], [-97.4, 35.3]],
             color: egui::Color32::from_rgba_unmultiplied(255, 80, 80, 128),
+            width: 6.0,
         }];
         let json: serde_json::Value =
             serde_json::from_str(&annotations_geojson(&strokes).unwrap()).unwrap();
@@ -24159,9 +24174,11 @@ mod tests {
         assert_eq!(json["features"][0]["geometry"]["coordinates"][1][0], -97.4);
         assert_eq!(json["features"][0]["properties"]["stroke"], "#ff5050");
         assert_eq!(json["features"][0]["properties"]["stroke-opacity"], 128.0 / 255.0);
+        assert_eq!(json["features"][0]["properties"]["stroke-width"], 6.0);
         assert!(annotations_geojson(&[Stroke2d {
             points: vec![[f64::NAN, 35.0], [-97.0, 35.0]],
             color: egui::Color32::WHITE,
+            width: 2.5,
         }])
         .unwrap_err()
         .to_string()
