@@ -409,7 +409,7 @@ impl HookEchoApp {
                             if globe {
                                 "Globe"
                             } else if pitch > 0.0 {
-                                "Tilted"
+                                "3D"
                             } else {
                                 "2D"
                             },
@@ -431,8 +431,8 @@ impl HookEchoApp {
                                 ui.close();
                             }
                             if ui
-                                .selectable_label(!globe && pitch > 0.0, "Tilted map")
-                                .named_toggle("Tilted map", !globe && pitch > 0.0)
+                                .selectable_label(!globe && pitch > 0.0, "3D map")
+                                .named_toggle("3D map", !globe && pitch > 0.0)
                                 .clicked()
                             {
                                 globe = false;
@@ -466,7 +466,7 @@ impl HookEchoApp {
                                     bearing = 0.0;
                                 }
                             });
-                            ui.weak("Tilt changes the map perspective.");
+                            ui.weak("Reflectivity height shows value, not storm altitude. Other products stay flat.");
                         })
                         .0
                         .named("Map projection");

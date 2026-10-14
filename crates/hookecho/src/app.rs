@@ -14328,6 +14328,9 @@ impl HookEchoApp {
             vector_over_raster: pane_style == BasemapStyle::HybridSatellite,
             radar_upload,
             draw_radar,
+            radar_surface: draw_radar && !cam.globe && cam.pitch_deg > 1.0
+                && self.views[idx].custom_product.is_none()
+                && crate::render::radar_surface_supported(self.views[idx].moment),
             overlay_upload: if first {
                 self.pending_overlay.take()
             } else {
