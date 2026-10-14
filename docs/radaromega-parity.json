@@ -1169,7 +1169,7 @@
       "hookecho_implementation": "Public NOAA SPC fire-weather MapServer polygons for days 1–8, with conditions/dry-thunderstorm choices, NOAA category colors, on-map polygon details and source/valid/expiry metadata.",
       "remaining_gaps": [
         "The public GIS polygons do not include RadarOmega's hosted forecast-discussion text or identical popup hierarchy.",
-        "Empty/stale-source messaging and a live end-to-end browser check remain to be verified; overlapping NWS alerts currently capture clicks before the fire-outlook polygon can be inspected."
+        "Empty/stale-source messaging remains to be verified. When NWS alert polygons overlap an outlook, alerts take click priority; users can temporarily hide alerts to inspect the outlook."
       ],
       "hookecho_sources": [
         "crates/wxdata/src/fire_weather.rs",
@@ -1181,7 +1181,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV06",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "Focused parser tests and integrated native library check pass. On 2026-10-14, the official NOAA Day 2 conditions endpoint returned a valid California Elevated polygon, and the optimized browser build retained Day 2 selection after navigation to that area without console errors. Active NWS fire alerts overlaid the same area and captured map clicks, so the fire polygon's detail popup was not visually accepted; empty/stale messaging remains pending."
+      "runtime_verification": "Focused parser tests and integrated native library check pass. On 2026-10-14, the official NOAA Day 2 conditions endpoint returned a California Elevated polygon. The optimized browser build rendered it and opened its issue/valid/expiry/source detail after overlapping NWS alert polygons were hidden, with no console errors. Issue time was correctly derived from the public source ID. Screenshot: outputs/ro-parity/fire-weather/browser-day2-detail.png. Empty/stale messaging remains pending."
     },
     {
       "id": "OV07",

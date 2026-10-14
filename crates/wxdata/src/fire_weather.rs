@@ -56,13 +56,33 @@ fn category(day: u8, kind: Kind, props: &serde_json::Map<String, serde_json::Val
     }
 }
 
+fn utc_time(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    if bytes.len() != 12 || !bytes.iter().all(u8::is_ascii_digit) { return None; }
+    Some(format!("{}-{}-{} {}:{} UTC", &raw[..4], &raw[4..6], &raw[6..8], &raw[8..10], &raw[10..12]))
+}
+
+fn issue_time(props: &serde_json::Map<String, serde_json::Value>) -> String {
+    if let Some(issue) = props.get("issue").and_then(|v| v.as_str()).and_then(utc_time) {
+        return issue;
+    }
+    // Days 1–2 omit an issue field, but their source ID ends in YYYYMMDD_HHMM.
+    let source = props.get("idp_source").and_then(|v| v.as_str()).unwrap_or("");
+    let mut parts = source.rsplit('_');
+    match (parts.next(), parts.next()) {
+        (Some(hm), Some(ymd)) if hm.len() == 4 && ymd.len() == 8 => utc_time(&format!("{ymd}{hm}")),
+        _ => None,
+    }.unwrap_or_else(|| "not reported".to_owned())
+}
+
 pub fn parse(json: &str, day: u8, kind: Kind) -> anyhow::Result<Vec<GeoFeature>> {
     let mut out = Vec::new();
     for_each_feature(json, |geom, props| {
         let Some((label, rgb)) = category(day, kind, props) else { return; };
         let text = |key| props.get(key).and_then(|v| v.as_str()).unwrap_or("");
         let title = format!("Day {day} fire weather: {label}");
-        let detail = format!("NOAA Storm Prediction Center fire-weather outlook\n{label}\nIssued: {} UTC\nValid: {} UTC\nExpires: {} UTC\nSource: {}", text("issue"), text("valid"), text("expire"), text("idp_source"));
+        let display_time = |key| utc_time(text(key)).unwrap_or_else(|| "not reported".to_owned());
+        let detail = format!("NOAA Storm Prediction Center fire-weather outlook\n{label}\nIssued: {}\nValid: {}\nExpires: {}\nSource: {}", issue_time(props), display_time("valid"), display_time("expire"), text("idp_source"));
         for rings in polygons_of(geom) {
             out.push(GeoFeature { rings, fill: [rgb[0], rgb[1], rgb[2], 55], stroke: [rgb[0], rgb[1], rgb[2], 230], kind: FeatureKind::Outlook, title: title.clone(), detail: detail.clone(), alert: None });
         }
@@ -95,6 +115,11 @@ mod tests {
         let f = parse(json, 1, Kind::Conditions).unwrap();
         assert_eq!(f.len(), 1);
         assert!(f[0].title.contains("Critical"));
-        assert!(f[0].detail.contains("202610141700"));
+        assert!(f[0].detail.contains("2026-10-14 17:00 UTC"));
+    }
+    #[test]
+    fn day_two_issue_time_comes_from_source_id() {
+        let props = serde_json::json!({"idp_source":"firewx_day2_20261014_1200"});
+        assert_eq!(issue_time(props.as_object().unwrap()), "2026-10-14 12:00 UTC");
     }
 }
