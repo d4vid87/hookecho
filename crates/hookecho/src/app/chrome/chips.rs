@@ -329,7 +329,7 @@ impl HookEchoApp {
                         if ui.selectable_label(!self.draw_eraser, "Pencil").clicked() {
                             self.draw_eraser = false;
                         }
-                        if ui.selectable_label(self.draw_eraser, "Eraser").on_hover_text("Drag across a drawing to remove its stroke").clicked() {
+                        if ui.selectable_label(self.draw_eraser, "Eraser").on_hover_text("Drag across a drawing to erase the touched portion").clicked() {
                             self.draw_eraser = true;
                         }
                         ui.add_enabled_ui(!self.draw_eraser, |ui| {

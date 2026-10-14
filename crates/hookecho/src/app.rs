@@ -1392,26 +1392,94 @@ pub(crate) fn draw_append(
     }
 }
 
-/// Remove complete strokes touched by an eraser drag, using a constant screen-pixel radius.
+/// Cut only the painted portion under an eraser drag. Clipping in screen space keeps the brush
+/// the same size at every zoom; the surviving endpoints return to lon/lat with their stroke.
 fn erase_strokes_at(strokes: &mut Vec<Stroke2d>, cam: &crate::render::mercator::Camera, vp: (f32, f32), cursor: (f32, f32)) -> bool {
-    let before = strokes.len();
-    let radius_sq = 11.0_f32.powi(2);
-    strokes.retain(|stroke| {
-        let hit = stroke.points.windows(2).any(|pair| {
-            let screen = |ll: [f64; 2]| {
-                let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
-                cam.world_to_screen(world, vp)
-            };
-            let a = screen(pair[0]);
-            let b = screen(pair[1]);
-            let dx = b.0 - a.0;
-            let dy = b.1 - a.1;
-            let t = (((cursor.0 - a.0) * dx + (cursor.1 - a.1) * dy) / (dx * dx + dy * dy).max(0.001)).clamp(0.0, 1.0);
-            (cursor.0 - a.0 - t * dx).powi(2) + (cursor.1 - a.1 - t * dy).powi(2) <= radius_sq
-        });
-        !hit
-    });
-    strokes.len() != before
+    let radius_sq = 11.0_f64.powi(2);
+    let screen = |ll: [f64; 2]| {
+        let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+        let (x, y) = cam.world_to_screen(world, vp);
+        (f64::from(x), f64::from(y))
+    };
+    let mut changed = false;
+    let mut result = Vec::with_capacity(strokes.len());
+    for stroke in strokes.drain(..) {
+        if stroke.points.len() < 2 {
+            if stroke.points.first().is_some_and(|&point| {
+                let p = screen(point);
+                (p.0 - f64::from(cursor.0)).powi(2) + (p.1 - f64::from(cursor.1)).powi(2) <= radius_sq
+            }) {
+                changed = true;
+            } else {
+                result.push(stroke);
+            }
+            continue;
+        }
+        let mut kept = Vec::new();
+        let mut current = Vec::new();
+        let mut stroke_changed = false;
+        for pair in stroke.points.windows(2) {
+            let (a, b) = (screen(pair[0]), screen(pair[1]));
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let (ox, oy) = (a.0 - f64::from(cursor.0), a.1 - f64::from(cursor.1));
+            let quadratic_a = dx * dx + dy * dy;
+            let quadratic_b = 2.0 * (ox * dx + oy * dy);
+            let quadratic_c = ox * ox + oy * oy - radius_sq;
+            let mut cuts = vec![0.0, 1.0];
+            let discriminant = quadratic_b * quadratic_b - 4.0 * quadratic_a * quadratic_c;
+            if quadratic_a > 1e-12 && discriminant > 0.0 {
+                let root = discriminant.sqrt();
+                for t in [(-quadratic_b - root) / (2.0 * quadratic_a), (-quadratic_b + root) / (2.0 * quadratic_a)] {
+                    if t > 0.0 && t < 1.0 { cuts.push(t); }
+                }
+            }
+            cuts.sort_by(f64::total_cmp);
+            for interval in cuts.windows(2) {
+                let midpoint = (interval[0] + interval[1]) * 0.5;
+                let mx = ox + midpoint * dx;
+                let my = oy + midpoint * dy;
+                if mx * mx + my * my <= radius_sq {
+                    stroke_changed = true;
+                    if current.len() >= 2 { kept.push(std::mem::take(&mut current)); }
+                    current.clear();
+                } else {
+                    let interpolate = |t: f64| [
+                        pair[0][0] + t * (pair[1][0] - pair[0][0]),
+                        pair[0][1] + t * (pair[1][1] - pair[0][1]),
+                    ];
+                    let start = interpolate(interval[0]);
+                    let end = interpolate(interval[1]);
+                    if current.last() != Some(&start) {
+                        if current.len() >= 2 { kept.push(std::mem::take(&mut current)); }
+                        current.push(start);
+                    }
+                    current.push(end);
+                }
+            }
+        }
+        if current.len() >= 2 { kept.push(current); }
+        if stroke_changed {
+            changed = true;
+            result.extend(kept.into_iter().map(|points| Stroke2d { points, color: stroke.color }));
+        } else {
+            result.push(stroke);
+        }
+    }
+    *strokes = result;
+    changed
+}
+
+/// Sample the whole pointer movement so a quick eraser stroke cannot leave gaps between frames.
+fn erase_strokes_along(strokes: &mut Vec<Stroke2d>, cam: &crate::render::mercator::Camera, vp: (f32, f32), from: Option<(f32, f32)>, to: (f32, f32)) -> bool {
+    let Some(from) = from else { return erase_strokes_at(strokes, cam, vp, to); };
+    let distance = ((to.0 - from.0).powi(2) + (to.1 - from.1).powi(2)).sqrt();
+    let steps = (distance / 5.5).ceil().max(1.0) as usize;
+    let mut changed = false;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        changed |= erase_strokes_at(strokes, cam, vp, (from.0 + t * (to.0 - from.0), from.1 + t * (to.1 - from.1)));
+    }
+    changed
 }
 
 fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
@@ -3324,6 +3392,7 @@ pub struct HookEchoApp {
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
     draw_eraser: bool,
+    draw_erase_last: Option<(f32, f32)>,
     draw_undo: Vec<Vec<Stroke2d>>,
     draw_redo: Vec<Vec<Stroke2d>>,
     draw_gesture_active: bool,
@@ -4383,6 +4452,7 @@ impl HookEchoApp {
             detector_history_key: None,
             strokes: Vec::new(),
             draw_eraser: false,
+            draw_erase_last: None,
             draw_undo: Vec::new(),
             draw_redo: Vec::new(),
             draw_gesture_active: false,
@@ -13707,7 +13777,10 @@ impl HookEchoApp {
         }
         // The draw tool takes the drag away from the pan, the same deal the measure tool makes
         // with the click: while it's armed, a drag draws. Disarm it (Esc / another tool) to pan.
-        if !ctx.input(|i| i.pointer.primary_down()) { self.draw_gesture_active = false; }
+        if !ctx.input(|i| i.pointer.primary_down()) {
+            self.draw_gesture_active = false;
+            self.draw_erase_last = None;
+        }
         if self.tool == MapTool::Draw && quiet {
             if response.dragged() {
                 self.active = idx;
@@ -13718,7 +13791,8 @@ impl HookEchoApp {
                     let ll = crate::render::mercator::world_to_lonlat(w.0, w.1);
                     if self.draw_eraser {
                         let before = (!self.draw_gesture_active).then(|| self.strokes.clone());
-                        if erase_strokes_at(&mut self.strokes, &cam, vp, px)
+                        let last = self.draw_erase_last.replace(px);
+                        if erase_strokes_along(&mut self.strokes, &cam, vp, last, px)
                             && !self.draw_gesture_active
                         {
                             self.draw_undo.push(before.expect("new eraser gesture has a snapshot"));
@@ -13727,6 +13801,7 @@ impl HookEchoApp {
                             self.draw_gesture_active = true;
                         }
                     } else {
+                        self.draw_erase_last = None;
                         let new_stroke = !self.draw_gesture_active;
                         if new_stroke {
                             self.draw_undo.push(self.strokes.clone());
@@ -24038,9 +24113,38 @@ mod tests {
         ];
         let before = strokes.clone();
         assert!(erase_strokes_at(&mut strokes, &cam, vp, middle));
-        assert_eq!(strokes.len(), 1);
-        assert_eq!(strokes[0], before[1]);
+        assert_eq!(strokes.len(), 3, "the touched line is split on both sides of the eraser");
+        assert_eq!(strokes[0].color, before[0].color);
+        assert_eq!(strokes[1].color, before[0].color);
+        assert_eq!(strokes[2], before[1]);
+        assert_eq!(strokes[0].points.first(), before[0].points.first());
+        assert_eq!(strokes[1].points.last(), before[0].points.last());
+        let radius = |point: [f64; 2]| {
+            let p = cam.world_to_screen(crate::render::mercator::lonlat_to_world(point[0], point[1]), vp);
+            ((p.0 - middle.0).powi(2) + (p.1 - middle.1).powi(2)).sqrt()
+        };
+        assert!((radius(*strokes[0].points.last().unwrap()) - 11.0).abs() < 0.2);
+        assert!((radius(strokes[1].points[0]) - 11.0).abs() < 0.2);
         assert!(!erase_strokes_at(&mut strokes, &cam, vp, middle));
+    }
+
+    #[test]
+    fn eraser_fast_drag_covers_the_path_between_samples() {
+        let cam = crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let vp = (800.0, 600.0);
+        let center = cam.world_to_screen(crate::render::mercator::lonlat_to_world(-97.0, 35.0), vp);
+        let mut strokes = vec![Stroke2d {
+            points: vec![[-97.1, 35.0], [-96.9, 35.0]],
+            color: DRAW_COLORS[0],
+        }];
+        assert!(erase_strokes_along(
+            &mut strokes,
+            &cam,
+            vp,
+            Some((center.0, center.1 - 40.0)),
+            (center.0, center.1 + 40.0),
+        ));
+        assert_eq!(strokes.len(), 2);
     }
 
     #[test]

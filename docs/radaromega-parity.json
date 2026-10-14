@@ -1518,9 +1518,9 @@
       "status": "partial",
       "observed_scope": "Pencil, eraser, undo, redo and clear controls.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Workspace drawing chip offers pencil with four colors, stroke eraser, 16-step drawing undo/redo, clear and GeoJSON export. Freehand annotations stay anchored to geographic coordinates during pan and zoom. Eraser drag removes whole touched strokes within an 11-pixel screen radius; each draw or erase drag is one history step.",
+      "hookecho_implementation": "Workspace drawing chip offers pencil with four colors, a segment eraser, 16-step drawing undo/redo, clear and GeoJSON export. Freehand annotations stay anchored to geographic coordinates during pan and zoom. An eraser drag cuts only the portion inside an 11-pixel screen-radius brush, splitting surviving geographic strokes at the brush boundary; each draw or erase drag is one history step.",
       "remaining_gaps": [
-        "RadarOmega eraser granularity, history depth and export format have not been verified as equivalent. HookEcho eraser removes whole strokes, not portions of strokes."
+        "RadarOmega's canvas eraser brush size, history depth and export format have not been verified as equivalent. HookEcho's geographic vector annotations and four-color palette differ from the reference canvas drawing board's color and size controls."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/clearview.rs",
@@ -1532,7 +1532,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN04",
       "acceptance": "Create annotations, undo/redo/clear and exit without unintended map actions.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-14: targeted native unit tests verify partial-stroke clipping at an 11-pixel screen radius, preservation of an untouched stroke, and continuous erasure along a fast pointer movement. Integrated map interaction, reference brush sizing and drawing export equivalence remain unverified."
     },
     {
       "id": "AN05",
