@@ -181,13 +181,23 @@ impl HookEchoApp {
             let health = layer.and_then(|layer| if layer.is_pane_field() { Some(self.request_health(RequestLane::PaneField(i, layer))) } else { self.palette_health(PaletteAction::ToggleField(layer)) })
                 .map(|health| format!(" · {}", crate::ui::layers_panel::health_look(health.state()).0))
                 .unwrap_or_default();
-            let source = field.map(|frame| format!(
-                "{} · {} · valid {} · {}",
-                frame.descriptor.short_name,
-                frame.stamp.source_identity,
-                frame.stamp.valid_time.format("%H:%M UTC"),
-                frame.stamp.quality.label(),
-            )).or_else(|| view.volume.as_ref().map(|volume| {
+            let source = field.map(|frame| {
+                let identity = if layer.is_some_and(crate::render::FieldLayer::is_l3_grid) {
+                    format!("NWS Level III · {site}")
+                } else {
+                    frame.stamp.source_identity.clone()
+                };
+                let quality = (frame.stamp.quality != wxdata::field::QualitySummary::Unknown)
+                    .then(|| format!(" · {}", frame.stamp.quality.label()))
+                    .unwrap_or_default();
+                format!(
+                    "{} · {} · valid {}{}",
+                    frame.descriptor.short_name,
+                    identity,
+                    frame.stamp.valid_time.format("%H:%M UTC"),
+                    quality,
+                )
+            }).or_else(|| view.volume.as_ref().map(|volume| {
                 let time = view.selected_cut_ms()
                     .and_then(chrono::DateTime::from_timestamp_millis)
                     .unwrap_or(volume.time);

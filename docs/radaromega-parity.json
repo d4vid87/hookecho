@@ -578,7 +578,7 @@
       "status": "partial",
       "observed_scope": "Digital Accumulation Array, one-hour and storm-total precipitation",
       "observation_type": "static-client",
-      "hookecho_implementation": "Existing national MRMS QPE remains available. Selected-site NEXRAD Level III product 170 (DAA, one-hour digital accumulation) and product 172 (DSA, digital storm total) are fetched from the public NWS feed, decoded with each product header's scale/offset and no-data flags, and projected to a 0.005-degree display grid. Product 169 (OHA, one-hour precipitation total) decodes its AF1F 16-level radial packet and header category thresholds at a coarser 0.01-degree display grid. All three are exposed as separate Radar site fields with millimeter legends; OHA values represent color-band lower bounds rather than exact measured totals. Level III requests, CPU fields, and GPU textures are keyed by pane and product, and a pane's old field is cleared when its selected station changes. The Layers panel gives the six site-scoped Level III grids a browsable Site radar products category.",
+      "hookecho_implementation": "Existing national MRMS QPE remains available. Selected-site NEXRAD Level III product 170 (DAA, one-hour digital accumulation) and product 172 (DSA, digital storm total) are fetched from the public NWS feed, decoded with each product header's scale/offset and no-data flags, and projected to a 0.005-degree display grid. Product 169 (OHA, one-hour precipitation total) decodes its AF1F 16-level radial packet and header category thresholds at a coarser 0.01-degree display grid. All three are exposed as separate Radar site fields with millimeter legends; OHA values represent color-band lower bounds rather than exact measured totals. Level III requests, CPU fields, and GPU textures are keyed by pane and product, and a pane's old field is cleared when its selected station changes. The Layers panel gives the six site-scoped Level III grids a browsable Site radar products category. Health separates two-minute polling from a 12-minute Level III observation freshness window; the inspector summarizes the station and product while retaining the exact public source URL in expanded provenance.",
       "remaining_gaps": [
         "The relationship of the reference client's OST label to NWS OHA has not been established; the three public products must not be presented as exact reference-client algorithm equivalents.",
         "The reference product-menu grouping, palettes, and accumulation algorithms are not verified equivalents; these are public NWS product renderings, not the reference client's internal implementation.",
@@ -588,6 +588,8 @@
         "ROADMAP.md",
         "crates/hookecho/src/render/mod.rs",
         "crates/hookecho/src/app/chrome/registry.rs",
+        "crates/hookecho/src/app/chrome/workbench.rs",
+        "crates/hookecho/src/app/request_book.rs",
         "crates/hookecho/src/ui/layers_panel.rs",
         "crates/wxdata/src/level3.rs",
         "crates/nexrad-level3/src/lib.rs"
@@ -595,7 +597,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD05",
       "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
-      "runtime_verification": "Public KTLX product 169/170/172 captures decoded in golden tests; geographic field projection tested for each product. Per-pane request invalidation and GPU-key tests passed within 648 native library tests (28 existing ignored). Optimized main web bundle passed at 4,533,046 gzip bytes against the 4,540,000-byte cap, and Lite at 74,707 bytes against its 80,000-byte cap. A local browser check enabled DAA in separate KTLX and KFWS Analysis panes: each showed its own rain legend, and the inspector reported distinct site-specific public Level III source files and valid times. The final optimized bundle displayed a Site radar products category with DAA, DSA, OHA, VIL, echo tops, and hydrometeor class. This verifies independent routing, visible product activation, and product discoverability, not numerical or visual equivalence to the reference client."
+      "runtime_verification": "Public KTLX product 169/170/172 captures decoded in golden tests; geographic field projection tested for each product. Per-pane request invalidation, GPU-key, and volume-scan freshness tests passed within 649 native library tests (28 existing ignored). Optimized main web bundle passed at 4,532,977 gzip bytes against the 4,540,000-byte cap, and Lite at 74,707 bytes against its 80,000-byte cap. A local browser check enabled DAA in separate KTLX and KFWS Analysis panes: each showed its own rain legend, and the inspector reported distinct site-specific public Level III source files and valid times. The optimized bundle displayed a Site radar products category with DAA, DSA, OHA, VIL, echo tops, and hydrometeor class. A later browser build displayed concise DAA · NWS Level III · KTLX/KFWS headings with valid times and Fresh states in both panes instead of raw URLs and Unknown · Stale. This verifies independent routing, visible product activation, and product discoverability, not numerical or visual equivalence to the reference client."
     },
     {
       "id": "RAD06",

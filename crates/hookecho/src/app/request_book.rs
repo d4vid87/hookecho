@@ -157,6 +157,7 @@ impl RequestBook {
                 data_age: None,
                 last_failure: None,
                 error: None,
+                freshness_window: lane.freshness_window(),
                 cadence: lane.cadence(),
                 successes: 0,
                 failures: 0,
@@ -175,6 +176,7 @@ impl RequestBook {
                 .as_ref()
                 .map(|(t, _)| now.saturating_duration_since(*t)),
             error: s.last_failure.as_ref().map(|(_, e)| e.clone()),
+            freshness_window: lane.freshness_window(),
             cadence: s.cadence,
             successes: s.successes,
             failures: s.failures,

@@ -557,6 +557,16 @@ impl RequestLane {
         };
         std::time::Duration::from_secs(secs)
     }
+
+    fn freshness_window(&self) -> std::time::Duration {
+        // NEXRAD Level III products are published per volume scan. Continue polling every two
+        // minutes, but allow two typical precipitation-mode scans before flagging stale data.
+        if matches!(self, Self::PaneField(_, layer) if layer.is_l3_grid()) {
+            std::time::Duration::from_secs(12 * 60)
+        } else {
+            self.cadence()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -579,6 +589,9 @@ pub(crate) struct SourceHealth {
     pub data_age: Option<std::time::Duration>,
     pub last_failure: Option<std::time::Duration>,
     pub error: Option<String>,
+    /// How old the source observation may be before the UI calls it stale. This can exceed the
+    /// request cadence when a provider publishes only once per radar volume scan.
+    pub freshness_window: std::time::Duration,
     pub cadence: std::time::Duration,
     pub successes: u64,
     pub failures: u64,
@@ -596,7 +609,7 @@ impl SourceHealth {
         } else if self
             .data_age
             .or(self.last_success)
-            .is_some_and(|age| age <= self.cadence)
+            .is_some_and(|age| age <= self.freshness_window)
         {
             HealthState::Fresh
         } else if self.data_age.is_some() || self.last_success.is_some() {
@@ -24652,6 +24665,7 @@ mod request_book_tests {
             data_age: None,
             last_failure: failure.map(std::time::Duration::from_secs),
             error,
+            freshness_window: cadence,
             cadence,
             successes: u64::from(success.is_some()),
             failures: u64::from(failure.is_some()),
@@ -24670,5 +24684,18 @@ mod request_book_tests {
             health(false, None, None, None).state(),
             HealthState::Waiting
         );
+    }
+
+    #[test]
+    fn level3_health_allows_volume_scan_latency_without_slower_polling() {
+        let lane = RequestLane::PaneField(1, FieldLayer::Daa);
+        assert_eq!(lane.cadence().as_secs(), 120);
+        assert_eq!(lane.freshness_window().as_secs(), 720);
+        let mut health = RequestBook::default().health(&lane);
+        health.last_success = Some(std::time::Duration::from_secs(1));
+        health.data_age = Some(std::time::Duration::from_secs(5 * 60));
+        assert_eq!(health.state(), HealthState::Fresh);
+        health.data_age = Some(std::time::Duration::from_secs(13 * 60));
+        assert_eq!(health.state(), HealthState::Stale);
     }
 }
