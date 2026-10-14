@@ -123,6 +123,9 @@ impl HookEchoApp {
             let view = &mut self.views[idx];
             view.head_request.cancel();
             view.frame_request.cancel();
+            view.list_request.cancel();
+            view.timeline.listing = false;
+            view.last_list_failure = None;
             view.loading = false;
             view.last_poll = None;
             self.trigger_reload(ctx);
