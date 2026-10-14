@@ -108,6 +108,16 @@ pub fn stop_speech() {
 #[wasm_bindgen::prelude::wasm_bindgen(inline_js = "export function clearHookEchoMapCache(){return caches.delete('tiles-v2')}")]
 extern "C" { fn clearHookEchoMapCache(); }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "export function showHookEchoHls(title,url){return globalThis.__hookechoPlayHls?.(title,url) ?? false}")]
+extern "C" { fn showHookEchoHls(title: &str, url: &str) -> bool; }
+
+/// Open the on-demand browser HLS player supplied by the web shell.
+#[cfg(target_arch = "wasm32")]
+pub fn open_hls_player(title: &str, url: &str) -> Result<(), String> {
+    showHookEchoHls(title, url).then_some(()).ok_or_else(|| "browser video player unavailable".to_string())
+}
+
 /// Clear only basemap data; radar volumes and settings are deliberately separate.
 pub fn clear_map_cache() {
     #[cfg(target_arch = "wasm32")]

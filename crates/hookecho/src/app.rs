@@ -6673,6 +6673,7 @@ impl HookEchoApp {
             color: [105, 203, 255, 255],
             image: None,
             link: None,
+            stream: None,
         });
     }
 
@@ -6681,6 +6682,13 @@ impl HookEchoApp {
     // ponytail: no yt-dlp sidecar — the browser already plays those better than we would.
     fn watch_stream(&mut self, title: String, url: String) {
         if url.is_empty() {
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if url.split(['?', '#']).next().is_some_and(|path| path.to_ascii_lowercase().ends_with(".m3u8")) {
+            if let Err(e) = crate::platform::open_hls_player(&title, &url) {
+                log::warn!("open browser HLS player failed: {e}");
+            }
             return;
         }
         if ui::video_window::playable_in_app(&url) {
@@ -11064,6 +11072,7 @@ impl HookEchoApp {
                 .link
                 .clone()
                 .map(|u| ("View on Windy.com".to_string(), u)),
+            stream: None,
         });
         let (Some(key), Some(cam)) = (key, cam) else {
             return;
@@ -11118,10 +11127,9 @@ impl HookEchoApp {
             body: format!("{title}{place}\n{capability}\nCapture time is not supplied by the camera catalog.\nPublic fixed highway camera; not a chaser feed."),
             color: [91, 220, 206, 255],
             image: image.clone(),
-            link: cam.stream_url.as_ref()
-                .map(|url| ("Open stream URL in external player".to_string(), url.clone()))
-                .or_else(|| cam.image_url.as_ref()
-                    .map(|url| ("Open image from Caltrans".to_string(), url.clone()))),
+            link: cam.image_url.as_ref()
+                .map(|url| ("Open image from Caltrans".to_string(), url.clone())),
+            stream: cam.stream_url.clone(),
         });
         let (Some(key), Some(url)) = (image, cam.image_url.clone()) else { return; };
         if self.pf_icon_tex.contains_key(&key) { return; }
@@ -11247,6 +11255,7 @@ impl HookEchoApp {
             color,
             image: key.clone(),
             link: None,
+            stream: None,
         });
         let (Some(key), Some(url)) = (key, p.image.clone()) else {
             return;
@@ -14239,6 +14248,7 @@ impl HookEchoApp {
                                 color: [c[0], c[1], c[2], 255],
                                 image: None,
                                 link: None,
+                                stream: None,
                             });
                         } else if let Some(f) = fire {
                             self.cell_popup = None;
@@ -14257,6 +14267,7 @@ impl HookEchoApp {
                                 color: [235, 110, 40, 255],
                                 image: None,
                                 link: None,
+                                stream: None,
                             });
                         } else if let Some(r) = report {
                             self.cell_popup = None;
@@ -14270,6 +14281,7 @@ impl HookEchoApp {
                                 color: report_color(r.kind),
                                 image: None,
                                 link: None,
+                                stream: None,
                             });
                         } else {
                             let cell_hit = self.filters.show_cells
@@ -14303,6 +14315,7 @@ impl HookEchoApp {
                                         color: cell_color(c.kind),
                                         image: None,
                                         link: None,
+                                        stream: None,
                                     });
                                 }
                                 None => {
@@ -14354,6 +14367,7 @@ impl HookEchoApp {
                                             color: f.stroke,
                                             image: None,
                                             link: None,
+                                            stream: None,
                                         });
                                     }
                                 }
@@ -22434,7 +22448,12 @@ impl eframe::App for HookEchoApp {
                 .as_ref()
                 .and_then(|k| self.pf_icon_tex.get(k))
                 .and_then(|t| t.as_ref());
-            if !ui::detail_window::show(ctx, detail, tex, &mut self.popovers) {
+            let mut play_stream = None;
+            let open = ui::detail_window::show(ctx, detail, tex, &mut self.popovers, &mut play_stream);
+            if let Some(url) = play_stream {
+                self.watch_stream(detail.title.clone(), url);
+            }
+            if !open {
                 self.detail = None;
             }
         }
@@ -22609,7 +22628,7 @@ impl eframe::App for HookEchoApp {
                 } else {
                     self.warning_popup = None;
                     self.detail = Some(Detail { title:f.title.clone(), body:f.detail.clone(),
-                        color:f.stroke, image:None, link:None });
+                        color:f.stroke, image:None, link:None, stream:None });
                 }
             }
         }

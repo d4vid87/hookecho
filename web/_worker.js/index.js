@@ -24,7 +24,8 @@ export default {
       const response = await env.ASSETS.fetch(request);
       // Never cache Pages' HTML fallback (or a missing file) as immutable executable code.
       const type = response.headers.get("content-type") || "";
-      if (response.status >= 400 || (response.status === 200 && url.pathname.startsWith("/dist/") && type.includes("text/html"))) {
+      const executable = url.pathname.startsWith("/dist/") || url.pathname.startsWith("/vendor/") || url.pathname === "/video-player.js";
+      if (response.status >= 400 || (response.status === 200 && executable && type.includes("text/html"))) {
         return new Response("Asset not found", { status: 404, headers: { "cache-control": "no-store" } });
       }
       return response;
