@@ -1059,6 +1059,22 @@ impl HookEchoApp {
             Some(self.filters.outlook_day != 0),
         );
         push(
+            "SPC fire-weather outlook",
+            "Severe",
+            "Public NOAA fire-weather conditions and dry-thunderstorm outlooks",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.fire_weather_day != 0),
+        );
+        push(
+            "Climate outlook (CPC)",
+            "National",
+            "Public NOAA CPC temperature and precipitation outlooks",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.cpc_period.is_some()),
+        );
+        push(
             "Map settings",
             "Reference",
             "Active pane palettes, display smoothing, precision and globe projection",
