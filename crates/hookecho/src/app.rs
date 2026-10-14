@@ -293,6 +293,7 @@ enum OverlayMsg {
     StormReports(Option<i64>, Vec<wxdata::spc::StormReport>),
     /// Live Spotter Network positions (CONUS-wide; filtered to the active site at draw time).
     Spotters(Vec<wxdata::spotters::Spotter>),
+    RadarSiteStatus(wxdata::radar_status::Report),
     /// ProbSevere per-storm probability polygons.
     ProbSevere(Vec<GeoFeature>),
     /// HRRR wind components for the particle layer.
@@ -398,6 +399,7 @@ enum OverlaySource {
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
+    RadarSiteStatus,
     ProbSevere,
     /// WPC coded surface analysis (fronts + pressure centers).
     Fronts,
@@ -691,6 +693,7 @@ impl OverlaySource {
             Self::StormReports(Some(_)) => RequestLane::Feed("Archived storm reports"),
             Self::StormReports(None) => RequestLane::Feed("Storm reports"),
             Self::Spotters => RequestLane::Feed("Spotter Network"),
+            Self::RadarSiteStatus => RequestLane::Feed("NWS radar station status"),
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
             Self::GoesAbi(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
@@ -974,6 +977,9 @@ impl OverlaySource {
             OverlaySource::Fronts => OverlayMsg::Fronts(wxdata::fronts::fetch(http).await?),
             OverlaySource::Spotters => {
                 OverlayMsg::Spotters(wxdata::spotters::fetch_spotters(http).await?)
+            }
+            OverlaySource::RadarSiteStatus => {
+                OverlayMsg::RadarSiteStatus(wxdata::radar_status::fetch(http).await?)
             }
             OverlaySource::ProbSevere => {
                 OverlayMsg::ProbSevere(wxdata::probsevere::fetch_probsevere(http).await?)
@@ -3791,6 +3797,8 @@ pub struct HookEchoApp {
     mosaic_bounds: Option<(f64, f64, f64, f64)>,
     spotters: Vec<wxdata::spotters::Spotter>,
     spotters_last_fetch: Option<Instant>,
+    radar_site_status: Option<wxdata::radar_status::Report>,
+    radar_site_status_last_fetch: Option<Instant>,
     /// Sensor dashboard: open flag, latest fetch (Ok/Err), the site it's for, and a refresh clock.
     show_sensors: bool,
     sensor_data: Option<Result<wxdata::obs::StationObs, String>>,
@@ -4718,6 +4726,8 @@ impl HookEchoApp {
             mosaic_bounds: None,
             spotters: Vec::new(),
             spotters_last_fetch: None,
+            radar_site_status: None,
+            radar_site_status_last_fetch: None,
             show_sensors: false,
             sensor_data: None,
             sensor_history: Default::default(),
@@ -10359,6 +10369,7 @@ impl HookEchoApp {
                     self.tfr_pending = remaining;
                 }
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
+                OverlayMsg::RadarSiteStatus(report) => self.radar_site_status = Some(report),
                 OverlayMsg::Fronts(a) => self.fronts = Some(a),
                 OverlayMsg::FreezingLevels(h0, hm20) => {
                     if let Some(site) = self.views[self.active].site.clone() {
@@ -14857,6 +14868,24 @@ impl HookEchoApp {
                                 ui.separator();
                                 ui.label(egui::RichText::new(site.id).strong().size(17.0).color(egui::Color32::WHITE));
                                 ui.label(format!("{}, {}", site.city, site.state));
+                                let availability = self.radar_site_status.as_ref().map_or(
+                                    wxdata::radar_status::Availability::Unknown,
+                                    |report| report.availability(site.id, Utc::now()),
+                                );
+                                let status = match availability {
+                                    wxdata::radar_status::Availability::Recent => "NOAA: recent Level II receipt".to_owned(),
+                                    wxdata::radar_status::Availability::Delayed => "NOAA: Level II receipt delayed over 10 min".to_owned(),
+                                    wxdata::radar_status::Availability::Stale => "NOAA: no Level II receipt for over 25 min".to_owned(),
+                                    wxdata::radar_status::Availability::NotOperating => format!(
+                                        "NOAA: RDA {}",
+                                        self.radar_site_status.as_ref()
+                                            .and_then(|report| report.stations.get(site.id))
+                                            .and_then(|station| station.rda_state.as_deref())
+                                            .unwrap_or("not operating"),
+                                    ),
+                                    wxdata::radar_status::Availability::Unknown => "NOAA status unavailable".to_owned(),
+                                };
+                                ui.label(egui::RichText::new(status).small());
                                 ui.label(egui::RichText::new("Visual range guide").small().color(egui::Color32::from_rgb(149, 188, 211)));
                             }
                     });
@@ -16918,6 +16947,7 @@ impl HookEchoApp {
 
         // Radar lens: spaced bright pins keep visible networks legible and clickable.
         if self.show_radar_sites {
+            let status_now = Utc::now();
             let current = self.views[idx].site.as_deref();
             let hovered = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
@@ -16955,16 +16985,22 @@ impl HookEchoApp {
                 // city-scale zoom, do not leave their opt-in map layer as almost invisible dots.
                 let tdwr = wxdata::sites::network(s.id) == wxdata::sites::Network::Tdwr;
                 let prominent = bright || (tdwr && cam.zoom >= 8.0);
-                let color = if tdwr && !selected {
-                    egui::Color32::from_rgb(20, 149, 178)
-                } else {
-                    egui::Color32::from_rgb(31, 108, 212)
+                let availability = self.radar_site_status.as_ref().map_or(
+                    wxdata::radar_status::Availability::Unknown,
+                    |report| report.availability(s.id, status_now),
+                );
+                let color = match availability {
+                    wxdata::radar_status::Availability::Delayed => egui::Color32::from_rgb(226, 170, 42),
+                    wxdata::radar_status::Availability::Stale => egui::Color32::from_rgb(218, 99, 49),
+                    wxdata::radar_status::Availability::NotOperating => egui::Color32::from_rgb(211, 65, 75),
+                    _ if tdwr && !selected => egui::Color32::from_rgb(20, 149, 178),
+                    _ => egui::Color32::from_rgb(31, 108, 212),
                 };
                 painter.circle_filled(p, if prominent { 5.4 } else { 2.4 },
                     if prominent { color }
-                    else { egui::Color32::from_rgba_unmultiplied(139, 184, 213, 110) });
+                    else { color.gamma_multiply(0.55) });
                 if prominent {
-                    painter.circle_stroke(p, 5.4, egui::Stroke::new(1.4, egui::Color32::from_rgb(194, 231, 255)));
+                    painter.circle_stroke(p, 5.4, egui::Stroke::new(1.4, color.gamma_multiply(0.85)));
                     painter.circle_filled(p, 1.5, egui::Color32::WHITE);
                 }
                 if focus == Some(s.id) {
@@ -21747,6 +21783,14 @@ impl eframe::App for HookEchoApp {
         {
             self.spotters_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Spotters);
+        }
+        // NOAA publishes RDA state and last Level II receipt for the national network.
+        // A single cache-friendly request keeps map pins honest without polling per station.
+        if self.show_radar_sites
+            && self.radar_site_status_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120)
+        {
+            self.radar_site_status_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::RadarSiteStatus);
         }
         // ProbSevere refresh (~2-min product cadence).
         if self.show_probsevere

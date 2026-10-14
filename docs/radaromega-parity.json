@@ -398,9 +398,9 @@
       "status": "partial",
       "observed_scope": "Map shows labeled radar towers; Show TDWR Towers toggle is visible.",
       "observation_type": "runtime-screenshot",
-      "hookecho_implementation": "Existing radar-site markers and range rings are exposed by Display Settings. Persisted show_tdwr_sites (default true) independently filters TDWR marker drawing, hover and click hit-testing by registry Network::Tdwr; selected station data and full site picker remain available. At city zoom (8+), unselected TDWRs use an outlined cyan pin instead of a faint small dot, making the optional layer legible on the dark map.",
+      "hookecho_implementation": "Existing radar-site markers and range rings are exposed by Display Settings. Persisted show_tdwr_sites (default true) independently filters TDWR marker drawing, hover and click hit-testing by registry Network::Tdwr; selected station data and full site picker remain available. At city zoom (8+), unselected TDWRs use an outlined cyan pin instead of a faint small dot. A public NWS radar-stations feed now colors delayed, stale, and non-operating station pins and labels the RDA state/Level II receipt category in the radar lens. A missing station or report older than five minutes reverts to unknown rather than claiming an outage.",
       "remaining_gaps": [
-        "Tower status-color equivalence and every international tower catalog remain incomplete."
+        "NOAA receipt/status categories are independent public-data signals, not proven equivalent to RadarOmega's tower colors or to the freshness of a scan rendered in HookEcho. Every international tower catalog remains incomplete."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/radar_identity.rs",
@@ -410,6 +410,7 @@
         "crates/hookecho/src/app.rs",
         "crates/hookecho/src/ui/settings_window.rs",
         "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/wxdata/src/radar_status.rs",
         "crates/wxdata/src/lib.rs"
       ],
       "observation_evidence_ids": [
@@ -417,7 +418,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP05",
       "acceptance": "Tower filtering and selected-site status are distinct; site can be selected from map.",
-      "runtime_verification": "Two focused settings/filter tests passed: legacy default compatibility and saved false roundtrip; registry-based TDWR-only exclusion retains the full catalog. On the optimized browser build at TDFW (33.065, -96.918), clicking the visible TDWR marker selected TDFW. Turning TDWR stations off removed its marker while retaining the selected TDFW in the top control. With KFWS selected at the same map center, clicking the hidden TDFW location left KFWS selected. The site picker still listed TDFW and selecting that row activated it while the marker toggle remained off. A subsequent optimized build showed prominent cyan TDFW and TDAL pins at zoom 11 with the toggle on and neither pin with it off; screenshots: outputs/ro-parity/map05/tdwr-selected-on.png, tdwr-selected-hidden.png, tdwr-picker-hidden.png, tdwr-picked-while-hidden.png, tdwr-prominent-on.png and tdwr-prominent-off.png. Complete network/status equivalence remains unverified."
+      "runtime_verification": "Two focused settings/filter tests passed: legacy default compatibility and saved false roundtrip; registry-based TDWR-only exclusion retains the full catalog. On the optimized browser build at TDFW (33.065, -96.918), clicking the visible TDWR marker selected TDFW. Turning TDWR stations off removed its marker while retaining the selected TDFW in the top control. With KFWS selected at the same map center, clicking the hidden TDFW location left KFWS selected. The site picker still listed TDFW and selecting that row activated it while the marker toggle remained off. A subsequent optimized build showed prominent cyan TDFW and TDAL pins at zoom 11 with the toggle on and neither pin with it off; screenshots: outputs/ro-parity/map05/tdwr-selected-on.png, tdwr-selected-hidden.png, tdwr-picker-hidden.png, tdwr-picked-while-hidden.png, tdwr-prominent-on.png and tdwr-prominent-off.png. The NOAA parser test covers stale RDA timestamps and all native app tests passed; the optimized web build stayed within budget. The final local browser showed KMRX's recent Level II receipt without claiming the RDA was operating, while its separate Level III view could not load. Complete network/status-color equivalence remains unverified."
     },
     {
       "id": "MAP06",

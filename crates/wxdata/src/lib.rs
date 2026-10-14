@@ -54,6 +54,7 @@ pub mod placefile;
 pub mod product_dsl;
 pub mod probsevere;
 pub mod raob;
+pub mod radar_status;
 pub mod recon;
 pub mod refs;
 pub mod rtma;
