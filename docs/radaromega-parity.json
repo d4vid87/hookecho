@@ -12,11 +12,11 @@
     "not-verified": "Insufficient evidence to map the observed feature to an actual working equivalent."
   },
   "status_counts": {
-    "partial": 29,
+    "partial": 30,
     "implemented-related": 26,
     "not-verified": 2,
     "external-service": 3,
-    "missing": 1
+    "missing": 0
   },
   "research_artifacts": {
     "paths_relative_to": "original REA research workspace; artifacts are not bundled into this repository",
@@ -1416,15 +1416,17 @@
       "category": "overlays",
       "title": "NEXRAD hail history",
       "priority": 2,
-      "status": "missing",
+      "status": "partial",
       "observed_scope": "Nexrad History settings offer 1/2/3-inch-plus hail categories and time intervals, with magnitude/VIL details.",
       "observation_type": "runtime-menu+static-client",
-      "hookecho_implementation": "HookEcho has hail attributes and storm-track tools.",
+      "hookecho_implementation": "Independent public MRMS MESH maximum-estimated-hail-size swaths support 30-minute, 1-, 2-, 6- and 24-hour windows. Layer options filter display to all, 1+, 2+ or 3+ inch estimated size without refetching or altering native values; point interrogation shows the native magnitude, accumulation window and valid time. Existing hail attributes and storm-track tools remain separate.",
       "remaining_gaps": [
-        "No demonstrated equivalent of the dedicated NEXRAD hail-history layer with 1/2/3-inch thresholds, interval selection and historical magnitude/VIL detail."
+        "MRMS rolling-max swaths are a public-data alternative to the observed NEXRAD history layer, not its tracks or per-cell event archive. The grid does not identify the exact time of the maximum at a point, and historical VIL from the same hail event is not joined. UI and live-data visual acceptance remain pending."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/wxdata/src/mrms.rs",
         "crates/hookecho/src/ui/cell_window.rs",
         "crates/hookecho/src/ui/cells_window.rs",
         "crates/wxdata/src/level3.rs"
@@ -1434,7 +1436,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV16",
       "acceptance": "Filter historical hail tracks and inspect magnitude, VIL and time.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "Focused native-value threshold test passed for all/1+/2+/3+ inch display classes; 642 native library tests, strict Clippy and wasm library check passed. A live hail-swath frame and the controls have not yet been accepted in the browser."
     },
     {
       "id": "AN01",

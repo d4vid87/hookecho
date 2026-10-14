@@ -72,6 +72,7 @@ pub(crate) fn show(
     trail_minutes: &mut u16,
     trail_threshold: &mut f32,
     hail_minutes: &mut u16,
+    hail_threshold_inches: &mut u8,
     hrrr_fcst_hour: &mut u8,
     refs_fcst_hour: &mut u8,
     refs_dbz_threshold: &mut u8,
@@ -867,6 +868,7 @@ pub(crate) fn show(
 
     if section == "Hail swaths" && on.contains(&FL::HailSwath) {
         header(ui, "Hail swaths");
+        ui.weak("Public MRMS maximum estimated hail size (MESH), not individual hail reports.");
         ui.horizontal(|ui| {
             ui.label("Window:");
             let mut dur = false;
@@ -882,6 +884,22 @@ pub(crate) fn show(
             if dur {
                 if let Some(s) = fields.get_mut(&FL::HailSwath) {
                     s.last_fetch = None;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Size:");
+            let mut changed = false;
+            for (inches, label) in [(0, "All"), (1, "1+ in"), (2, "2+ in"), (3, "3+ in")] {
+                changed |= ui.selectable_value(hail_threshold_inches, inches, label).changed();
+            }
+            if changed {
+                if let Some(state) = fields.get_mut(&FL::HailSwath) {
+                    if let Some(frame) = state.frame.as_ref() {
+                        state.pending = Some(crate::app::field_upload_indexed_filtered(
+                            FL::HailSwath, frame.field(), *hail_threshold_inches,
+                        ));
+                    }
                 }
             }
         });

@@ -167,7 +167,7 @@ static MESH: FieldRamp = ramp!(
 );
 
 static HAIL_SWATH: FieldRamp = ramp!(
-    "Hail swaths (24 h)",
+    "Hail swaths",
     "mm",
     19.0,
     75.0,

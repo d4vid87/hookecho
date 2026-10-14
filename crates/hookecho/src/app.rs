@@ -3396,6 +3396,8 @@ pub struct HookEchoApp {
     reflectivity_trail_threshold: f32,
     /// Selected hail-swath accumulation window (minutes); see [`wxdata::mrms::hail_swath`].
     hail_minutes: u16,
+    /// Minimum estimated MESH hail size to display, in whole inches; zero shows the full swath.
+    hail_threshold_inches: u8,
     /// Environment suite (HRRR CAPE/SRH): CAPE uses the mixed-layer (90-0 mb) parcel when true,
     /// else surface-based; SRH depth in km (1 = 0-1 km, 3 = 0-3 km). Changing either clears the
     /// layer's last_fetch so the next frame refetches.
@@ -4401,6 +4403,7 @@ impl HookEchoApp {
             reflectivity_trail_minutes: 30,
             reflectivity_trail_threshold: 35.0,
             hail_minutes: 1440,
+            hail_threshold_inches: 0,
             env_cape_ml: false,
             env_srh_km: 3,
             l3grid_site: None,
@@ -13116,13 +13119,27 @@ impl HookEchoApp {
                     format!("\nContributor {site} · confidence {:.0}%", confidence * 100.0)
                 })
                 .unwrap_or_default();
+            let hail_detail = if layer == crate::render::FieldLayer::HailSwath {
+                format!(
+                    "\nMESH maximum {:.2} in ({value:.1} mm) over {} min · filter {}",
+                    value / 25.4,
+                    self.hail_minutes,
+                    if self.hail_threshold_inches == 0 {
+                        "All".to_owned()
+                    } else {
+                        format!("{}+ in", self.hail_threshold_inches)
+                    }
+                )
+            } else {
+                String::new()
+            };
             format!(
                 "{}\n{:.1} {} · valid {}{coverage_warning}",
                 frame.descriptor.short_name,
                 display.value,
                 display.units,
                 sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
-            ) + &provenance + &profile
+            ) + &hail_detail + &provenance + &profile
         })
     }
 
@@ -19937,6 +19954,16 @@ pub(crate) fn field_upload_indexed(
     layer: crate::render::FieldLayer,
     f: &wxdata::mrms::MrmsField,
 ) -> crate::render::MrmsUpload {
+    field_upload_indexed_filtered(layer, f, 0)
+}
+
+/// Apply an optional MESH size filter to the display texture only. The retained field keeps
+/// every native value for interrogation and a new threshold can reuse it without a network fetch.
+pub(crate) fn field_upload_indexed_filtered(
+    layer: crate::render::FieldLayer,
+    f: &wxdata::mrms::MrmsField,
+    hail_threshold_inches: u8,
+) -> crate::render::MrmsUpload {
     use crate::render::field_ramps::{ramp_for, FieldScale};
     use crate::render::FieldLayer as FL;
     // Lightning keeps its own mapping (density counts, not a physical scale).
@@ -19954,7 +19981,9 @@ pub(crate) fn field_upload_indexed(
             categorical_lut(&slots, r.alpha)
         }
     };
-    field_index_upload(f, |v| r.index(v), lut)
+    let threshold_mm = (layer == FL::HailSwath && hail_threshold_inches > 0)
+        .then_some(hail_threshold_inches.min(3) as f32 * 25.4);
+    field_index_upload(f, |v| if threshold_mm.is_some_and(|minimum| v < minimum) { 0 } else { r.index(v) }, lut)
 }
 
 impl HookEchoApp {
@@ -19973,7 +20002,7 @@ impl HookEchoApp {
         {
             mrms_upload(f, self.palettes.table(Moment::Reflectivity))
         } else {
-            field_upload_indexed(layer, f)
+            field_upload_indexed_filtered(layer, f, self.hail_threshold_inches)
         }
     }
 }
@@ -23089,6 +23118,37 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hail_swath_size_filters_use_native_mesh_millimetres() {
+        let field = wxdata::mrms::MrmsField {
+            values: vec![20.0, 25.4, 50.7, 50.8, 76.19, 76.2],
+            nx: 6,
+            ny: 1,
+            lon_west: -100.0,
+            lon_east: -99.0,
+            lat_north: 40.0,
+            lat_south: 39.0,
+            time: chrono::Utc::now(),
+        };
+        use crate::render::FieldLayer::HailSwath;
+        let all = super::field_upload_indexed_filtered(HailSwath, &field, 0);
+        assert!(all.data.iter().all(|&index| index >= 2));
+        let one = super::field_upload_indexed_filtered(HailSwath, &field, 1);
+        assert_eq!(one.data[0], 0);
+        assert!(one.data[1] >= 2);
+        let two = super::field_upload_indexed_filtered(HailSwath, &field, 2);
+        assert_eq!(&two.data[..3], &[0, 0, 0]);
+        assert!(two.data[3] >= 2);
+        let three = super::field_upload_indexed_filtered(HailSwath, &field, 3);
+        assert_eq!(&three.data[..5], &[0, 0, 0, 0, 0]);
+        assert!(three.data[5] >= 2);
+        assert_eq!(field.values[0], 20.0, "display filtering must not rewrite native values");
+        let shear = wxdata::mrms::MrmsField { values: vec![-20.0], nx: 1, ..field };
+        let unfiltered = super::field_upload_indexed(crate::render::FieldLayer::AzShear, &shear);
+        let with_hail_choice = super::field_upload_indexed_filtered(crate::render::FieldLayer::AzShear, &shear, 3);
+        assert_eq!(with_hail_choice.data, unfiltered.data, "hail choice cannot hide negative shear");
+    }
+
     #[test]
     fn scan_chime_sounds_once_per_new_volume_and_resets_on_station_change() {
         let mut last = None;
