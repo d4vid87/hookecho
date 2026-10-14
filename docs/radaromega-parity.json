@@ -648,11 +648,11 @@
       "title": "Radar range and ring",
       "priority": 1,
       "status": "partial",
-      "observed_scope": "Full Coverage Radar and Show Range Ring toggles.",
+      "observed_scope": "Radar display settings expose Full Coverage Radar and Show Range Ring. The retained client labels Full Coverage as a 50% extension for supported towers, maps the switch to NORMAL/FULL, and selects sweep.radius versus sweep.radius_full (when supplied). The renderer recomputes radius_full from gate depth, gate spacing and first-gate distance. Real-time range rings are a separate toggle from the static map ring.",
       "observation_type": "static-client",
       "hookecho_implementation": "Range rings and scan geometry are available.",
       "remaining_gaps": [
-        "The competitor full-coverage extension toggle and all site-specific extent rules have not been mapped."
+        "HookEcho currently renders its full decoded sweep and has no NORMAL/FULL switch. The retained client does not reveal which server sweeps supply radius_full or the NORMAL radius values for each station/product; inventing a universal 2/3 crop would conceal legitimate velocity or short-range TDWR gates. Site/product-specific extent rules and live ring behavior still need runtime capture."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/radar_identity.rs",

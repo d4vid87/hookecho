@@ -2194,6 +2194,9 @@ fn field_time_tolerance(layer: crate::render::FieldLayer) -> chrono::Duration {
     match layer {
         // NOHRSC analyses are issued at 00/06/12/18Z; allow one cadence plus posting delay.
         crate::render::FieldLayer::SnowAnalysis => chrono::Duration::hours(7),
+        // A rolling maximum remains useful across a short MRMS posting delay. Its source time
+        // must still be shown, and a genuinely stale frame will be hidden after half an hour.
+        crate::render::FieldLayer::HailSwath => chrono::Duration::minutes(30),
         _ => chrono::Duration::seconds((field_refresh_secs(layer) * 2) as i64),
     }
 }
@@ -17307,10 +17310,9 @@ impl HookEchoApp {
         } else {
             self.views[pane].displayed_time().or(self.views[pane].timeline.selected_time())
         };
-        // A live MRMS mosaic is independent of the site's last completed scan. That scan can
-        // lag by ten minutes even while the national field is fresh; archive scrubs still use
-        // their selected instant.
-        let analysis_time = if layer == crate::render::FieldLayer::Mrms {
+        // Live MRMS fields are independent of the site's last completed scan. That scan can
+        // lag while the national field is fresh; archive scrubs still use their selected instant.
+        let analysis_time = if matches!(layer, crate::render::FieldLayer::Mrms | crate::render::FieldLayer::HailSwath) {
             mrms_reference_time(self.views[pane].timeline.following, selected_time, Utc::now())?
         } else {
             selected_time?
@@ -23325,6 +23327,19 @@ mod tests {
         let archive = super::mrms_reference_time(false, Some(old_scan), now).unwrap();
         assert!(align(&[mosaic], archive, TimePolicy::NearestPast, tolerance).is_none());
         assert_eq!(super::mrms_reference_time(true, None, now), Some(now));
+    }
+
+    #[test]
+    fn live_hail_swath_allows_short_posting_delay_but_not_stale_data() {
+        use wxdata::timecoord::{align, TimePolicy, TimedFrame};
+        let now = chrono::Utc::now();
+        let tolerance = super::field_time_tolerance(crate::render::FieldLayer::HailSwath);
+        assert_eq!(tolerance, chrono::Duration::minutes(30));
+        let live = super::mrms_reference_time(true, Some(now - chrono::Duration::hours(2)), now).unwrap();
+        let recent = TimedFrame { valid: now - chrono::Duration::minutes(17), value: () };
+        let stale = TimedFrame { valid: now - chrono::Duration::minutes(31), value: () };
+        assert!(align(&[recent], live, TimePolicy::NearestPast, tolerance).is_some());
+        assert!(align(&[stale], live, TimePolicy::NearestPast, tolerance).is_none());
     }
 
     #[test]
