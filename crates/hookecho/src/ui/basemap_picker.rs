@@ -22,6 +22,10 @@ const CARD_H: f32 = 72.0;
 /// Paint the swatch a vector style gets instead of a fetched tile: its background with a band of
 /// its own road and water colors, so the cards differ the way the maps do.
 fn swatch(painter: &egui::Painter, rect: egui::Rect, style: BasemapStyle) {
+    if style == BasemapStyle::BlankWhite {
+        painter.rect_filled(rect, 4.0, egui::Color32::WHITE);
+        return;
+    }
     let Some(pal) = style.vector_palette() else {
         painter.rect_filled(rect, 4.0, egui::Color32::from_gray(40));
         return;

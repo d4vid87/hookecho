@@ -14591,10 +14591,13 @@ impl HookEchoApp {
             } else { format!("{} · frame unavailable", pane_style.label()) };
             Some(status)
         } else { None };
-        // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
-        // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
-        // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
-        let (visible_vector, vlabels, visible_vector_tiles) = {
+        // Raster maps still use vector-tile city/town labels where baked-in labels are faint.
+        // Blank White deliberately skips both the requests and the geographic labels.
+        let (visible_vector, vlabels, visible_vector_tiles) = if pane_style == BasemapStyle::BlankWhite {
+            self.vlabel_cache[idx] = None;
+            let labels: std::sync::Arc<[crate::vector_tiles::PlaceLabel]> = Vec::new().into();
+            (Vec::new(), labels, Vec::new())
+        } else {
             let vis = self.pane_vtiles[idx].request_view(&cam, vp, self.gesture_live, if self.adaptive.reduced && self.settings.map_quality == crate::settings::MapQuality::Auto { crate::settings::MapQuality::Performance } else { self.settings.map_quality });
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             // Deep-copying every visible place name every frame (for every pane) showed up at the
@@ -14730,8 +14733,16 @@ impl HookEchoApp {
         let cam = self.views[idx].camera;
         let map_hover = response.hover_pos().filter(|pos| cam.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some());
         let (center, scale) = cam.world_to_clip_uniform(vp);
+        if pane_style == BasemapStyle::BlankWhite {
+            ui.painter().rect_filled(prect, 0.0, egui::Color32::WHITE);
+        }
         if cam.globe {
-            ui.painter().with_clip_rect(prect).circle_filled(prect.center(), cam.globe_radius() as f32, egui::Color32::from_rgb(20, 35, 48));
+            let globe_color = if pane_style == BasemapStyle::BlankWhite {
+                egui::Color32::from_rgb(247, 248, 249)
+            } else {
+                egui::Color32::from_rgb(20, 35, 48)
+            };
+            ui.painter().with_clip_rect(prect).circle_filled(prect.center(), cam.globe_radius() as f32, globe_color);
         }
         let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
         if let Some(started) = trace_started.as_ref() {

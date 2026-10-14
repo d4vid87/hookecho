@@ -73,6 +73,8 @@ pub enum BasemapStyle {
     Light,
     Satellite,
     None,
+    /// A plain white canvas for radar, annotations and weather overlays; no map tiles.
+    BlankWhite,
     /// NOAA GOES-East GeoColor via NASA GIBS (near-real-time satellite).
     GoesEast,
     /// NOAA GOES-West GeoColor via NASA GIBS.
@@ -163,7 +165,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 60] = [
+    pub const ALL: [BasemapStyle; 61] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -224,6 +226,8 @@ impl BasemapStyle {
         BasemapStyle::MapTilerBasic,
         BasemapStyle::MapTilerDatavizDark,
         BasemapStyle::Presentation,
+        // Append to retain the existing per-style cache keys.
+        BasemapStyle::BlankWhite,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -269,6 +273,7 @@ impl BasemapStyle {
             BasemapStyle::Light => "Light",
             BasemapStyle::Satellite => "USGS Imagery",
             BasemapStyle::None => "None",
+            BasemapStyle::BlankWhite => "Blank White",
             BasemapStyle::GoesEast => "GOES-East (GeoColor)",
             BasemapStyle::GoesWest => "GOES-West (GeoColor)",
             BasemapStyle::GoesEastIR => "GOES-East (infrared)",
@@ -335,6 +340,7 @@ impl BasemapStyle {
             BasemapStyle::Light => "light",
             BasemapStyle::Satellite => "satellite",
             BasemapStyle::None => "none",
+            BasemapStyle::BlankWhite => "blank-white",
             BasemapStyle::GoesEast => "goes-east",
             BasemapStyle::GoesWest => "goes-west",
             BasemapStyle::GoesEastIR => "goes-east-ir",
@@ -526,6 +532,7 @@ impl BasemapStyle {
             BasemapStyle::Dark
                 | BasemapStyle::Light
                 | BasemapStyle::None
+                | BasemapStyle::BlankWhite
                 | BasemapStyle::Auto
                 | BasemapStyle::VectorLiberty
                 | BasemapStyle::VectorBright
@@ -640,7 +647,7 @@ impl BasemapStyle {
             return Category::Weather;
         }
         match self {
-            BasemapStyle::None | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
+            BasemapStyle::None | BasemapStyle::BlankWhite | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
             BasemapStyle::Dark
             | BasemapStyle::Light
             | BasemapStyle::VectorLiberty
@@ -2679,6 +2686,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn blank_white_is_a_tile_free_style_with_a_stable_slug() {
+        let style = BasemapStyle::BlankWhite;
+        assert_eq!(BasemapStyle::from_slug("blank-white"), style);
+        assert_eq!(style.category(), Category::Other);
+        assert!(!style.is_raster());
+        assert!(style.vector_palette().is_none());
+        assert!(style.thumb_url("", "", "").is_none());
+        assert_eq!(style.key() as usize, BasemapStyle::ALL.len() - 1);
+    }
+
     /// The picker draws one section per category. A style in no section is invisible, and a
     /// section with nothing in it is a stray heading.
     #[test]
@@ -2696,6 +2714,7 @@ mod tests {
         // The three that are not a map of anywhere belong together, away from the imagery.
         for s in [
             BasemapStyle::None,
+            BasemapStyle::BlankWhite,
             BasemapStyle::Auto,
             BasemapStyle::CustomXyz,
         ] {
