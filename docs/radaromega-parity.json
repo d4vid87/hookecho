@@ -1163,25 +1163,25 @@
       "category": "overlays",
       "title": "Fire weather",
       "priority": 1,
-      "status": "not-verified",
-      "observed_scope": "Sidebar destination observed: Fire Weather.",
-      "observation_type": "runtime-controls",
-      "hookecho_implementation": "Existing fire/perimeter layers are related capabilities.",
+      "status": "partial",
+      "observed_scope": "REA retained client code exposes separate fire-weather conditions and dry-thunderstorm day selectors, styled elevated/critical/extreme and isolated/scattered polygons, and a forecast-discussion popup.",
+      "observation_type": "shipped-client-code-and-runtime-controls",
+      "hookecho_implementation": "Public NOAA SPC fire-weather MapServer polygons for days 1–8, with conditions/dry-thunderstorm choices, NOAA category colors, on-map polygon details and source/valid/expiry metadata.",
       "remaining_gaps": [
-        "Those layers do not establish a matching Fire Weather outlook suite; specific forecast products and menu states remain unverified."
+        "The public GIS polygons do not include RadarOmega's hosted forecast-discussion text or identical popup hierarchy.",
+        "Empty/stale-source messaging and a live end-to-end browser check remain to be verified."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/notify.rs",
-        "crates/hookecho/src/spoken_alerts.rs",
-        "crates/hookecho/src/ui/alert_panel.rs",
-        "crates/hookecho/src/ui/warning_window.rs"
+        "crates/wxdata/src/fire_weather.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/app.rs"
       ],
       "observation_evidence_ids": [
         "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV06",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "Focused parser tests and integrated native library check pass; browser acceptance and stale/empty messaging pending."
     },
     {
       "id": "OV07",

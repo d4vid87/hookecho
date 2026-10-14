@@ -22,6 +22,8 @@ pub struct UiActions {
     pub instant_replay: bool,
     /// The Day-1 outlook hazard changed; the app must clear + refetch that day's outlook.
     pub outlook_kind_changed: bool,
+    /// NOAA SPC fire-weather day or category changed.
+    pub fire_weather_changed: bool,
     /// The WSSI day changed; the app must clear + refetch it.
     pub wssi_day_changed: bool,
     /// The Excessive Rainfall Outlook day changed; the app must clear + refetch it.
@@ -671,6 +673,30 @@ pub(crate) fn show(
                     }
                 });
             });
+
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("SPC Fire Weather Outlook").strong());
+        ui.weak("NOAA public outlook · tap a polygon for its source and valid time");
+        let mut fire_changed = false;
+        egui::ComboBox::from_id_salt("fire_weather_day")
+            .selected_text(if filters.fire_weather_day == 0 { "Off".to_owned() } else { format!("Day {}", filters.fire_weather_day) })
+            .show_ui(ui, |ui| {
+                for day in 0..=8 {
+                    fire_changed |= ui.selectable_value(&mut filters.fire_weather_day, day, if day == 0 { "Off".to_owned() } else { format!("Day {day}") }).changed();
+                }
+            });
+        if filters.fire_weather_day != 0 {
+            ui.horizontal_wrapped(|ui| {
+                for kind in [wxdata::fire_weather::Kind::Conditions, wxdata::fire_weather::Kind::DryThunderstorms] {
+                    fire_changed |= ui.selectable_value(&mut filters.fire_weather_kind, kind, kind.label()).changed();
+                }
+            });
+            ui.weak("Conditions: elevated/critical risk; dry thunderstorms: isolated/scattered risk. Days 3–8 use probability contours.");
+        }
+        if fire_changed {
+            actions.fire_weather_changed = true;
+            changed = true;
+        }
 
         // Excessive Rainfall Outlook: the flood half of the day, directly under the severe half.
         ui.label("Rainfall outlook");

@@ -62,6 +62,7 @@ pub mod rotation;
 pub mod severe;
 pub mod sounding;
 pub mod spc;
+pub mod fire_weather;
 pub mod spoken;
 pub mod spotters;
 pub mod stations;

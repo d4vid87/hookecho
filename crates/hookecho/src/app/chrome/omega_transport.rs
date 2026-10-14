@@ -135,7 +135,7 @@ impl HookEchoApp {
                                     } else {
                                         format!("{}+ in", self.hail_threshold_inches)
                                     };
-                                    ui.menu_button(format!("Hail: {size} ▾"), |ui| {
+                                    ui.menu_button(format!("Hail: {size}"), |ui| {
                                         ui.strong("Public MRMS estimated hail size");
                                         ui.label("Size filter");
                                         let mut changed = false;
