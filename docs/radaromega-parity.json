@@ -652,20 +652,21 @@
       "priority": 1,
       "status": "partial",
       "observed_scope": "Radar display settings expose Full Coverage Radar and Show Range Ring. The retained client labels Full Coverage as a 50% extension for supported towers, maps the switch to NORMAL/FULL, and selects sweep.radius versus sweep.radius_full (when supplied). The renderer recomputes radius_full from gate depth, gate spacing and first-gate distance. Real-time range rings are a separate toggle from the static map ring.",
-      "observation_type": "static-client",
-      "hookecho_implementation": "Range rings and scan geometry are available.",
+      "observation_type": "static-client + live-runtime",
+      "hookecho_implementation": "The range-ring overlay now anchors to the scan actually on screen and draws a labeled blue boundary at the selected moment/tilt/cut's farthest decoded gate. This uses source gate spacing and count, including different ranges in split cuts, without cropping data. The fixed 50–200 km distance rings remain available.",
       "remaining_gaps": [
-        "HookEcho currently renders its full decoded sweep and has no NORMAL/FULL switch. The retained client does not reveal which server sweeps supply radius_full or the NORMAL radius values for each station/product; inventing a universal 2/3 crop would conceal legitimate velocity or short-range TDWR gates. Site/product-specific extent rules and live ring behavior still need runtime capture."
+        "HookEcho still renders its full decoded sweep and has no NORMAL/FULL switch. The retained client does not reveal which server sweeps supply radius_full or the NORMAL radius values for each station/product; inventing a universal 2/3 crop would conceal legitimate velocity or short-range TDWR gates. The live KTLX NORMAL/FULL switch comparison showed no measurable map change at the captured viewport, so station/product-specific rules and more representative zoom levels still need runtime capture."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/radar_identity.rs",
         "crates/hookecho/src/products.rs",
-        "crates/hookecho/src/view.rs"
+        "crates/hookecho/src/view.rs",
+        "crates/wxdata/src/level2.rs"
       ],
-      "observation_evidence_ids": [],
+      "observation_evidence_ids": ["ev_0de0005531cca51c333f3a1e58f4798fba676c570907cdf4ed1adf82b2aa942a", "ev_7a4dbc2829784f76d5cfcb052a14202586910415384e4c9ce8b11359c7cd6bd4"],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD08",
       "acceptance": "Toggle coverage/ring while clearly indicating actual available scan extent.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-14: REA live Radar Settings confirmed both Full Coverage Radar and Show Range Ring controls. A controlled KTLX FULL→NORMAL→FULL comparison completed, but pixel difference at 920×1028 was limited to the setting switch at this viewport; it does not establish the behavior on supported towers. HookEcho cargo check and selected-cut range unit test passed. Integrated range-ring UI still needs screenshot verification."
     },
     {
       "id": "RAD09",

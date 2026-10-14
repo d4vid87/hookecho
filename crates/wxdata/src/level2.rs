@@ -880,6 +880,26 @@ fn selected_sweep_at(
         .map(|(_, sweep)| sweep)
 }
 
+/// Farthest gate available for the displayed moment, tilt and selected cut.
+/// This is the scan's real data extent, not a station-wide nominal radius.
+pub fn display_extent_km(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    cut_end_ms: Option<i64>,
+) -> Option<f64> {
+    selected_sweep_at(scan, moment, tilt, cut_end_ms)?
+        .radials()
+        .iter()
+        .filter_map(|radial| moment.select(radial))
+        .map(|data| {
+            data.first_gate_range_km()
+                + data.gate_count() as f64 * data.gate_interval_km()
+        })
+        .filter(|range| range.is_finite() && *range > 0.0)
+        .reduce(f64::max)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AzimuthAge {
     Missing,
@@ -1694,6 +1714,17 @@ mod tests {
             bin_scan(&scan, Moment::Reflectivity, 0).is_ok(),
             "REF found on surveillance cut"
         );
+    }
+
+    #[test]
+    fn display_extent_uses_selected_moment_and_cut() {
+        let reflectivity = Sweep::new(1, vec![radial_with_at(Moment::Reflectivity, 0.48, 1_000)]);
+        let velocity = Sweep::new(2, vec![radial_with_at_az(Moment::Velocity, 0.52, 2_000, 0, 2)]);
+        let site = nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0);
+        let scan = Scan::with_site(site, minimal_vcp(), vec![reflectivity, velocity]);
+        assert_eq!(display_extent_km(&scan, Moment::Reflectivity, 0, Some(1_000)), Some(2.375));
+        assert_eq!(display_extent_km(&scan, Moment::Velocity, 0, Some(1_000)), None);
+        assert_eq!(display_extent_km(&scan, Moment::Velocity, 0, Some(2_000)), Some(2.375));
     }
 
     #[test]

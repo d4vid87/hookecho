@@ -16713,9 +16713,9 @@ impl HookEchoApp {
             }
         }
 
-        // Range rings + azimuth spokes around this pane's site (feature HH).
+        // Range rings + azimuth spokes around the scan actually on screen.
         if self.show_range_rings {
-            if let Some(site) = view.site.as_deref().and_then(wxdata::sites::site_by_id) {
+            if let Some(site) = view.displayed_station().or(view.site.as_deref()).and_then(wxdata::sites::site_by_id) {
                 let origin = [site.longitude as f64, site.latitude as f64];
                 let col = egui::Color32::from_gray(150).gamma_multiply(0.55);
                 let to_screen = |lon: f64, lat: f64| {
@@ -16740,6 +16740,30 @@ impl HookEchoApp {
                 for az in (0..360).step_by(45) {
                     let far = crate::geo::destination_point(origin, az as f64, 200.0);
                     crate::geo::paint_path(&painter, &cam, prect, &[origin, far], egui::Stroke::new(0.6, col.gamma_multiply(0.7)));
+                }
+                if let Some(extent) = view.volume.as_ref().and_then(|volume| {
+                    wxdata::level2::display_extent_km(
+                        &volume.scan,
+                        view.moment,
+                        view.tilt,
+                        view.selected_cut_ms(),
+                    )
+                }) {
+                    let boundary: Vec<_> = (0..=120)
+                        .map(|i| crate::geo::destination_point(origin, i as f64 * 3.0, extent))
+                        .collect();
+                    let edge = egui::Color32::from_rgb(75, 170, 255);
+                    crate::geo::paint_path(&painter, &cam, prect, &boundary, egui::Stroke::new(1.4, edge));
+                    if cam.zoom >= 5.0 {
+                        let top = crate::geo::destination_point(origin, 0.0, extent);
+                        painter.text(
+                            to_screen(top[0], top[1]),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("Scan extent {:.0} km", extent),
+                            egui::FontId::proportional(11.0),
+                            edge,
+                        );
+                    }
                 }
             }
         }
