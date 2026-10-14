@@ -151,7 +151,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Radar Workspace, perspective camera, source catalog and public-feed availability measured
 # 4,489,754 gzip bytes with binaryen 130. Allocate 50 KB (1.12%) over the former cap;
 # the lite and startup limits remain unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4500000}"
+# Public CPC and SPC fire-weather polygons measured 4,503,536 gzip bytes with binaryen 130,
+# 3,536 bytes above the previous cap (0.08%). Allow 11,464 bytes of headroom; the lite and
+# startup limits remain unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4515000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

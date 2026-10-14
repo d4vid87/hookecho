@@ -1169,7 +1169,7 @@
       "hookecho_implementation": "Public NOAA SPC fire-weather MapServer polygons for days 1–8, with conditions/dry-thunderstorm choices, NOAA category colors, on-map polygon details and source/valid/expiry metadata.",
       "remaining_gaps": [
         "The public GIS polygons do not include RadarOmega's hosted forecast-discussion text or identical popup hierarchy.",
-        "Empty/stale-source messaging and a live end-to-end browser check remain to be verified."
+        "Empty/stale-source messaging and a live end-to-end browser check remain to be verified; overlapping NWS alerts currently capture clicks before the fire-outlook polygon can be inspected."
       ],
       "hookecho_sources": [
         "crates/wxdata/src/fire_weather.rs",
@@ -1181,7 +1181,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV06",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "Focused parser tests and integrated native library check pass; browser acceptance and stale/empty messaging pending."
+      "runtime_verification": "Focused parser tests and integrated native library check pass. On 2026-10-14, the official NOAA Day 2 conditions endpoint returned a valid California Elevated polygon, and the optimized browser build retained Day 2 selection after navigation to that area without console errors. Active NWS fire alerts overlaid the same area and captured map clicks, so the fire polygon's detail popup was not visually accepted; empty/stale messaging remains pending."
     },
     {
       "id": "OV07",
@@ -1232,7 +1232,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV08",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "NOAA public endpoints and sample schemas checked live on 2026-10-14; integrated UI/browser smoke remains pending"
+      "runtime_verification": "All eight NOAA public endpoints and sample schemas checked live on 2026-10-14. The optimized browser build rendered a 6–10 day Temperature polygon over Chicago; selecting it displayed Above, 80% probability, issue date 2026-10-13, valid dates 2026-10-19 through 2026-10-23, and NOAA CPC source. No browser console warnings or errors."
     },
     {
       "id": "OV09",
@@ -1437,7 +1437,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV16",
       "acceptance": "Filter historical hail tracks and inspect magnitude, VIL and time.",
-      "runtime_verification": "Focused native-value threshold test passed for all/1+/2+/3+ inch display classes; 642 native library tests and strict Clippy passed. Optimized web build passed at 4,497,214/4,500,000 gzip bytes. Browser showed a valid public MRMS hail-swath frame, selected 1+ inch and 6-hour menu states, and no console errors or warnings; the frame was hidden outside the selected radar-time tolerance, so nonzero swath pixels were not visually accepted. Screenshot: outputs/ro-parity/hail-history/browser-hail-controls.png."
+      "runtime_verification": "Focused native-value threshold and 30-minute field-time-tolerance tests passed; 644 native library tests and strict Clippy passed. Optimized web build passed at 4,503,536/4,515,000 gzip bytes. Browser showed a valid public MRMS hail-swath frame, selected 1+ inch and 6-hour menu states, and no console errors or warnings; the 40-minute-old frame was correctly hidden against the 30-minute live tolerance, so nonzero swath pixels were not visually accepted. Screenshot: outputs/ro-parity/hail-history/browser-hail-controls.png."
     },
     {
       "id": "AN01",
