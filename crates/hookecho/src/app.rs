@@ -548,9 +548,9 @@ impl RequestLane {
                 "RTMA station temperature" => 3600,
                 "Tropical cyclones" | "Wildfires" | "Air quality"
                 | "Temporary flight restrictions" | "Wind particles" | "Freezing levels"
-                | "Contours" => 900,
+                | "Contours" | "Highway cameras" => 900,
                 "Surface analysis" | "Archived storm reports" => 1800,
-                "Highway cameras" | "Damage surveys" => 3600,
+                "Damage surveys" => 3600,
                 _ => 120,
             },
         };
@@ -10907,9 +10907,8 @@ impl HookEchoApp {
         }
     }
 
-    /// Drive the live-station layer: poll the networks on a clock, refresh the electric field
-    /// far more slowly (the model publishes every five minutes), and pull the camera catalog only
-    /// when the view has moved somewhere new.
+    /// Drive the live-station layer: poll the networks on a clock and refresh the electric field
+    /// far more slowly (the model publishes every five minutes).
     ///
     /// The poll is what fills every open card's ring buffer, so it keeps running while any card is
     /// open even if the layer itself has been switched off.
@@ -10963,6 +10962,17 @@ impl HookEchoApp {
             self.ppef_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Ppef);
         }
+    }
+
+    /// Highway cameras are useful even when station observations are unavailable. Keep their
+    /// public catalog on the camera layer, while station cards can use the same catalog for a
+    /// nearby stream or still.
+    fn sync_dotcams(&mut self, ctx: &egui::Context) {
+        if !self.show_webcams && !self.show_stations && self.stations.cards.is_empty() {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        if (max_lon - min_lon) > 20.0 { return; }
         // Refresh large camera catalogs on view changes or expiry, including a stationary view.
         let bbox = (
             (min_lon * 2.0).round() / 2.0,
@@ -11089,6 +11099,41 @@ impl HookEchoApp {
                     ctx2.request_repaint();
                 }
                 Err(e) => log::warn!("webcam image {url} failed: {e}"),
+            }
+        });
+    }
+
+    /// Open a public highway camera directly, without requiring a nearby station card.
+    fn open_dotcam(&mut self, cam: &wxdata::dotcams::DotCam, ctx: &egui::Context) {
+        let title = if cam.name.is_empty() { cam.id.clone() } else { cam.name.clone() };
+        let image = cam.image_url.as_ref().map(|_| {
+            // A still URL can remain constant while its bytes change. A five-minute texture key
+            // lets reopening the camera refresh it without minting a texture on every frame.
+            format!("dotcam:{}:{}", cam.id, Utc::now().timestamp() / 300)
+        });
+        let place = if cam.place.is_empty() { String::new() } else { format!("\n{}", cam.place) };
+        let capability = if cam.stream_url.is_some() { "Stream URL available" } else { "Still image only" };
+        self.detail = Some(Detail {
+            title: format!("{} camera", cam.agency),
+            body: format!("{title}{place}\n{capability}\nCapture time is not supplied by the camera catalog.\nPublic fixed highway camera; not a chaser feed."),
+            color: [91, 220, 206, 255],
+            image: image.clone(),
+            link: cam.stream_url.as_ref()
+                .map(|url| ("Open stream URL in external player".to_string(), url.clone()))
+                .or_else(|| cam.image_url.as_ref()
+                    .map(|url| ("Open image from Caltrans".to_string(), url.clone()))),
+        });
+        let (Some(key), Some(url)) = (image, cam.image_url.clone()) else { return; };
+        if self.pf_icon_tex.contains_key(&key) { return; }
+        self.pf_icon_tex.insert(key.clone(), None);
+        let (http, tx, ctx2) = (self.http.clone(), self.pf_icon_tx.clone(), ctx.clone());
+        self.spawner.spawn(async move {
+            match crate::stationlayer::fetch_image(&http, &url).await {
+                Ok(image) => {
+                    let _ = tx.send((key, image));
+                    ctx2.request_repaint();
+                }
+                Err(e) => log::warn!("highway camera still {url}: {e}"),
             }
         });
     }
@@ -13886,10 +13931,31 @@ impl HookEchoApp {
                 } else {
                     cam_site
                 };
+                let dotcam_hit = (marker_hit.is_none()
+                    && !picked_site
+                    && station_hit.is_none()
+                    && cam_site.is_none()
+                    && tool == MapTool::Interrogate
+                    && self.show_webcams)
+                    .then(|| {
+                        self.stations.cams.iter()
+                            .map(|site| {
+                                let w = crate::render::mercator::lonlat_to_world(site.lon, site.lat);
+                                let (sx, sy) = cam.world_to_screen(w, vp);
+                                let dx = prect.left() + sx - pos.x;
+                                let dy = prect.top() + sy - pos.y;
+                                (site, dx * dx + dy * dy)
+                            })
+                            .filter(|(_, distance2)| *distance2 <= tap_r2(12.0))
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(site, _)| site.clone())
+                    })
+                    .flatten();
                 // A surveyed damage point under an interrogate click, same rule as the cameras.
                 let dat_hit = (marker_hit.is_none()
                     && !picked_site
                     && cam_site.is_none()
+                    && dotcam_hit.is_none()
                     && tool == MapTool::Interrogate
                     && self.show_dat)
                     .then(|| {
@@ -13935,6 +14001,12 @@ impl HookEchoApp {
                         self.warning_popup = None;
                         let site = cam_site.expect("checked Some");
                         self.open_webcam(&site, ctx);
+                    }
+                    _ if dotcam_hit.is_some() => {
+                        self.cell_popup = None;
+                        self.warning_popup = None;
+                        let site = dotcam_hit.expect("checked Some");
+                        self.open_dotcam(&site, ctx);
                     }
                     _ if dat_hit.is_some() => {
                         self.cell_popup = None;
@@ -15853,6 +15925,27 @@ impl HookEchoApp {
                         egui::FontId::proportional(10.0),
                         col,
                     );
+                }
+            }
+            // Highway cameras are separate from airport observations. Their square pins stay
+            // usable even when the METAR station lookup fails or the station layer is off.
+            let highway_col = egui::Color32::from_rgb(91, 220, 206);
+            for site in &self.stations.cams {
+                let w = crate::render::mercator::lonlat_to_world(site.lon, site.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) { continue; }
+                let pin = egui::Rect::from_center_size(p, egui::vec2(8.0, 8.0));
+                painter.rect_filled(pin, 2.0, highway_col);
+                painter.rect_stroke(pin, 2.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(190)),
+                    egui::StrokeKind::Inside);
+                if cam.zoom >= 10.0 {
+                    painter.text(p + egui::vec2(6.0, -5.0), egui::Align2::LEFT_BOTTOM,
+                        &site.name, egui::FontId::proportional(10.0), highway_col);
+                }
+                if map_hover.is_some_and(|hover| pin.expand(4.0).contains(hover)) {
+                    response.clone().show_tooltip_text(format!("{} · {}", site.agency, site.name));
                 }
             }
         }
@@ -20898,6 +20991,7 @@ impl eframe::App for HookEchoApp {
         self.sync_fires(ctx);
         self.sync_aqi(ctx);
         self.sync_stations(ctx);
+        self.sync_dotcams(ctx);
         self.sync_dat(ctx);
         self.sync_mosaic(ctx);
         // River flood gauges (NWPS).

@@ -842,9 +842,8 @@ impl HookEchoApp {
             (
                 T::Webcams,
                 "Obs",
-                "Webcams (FAA + Windy)",
-                "Look at the sky through a real camera \u{2014} FAA airports, plus the Windy \
-                 network worldwide with a key in Settings",
+                "Weather & highway cameras",
+                "FAA airports and public Caltrans highway cameras, plus Windy webcams with a key in Settings",
                 false,
             ),
             (

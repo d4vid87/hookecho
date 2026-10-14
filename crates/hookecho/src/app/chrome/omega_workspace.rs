@@ -637,13 +637,13 @@ impl HookEchoApp {
                                                     ),
                                                 ),
                                                 (
-                                                    "Weather cameras",
+                                                    "Weather & highway cameras",
                                                     PaletteAction::ToggleOverlay(
                                                         OverlayToggle::Webcams,
                                                     ),
                                                 ),
                                                 (
-                                                    "Stations & highway cameras",
+                                                    "Live station cards",
                                                     PaletteAction::ToggleOverlay(
                                                         OverlayToggle::Stations,
                                                     ),

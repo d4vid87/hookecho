@@ -287,9 +287,9 @@ fn km_between(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     6371.0 * 2.0 * a.sqrt().asin()
 }
 
-async fn fetch_image(http: &reqwest::Client, url: &str) -> anyhow::Result<ColorImage> {
+pub(crate) async fn fetch_image(http: &reqwest::Client, url: &str) -> anyhow::Result<ColorImage> {
     let bytes = http
-        .get(url)
+        .get(wxdata::net::fetch_url(url))
         .header("User-Agent", crate::tiles::USER_AGENT)
         .send()
         .await?
