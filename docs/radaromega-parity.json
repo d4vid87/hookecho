@@ -623,9 +623,9 @@
       "status": "partial",
       "observed_scope": "Catalog variations for TDWR, Canada, Germany, Australia and other limited-product sites",
       "observation_type": "static-client",
-      "hookecho_implementation": "US NEXRAD/TDWR, live German DWD site volumes, ODIM file import and Canadian ECCC rain/snow WMS composites provide public alternatives. Site changes request WSR-88D storm-cell Level 3 products only for NEXRAD sites; TDWR selection requests its own tilt volume. TDWR sweep radials carry the decoded Level 3 product timestamp, falling back to the timestamped object key if the header time is unavailable, so gate interrogation reports the actual scan time.",
+      "hookecho_implementation": "US NEXRAD/TDWR, live German DWD site volumes, ODIM file import and Canadian ECCC rain/snow WMS composites provide public alternatives. Site changes request WSR-88D storm-cell Level 3 products only for NEXRAD sites; TDWR selection requests its own tilt volume. TDWR sweep radials carry the decoded Level 3 product timestamp, falling back to the timestamped object key if the header time is unavailable, so gate interrogation reports the actual scan time. Timestamped public TDWR low-tilt objects now populate the shared archive timeline; historical product sets are assembled for frame stepping and playback.",
       "remaining_gaps": [
-        "User accepted public providers with different coverage. ECCC composites do not provide Canadian individual-site velocity/tilts. Advertised-window discovery is implemented; TDFW reflectivity and velocity rendered in the browser, but frame transitions, full playback cadence and other TDWR sites remain to verify.",
+        "User accepted public providers with different coverage. ECCC composites do not provide Canadian individual-site velocity/tilts. Advertised-window discovery is implemented; TDFW reflectivity and velocity, historical frame transitions and a four-frame loop rendered in the browser. Longer-loop cadence and other TDWR sites remain to verify.",
         "No live Australian BOM/Furuno/private-network adapter. An official BOM viewer link is implemented in the Weather map picker; file import, external viewing and satellite imagery are not embedded live radar coverage."
       ],
       "hookecho_sources": [
@@ -643,7 +643,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD07",
       "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
-      "runtime_verification": "2026-10-14 16:49 UTC: existing native release headless DEOF REF tilt 0 passed; actual volume 20261014164020, elevation 0.50°, 720 × 720 grid / 423,586 echo gates, inspected 768 × 768 PNG. Live TDFW browser switching exposed erroneous WSR-88D p59hi/p62ss storm-cell requests and Level 3 decode warnings. The site-switch request now uses the same NEXRAD-only guard as periodic polling; a fresh browser switch produced no new p59hi/p62ss warnings. With the station's Radar source selected, live TDFW VCP 80 reflectivity and velocity both rendered at the 0.4° cut. Before timestamp repair, gate interrogation reported 1970-01-01 and an age of 1792009136s. After repair, reflectivity interrogation reported 2026-10-14 20:23:56 UTC and age 35s; velocity interrogation reported the same product time and age 44s. Focused sweep test, strict Clippy and optimized web build passed. The Play button entered its playing state; actual frame transitions and full playback cadence remain unverified. Other products/elevations, calibration and independent geolocation remain unverified. Evidence: outputs/ro-parity/provider-runtime/results.json, outputs/ro-parity/tdwr-time/before-1970.png, after-current.png and velocity-current.png."
+      "runtime_verification": "2026-10-14: existing native release headless DEOF REF tilt 0 passed; actual volume 20261014164020, elevation 0.50°, 720 × 720 grid / 423,586 echo gates, inspected 768 × 768 PNG. Live TDFW browser switching exposed erroneous WSR-88D p59hi/p62ss storm-cell requests and Level 3 decode warnings. The site-switch request now uses the same NEXRAD-only guard as periodic polling; a fresh browser switch produced no new p59hi/p62ss warnings. With the station's Radar source selected, live TDFW VCP 80 reflectivity and velocity both rendered at the 0.4° cut. Before timestamp repair, gate interrogation reported 1970-01-01 and an age of 1792009136s. After repair, reflectivity interrogation reported 2026-10-14 20:23:56 UTC and age 35s; velocity interrogation reported the same product time and age 44s. A live public-bucket test listed TDFW low-tilt frames and decoded reflectivity and velocity from two different historical frames. In the browser, four-frame mode loaded distinct 3:30, 3:31, 3:32 and live 3:33 PM CDT scans; stepping changed scan time and pixels, and Play advanced from an archive frame back to live. Longer-loop cadence, other products/elevations, calibration and independent geolocation remain unverified. Evidence: outputs/ro-parity/provider-runtime/results.json and outputs/ro-parity/tdwr-time/{before-1970,after-current,velocity-current,archive-1530,archive-1531}.png."
     },
     {
       "id": "RAD08",
@@ -780,7 +780,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME01",
       "acceptance": "Configured frame count maps to available frames with explicit loading/missing states.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14; other station networks and larger native loop counts remain unverified. Evidence: outputs/ro-parity/tdwr-time/archive-1530.png and archive-1531.png."
     },
     {
       "id": "TIME02",

@@ -16,12 +16,13 @@
 //! Deliberately not fetched: `TZL` (long-range reflectivity) is the same 0.5° tilt as `TZ0` at
 //! half the resolution, so it would collide with it in the tilt list for no gain.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use nexrad_model::data::{
     MomentData, PulseWidth, Radial, RadialStatus, Scan, Sweep, VolumeCoveragePattern,
 };
 use nexrad_model::meta::registry::SiteEntry;
 use nexrad_model::meta::Site;
+use crate::level2::Identifier;
 
 const BUCKET: &str = "https://unidata-nexrad-level3.s3.amazonaws.com";
 
@@ -125,23 +126,42 @@ const PRODUCTS: [(&str, u16); 6] = [
     ("TV2", 150),
 ];
 
-/// Newest S3 key under `prefix`, or `None` when the listing is empty or unreachable.
-async fn newest_key(http: &reqwest::Client, prefix: &str) -> Option<String> {
+/// The bucket's timestamped keys under one narrow prefix. Hour prefixes stay below S3's
+/// default 1,000-key page even on the one-minute low tilt, so a complete hour needs no cursor.
+async fn keys_for_prefix(http: &reqwest::Client, prefix: &str) -> anyhow::Result<Vec<String>> {
     let url = format!("{BUCKET}/?list-type=2&prefix={prefix}");
     let xml = http
         .get(crate::net::fetch_url(&url))
         .timeout(crate::net::FEED_TIMEOUT)
         .send()
-        .await
-        .ok()?
+        .await?
+        .error_for_status()?
         .text()
-        .await
-        .ok()?;
+        .await?;
     crate::stats::net(xml.len());
-    // Keys sort by their embedded timestamp, so the last one listed is the newest.
-    let (i, _) = xml.rmatch_indices("<Key>").next()?;
-    let rest = &xml[i + 5..];
-    rest.find("</Key>").map(|e| rest[..e].to_string())
+    anyhow::ensure!(!xml.contains("<IsTruncated>true</IsTruncated>"), "TDWR listing exceeded one S3 page");
+    Ok(xml.match_indices("<Key>").filter_map(|(i, _)| {
+        xml[i + 5..].split_once("</Key>").map(|(key, _)| key.to_owned())
+    }).collect())
+}
+
+async fn keys_near_hour(http: &reqwest::Client, prefix: &str, hour: DateTime<Utc>) -> Vec<String> {
+    let hours = [hour - chrono::Duration::hours(1), hour];
+    let listings = futures_util::future::join_all(hours.into_iter().map(|at| {
+        let http = http.clone();
+        let prefix = format!("{prefix}_{}", at.format("%Y_%m_%d_%H"));
+        async move { keys_for_prefix(&http, &prefix).await.unwrap_or_default() }
+    })).await;
+    listings.into_iter().flatten().collect()
+}
+
+async fn newest_near_hour(http: &reqwest::Client, prefix: &str, now: DateTime<Utc>) -> Option<String> {
+    let current = format!("{prefix}_{}", now.format("%Y_%m_%d_%H"));
+    if let Some(key) = keys_for_prefix(http, &current).await.ok()?.pop() {
+        return Some(key);
+    }
+    let previous = format!("{prefix}_{}", (now - chrono::Duration::hours(1)).format("%Y_%m_%d_%H"));
+    keys_for_prefix(http, &previous).await.ok()?.pop()
 }
 
 /// Timestamp encoded in an S3 key (`OKC_TZ0_2026_08_01_17_27_13`).
@@ -159,6 +179,35 @@ fn key_time(key: &str) -> Option<DateTime<Utc>> {
         f(7)?,
     )?;
     Some(dt.and_utc())
+}
+
+fn frame_name(site: &str, time: DateTime<Utc>) -> String {
+    format!("{site}{}_TDWR", time.format("%Y%m%d_%H%M%S"))
+}
+
+/// List every low-tilt TDWR reflectivity scan on a UTC day for the shared archive timeline.
+/// One hour per request avoids S3's default pagination limit and admits midnight boundaries.
+pub async fn list_volumes(http: &reqwest::Client, id: &str, date: NaiveDate) -> anyhow::Result<Vec<Identifier>> {
+    let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a TDWR"))?;
+    let short = &meta.id[1..];
+    let day = date.format("%Y_%m_%d").to_string();
+    let listings = futures_util::future::join_all((0..24).map(|hour| {
+        let http = http.clone();
+        let prefix = format!("{short}_TZ0_{day}_{hour:02}");
+        async move { keys_for_prefix(&http, &prefix).await }
+    })).await;
+    let mut frames = Vec::new();
+    let mut successes = 0;
+    for keys in listings.into_iter().flatten() {
+        successes += 1;
+        frames.extend(keys.into_iter().filter_map(|key| key_time(&key))
+            .filter(|time| time.date_naive() == date)
+            .map(|time| Identifier::new(frame_name(meta.id, time))));
+    }
+    anyhow::ensure!(successes > 0, "TDWR hourly listings unavailable for {id} {date}");
+    frames.sort_by(|a, b| a.name().cmp(b.name()));
+    frames.dedup_by(|a, b| a.name() == b.name());
+    Ok(frames)
 }
 
 /// Turn one decoded tilt product into a sweep of radials carrying `moment`.
@@ -236,28 +285,52 @@ pub async fn fetch_volume(
 ) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a TDWR"))?;
     let short = &meta.id[1..];
-    let day = Utc::now().format("%Y_%m_%d").to_string();
-
-    // The listings first, on their own. This volume's name *is* the newest contributing key, so
-    // six listings of a few KB each answer "has anything been published since last time?" exactly
-    // — and answering it before the six product bodies is the difference between a poll that
-    // costs a few KB and one that costs megabytes, on a feed that turns over every few minutes.
+    // A low-tilt reflectivity key anchors the volume identity and timeline frame. Query the
+    // current and preceding UTC hour: a whole-day prefix can exceed S3's 1,000-key page late in
+    // the day, and the previous hour keeps the first minutes after midnight live.
+    let now = Utc::now();
     let keys = futures_util::future::join_all(PRODUCTS.iter().map(|(product, _)| {
-        let (http, prefix) = (http.clone(), format!("{short}_{product}_{day}"));
-        async move { newest_key(&http, &prefix).await }
+        let (http, prefix) = (http.clone(), format!("{short}_{product}"));
+        async move { newest_near_hour(&http, &prefix, now).await }
     }))
     .await;
-    let newest_listed = keys
-        .iter()
-        .flatten()
-        .filter_map(|k| key_time(k).map(|t| (k, t)))
-        .max_by_key(|(_, t)| *t)
-        .map(|(k, _)| k.clone());
-    if newest_listed.is_some() && current_name == newest_listed.as_deref() {
+    let anchor = keys.first().and_then(|key| key.as_deref()).and_then(key_time)
+        .ok_or_else(|| anyhow::anyhow!("no recent low-tilt TDWR reflectivity for {id}"))?;
+    let name = frame_name(meta.id, anchor);
+    if current_name == Some(name.as_str()) {
         crate::stats::bump(crate::stats::Counter::FetchSkipped);
         return Ok(None);
     }
 
+    assemble_volume(http, meta, keys, anchor).await.map(Some)
+}
+
+/// Fetch the product set that was current at a listed low-tilt frame, for playback and scrubbing.
+pub async fn fetch_volume_at(http: &reqwest::Client, id: &Identifier) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    let site = id.site().ok_or_else(|| anyhow::anyhow!("TDWR frame has no site"))?;
+    let meta = site_by_id(site).ok_or_else(|| anyhow::anyhow!("{site} is not a TDWR"))?;
+    let anchor = id.date_time().ok_or_else(|| anyhow::anyhow!("TDWR frame has no valid time"))?;
+    anyhow::ensure!(id.name() == frame_name(meta.id, anchor), "TDWR frame name malformed");
+    let short = &meta.id[1..];
+    let keys = futures_util::future::join_all(PRODUCTS.iter().map(|(product, _)| {
+        let (http, prefix) = (http.clone(), format!("{short}_{product}"));
+        async move {
+            keys_near_hour(&http, &prefix, anchor).await.into_iter()
+                .filter_map(|key| key_time(&key).map(|time| (key, time)))
+                .filter(|(_, time)| *time <= anchor && anchor.signed_duration_since(*time) <= chrono::Duration::minutes(10))
+                .max_by_key(|(_, time)| *time).map(|(key, _)| key)
+        }
+    })).await;
+    anyhow::ensure!(keys.first().and_then(|key| key.as_deref()).is_some(), "TDWR frame's low tilt unavailable");
+    assemble_volume(http, meta, keys, anchor).await
+}
+
+async fn assemble_volume(
+    http: &reqwest::Client,
+    meta: &SiteEntry,
+    keys: Vec<Option<String>>,
+    anchor: DateTime<Utc>,
+) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
     // Six products. Serially that was most of the wait for a TDWR site; they're independent, so
     // fetch and decode them all at once.
     let mut jobs = Vec::new();
@@ -285,34 +358,26 @@ pub async fn fetch_volume(
             // stay separate sweeps, which the split-cut-aware binning already handles.
             let timestamp = crate::level3::product_time(&p).or_else(|| key_time(&key))?;
             let sweep = sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"), timestamp.timestamp_millis());
-            Some((n, sweep, key))
+            Some((n, sweep))
         });
     }
-    // `join_all` and not a JoinSet: these are twelve round trips with a small decode each, so the
+    // `join_all` and not a JoinSet: these are six round trips with a small decode each, so the
     // concurrency that matters is the IO, and this way the web build compiles the same code.
-    let mut found: Vec<(usize, Option<Sweep>, String)> = futures_util::future::join_all(jobs)
+    let mut found: Vec<(usize, Option<Sweep>)> = futures_util::future::join_all(jobs)
         .await
         .into_iter()
         .flatten()
         .collect();
-    // Keep the product order stable: sweeps are keyed by elevation number, and the caller's
-    // "did the volume change?" check compares the name of the newest key.
-    found.sort_by_key(|(n, _, _)| *n);
+    // Keep the product order stable: sweeps are keyed by elevation number.
+    found.sort_by_key(|(n, _)| *n);
     let mut sweeps = Vec::new();
-    let mut newest: Option<(String, DateTime<Utc>)> = None;
-    for (_, sweep, key) in found {
+    for (_, sweep) in found {
         if let Some(s) = sweep {
             sweeps.push(s);
         }
-        if let Some(t) = key_time(&key) {
-            if newest.as_ref().is_none_or(|(_, prev)| t > *prev) {
-                newest = Some((key, t));
-            }
-        }
     }
-    let (name, time) = newest.ok_or_else(|| anyhow::anyhow!("no TDWR products for {id}"))?;
     if sweeps.is_empty() {
-        anyhow::bail!("no decodable TDWR tilts for {id}");
+        anyhow::bail!("no decodable TDWR tilts for {}", meta.id);
     }
 
     // No separate tower height is published for these.
@@ -334,7 +399,7 @@ pub async fn fetch_volume(
         false,
         Vec::new(),
     );
-    Ok(Some((name, time, Scan::with_site(site, vcp, sweeps))))
+    Ok((frame_name(meta.id, anchor), anchor, Scan::with_site(site, vcp, sweeps)))
 }
 
 #[cfg(test)]
@@ -463,9 +528,28 @@ mod tests {
             .await
             .expect("TOKC volume")
             .expect("a fresh fetch is never up to date");
-        assert!(name.starts_with("OKC_"), "{name}");
+        assert!(name.starts_with("TOKC"), "{name}");
+        assert!(Identifier::new(name).date_time().is_some());
         let tilts = crate::level2::elevation_angles(&scan);
         assert!(!tilts.is_empty(), "at least one tilt");
         assert!(bin_scan_opts(&scan, Moment::Reflectivity, 0, false).is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn lists_and_fetches_distinct_tdwr_archive_frames() {
+        let http = reqwest::Client::new();
+        let frames = list_volumes(&http, "TDFW", Utc::now().date_naive()).await.expect("TDFW listing");
+        assert!(frames.len() >= 2, "need two real TDFW frames for playback");
+        let earlier = &frames[frames.len() - 2];
+        let latest = &frames[frames.len() - 1];
+        assert!(earlier.date_time() < latest.date_time());
+        for id in [earlier, latest] {
+            let (name, time, scan) = fetch_volume_at(&http, id).await.expect("historical TDWR volume");
+            assert_eq!(name, id.name());
+            assert_eq!(Some(time), id.date_time());
+            assert!(bin_scan_opts(&scan, Moment::Reflectivity, 0, false).is_ok());
+            assert!(bin_scan_opts(&scan, Moment::Velocity, 0, false).is_ok());
+        }
     }
 }

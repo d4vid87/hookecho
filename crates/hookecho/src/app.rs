@@ -11964,7 +11964,7 @@ impl HookEchoApp {
                     // the frame list so the loop window slides forward. A frame-fetch result for a
                     // scrubbed/loop-display frame is older than the head and isn't a new head.
                     let new_head = v.timeline.following
-                        && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
+                        && v.site.as_deref().is_some_and(|site| matches!(wxdata::sites::network(site), wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr))
                         && {
                             let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
                             if time.date_naive() != v.timeline.date {
@@ -12540,9 +12540,9 @@ impl HookEchoApp {
         let (site, date, following, need_list, listing) = {
             let v = &self.views[idx];
             let key = v.site.clone().map(|s| (s, v.timeline.date));
-            // TDWRs and DWD radars have no archive to list; their timeline stays empty and
-            // always live.
-            let need = v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
+            // NEXRAD and TDWR have timestamped public archives. DWD and OPERA currently
+            // expose only their newest assembled volume to this timeline.
+            let need = v.site.as_deref().is_some_and(|site| matches!(wxdata::sites::network(site), wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr))
                 && v.timeline.frames_key != key
                 && v.last_list_failure.is_none_or(|at| at.elapsed().as_secs() >= 10);
             (
@@ -12702,13 +12702,20 @@ impl HookEchoApp {
         book(&self.prefetching).insert(name, Instant::now());
         let tx = self.msg_tx.clone();
         let (site, ctx) = (site.to_string(), ctx.clone());
+        let http = self.http.clone();
         let view = idx;
         let slot = self.prefetching.clone();
         self.spawner.spawn(async move {
             let name = id.name().to_string();
             let fetched = wxdata::task::timeout(
                 VOLUME_TIMEOUT,
-                crate::volume::fetch(id, crate::paths::cache_dir()),
+                async {
+                    if wxdata::tdwr::is_tdwr(&site) {
+                        wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan)
+                    } else {
+                        crate::volume::fetch(id, crate::paths::cache_dir()).await
+                    }
+                },
             )
             .await
             .unwrap_or_else(Err);
@@ -12769,19 +12776,23 @@ impl HookEchoApp {
         let generation = self.views[view_idx].frame_request.start(id.name().to_string());
         self.views[view_idx].load_phase = None;
         let tx = self.msg_tx.clone();
+        let http = self.http.clone();
         let handle = self.spawner.spawn_abortable(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
             // The `Err` arm is what matters here: it clears the pane's `loading` flag. Without a
             // deadline a swallowed request never took either arm, and a pane stuck on `loading`
             // stops polling for the rest of the session.
-            let fetched = wxdata::task::timeout(
-                VOLUME_TIMEOUT,
-                crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
-                    let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
-                    ctx.request_repaint();
-                }),
-            )
+            let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
+                if wxdata::tdwr::is_tdwr(&site) {
+                    wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan)
+                } else {
+                    crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
+                        let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
+                        ctx.request_repaint();
+                    }).await
+                }
+            })
             .await
             .unwrap_or_else(Err);
             let msg = match fetched {
@@ -12812,8 +12823,15 @@ impl HookEchoApp {
         let identity = format!("{site}:{date}");
         let generation = self.views[view_idx].list_request.start(identity.clone());
         let tx = self.msg_tx.clone();
+        let http = self.http.clone();
         let handle = self.spawner.spawn_abortable(async move {
-            let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, level2::list_volumes(&site, date)).await.unwrap_or_else(Err);
+            let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
+                if wxdata::tdwr::is_tdwr(&site) {
+                    wxdata::tdwr::list_volumes(&http, &site, date).await
+                } else {
+                    level2::list_volumes(&site, date).await
+                }
+            }).await.unwrap_or_else(Err);
             let result = match fetched {
                 Ok(frames) => DataMsg::Frames { view: view_idx, site, date, frames },
                 Err(error) => {
