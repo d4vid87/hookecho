@@ -324,7 +324,7 @@ impl Timeline {
         }
         self.playhead = (self.playhead as i32 + delta).clamp(0, n - 1) as usize;
         // Re-pin to live only when back on the last observed frame (not in the forecast tail).
-        self.following = self.playhead + 1 == self.frames.len();
+        self.following = self.date >= Utc::now().date_naive() && self.playhead + 1 == self.frames.len();
     }
 
     pub fn enable_cut_playback(&mut self, enabled: bool) {
@@ -402,7 +402,7 @@ impl Timeline {
             }
             self.following = false;
         } else {
-            self.following = slot + 1 == self.frames.len();
+            self.following = self.date >= Utc::now().date_naive() && slot + 1 == self.frames.len();
         }
     }
 
@@ -497,9 +497,9 @@ impl Timeline {
         }
         if self.playhead + 1 < self.frames.len() {
             self.playhead += 1;
-            // Archive play re-pins to live at the head; a live loop stays pinned throughout.
+            // Only today's head can re-pin to live. Older archive days stay explicit.
             if !self.following {
-                self.following = self.playhead + 1 >= self.frames.len();
+                self.following = self.date >= Utc::now().date_naive() && self.playhead + 1 >= self.frames.len();
             }
         } else if self.loop_enabled {
             // Wrap: a live loop jumps back to the window start and keeps following; an archive
@@ -676,6 +676,24 @@ mod tests {
         assert!(timeline.seek_target.is_none());
         assert!(timeline.following);
         assert!(!timeline.playing);
+    }
+
+    #[test]
+    fn historical_head_does_not_repin_steps_scrubs_or_playback_to_live() {
+        let mut t = Timeline::default();
+        t.date = t.date.pred_opt().unwrap();
+        t.set_frames(day("KTLX", 3), ("KTLX".into(), t.date));
+        t.following = false;
+        t.playhead = 1;
+        t.step(1);
+        assert!(!t.following);
+        t.scrub_to(2, 0.0);
+        assert!(!t.following);
+        t.playhead = 1;
+        t.playing = true;
+        t.last_advance = None;
+        assert!(t.tick());
+        assert!(!t.following);
     }
 
     #[test]
