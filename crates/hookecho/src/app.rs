@@ -1072,6 +1072,7 @@ impl OverlaySource {
                     FL::EchoTops => wxdata::level3::fetch_eet_frame(http, &site).await,
                     FL::Hca => wxdata::level3::fetch_hhc_frame(http, &site).await,
                     FL::Daa => wxdata::level3::fetch_daa_frame(http, &site).await,
+                    FL::Oha => wxdata::level3::fetch_oha_frame(http, &site).await,
                     FL::Dsa => wxdata::level3::fetch_dsa_frame(http, &site).await,
                     _ => None,
                 };
@@ -2241,7 +2242,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::PrecipRate => 120,
         FL::Qpe1h | FL::Qpe3h | FL::Qpe6h | FL::Qpe12h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
-        FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca | FL::Daa | FL::Dsa => 120,
+        FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca | FL::Daa | FL::Oha | FL::Dsa => 120,
         // Bands are cut from the ~2-min mosaic, so they are as fresh as it is.
         FL::SnowBands => 120,
         FL::UpdraftHelicity => 600,
@@ -21633,7 +21634,7 @@ impl eframe::App for HookEchoApp {
         // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
         let l3_site = self.views[self.active].site.clone();
         let site_changed = self.l3grid_site != l3_site;
-        for layer in [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Dsa] {
+        for layer in [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa] {
             let on = self.field_wanted(layer);
             if !on {
                 continue;
@@ -21652,7 +21653,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         if site_changed
-            && [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Dsa]
+            && [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa]
                 .iter()
                 .any(|l| self.field_wanted(*l))
         {

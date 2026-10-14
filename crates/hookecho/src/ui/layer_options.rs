@@ -187,7 +187,7 @@ pub(crate) fn show(
         ("Detectors", filters.show_tbss || filters.show_zdr_columns),
         (
             "Level 3 grids",
-            [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Dsa]
+            [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa]
                 .iter()
                 .any(|l| on.contains(l)),
         ),
@@ -1185,7 +1185,7 @@ pub(crate) fn show(
     }
 
     if section == "Level 3 grids"
-        && [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Dsa]
+        && [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa]
             .iter()
             .any(|l| on.contains(l))
     {

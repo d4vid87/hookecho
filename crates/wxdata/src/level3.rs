@@ -83,6 +83,22 @@ pub static DAA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_contours: false,
     supports_difference: false,
 };
+pub static OHA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.level3.oha"),
+    source: "NEXRAD Level III",
+    family: FieldFamily::Radar,
+    display_name: "One-Hour Precipitation Total",
+    short_name: "OHA",
+    search_aliases: &["one-hour accumulation", "radar precipitation total"],
+    units: "mm",
+    value_kind: ValueKind::Scalar,
+    palette_key: "radar.level3.oha",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
 pub static DSA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     id: FieldId("radar.level3.dsa"),
     source: "NEXRAD Level III",
@@ -971,6 +987,15 @@ pub async fn fetch_daa_frame(http: &reqwest::Client, site: &str) -> Option<Field
     fetch_accumulation_frame(http, site, "170aa", 170, &DAA_DESCRIPTOR).await
 }
 
+/// Public NWS product 169: coarser 16-band one-hour precipitation total.
+pub async fn fetch_oha_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
+    let (p, source, received) =
+        fetch_tgftp_with_metadata(http, &l3_site(site).to_lowercase(), "169oh").await?;
+    if p.code != 169 { return None; }
+    let field = radial_to_field(&p, 2.0, nexrad_level3::accumulation_band_mm)?;
+    field_frame(field, &OHA_DESCRIPTOR, source, received)
+}
+
 /// Public NWS product 172: high-resolution accumulation since the radar's storm reset.
 pub async fn fetch_dsa_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
     fetch_accumulation_frame(http, site, "172dt", 172, &DSA_DESCRIPTOR).await
@@ -1059,6 +1084,16 @@ mod tests {
             assert!(field.values.iter().any(|v| v.is_finite() && *v > 0.0));
             assert!(field.values.iter().all(|v| v.is_nan() || *v >= 0.0));
         }
+    }
+
+    #[test]
+    fn public_oha_categories_project_to_a_coarser_field() {
+        let product = decode(include_bytes!("../../nexrad-level3/tests/data/oha_tlx.l3"))
+            .expect("public OHA 169");
+        let field = radial_to_field(&product, 2.0, nexrad_level3::accumulation_band_mm)
+            .expect("project OHA bands");
+        assert!(field.nx > 400 && field.ny > 400);
+        assert!(field.values.iter().any(|v| v.is_finite() && *v > 0.0));
     }
 
     #[test]

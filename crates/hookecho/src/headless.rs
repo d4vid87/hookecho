@@ -2178,8 +2178,9 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         "eet" => FL::EchoTops,
         "hhc" => FL::Hca,
         "daa" => FL::Daa,
+        "oha" => FL::Oha,
         "dsa" => FL::Dsa,
-        other => anyhow::bail!("unknown l3grid kind '{other}' (dvl|eet|hhc|daa|dsa)"),
+        other => anyhow::bail!("unknown l3grid kind '{other}' (dvl|eet|hhc|daa|oha|dsa)"),
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2190,6 +2191,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
             FL::Vil => wxdata::level3::fetch_dvl(&client, site).await,
             FL::Hca => wxdata::level3::fetch_hhc(&client, site).await,
             FL::Daa => wxdata::level3::fetch_daa_frame(&client, site).await.map(|f| f.field().clone()),
+            FL::Oha => wxdata::level3::fetch_oha_frame(&client, site).await.map(|f| f.field().clone()),
             FL::Dsa => wxdata::level3::fetch_dsa_frame(&client, site).await.map(|f| f.field().clone()),
             _ => wxdata::level3::fetch_eet(&client, site).await,
         }

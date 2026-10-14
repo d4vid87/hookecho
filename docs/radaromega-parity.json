@@ -578,9 +578,9 @@
       "status": "partial",
       "observed_scope": "Digital Accumulation Array, one-hour and storm-total precipitation",
       "observation_type": "static-client",
-      "hookecho_implementation": "Existing national MRMS QPE remains available. Selected-site NEXRAD Level III product 170 (DAA, one-hour digital accumulation) and product 172 (DSA, digital storm total) are fetched from the public NWS feed, decoded with each product header's scale/offset and no-data flags, projected to a 0.005-degree display grid, and exposed as separate Radar site fields with millimeter legends.",
+      "hookecho_implementation": "Existing national MRMS QPE remains available. Selected-site NEXRAD Level III product 170 (DAA, one-hour digital accumulation) and product 172 (DSA, digital storm total) are fetched from the public NWS feed, decoded with each product header's scale/offset and no-data flags, and projected to a 0.005-degree display grid. Product 169 (OHA, one-hour precipitation total) decodes its AF1F 16-level radial packet and header category thresholds at a coarser 0.01-degree display grid. All three are exposed as separate Radar site fields with millimeter legends; OHA values represent color-band lower bounds rather than exact measured totals.",
       "remaining_gaps": [
-        "Public NWS one-hour accumulation product 169 (OHA) is distinct from DAA and uses AF1F 16-level radial packets, which the current decoder does not support. The relationship of the reference client's OST label to NWS OHA has not been established; DAA must not be presented as an exact OST equivalent.",
+        "The relationship of the reference client's OST label to NWS OHA has not been established; the three public products must not be presented as exact reference-client algorithm equivalents.",
         "The reference product-menu grouping, palettes, and accumulation algorithms are not verified equivalents; these are public NWS product renderings, not the reference client's internal implementation.",
         "Multi-pane use of different radar sites still shares one field per product and needs per-pane field storage."
       ],
@@ -594,7 +594,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD05",
       "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
-      "runtime_verification": "public KTLX product 170/172 captures decoded in golden tests; 0.005-degree geographic field projection tested; 646 native library tests passed (28 existing ignored); optimized web build passed at 4,531,260 gzip bytes against the explicit 4,540,000-byte main cap and 74,039 bytes against the unchanged 80,000-byte Lite cap. Integrated interactive UI verification pending."
+      "runtime_verification": "public KTLX product 169/170/172 captures decoded in golden tests; geographic field projection tested for each product. Integrated build passed 646 native library tests (28 existing ignored), optimized main web bundle at 4,532,415 gzip bytes against the 4,540,000-byte cap, and Lite at 74,707 bytes against its unchanged 80,000-byte cap. Interactive UI verification pending."
     },
     {
       "id": "RAD06",

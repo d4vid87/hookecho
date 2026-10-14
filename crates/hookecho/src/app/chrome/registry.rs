@@ -82,6 +82,7 @@ impl HookEchoApp {
                         | FL::Qpe12h
                         | FL::Qpe24h
                         | FL::Daa
+                        | FL::Oha
                         | FL::Dsa
                         | FL::PrecipType
                         | FL::FlashFlood
@@ -508,6 +509,13 @@ impl HookEchoApp {
                 "Radar site",
                 "Storm Total Precipitation (DSA)",
                 "Digital storm-total precipitation from the selected radar",
+                false,
+            ),
+            (
+                FL::Oha,
+                "Radar site",
+                "1 Hour Precip Total (OHA)",
+                "Sixteen precipitation bands from the selected radar; values are band lower bounds",
                 false,
             ),
             (
