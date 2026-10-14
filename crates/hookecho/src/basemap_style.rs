@@ -30,18 +30,127 @@ pub enum Palette {
     Positron,
     /// Very dark, desaturated navy — the night-drive look.
     Midnight,
+    /// Black land, neutral geography and bright labels for weather presentations.
+    Presentation,
 }
 
 impl Palette {
     /// Every selectable vector look, in menu order.
-    pub const ALL: [Palette; 6] = [
+    pub const ALL: [Palette; 7] = [
         Palette::Dark,
         Palette::Light,
         Palette::Liberty,
         Palette::Bright,
         Palette::Positron,
         Palette::Midnight,
+        Palette::Presentation,
     ];
+}
+
+/// Optional overrides for one administrative boundary class. Width is in base screen pixels;
+/// the accessibility theme may enlarge it. `None` keeps the selected palette's own appearance.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct BoundaryAppearance {
+    pub enabled: bool,
+    pub color: Option<[u8; 3]>,
+    pub width: Option<f32>,
+}
+
+impl Default for BoundaryAppearance {
+    fn default() -> Self { Self { enabled: true, color: None, width: None } }
+}
+
+impl BoundaryAppearance {
+    fn normalized(mut self) -> Self {
+        self.width = self.width.filter(|v| v.is_finite()).map(|v| v.clamp(0.25, 6.0));
+        self
+    }
+
+    fn apply(self, base: Option<([u8; 4], f32)>) -> Option<([u8; 4], f32)> {
+        if !self.enabled { return None; }
+        let (mut color, mut width) = base?;
+        if let Some([r, g, b]) = self.color { color = [r, g, b, 255]; }
+        if let Some(value) = self.normalized().width { width = value; }
+        Some((color, width))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CityRoadVisibility {
+    #[default]
+    Always,
+    /// Show geographic labels and roads only when the radar-site markers are hidden.
+    WithoutRadarSites,
+    Hidden,
+}
+
+/// Persisted map-display preferences. Defaults keep every existing palette unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MapDetailSettings {
+    pub states: BoundaryAppearance,
+    pub counties: BoundaryAppearance,
+    pub city_roads: CityRoadVisibility,
+}
+
+impl MapDetailSettings {
+    /// Resolve the conditional visibility before sending a geometry job to a worker. This
+    /// depends on tower-marker visibility, never on whether a radar station is selected.
+    pub fn resolve(self, show_radar_sites: bool) -> MapDetailStyle {
+        MapDetailStyle {
+            states: self.states.normalized(),
+            counties: self.counties.normalized(),
+            show_city_roads: match self.city_roads {
+                CityRoadVisibility::Always => true,
+                CityRoadVisibility::WithoutRadarSites => !show_radar_sites,
+                CityRoadVisibility::Hidden => false,
+            },
+        }
+    }
+}
+
+/// Fully resolved geometry-job configuration; travels with both native and browser worker jobs.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MapDetailStyle {
+    pub states: BoundaryAppearance,
+    pub counties: BoundaryAppearance,
+    pub show_city_roads: bool,
+}
+
+impl Default for MapDetailStyle {
+    fn default() -> Self { MapDetailSettings::default().resolve(true) }
+}
+
+impl MapDetailStyle {
+    pub fn normalized(self) -> Self {
+        Self { states: self.states.normalized(), counties: self.counties.normalized(), ..self }
+    }
+}
+
+/// Apply administrative-boundary and road visibility preferences to actual vector geometry.
+/// Country borders and weather overlays remain independent of these controls.
+pub fn stroke_with_details(p: Palette, layer: &str, class: &str, details: MapDetailStyle)
+    -> Option<([u8; 4], f32)>
+{
+    if layer == "transportation" && !details.show_city_roads { return None; }
+    let base = stroke(p, layer, class);
+    if layer == "boundary" {
+        match class {
+            "3" | "4" => return details.states.apply(base),
+            "6" => return details.counties.apply(base),
+            _ => {}
+        }
+    }
+    base
+}
+
+pub fn casing_with_details(p: Palette, layer: &str, class: &str, details: MapDetailStyle)
+    -> Option<([u8; 4], f32)>
+{
+    if layer == "transportation" && !details.show_city_roads { return None; }
+    casing(p, layer, class)
 }
 
 /// The per-palette color table. One struct rather than a pile of parallel `match` arms: adding a
@@ -164,6 +273,24 @@ const C_MIDNIGHT: Colors = Colors {
     casing: 0x05070c,
 };
 
+// Independently authored for the OpenMapTiles schema; no provider style assets required.
+const C_PRESENTATION: Colors = Colors {
+    water: 0x06121b,
+    wood: 0x000000,
+    park: 0x000000,
+    residential: 0x000000,
+    building: 0x101010,
+    motorway: 0x686868,
+    primary: 0x555555,
+    secondary: 0x454545,
+    minor: 0x303030,
+    rail: 0x242424,
+    admin2: 0x8c8c8c,
+    admin4: 0x707070,
+    county: 0x383838,
+    casing: 0x000000,
+};
+
 fn colors(p: Palette) -> &'static Colors {
     match p {
         Palette::Dark => &C_DARK,
@@ -172,6 +299,7 @@ fn colors(p: Palette) -> &'static Colors {
         Palette::Bright => &C_BRIGHT,
         Palette::Positron => &C_POSITRON,
         Palette::Midnight => &C_MIDNIGHT,
+        Palette::Presentation => &C_PRESENTATION,
         // Never asked for: `fill` and `stroke` handle the overlay before they get here.
         Palette::HybridOverlay => &C_DARK,
     }
@@ -229,6 +357,12 @@ const MIDNIGHT: VecStyle = VecStyle {
     label_halo: rgb(0x03050a),
 };
 
+const PRESENTATION: VecStyle = VecStyle {
+    background: Some(rgb(0x000000)),
+    label: rgb(0xffffff),
+    label_halo: rgb(0x000000),
+};
+
 pub fn style(p: Palette) -> &'static VecStyle {
     match p {
         Palette::Dark => &DARK,
@@ -238,6 +372,7 @@ pub fn style(p: Palette) -> &'static VecStyle {
         Palette::Bright => &BRIGHT,
         Palette::Positron => &POSITRON,
         Palette::Midnight => &MIDNIGHT,
+        Palette::Presentation => &PRESENTATION,
     }
 }
 
@@ -253,7 +388,7 @@ pub fn road_scale(zoom: f64) -> f64 {
 /// Width here is the total width of the casing stroke, so it has to exceed the road's own or the
 /// road would cover it entirely.
 pub fn casing(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
-    if layer != "transportation" {
+    if layer != "transportation" || p == Palette::Presentation {
         return None;
     }
     // Only the classes wide enough for a casing to be visible. Below tertiary the casing and the
@@ -360,12 +495,64 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
         },
         _ => return None,
     };
+    let w = if p == Palette::Presentation {
+        match layer {
+            "boundary" => match class {
+                "2" => 1.8,
+                "3" | "4" => 1.4,
+                _ => 0.5,
+            },
+            "transportation" => w * 0.6,
+            _ => w * 0.7,
+        }
+    } else {
+        w
+    };
     Some((rgb(c), w))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detail_preferences_preserve_defaults_and_roundtrip_partial_json() {
+        let defaults = MapDetailSettings::default().resolve(true);
+        for p in Palette::ALL {
+            for (layer, class) in [("boundary", "2"), ("boundary", "4"), ("boundary", "6"),
+                ("transportation", "motorway"), ("waterway", "")] {
+                assert_eq!(stroke_with_details(p, layer, class, defaults), stroke(p, layer, class));
+            }
+        }
+        let settings: MapDetailSettings = serde_json::from_str(
+            r#"{"states":{"enabled":false},"city_roads":"WithoutRadarSites"}"#).unwrap();
+        assert!(!settings.states.enabled);
+        assert!(settings.counties.enabled);
+        assert!(!settings.resolve(true).show_city_roads);
+        assert!(settings.resolve(false).show_city_roads);
+        assert_eq!(serde_json::from_str::<MapDetailSettings>(&serde_json::to_string(&settings).unwrap()).unwrap(), settings);
+        let resolved = settings.resolve(true);
+        assert_eq!(postcard::from_bytes::<MapDetailStyle>(&postcard::to_allocvec(&resolved).unwrap()).unwrap(), resolved);
+    }
+
+    #[test]
+    fn administrative_overrides_are_independent_and_bounded() {
+        let details = MapDetailStyle {
+            states: BoundaryAppearance { enabled: false, ..Default::default() },
+            counties: BoundaryAppearance { enabled: true, color: Some([40, 90, 150]), width: Some(2.5) },
+            show_city_roads: false,
+        };
+        for class in ["3", "4"] { assert!(stroke_with_details(Palette::Presentation, "boundary", class, details).is_none()); }
+        assert_eq!(stroke_with_details(Palette::Presentation, "boundary", "6", details), Some(([40,90,150,255], 2.5)));
+        assert!(stroke_with_details(Palette::Presentation, "boundary", "2", details).is_some());
+        assert!(stroke_with_details(Palette::Dark, "transportation", "motorway", details).is_none());
+        assert!(casing_with_details(Palette::Dark, "transportation", "motorway", details).is_none());
+        assert!(stroke_with_details(Palette::Dark, "waterway", "", details).is_some());
+        for (input, expected) in [(Some(f32::NAN), None), (Some(-5.0), Some(0.25)), (Some(90.0), Some(6.0))] {
+            let boundary = BoundaryAppearance { width: input, ..Default::default() };
+            assert_eq!(boundary.normalized().width, expected);
+        }
+    }
 
     #[test]
     fn regional_roads_are_thin_and_grow_to_street_scale() {

@@ -1163,6 +1163,9 @@ fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::U
 }
 
 fn appearance_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    settings_group(ui, "Desktop workspace", |ui| {
+        ui.checkbox(&mut settings.radar_workspace, "Radar workspace").on_hover_text("Source selector, slide-out tools and centered playback controls.");
+    });
     settings_group(ui, "Make Hook Echo yours", |ui| {
         egui::Grid::new("appearance_grid")
             .num_columns(2)
@@ -1248,6 +1251,11 @@ fn radar_defaults(ui: &mut egui::Ui, settings: &mut Settings) {
             if ui.text_edit_singleline(&mut site).changed() {
                 settings.default_site = site.to_ascii_uppercase();
             }
+            ui.end_row();
+
+            ui.label("Station markers");
+            ui.checkbox(&mut settings.show_tdwr_sites, "Show TDWR sites")
+                .on_hover_text("Hides only TDWR map markers. A selected TDWR continues to display radar data and remains available in the site picker.");
             ui.end_row();
 
             ui.label("Poll interval (s)");

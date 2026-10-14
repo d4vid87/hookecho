@@ -176,6 +176,16 @@ pub fn grid(
                 }
             }
         });
+        if cat == Category::Weather && ui.link("Australian radar ↗ BOM official viewer")
+                .on_hover_text("Opens the Bureau of Meteorology website; Australian radar is not embedded in this map.")
+                .clicked()
+            {
+                if let Err(error) = crate::platform::open_url(
+                    "https://www.bom.gov.au/weather-and-climate/rain-radar-and-weather-maps",
+                ) {
+                    log::warn!("Could not open BOM radar viewer: {error}");
+                }
+        }
         ui.add_space(6.0);
     }
     picked

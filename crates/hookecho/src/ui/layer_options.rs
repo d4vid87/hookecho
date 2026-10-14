@@ -107,6 +107,7 @@ pub(crate) fn show(
     show_spotters: bool,
     show_local_tracks: bool,
     spotter_range_km: &mut f64,
+    spotter_max_age_minutes: &mut u16,
     // Where the signature detectors draw their lines; only rendered for the ones that are on.
     detectors: &mut crate::settings::DetectorTuning,
     // One line about the live composite: contributing sites and the age of its oldest scan, or
@@ -567,6 +568,17 @@ pub(crate) fn show(
     }
 
     if section == "Spotters" && show_spotters {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Active timeframe:");
+            for (minutes, label) in [(0, "All"), (5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "60 min")] {
+                ui.selectable_value(spotter_max_age_minutes, minutes, label)
+                    .on_hover_text(if minutes == 0 {
+                        "Show every report returned by the Spotter Network feed"
+                    } else {
+                        "Only show reports within this age; future-dated reports are excluded"
+                    });
+            }
+        });
         ui.horizontal(|ui| {
             ui.label("Spotters within:");
             ui.add(

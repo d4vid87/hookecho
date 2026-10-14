@@ -202,6 +202,38 @@ pub fn draw_vertical(
     }
 }
 
+/// Thin full-width scale for the radar workspace. Uses the active physical palette.
+pub fn draw_horizontal(
+    painter: &egui::Painter, rect: Rect, moment: Moment, table: &ColorTable,
+    bounds: (Option<f32>, Option<f32>), disp_factor: f32, disp_label: &str,
+) {
+    let (lo, hi) = match (table.stops.first(), table.stops.last()) {
+        (Some(a), Some(b)) if b.value > a.value => (a.value, b.value),
+        _ => moment.value_range(),
+    };
+    let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 14.0));
+    for i in 0..256 {
+        let value = lo + (hi-lo) * i as f32 / 255.0;
+        let mut rgba = table.sample(value).unwrap_or([0,0,0,0]);
+        if bounds.0.is_some_and(|v| value < v) || bounds.1.is_some_and(|v| value > v) { rgba[3] = 50; }
+        let left = bar.left() + bar.width() * i as f32 / 256.0;
+        let right = bar.left() + bar.width() * (i+1) as f32 / 256.0;
+        painter.rect_filled(Rect::from_min_max(egui::pos2(left,bar.top()),egui::pos2(right,bar.bottom())),0.0,Color32::from_rgba_unmultiplied(rgba[0],rgba[1],rgba[2],rgba[3]));
+    }
+    let decimals = if (hi-lo)*disp_factor < 10.0 {2} else {0};
+    let ticks = (bar.width()/90.0).clamp(2.0,12.0) as usize;
+    for i in 0..=ticks {
+        let value = lo+(hi-lo)*i as f32/ticks as f32;
+        let x=bar.left()+bar.width()*i as f32/ticks as f32;
+        let align=if i==0 {Align2::LEFT_TOP} else if i==ticks {Align2::RIGHT_TOP} else {Align2::CENTER_TOP};
+        let text=format!("{:.*}",decimals,value*disp_factor);
+        let pos=egui::pos2(x,bar.top());
+        painter.text(pos+Vec2::splat(1.0),align,&text,FontId::proportional(10.0),Color32::BLACK);
+        painter.text(pos,align,text,FontId::proportional(10.0),Color32::WHITE);
+    }
+    painter.text(egui::pos2(rect.right()-5.0,bar.bottom()+2.0),Align2::RIGHT_TOP,format!("{} {disp_label}",moment.short_name()),FontId::proportional(10.0),Color32::WHITE);
+}
+
 /// Paint a gridded field layer's scale under the moment legend (or at the top-left when the radar
 /// legend is hidden). Reads [`crate::render::field_ramps`] — the same table that bakes the layer's
 /// GPU LUT — so the key can't drift from the pixels.

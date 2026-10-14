@@ -3606,6 +3606,7 @@ pub struct HookEchoApp {
     station_last_regional: Option<bool>,
     ppef_last_fetch: Option<Instant>,
     dotcam_bounds: Option<(f64, f64, f64, f64)>,
+    dotcam_last_fetch: Option<Instant>,
     /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
     /// in the drawer.
     #[cfg(not(target_arch = "wasm32"))]
@@ -4102,6 +4103,8 @@ impl HookEchoApp {
                     center: (sv.x, sv.y),
                     zoom: sv.zoom,
                     globe: false,
+            pitch_deg: 0.0,
+            bearing_deg: 0.0,
                 },
             ),
             _ => {
@@ -4508,6 +4511,7 @@ impl HookEchoApp {
             station_last_regional: None,
             ppef_last_fetch: None,
             dotcam_bounds: None,
+            dotcam_last_fetch: None,
             #[cfg(not(target_arch = "wasm32"))]
             nwr: None,
             nwr_pick: String::new(),
@@ -6485,6 +6489,7 @@ impl HookEchoApp {
             return false;
         }
         let hit = wxdata::sites::all()
+            .filter(|s| self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)))
             .filter(|s| {
                 let w = crate::render::mercator::lonlat_to_world(
                     s.longitude as f64,
@@ -6832,19 +6837,32 @@ impl HookEchoApp {
         let radar = self.views[idx].displayed_time();
         let selected = self.views[idx].satellite.selected(&times, radar);
         let tz = self.active_tz();
-        egui::Area::new(egui::Id::new("goes_time_bar"))
+        let workspace = self.settings.radar_workspace && !chrome::compact(ctx);
+        let bottom_offset = if workspace {
+            ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("corner_scrubber_rect")))
+                .map_or(240.0, |rect| (self.chrome_rect.bottom() - rect.top() + 8.0).max(120.0))
+        } else {
+            120.0
+        };
+        let area = egui::Area::new(egui::Id::new("goes_time_bar"))
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -120.0))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -bottom_offset))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    if workspace {
+                        ui.set_max_width((self.chrome_rect.width() - 32.0).clamp(240.0, 480.0));
+                    }
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(if self.goes[idx].imagery_ready {
-                            "🛰 GOES displayed:"
+                        let state = if selected.is_none() && self.goes[idx].rx.is_none() {
+                            "frame unavailable"
+                        } else if self.goes[idx].imagery_ready {
+                            "displayed"
                         } else if self.goes[idx].imagery_incomplete {
-                            "🛰 GOES selected (incomplete):"
+                            "selected (incomplete)"
                         } else {
-                            "🛰 GOES selected (loading):"
-                        });
+                            "selected (loading)"
+                        };
+                        ui.label(format!("{} {state}:", self.views[idx].basemap.label()));
                         let selection = &mut self.views[idx].satellite;
                         if ui
                             .selectable_label(selection.follow_radar, "Follow radar")
@@ -6894,7 +6912,7 @@ impl HookEchoApp {
                         if ui
                             .checkbox(
                                 &mut self.settings.link_satellite_times,
-                                "Link satellite panes",
+                                "Link imagery panes",
                             )
                             .changed()
                         {
@@ -6903,6 +6921,18 @@ impl HookEchoApp {
                     });
                 });
             });
+        if workspace {
+            // Alerts and their expanded details must reserve the complete transport/imagery
+            // stack. The scrubber overwrites this rect with its own geometry next frame.
+            ctx.data_mut(|d| {
+                let id = egui::Id::new("corner_scrubber_rect");
+                let stack = d.get_temp::<egui::Rect>(id)
+                    .map_or(area.response.rect, |transport| transport.union(area.response.rect));
+                d.insert_temp(id, stack);
+                d.insert_temp(egui::Id::new("workspace_imagery_timebar_pane"), idx);
+            });
+            self.mobile_occlusion.push(area.response.rect);
+        }
     }
 
     fn prepare_satellite_pane(
@@ -10798,15 +10828,19 @@ impl HookEchoApp {
             self.ppef_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Ppef);
         }
-        // The camera catalog is megabytes of slow-changing agency data: fetch it per view box.
+        // Refresh large camera catalogs on view changes or expiry, including a stationary view.
         let bbox = (
             (min_lon * 2.0).round() / 2.0,
             (min_lat * 2.0).round() / 2.0,
             (max_lon * 2.0).round() / 2.0,
             (max_lat * 2.0).round() / 2.0,
         );
-        if self.dotcam_bounds != Some(bbox) {
+        if wxdata::dotcams::catalog_refresh_due(
+            self.dotcam_bounds != Some(bbox),
+            self.dotcam_last_fetch.map(|time| time.elapsed()),
+        ) {
             self.dotcam_bounds = Some(bbox);
+            self.dotcam_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::DotCams(bbox.0, bbox.1, bbox.2, bbox.3));
         }
     }
@@ -12312,7 +12346,7 @@ impl HookEchoApp {
         // A frame switch bins and uploads a full sweep. Holding animation while the map is under
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
         self.views[idx].buffering = next_pending;
-        if should_advance_timeline(next_pending, self.gesture_live) {
+        if should_advance_timeline(next_pending, self.settings.pause_while_panning && self.gesture_live) {
             let view = &mut self.views[idx];
             let previous = view.timeline.playhead;
             let unavailable = view.failed_frame.as_deref().is_some_and(|name| view.timeline.current().is_some_and(|frame| frame.name() == name));
@@ -13348,6 +13382,7 @@ impl HookEchoApp {
         let palette = pane_style.vector_palette().unwrap_or_default();
         self.pane_vtiles[idx].set_ctx(ctx.clone());
         let clear_vector = clear_vector | self.pane_vtiles[idx].set_style(palette)
+            | self.pane_vtiles[idx].set_details(self.settings.map_details.resolve(self.show_radar_sites))
             | self.pane_vtiles[idx].set_theme(self.settings.theme)
             | self.pane_vtiles[idx].set_simplified(
                 self.settings.map_quality == crate::settings::MapQuality::Performance
@@ -13435,7 +13470,8 @@ impl HookEchoApp {
                 }
                 None => {
                     let view = &mut self.views[idx];
-                    view.camera_motion.drag(&mut view.camera, (d.x, d.y), dt, vp, ctx.input(|i| i.time));
+                    let to = response.interact_pointer_pos().map(|p| (p.x - prect.left(), p.y - prect.top())).unwrap_or((vp.0 / 2.0, vp.1 / 2.0));
+                    view.camera_motion.drag_at(&mut view.camera, (d.x, d.y), to, dt, vp, ctx.input(|i| i.time));
                     self.follow_cell = None; // a manual pan takes over the camera
                 }
             }
@@ -13523,7 +13559,7 @@ impl HookEchoApp {
                 }
                 let t = mt.translation_delta;
                 if t != egui::Vec2::ZERO {
-                    self.views[idx].camera.pan_pixels(t.x, t.y, vp);
+                    self.views[idx].camera.pan_at((t.x, t.y), (mt.center_pos.x - prect.left(), mt.center_pos.y - prect.top()), vp);
                     self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
                 }
             }
@@ -14101,8 +14137,8 @@ impl HookEchoApp {
             self.goes[idx].imagery_incomplete = self.tiles.visible_failed(pane_style, &visible);
             let status = if let Some(time) = satellite_time {
                 let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
-                format!("{} satellite {}{}", if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" }, crate::timefmt::fmt_clock(time, self.active_tz(), false), offset)
-            } else { "Satellite frame unavailable".to_owned() };
+                format!("{} · {} {}{}", pane_style.label(), if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" }, crate::timefmt::fmt_clock(time, self.active_tz(), false), offset)
+            } else { format!("{} · frame unavailable", pane_style.label()) };
             Some(status)
         } else { None };
         // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
@@ -14265,6 +14301,7 @@ impl HookEchoApp {
             camera_center: center,
             camera_scale: scale,
             globe: cam.globe_uniform(vp),
+            planar: cam.planar_uniform(vp),
             world_per_pixel: cam.world_per_pixel() as f32,
             new_tiles,
             visible,
@@ -14304,7 +14341,12 @@ impl HookEchoApp {
             painter.rect_filled(egui::Rect::from_min_size(position - egui::vec2(4.0, 3.0), text.size() + egui::vec2(8.0, 6.0)), 3.0, egui::Color32::from_black_alpha(210));
             painter.galley(position, text, egui::Color32::WHITE);
         }
-        if let Some(status) = satellite_status {
+        // The active workspace pane already exposes imagery time/loading state in its bar.
+        // Inactive panes retain their own captions, as do mobile/ordinary/hidden-chrome views.
+        let imagery_bar_visible = idx == self.active && ctx.data(|d| {
+            d.get_temp::<usize>(egui::Id::new("workspace_imagery_timebar_pane")) == Some(idx)
+        });
+        if let Some(status) = satellite_status.filter(|_| !imagery_bar_visible) {
             let painter = ui.painter().with_clip_rect(prect);
             let text = painter.layout(status, egui::FontId::proportional(12.0), egui::Color32::WHITE, (prect.width() - 50.0).max(100.0));
             let position = egui::pos2((prect.right() - 30.0 - text.size().x).max(prect.left() + 10.0), prect.top() + 52.0);
@@ -14341,6 +14383,7 @@ impl HookEchoApp {
 
         if idx == self.active
             && self.show_radar_sites
+            && !self.settings.radar_workspace
             && !self.obs_mode
             && !self.forecast_open
             && !self.cells_window.open
@@ -14350,6 +14393,7 @@ impl HookEchoApp {
         {
             let focused = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
+                    if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { return None; }
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
                     (d <= 16.0 * 16.0).then_some((s, d))
@@ -15769,6 +15813,9 @@ impl HookEchoApp {
                 };
                 let mut spotter_click: Option<wxdata::spotters::Spotter> = None;
                 for sp in &self.spotters {
+                    if !sp.within_active_timeframe(now, self.settings.spotter_max_age_minutes) {
+                        continue;
+                    }
                     if (sp.lon - site_pos[0]).abs() > max_dlon
                         || (sp.lat - site_pos[1]).abs() > max_dlat
                     {
@@ -15801,8 +15848,8 @@ impl HookEchoApp {
                     painter.circle_filled(p, 3.5, accent);
                     // Movement arrow tick, heading clockwise from north.
                     if let Some(h) = sp.heading {
-                        let r = h.to_radians();
-                        let dir = egui::vec2(r.sin(), -r.cos());
+                        let heading = cam.heading_on_screen(w, h as f64, vp);
+                        let dir = egui::vec2(heading.0, heading.1);
                         painter.line_segment(
                             [p + dir * 8.0, p + dir * 14.0],
                             egui::Stroke::new(2.0, egui::Color32::WHITE),
@@ -16021,8 +16068,8 @@ impl HookEchoApp {
                 painter.circle_stroke(p, 3.0, egui::Stroke::new(1.5, col));
                 // Wind barb, rotated so the shaft points toward the wind source (FROM bearing).
                 if let Some(dir) = ob.wdir_deg {
-                    let th = dir.to_radians();
-                    let (up, right) = ([th.sin(), -th.cos()], [th.cos(), th.sin()]);
+                    let heading = cam.heading_on_screen(crate::render::mercator::lonlat_to_world(ob.lon, ob.lat), dir as f64, vp);
+                    let (up, right) = ([heading.0, heading.1], [-heading.1, heading.0]);
                     let map = |u: [f32; 2]| {
                         p + egui::vec2(
                             (u[0] * right[0] + u[1] * up[0]) * 22.0,
@@ -16306,7 +16353,7 @@ impl HookEchoApp {
         // a rebuild is in flight the previous rect keeps it registered to the ground.
         if self.show_blockage {
             if let Some((_, tex, world)) = &self.blockage_tex {
-                if cam.globe {
+                if cam.globe || cam.pitch_deg != 0.0 || cam.bearing_deg != 0.0 {
                     crate::geo::paint_image(&painter, &cam, prect, tex.id(), *world);
                 } else {
                 let a = cam.world_to_screen((world[0], world[1]), vp);
@@ -16382,11 +16429,12 @@ impl HookEchoApp {
             }
         }
 
-        // Radar lens: spaced bright pins keep the network legible; every site remains clickable.
+        // Radar lens: spaced bright pins keep visible networks legible and clickable.
         if self.show_radar_sites {
             let current = self.views[idx].site.as_deref();
             let hovered = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
+                    if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { return None; }
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
                     (d <= 16.0 * 16.0).then_some((s.id, d))
@@ -16396,6 +16444,7 @@ impl HookEchoApp {
             let spacing = 110.0;
             let mut cells = std::collections::HashMap::new();
             for (s, w) in sites_in_world() {
+                if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { continue; }
                 if !s.id.starts_with('K') || !(-126.0..-66.0).contains(&s.longitude)
                     || !(24.0..50.0).contains(&s.latitude) { continue; }
                 let (sx, sy) = cam.world_to_screen(*w, vp);
@@ -16409,6 +16458,7 @@ impl HookEchoApp {
             }
             let strong: std::collections::HashSet<&str> = cells.values().map(|(id, _)| *id).collect();
             for (s, w) in sites_in_world() {
+                if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { continue; }
                 let (sx, sy) = cam.world_to_screen(*w, vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
                 if !prect.contains(p) { continue; }
@@ -16461,8 +16511,10 @@ impl HookEchoApp {
                 let km = m.alert_radius_mi * crate::geo::KM_PER_MILE;
                 let edge = crate::geo::destination_point([m.lon, m.lat], 90.0, km);
                 let ew = crate::render::mercator::lonlat_to_world(edge[0], edge[1]);
-                let (ex, _) = cam.world_to_screen(ew, vp);
-                let r = (prect.left() + ex - p.x).abs();
+                let (ex, ey) = cam.world_to_screen(ew, vp);
+                let r = egui::pos2(prect.left() + ex, prect.top() + ey).distance(p);
+                let geographic = cam.globe || cam.pitch_deg != 0.0 || cam.bearing_deg != 0.0;
+                let ring: Vec<_> = if geographic { (0..=144).map(|i| crate::geo::destination_point([m.lon, m.lat], i as f64 * 2.5, km)).collect() } else { Vec::new() };
                 if r > 4.0 && r < 4000.0 {
                     for (width, color) in [
                         (24.0, egui::Color32::from_rgba_unmultiplied(106, 199, 255, 24)),
@@ -16470,13 +16522,18 @@ impl HookEchoApp {
                         (9.0, egui::Color32::from_rgb(6, 26, 43)),
                         (4.0, egui::Color32::from_rgb(167, 228, 255)),
                     ] {
-                        painter.circle_stroke(p, r, egui::Stroke::new(width, color));
+                        if geographic { crate::geo::paint_path(&painter, &cam, prect, &ring, egui::Stroke::new(width, color)); }
+                        else { painter.circle_stroke(p, r, egui::Stroke::new(width, color)); }
                     }
-                    if r > 9.0 {
+                    if r > 9.0 && !geographic {
                         painter.circle_stroke(p, r - 5.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(62, 156, 219)));
                     }
                     if r >= 35.0 {
-                        let edge = p + egui::vec2(r * std::f32::consts::FRAC_1_SQRT_2, -r * std::f32::consts::FRAC_1_SQRT_2);
+                        let edge = if geographic {
+                            let ll = crate::geo::destination_point([m.lon, m.lat], 45.0, km);
+                            let xy = cam.world_to_screen(crate::render::mercator::lonlat_to_world(ll[0], ll[1]), vp);
+                            egui::pos2(prect.left() + xy.0, prect.top() + xy.1)
+                        } else { p + egui::vec2(r * std::f32::consts::FRAC_1_SQRT_2, -r * std::f32::consts::FRAC_1_SQRT_2) };
                         let badge = egui::Rect::from_min_size(
                             egui::pos2(
                                 (edge.x + 12.0).clamp(prect.left() + 8.0, (prect.right() - 124.0).max(prect.left() + 8.0)),
@@ -16959,12 +17016,15 @@ impl HookEchoApp {
 
         // The boxed legend is desktop-only; Android draws a full-width color scale in the mobile
         // chrome (see `app::mobile`), so drawing both would be redundant.
+        let workspace_chrome = self.settings.radar_workspace && !chrome::compact(ctx);
+        let mut field_status_y = if workspace_chrome { 84.0 } else { 12.0 };
         if view.show_legend && !cfg!(target_os = "android") {
             // The moment's scale floats over this pane's right edge (no panel, no card) so the map
             // keeps the pixels; the field/wind ramps still need their cards.
-            if view.volume.is_some() {
+            if view.volume.is_some() && view.show_radar {
                 let (df, dl) = display_units(view.moment, &self.settings);
-                ui::legend::draw_vertical(
+                let draw_scale = if self.settings.radar_workspace && !chrome::compact(ctx) { ui::legend::draw_horizontal } else { ui::legend::draw_vertical };
+                draw_scale(
                     &painter,
                     prect,
                     view.moment,
@@ -16979,7 +17039,7 @@ impl HookEchoApp {
             // Every pane ducks by the same amount rather than only the top row: in a 2x2 grid the
             // lower cards then sit a little further from their pane's edge, which nobody notices,
             // and the alternative is a rect comparison that has to know about window insets.
-            let mut y = 48.0;
+            let mut y = if self.settings.radar_workspace && !chrome::compact(ctx) { 84.0 } else { 48.0 };
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
             // categorical classifications were unlabeled color.
@@ -16996,8 +17056,9 @@ impl HookEchoApp {
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
             // call rather than a slot in DRAW_ORDER.
             if self.show_wind && self.wind.is_some() {
-                ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
+                y += ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
             }
+            if workspace_chrome { field_status_y = y + 20.0; }
         }
 
         if let Some((layer, valid, selected, tolerance, aligned)) =
@@ -17038,7 +17099,7 @@ impl HookEchoApp {
             let font = egui::FontId::proportional(12.0);
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let rect = egui::Rect::from_min_size(
-                prect.left_top() + egui::vec2(12.0, 12.0),
+                prect.left_top() + egui::vec2(12.0, field_status_y),
                 galley.size() + egui::vec2(16.0, 10.0),
             );
             painter.rect_filled(rect, 6.0, egui::Color32::from_black_alpha(220));
@@ -17284,6 +17345,7 @@ impl HookEchoApp {
                 bbox_max,
                 center,
                 globe: cam.globe_uniform(vp),
+            planar: cam.planar_uniform(vp),
                 scale,
                 dt: self.wind_dt,
                 // Pixels per world unit is the camera's own scale factor; the particle step is
@@ -18317,6 +18379,8 @@ impl HookEchoApp {
             center: lonlat_to_world(lon, lat),
             zoom,
             globe: v.camera.globe,
+            pitch_deg: v.camera.pitch_deg,
+            bearing_deg: v.camera.bearing_deg,
         };
         v.camera_placed = true;
         if let Some(t) = time {
@@ -21255,10 +21319,17 @@ impl eframe::App for HookEchoApp {
         // Bindings are polled once, globally: a hotkey works the same in OBS mode, on mobile, and
         // with the drawer open. `capture_key` suppresses the table while the Hotkeys tab is
         // listening for the next keypress.
-        if hotkeys::search_requested(ctx) {
+        // Modal dialogs, popups and the workspace drawer own keyboard input until dismissed.
+        // In particular, Escape must not also hide the entire map chrome underneath them.
+        let blocking_surface = ctx.memory(|m| m.top_modal_layer().is_some())
+            || egui::Popup::is_any_open(ctx)
+            || (self.settings.radar_workspace && ctx.data_mut(|d| {
+                d.get_temp::<bool>(egui::Id::new("omega_workspace_menu")).unwrap_or(false)
+            }));
+        if !blocking_surface && hotkeys::search_requested(ctx) {
             self.apply_action(BindableAction::CommandSearch, ctx);
         }
-        if !self.capture_key {
+        if !self.capture_key && !blocking_surface {
             // Space mirrors the transport button. A focused editor owns its spaces. Escape
             // closes a popup or panel before acting as the map-wide show/hide switch.
             if !ctx.memory(|m| m.focused().is_some())
@@ -21329,6 +21400,8 @@ impl eframe::App for HookEchoApp {
         // handling. The occlusion rects are rebuilt from scratch every frame; a stale rect would
         // keep swallowing gestures over a sheet that closed.
         self.mobile_occlusion.clear();
+        ctx.data_mut(|d| d.remove::<usize>(egui::Id::new("workspace_imagery_timebar_pane")));
+        let mut workspace_imagery_bar_handled = false;
         if !self.panel_open { self.drawer.resume(); }
         self.refresh_priority_overlays(ctx);
         self.drawer.begin_frame(ctx);
@@ -21358,6 +21431,10 @@ impl eframe::App for HookEchoApp {
                 // the remaining viewport rather than underneath either dock.
                 self.chrome_rect = root.available_rect_before_wrap();
                 self.scrubber(ctx);
+                if self.settings.radar_workspace && !phone_layout {
+                    self.goes_time_bar(ctx);
+                    workspace_imagery_bar_handled = true;
+                }
                 if !phone_layout && !self.analyst_open && !self.drawer.is_open() {
                     self.priority_dock(ctx);
                     if self.active_workspace.as_deref() == Some("National overview") {
@@ -21963,7 +22040,9 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        self.goes_time_bar(ctx);
+        if !workspace_imagery_bar_handled {
+            self.goes_time_bar(ctx);
+        }
         if let Some(act) = self
             .event_window
             .show(ctx, &mut self.settings, &mut self.drawer)

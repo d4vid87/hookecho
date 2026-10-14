@@ -21,15 +21,6 @@ impl HookEchoApp {
             .clone()
             .unwrap_or_else(|| "Choose radar".into());
         let place = wxdata::sites::site_by_id(&site).map(|s| format!("{}, {}", s.city, s.state));
-        let product = self.views[idx].custom_product.clone().unwrap_or_else(|| {
-            crate::products::name(self.views[idx].moment, self.views[idx].srv).into()
-        });
-        let elevations = self.views[idx]
-            .volume
-            .as_ref()
-            .map(|v| v.elevations.clone())
-            .unwrap_or_default();
-        let tilt = self.views[idx].tilt;
         let phone = compact(ui.ctx());
         ui.spacing_mut().interact_size.y = if phone { 44.0 } else { 32.0 };
         if !phone
@@ -49,10 +40,50 @@ impl HookEchoApp {
         {
             self.apply_palette(PaletteAction::OpenWindow(AppWindow::Site), ui.ctx());
         }
+        self.radar_product_controls(ui, false);
+        if self.analyst_open {
+            ui.weak(if self.link_cameras && self.views.len() == 4 {
+                "Products/elevations: this pane · Station: linked panes"
+            } else {
+                "Products/elevations/station: this pane"
+            });
+        }
+        if let Some(previous) = &self.views[idx].retained_station {
+            ui.weak(format!(
+                "Showing prior scan from {previous} while {site} loads"
+            ));
+        }
+    }
+    /// Shared product/elevation chooser for the compact header and radar workspace transport.
+    pub(crate) fn radar_product_controls(&mut self, ui: &mut egui::Ui, full_name: bool) {
+        let idx = self.active;
+        let phone = compact(ui.ctx());
+        let product = self.views[idx].custom_product.clone().unwrap_or_else(|| {
+            crate::products::name(self.views[idx].moment, self.views[idx].srv).into()
+        });
+        let elevations = self.views[idx]
+            .volume
+            .as_ref()
+            .map(|v| v.elevations.clone())
+            .unwrap_or_default();
+        let tilt = self.views[idx].tilt;
         ui.horizontal(|ui| {
             let mut pick = None;
             let menu = ui.menu_button(
-                format!("{} {}", if phone { product.as_str() } else if self.views[idx].srv && self.views[idx].moment == Moment::Velocity { "SRV" } else { self.views[idx].custom_product.as_deref().unwrap_or(crate::products::info(self.views[idx].moment).short) }, egui_phosphor::regular::CARET_DOWN),
+                format!(
+                    "{} {}",
+                    if phone || full_name {
+                        product.as_str()
+                    } else if self.views[idx].srv && self.views[idx].moment == Moment::Velocity {
+                        "SRV"
+                    } else {
+                        self.views[idx]
+                            .custom_product
+                            .as_deref()
+                            .unwrap_or(crate::products::info(self.views[idx].moment).short)
+                    },
+                    egui_phosphor::regular::CARET_DOWN
+                ),
                 |ui| {
                     ui.set_min_width(220.0);
                     ui.spacing_mut().interact_size.y = 44.0;
@@ -131,7 +162,9 @@ impl HookEchoApp {
                 },
             );
             self.tour_anchors.product = Some(menu.response.rect);
-            menu.response.named("Choose radar product").on_hover_text(&product);
+            menu.response
+                .named("Choose radar product")
+                .on_hover_text(&product);
             if let Some((m, srv)) = pick {
                 self.apply_palette(PaletteAction::SetMoment(m, srv), ui.ctx());
             }
@@ -157,18 +190,6 @@ impl HookEchoApp {
                 .response
                 .on_hover_text("Choose radar elevation");
         });
-        if self.analyst_open {
-            ui.weak(if self.link_cameras && self.views.len() == 4 {
-                "Products/elevations: this pane · Station: linked panes"
-            } else {
-                "Products/elevations/station: this pane"
-            });
-        }
-        if let Some(previous) = &self.views[idx].retained_station {
-            ui.weak(format!(
-                "Showing prior scan from {previous} while {site} loads"
-            ));
-        }
     }
 }
 

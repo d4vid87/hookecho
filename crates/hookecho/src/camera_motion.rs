@@ -32,7 +32,7 @@ impl Motion {
     pub fn sync(&mut self, cam: &Camera, vp: (f32, f32)) {
         if self
             .expected
-            .is_some_and(|e| e.center != cam.center || e.zoom != cam.zoom || e.globe != cam.globe)
+            .is_some_and(|e| e.center != cam.center || e.zoom != cam.zoom || e.globe != cam.globe || e.pitch_deg != cam.pitch_deg || e.bearing_deg != cam.bearing_deg)
             || self.viewport.is_some_and(|old| old != vp)
         {
             self.cancel();
@@ -92,6 +92,14 @@ impl Motion {
         let y = (delta.1 / dt).clamp(-2000.0, 2000.0);
         self.velocity.0 += (x - self.velocity.0) * weight;
         self.velocity.1 += (y - self.velocity.1) * weight;
+        self.expected = Some(*cam);
+    }
+
+    pub fn drag_at(&mut self, cam: &mut Camera, delta: (f32, f32), to: (f32, f32), dt: f32, vp: (f32, f32), now: f64) {
+        let mut anchored = *cam;
+        anchored.pan_at(delta, to, vp);
+        self.drag(cam, delta, dt, vp, now);
+        *cam = anchored;
         self.expected = Some(*cam);
     }
 
@@ -269,4 +277,13 @@ mod tests {
         }
         assert!((c.zoom - 7.5).abs() < 1e-4);
     }
+    #[test]
+    fn changing_orientation_cancels_old_inertia() {
+        let mut c=Camera::at_lonlat(-97.0,35.0,8.0);
+        let mut m=Motion::default();m.wheel(&mut c,1.0,(500.0,400.0),VP,false);
+        c.set_orientation(45.0,90.0);
+        assert!(!m.advance(&mut c,0.016,VP,false));
+        assert_eq!(c.zoom,8.0);
+    }
+
 }

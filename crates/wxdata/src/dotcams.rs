@@ -15,6 +15,12 @@
 
 use crate::alerts::USER_AGENT;
 
+/// Refresh catalogs after fifteen minutes even when the view is stationary. Failed requests
+/// use the same cooldown, avoiding an every-frame retry against large agency catalogs.
+pub fn catalog_refresh_due(bounds_changed: bool, age: Option<std::time::Duration>) -> bool {
+    bounds_changed || age.is_none_or(|age| age >= std::time::Duration::from_secs(900))
+}
+
 /// One highway camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DotCam {
@@ -167,7 +173,7 @@ pub async fn fetch_source(client: &reqwest::Client, s: &Source) -> anyhow::Resul
 /// Fetch every agency whose coverage could reach a lon/lat box, and keep the cameras inside it.
 ///
 /// The district files are megabytes each and change slowly, so the caller is expected to hold the
-/// result rather than poll it; there is no per-view query to push the filtering onto.
+/// result with a fifteen-minute expiry; there is no per-view query to push the filtering onto.
 pub async fn fetch_bbox(
     client: &reqwest::Client,
     min_lon: f64,
@@ -270,5 +276,24 @@ mod tests {
             );
             assert!(!cams.is_empty(), "{} returned nothing", s.agency);
         }
+    }
+}
+
+#[cfg(test)]
+mod catalog_expiry_tests {
+    use super::catalog_refresh_due;
+    use std::time::Duration;
+
+    #[test]
+    fn stationary_catalog_expires_without_refetching_every_frame() {
+        assert!(catalog_refresh_due(false, None));
+        assert!(!catalog_refresh_due(false, Some(Duration::ZERO)));
+        assert!(!catalog_refresh_due(
+            false,
+            Some(Duration::from_millis(899_999))
+        ));
+        assert!(catalog_refresh_due(false, Some(Duration::from_secs(900))));
+        assert!(catalog_refresh_due(false, Some(Duration::from_secs(1800))));
+        assert!(catalog_refresh_due(true, Some(Duration::from_secs(1))));
     }
 }

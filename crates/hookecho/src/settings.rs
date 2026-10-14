@@ -17,6 +17,48 @@ pub enum MapQuality {
     Full,
 }
 
+/// Animation preference families share the active pane's existing timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationSource { Radar, Mrms, Satellite, Forecasts }
+
+impl AnimationSource {
+    pub const ALL: [Self; 4] = [Self::Radar, Self::Mrms, Self::Satellite, Self::Forecasts];
+    pub fn label(self) -> &'static str {
+        match self { Self::Radar => "Radar", Self::Mrms => "MRMS", Self::Satellite => "Satellite", Self::Forecasts => "Forecasts" }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SourceAnimationSpeeds {
+    pub radar: f32,
+    pub mrms: f32,
+    pub satellite: f32,
+    pub forecasts: f32,
+}
+
+impl Default for SourceAnimationSpeeds {
+    fn default() -> Self { Self { radar: 4.0, mrms: 4.0, satellite: 4.0, forecasts: 4.0 } }
+}
+
+impl SourceAnimationSpeeds {
+    pub fn sanitize(speed: f32) -> f32 {
+        if speed.is_finite() { speed.clamp(0.5, 20.0) } else { 4.0 }
+    }
+    pub fn get(self, source: AnimationSource) -> f32 {
+        Self::sanitize(match source { AnimationSource::Radar => self.radar, AnimationSource::Mrms => self.mrms, AnimationSource::Satellite => self.satellite, AnimationSource::Forecasts => self.forecasts })
+    }
+    pub fn set(&mut self, source: AnimationSource, speed: f32) {
+        let slot = match source { AnimationSource::Radar => &mut self.radar, AnimationSource::Mrms => &mut self.mrms, AnimationSource::Satellite => &mut self.satellite, AnimationSource::Forecasts => &mut self.forecasts };
+        *slot = Self::sanitize(speed);
+    }
+    /// Mixed sources have no single preference owner; retain the current shared speed.
+    pub fn switch(&mut self, previous: Option<AnimationSource>, next: Option<AnimationSource>, speed: f32) -> f32 {
+        if let Some(previous) = previous { self.set(previous, speed); }
+        next.map_or_else(|| Self::sanitize(speed), |next| self.get(next))
+    }
+}
+
 /// Which public Level II feed supplies the live radar pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RadarFeed {
@@ -189,6 +231,18 @@ pub struct Settings {
     /// Manual fallback when the low-latency chunk feed is unreliable.
     pub radar_feed: RadarFeed,
     pub theme: Theme,
+    /// Optional desktop workspace with source selector, drawer and centered transport.
+    pub radar_workspace: bool,
+    /// Show TDWR station markers. Does not disable the selected station or its radar feed.
+    #[serde(default = "default_true")]
+    pub show_tdwr_sites: bool,
+    #[serde(default)]
+    pub map_details: crate::basemap_style::MapDetailSettings,
+    /// Pause radar playback while the map is being dragged or zoomed.
+    pub pause_while_panning: bool,
+    /// Saved playback rates applied when the workspace changes source family.
+    #[serde(default)]
+    pub source_animation_speeds: SourceAnimationSpeeds,
     /// UI density (spacing/type token table). Comfortable by default; Compact restores the
     /// pre-0.12 pro-dense desktop metrics.
     pub density: Density,
@@ -322,6 +376,10 @@ pub struct Settings {
     /// CONUS feed). Default 230 km, roughly the radar's own useful range.
     #[serde(default = "default_spotter_range_km")]
     pub spotter_range_km: f64,
+    /// Maximum age of Spotter Network reports in minutes. 0 keeps the whole feed.
+    /// Missing from older settings files means no age filter, preserving existing behavior.
+    #[serde(default)]
+    pub spotter_max_age_minutes: u16,
     /// Play an audible chime when a new NWS warning appears.
     #[serde(default = "default_true")]
     pub alert_sound: bool,
@@ -688,6 +746,11 @@ impl Default for DetectorTuning {
 }
 
 impl Settings {
+    /// Marker visibility only; site discovery, selection and radar fetching keep their full catalog.
+    pub(crate) fn radar_site_marker_visible(&self, network: wxdata::sites::Network) -> bool {
+        self.show_tdwr_sites || network != wxdata::sites::Network::Tdwr
+    }
+
     pub fn record_recent_field(&mut self, id: &str) {
         self.recent_fields.retain(|saved| saved != id);
         self.recent_fields.insert(0, id.to_string());
@@ -1293,6 +1356,11 @@ impl Default for Settings {
             poll_interval_secs: 30,
             radar_feed: RadarFeed::default(),
             theme: Theme::Dark,
+            radar_workspace: false,
+            show_tdwr_sites: true,
+            map_details: crate::basemap_style::MapDetailSettings::default(),
+            pause_while_panning: true,
+            source_animation_speeds: SourceAnimationSpeeds::default(),
             density: Density::default(),
             accent: None,
             reduce_motion: false,
@@ -1331,6 +1399,7 @@ impl Default for Settings {
             glm_goes_west: false,
             abi_scene: wxdata::abi::Scene::default(),
             spotter_range_km: default_spotter_range_km(),
+            spotter_max_age_minutes: 0,
             alert_sound: true,
             smooth_radar: true,
             ntfy_topic: String::new(),
@@ -1533,11 +1602,25 @@ impl Settings {
         serde_json::from_value(serde_json::Value::Object(good)).unwrap_or_default()
     }
 
+    /// Apply launcher defaults only to a fresh profile. Saved choices always win.
+    fn from_saved_profile(saved: Option<&str>, radar_workspace: bool) -> Self {
+        match saved {
+            Some(text) => Self::from_json_lossy(text),
+            None => {
+                let mut defaults = Self::default();
+                if radar_workspace {
+                    defaults.radar_workspace = true;
+                    defaults.basemap = crate::tiles::BasemapStyle::Presentation.slug().into();
+                    defaults.mqtt_prefix = "hookecho-radar-workspace".into();
+                }
+                defaults
+            }
+        }
+    }
+
     pub fn load() -> Self {
-        let mut loaded = match Self::read_saved() {
-            Some(s) => Self::from_json_lossy(&s),
-            None => Self::default(),
-        };
+        let saved = Self::read_saved();
+        let mut loaded = Self::from_saved_profile(saved.as_deref(), crate::paths::is_radar_workspace());
         // Older installs saved the five-minute default, which hid tracks between source scans.
         // Migrate that value once; a user who later chooses five minutes keeps their choice.
         if loaded.priority_rules.migrate_track_age_default() {
@@ -1987,6 +2070,11 @@ mod tests {
             poll_interval_secs: 45,
             radar_feed: RadarFeed::ArchiveOnly,
             theme: Theme::Synthwave,
+            radar_workspace: true,
+            show_tdwr_sites: true,
+            map_details: crate::basemap_style::MapDetailSettings::default(),
+            pause_while_panning: false,
+            source_animation_speeds: SourceAnimationSpeeds::default(),
             presets: vec!["KTLX".to_string(), "KOUN".to_string()],
             palettes: BTreeMap::from([("REF".to_string(), "/tmp/foo.pal".to_string())]),
             velocity_unit: VelocityUnit::Mph,
@@ -2040,6 +2128,7 @@ mod tests {
             glm_goes_west: false,
             abi_scene: wxdata::abi::Scene::default(),
             spotter_range_km: default_spotter_range_km(),
+            spotter_max_age_minutes: 0,
             alert_sound: false,
             ntfy_topic: "hookecho-test".to_string(),
             discord_webhook: String::new(),
@@ -2358,5 +2447,135 @@ mod deletion_undo_tests {
         assert_eq!(settings.markers[1].name, "Edited after deletion");
         assert!(!restore_deleted_marker(&mut settings.markers, 0, deleted));
         assert_eq!(settings.markers.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod spotter_timeframe_tests {
+    use super::*;
+
+    #[test]
+    fn spotter_age_filter_defaults_and_round_trips() {
+        let legacy = Settings::from_json_lossy("{}");
+        assert_eq!(legacy.spotter_max_age_minutes, 0);
+        let configured = Settings::from_json_lossy(r#"{"spotter_max_age_minutes":15}"#);
+        assert_eq!(configured.spotter_max_age_minutes, 15);
+        let saved = serde_json::to_string(&configured).unwrap();
+        let restored = Settings::from_json_lossy(&saved);
+        assert_eq!(restored.spotter_max_age_minutes, 15);
+    }
+}
+
+#[cfg(test)]
+mod standalone_profile_tests {
+    use super::Settings;
+
+    #[test]
+    fn fresh_standalone_profile_uses_workspace_without_changing_ordinary_defaults() {
+        let standalone = Settings::from_saved_profile(None, true);
+        assert!(standalone.radar_workspace);
+        assert_eq!(standalone.mqtt_prefix, "hookecho-radar-workspace");
+        assert_eq!(standalone.basemap, crate::tiles::BasemapStyle::Presentation.slug());
+        let ordinary = Settings::from_saved_profile(None, false);
+        assert!(!ordinary.radar_workspace);
+        assert_eq!(serde_json::to_value(ordinary).unwrap(), serde_json::to_value(Settings::default()).unwrap());
+    }
+
+    #[test]
+    fn saved_standalone_preferences_override_launcher_defaults() {
+        for workspace in [false, true] {
+            let saved = Settings {
+                radar_workspace: workspace,
+                basemap: "dark".into(),
+                live_loop_frames: 21,
+                mqtt_prefix: "my-existing-prefix".into(),
+                ..Settings::default()
+            };
+            let text = serde_json::to_string(&saved).unwrap();
+            let restored = Settings::from_saved_profile(Some(&text), true);
+            assert_eq!(serde_json::to_value(restored).unwrap(), serde_json::to_value(saved).unwrap());
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_animation_tests {
+    use super::*;
+    #[test]
+    fn source_speeds_switch_round_trip_and_keep_mixed_speed() {
+        use AnimationSource as S;
+        let mut speeds = SourceAnimationSpeeds::default();
+        speeds.set(S::Satellite, 2.0);
+        assert_eq!(speeds.switch(Some(S::Radar), Some(S::Satellite), 9.0), 2.0);
+        assert_eq!(speeds.switch(Some(S::Satellite), Some(S::Radar), 3.0), 9.0);
+        assert_eq!(speeds.get(S::Satellite), 3.0);
+        assert_eq!(speeds.switch(Some(S::Radar), None, 7.0), 7.0);
+        assert_eq!(speeds.switch(None, Some(S::Satellite), 12.0), 3.0);
+        let saved = serde_json::to_string(&speeds).unwrap();
+        let restored: SourceAnimationSpeeds = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored, speeds);
+        assert_eq!(Settings::from_json_lossy("{}").source_animation_speeds, SourceAnimationSpeeds::default());
+    }
+    #[test]
+    fn source_speeds_sanitize_nonfinite_and_extremes() {
+        let mut speeds = SourceAnimationSpeeds::default();
+        for (input, expected) in [(f32::NAN, 4.0), (f32::INFINITY, 4.0), (f32::NEG_INFINITY, 4.0), (-2.0, 0.5), (35.0, 20.0), (2.5, 2.5)] {
+            speeds.set(AnimationSource::Mrms, input);
+            assert_eq!(speeds.get(AnimationSource::Mrms), expected);
+        }
+        let loaded: SourceAnimationSpeeds = serde_json::from_str(r#"{"radar":-20,"satellite":100}"#).unwrap();
+        assert_eq!(loaded.get(AnimationSource::Radar), 0.5);
+        assert_eq!(loaded.get(AnimationSource::Satellite), 20.0);
+        assert_eq!(loaded.get(AnimationSource::Forecasts), 4.0);
+    }
+}
+
+#[cfg(test)]
+mod tdwr_marker_tests {
+    use super::Settings;
+    use wxdata::sites::{self, Network};
+
+    #[test]
+    fn tdwr_marker_default_preserves_old_settings_and_saves_false() {
+        assert!(Settings::default().show_tdwr_sites);
+        let legacy = Settings::from_json_lossy(r#"{"default_site":"KFWS"}"#);
+        assert!(legacy.show_tdwr_sites);
+        let hidden = Settings {
+            show_tdwr_sites: false,
+            ..legacy
+        };
+        let saved = serde_json::to_string(&hidden).unwrap();
+        let restored = Settings::from_json_lossy(&saved);
+        assert!(!restored.show_tdwr_sites);
+        assert_eq!(restored.default_site, "KFWS");
+    }
+
+    #[test]
+    fn tdwr_marker_filter_uses_network_membership_without_changing_catalog() {
+        let settings = Settings {
+            show_tdwr_sites: false,
+            ..Settings::default()
+        };
+        let mut hidden = 0;
+        for site in sites::all() {
+            let network = sites::network(site.id);
+            let visible = settings.radar_site_marker_visible(network);
+            assert_eq!(visible, network != Network::Tdwr);
+            if !visible {
+                hidden += 1;
+                assert!(
+                    sites::site_by_id(site.id).is_some(),
+                    "hidden markers remain selectable from the site catalog"
+                );
+            }
+        }
+        assert_eq!(hidden, wxdata::tdwr::SITES.len());
+        assert!(hidden > 0);
+        for network in [Network::Nexrad, Network::Dwd, Network::Opera] {
+            assert!(settings.radar_site_marker_visible(network));
+        }
+        assert!(Settings::default().radar_site_marker_visible(Network::Tdwr));
+        // An unregistered T-prefixed identifier is not classified as a TDWR by the registry.
+        assert!(settings.radar_site_marker_visible(sites::network("T___")));
     }
 }

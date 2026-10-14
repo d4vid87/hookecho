@@ -1,0 +1,1663 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-10-14",
+  "project": "HookEcho Radar Workspace",
+  "overall_status": "partial independent implementation; not a one-to-one clone",
+  "scope": "All 61 bounded groups from the research inventory, not a claim to exhaust every provider feature. A second standalone launcher/profile and optional existing-app mode share HookEcho implementation.",
+  "status_definitions": {
+    "implemented-related": "Related independently implemented capability exists and is wired; does not mean visual, numerical, coverage or behavioral equivalence.",
+    "partial": "Related implementation exists with a known material gap.",
+    "missing": "Specific equivalent not established in audited source; nearest related feature does not satisfy it.",
+    "external-service": "Primary unmet capability depends on unavailable provider service/data/authorization/backend.",
+    "not-verified": "Insufficient evidence to map the observed feature to an actual working equivalent."
+  },
+  "status_counts": {
+    "partial": 28,
+    "implemented-related": 26,
+    "not-verified": 3,
+    "external-service": 3,
+    "missing": 1
+  },
+  "research_artifacts": {
+    "paths_relative_to": "original REA research workspace; artifacts are not bundled into this repository",
+    "inventory": "outputs/ro-parity/feature-inventory.json",
+    "source_audit": "outputs/ro-parity/hookecho-coverage.json",
+    "basemap_plan": "outputs/ro-parity/basemap-plan.json",
+    "live_evidence_index": "outputs/ro-parity/live-evidence-index.json",
+    "transport_ledger": "outputs/ro-parity/transport-implementation-ledger.json",
+    "original_artifact_findings": "outputs/RadarOmega-5.5.3-findings.json",
+    "eccc_browser_acceptance": "outputs/ro-parity/eccc-browser-accepted/results.json",
+    "web_delivery_smoke": "outputs/ro-parity/web-delivery-smoke/results.json",
+    "native_delivery_smoke": "outputs/ro-parity/native-final/launch-evidence.json"
+  },
+  "rea_evidence": [
+    {
+      "name": "ro-shot",
+      "evidence_id": "ev_bf9d7760e0d04ac53c2594d5532a17946fd6eb8c36e92f554dee85df5b8bc7f0",
+      "captured_at": "2026-10-14T15:31:41.147Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "bb33552f07e23bcf954fd55e28a07108d65a13311598ab0b8af962481b2e2a76"
+    },
+    {
+      "name": "ro-sidebar",
+      "evidence_id": "ev_42f005059240a45abaad37405a4cc2bfd3bab25488a9c3e3809ee01ffdfee7ee",
+      "captured_at": "2026-10-14T15:32:25.499Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "fdc312b15490bf62041f123e5eef06970aa09412ba2953b7ac351e4f6c5ce8f4"
+    },
+    {
+      "name": "ro-display",
+      "evidence_id": "ev_f4fc167477152e72bba97f1fc648599ce7ee50df9ea6e8c65cbb7dbb38c05b9e",
+      "captured_at": "2026-10-14T15:33:00.753Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "2fa2d6db96d6b430a842816e6a8e2ed028bf13588e8a7056ad0747d4e2ec6146"
+    },
+    {
+      "name": "ro-modes",
+      "evidence_id": "ev_57fd94e566ba98dc5b7a4a4a0abc3e55b388915da71085a9c6cdd0b1eb320002",
+      "captured_at": "2026-10-14T15:33:44.539Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "2f40bd385c9c319b5f8a24cc7c69fa96b6dccb107d84e694f561aa2d87e88a07"
+    },
+    {
+      "name": "ro-radarmodes",
+      "evidence_id": "ev_c5a14d07a9b7e49a86171eab05342f3794fb02b0a6298ac12ce89536bbbb49d8",
+      "captured_at": "2026-10-14T15:33:53.775Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "fa63935dcbbf9bba5f824d6c27372f365de88aceff518db91150d2b65f48cdb2"
+    },
+    {
+      "name": "ro-overlays",
+      "evidence_id": "ev_c7107f76b5bba82d546d639c408d246a489dd115820760cae5756031fd059204",
+      "captured_at": "2026-10-14T15:39:28.638Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "2fd756237c4cced409495cfc8cbfd95a8e7b2623f39cc343f3c9800ba2b9730c"
+    },
+    {
+      "name": "ro-spotters",
+      "evidence_id": "ev_445a6809cb1df1e744164211c79536c7f01140c2edab5c1a8146c7c616e827be",
+      "captured_at": "2026-10-14T15:39:39.413Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "edc5f84cf3fe27b081d8c3c43b22154abb19cbb8280f1cca2b964b24bd2395f3"
+    }
+  ],
+  "artifact_identity": {
+    "name": "RadarOmega-5.5.3-x86_64.AppImage",
+    "sha256": "c8f3b2bbb56ed37d1c2fb815b4d851e0083e073d07f038942571a615f828b845",
+    "limitation": "Hosted viewer changes independently from AppImage. Screenshot evidence explicitly does not bind its artifact identity; original static artifact identity is separate."
+  },
+  "validation": {
+    "completed": [
+      "Native library cargo check after transport helper refactor.",
+      "Wasm library cargo check after transport helper refactor; unrelated warnings present.",
+      "Two settings-profile tests: fresh standalone/default ordinary and complete saved-preference preservation.",
+      "Two path tests: native profile config/data/cache separation and preserved Android private layout.",
+      "Full library suites: 635 HookEcho tests and 431 wxdata tests passed; 24 and 38 ignored respectively.",
+      "Explicit hardware GPU checks: perspective raster/field/radar/stroke alignment and wind advection passed.",
+      "All five camera WGSL shaders validate and translate every entrypoint to GLSL ES300/WebGL2.",
+      "ECCC local proxy HTTP 200; production parser accepted 31 advertised frames from captured layer-filtered capabilities.",
+      "TDWR defaults and authoritative registry marker filtering: two tests passed.",
+      "Final delivery web build after status/layout corrections: 4,488,523 gzip bytes under explicitly revised 4,500,000 budget; Lite 74,040 under unchanged 80,000 budget.",
+      "Final browser checks: search arrow caret, numeric tilt/bearing, radar/legend visibility and TDWR persistence, MRMS 7 fps restored after reload.",
+      "Native public NWS station observation chain and DWD DEOF 0.5-degree reflectivity GPU render passed.",
+      "Live ECCC browser imagery: one capabilities and 30 PNG HTTP 200 responses; current 16:54 UTC rain frame visibly rendered.",
+      "REA process-wrapped timing: nine valid hardware trials per app (idle/wheel/pan); no cross-app speed ranking. RadarOmega evidence ev_c44344280cedd8a5616f140cae54c6df58e51b601dc0a414b3f3a6adff943338; HookEcho evidence ev_415308d773bfafe35ae519c6ecab212286c4be0fa39087664ce95268b10dde38. Measured build predates final transport wording and imagery-bar placement fixes.",
+      "Final-source raw WASM: layouts passed at 1120×900 and 800×600; ECCC Previous/Latest navigation 17:24 → 17:18 → 17:24 UTC verified, one capabilities request and 42 PNG HTTP 200 responses, no page/request errors. Final optimized delivery is a separate artifact.",
+      "Caltrans browser public catalogs: all 12 districts HTTP 200; station lookup did not complete, so no camera still/timestamp verified. No media-parity claim.",
+      "Final optimized web smoke: live ECCC imagery and separated controls at both desktop sizes; all observed loaded code files HTTP 200 and served hashes match build. No page errors. Optional local /geo.json returned 404; not a zero-resource-error claim. Complete basemap loading not an acceptance gate.",
+      "Final standalone AppImage built (101,935,608 bytes), version 0.12.0-beta.2; live KEAX radar/map rendered on RX 580/Vulkan, correct standalone window/class and isolated profile files, normal exit 0. SHA256 3d3fe1d2ed1d09847159a2ec1ee334f21fb906cf0e0e62afa4352d2201e523a5. Unrelated system notification partly obscures screenshot; no complete interactive acceptance claim."
+    ],
+    "pending": [
+      "Complete feature-by-feature live data and pixel/behavior equivalence; presented-frame performance with matched scene/data and native AppImage timing."
+    ],
+    "rule": "Each bounded check states its coverage. Compile, unit and smoke results do not establish complete observed-feature equivalence."
+  },
+  "features": [
+    {
+      "id": "UI01",
+      "category": "shell",
+      "title": "Map-first desktop layout",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Top-left navigation/profile/mode/search, full-width top color scale, top-center site/VCP/2D control, top-right alert count, bottom frame/time card, central tool strip, bottom-right product/elevation card.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "New optional desktop workspace adds source control, station/projection card, drawer and centered transport.",
+      "remaining_gaps": [
+        "Pixel layout, spacing, branding, responsive transitions and all interaction states are not equivalent; compact phone UI remains HookEcho."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI01",
+      "acceptance": "At matched viewport all regions remain usable with legend, time, product, site and selected tool visible.",
+      "runtime_verification": "Final-source raw browser acceptance at 1120×900 and 800×600 verified separate imagery/transport/alerts controls, no duplicate active-pane timestamp and a clear install prompt. Initial standalone package launched with live KEAX data; final package smoke recorded in global validation. This does not establish pixel equivalence."
+    },
+    {
+      "id": "UI02",
+      "category": "shell",
+      "title": "Grouped navigation drawer",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "General and Settings groups with category disclosure, dimmed/blurred map backdrop.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "New grouped workspace drawer routes supported controls to existing actions.",
+      "remaining_gaps": [
+        "Only supported HookEcho destinations are exposed; complete competitor menu/catalog parity is absent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI02",
+      "acceptance": "Open and close navigation; access every registered destination without overlap.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "UI03",
+      "category": "shell",
+      "title": "Data mode selection",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Single-site Radar, MRMS, Satellite, Forecasts and grouped Models entries.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Source chooser groups Radar, MRMS, Satellite and Forecasts using existing registered fields.",
+      "remaining_gaps": [
+        "No complete vendor model/product/entitlement catalog; selected source replaces other source products while Layer manager permits combinations."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI03",
+      "acceptance": "Changing mode updates active dataset, product selector, legend and timestamp.",
+      "runtime_verification": "Browser candidate source search and selection passed, including MRMS selection and persisted hidden radar/legend across reload. All 84 MRMS choices are catalogued; individual live product correctness is not established."
+    },
+    {
+      "id": "UI04",
+      "category": "shell",
+      "title": "Search and location",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Search control is exposed beside mode selector; Location Settings entry is exposed in display settings.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Existing site/place search and location workflows remain available.",
+      "remaining_gaps": [
+        "Current search result ordering, geocoder coverage and GPS/follow transitions have not been compared end to end."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/recovery.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/ui/marker_window.rs",
+        "crates/hookecho/src/workspace.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI04",
+      "acceptance": "Search place/site, navigate map and configure location following.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "UI05",
+      "category": "shell",
+      "title": "Dual and quad panels",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Dual/quad display options, pane-local product choice and synchronized frame stepping are present.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Independent products, basemaps and timestamps; camera/time links, offsets, named panes, persistent workspaces.",
+      "remaining_gaps": [
+        "Existing one/two/four pane layouts and links are not the vendor split-view control or exhaustive layout equivalence."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/mobile/navigation.rs",
+        "crates/hookecho/src/view.rs",
+        "crates/hookecho/src/workspace.rs",
+        "docs/rea-next-improvements.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI05",
+      "acceptance": "Two/four panes preserve independent products and explicitly synchronize camera/time.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "UI06",
+      "category": "shell",
+      "title": "Keyboard shortcuts",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Dedicated shortcut module includes playback speed increase/decrease behavior.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing keyboard shortcuts and Help remain available.",
+      "remaining_gaps": [
+        "Every vendor binding, focus rule and shortcut name has not been matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI06",
+      "acceptance": "Publish accessible shortcut list; shortcuts work unless typing in a field.",
+      "runtime_verification": "Browser verified search-caret arrow keys and numeric tilt/bearing input, with popup/modal Escape returning to the map without hiding controls. Other shortcuts and platform variations remain unverified."
+    },
+    {
+      "id": "MAP01",
+      "category": "basemap",
+      "title": "Base map choices",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Observed choices begin Dark Presentation, Grey Presentation, Green Presentation, Blank White, Satellite, Basic, Blue Map, Road Network, Dark Roadmap; extracted control string truncates after Te.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Independent Presentation vector palette adds black land, restrained roads/boundaries and white labels to existing styles.",
+      "remaining_gaps": [
+        "No vendor style, font/sprite asset or tile content reuse; full style catalog, imagery and label placement differ."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/basemap_style.rs",
+        "crates/hookecho/src/tiles.rs",
+        "crates/hookecho/src/ui/basemap_picker.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP01",
+      "acceptance": "Selectable styles preserve map position, data overlays and readable labels.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "MAP02",
+      "category": "basemap",
+      "title": "State/province boundaries",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Visibility toggle, color swatch and line-thickness slider.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Display modal adds state/province visibility, color and width for supported vector maps.",
+      "remaining_gaps": [
+        "Administrative geometry and classifications depend on the independent tile schema; raster styles cannot expose individual vector styling."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP02",
+      "acceptance": "Boundary visibility, color and thickness update and persist.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "MAP03",
+      "category": "basemap",
+      "title": "County/local-region boundaries",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Independent visibility toggle, color swatch and thickness slider.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Display modal adds county visibility, color and width for supported vector maps.",
+      "remaining_gaps": [
+        "Complete local-region equivalence and all zoom transitions are not verified; raster styles cannot expose individual styling."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP03",
+      "acceptance": "County controls are independent of state controls.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "MAP04",
+      "category": "basemap",
+      "title": "City/road layer behavior",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Show Always, Show only when towers are OFF, No City & Road Layer choices.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Vector display settings add always/when radar stations hidden/hidden city-and-road modes.",
+      "remaining_gaps": [
+        "Independent label collision and road placement differ; interaction verification remains pending."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/basemap_style.rs",
+        "crates/hookecho/src/tiles.rs",
+        "crates/hookecho/src/ui/basemap_picker.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP04",
+      "acceptance": "All three label behaviors work without disabling radar data.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "MAP05",
+      "category": "basemap",
+      "title": "Tower visibility and status",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Map shows labeled radar towers; Show TDWR Towers toggle is visible.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Existing radar-site markers and range rings are exposed by Display Settings. Persisted show_tdwr_sites (default true) independently filters TDWR marker drawing, hover and click hit-testing by registry Network::Tdwr; selected station data and full site picker remain available.",
+      "remaining_gaps": [
+        "Tower status-color equivalence and every international tower catalog remain incomplete. Integrated UI behavior of the new TDWR marker toggle remains to verify."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/settings_window.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/wxdata/src/lib.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP05",
+      "acceptance": "Tower filtering and selected-site status are distinct; site can be selected from map.",
+      "runtime_verification": "Two focused settings/filter tests passed: legacy default compatibility and saved false roundtrip; registry-based TDWR-only exclusion retains the full catalog. Browser TDWR disabled preference restored across reload. Complete network/status equivalence remains unverified."
+    },
+    {
+      "id": "MAP06",
+      "category": "basemap",
+      "title": "Zoom/pan behavior",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Captured Mapbox wrapper sets fadeDuration 0, zoom rate 0.02, wheel zoom rate 0.004444.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Cursor anchored easing, drag inertia, direct pinch, detail hysteresis, retained geography and bounded gesture work.",
+      "remaining_gaps": [
+        "No claim of equal smoothness: prior cross-app measurements do not rank engines and matched fresh performance trials remain needed."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/camera_motion.rs",
+        "crates/hookecho/src/labelplace.rs",
+        "crates/hookecho/src/map_work.rs",
+        "crates/hookecho/src/vector_tiles.rs",
+        "docs/map-motion-refinements.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP06",
+      "acceptance": "Measure matched pan/wheel tasks for frame time, interaction latency, label stability and tile completion.",
+      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking; HookEcho camera response was not directly sampled. No presented-frame or input-latency claim."
+    },
+    {
+      "id": "MAP07",
+      "category": "basemap",
+      "title": "2D/3D display",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "2D/3D toggle observed at runtime; selecting 3D visibly raises the radar surface. This does not identify the height algorithm.",
+      "observation_type": "runtime-screenshot+static-client",
+      "hookecho_implementation": "Independent Mercator perspective tilt (0–60 degrees) and compass bearing, plus existing orthographic globe. Shared CPU/GPU transforms cover tiles, radar, gridded fields, vectors, picking, labels and wind. Workspace snapshots save orientation.",
+      "remaining_gaps": [
+        "3D building extrusion and an on-map radar-value surface remain absent; tilted ground-plane data and the separate volume window are distinct capabilities.",
+        "Shared-link orientation encoding is not implemented; full-world edge cases and all overlay combinations need broader acceptance."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/render/mercator.rs",
+        "crates/hookecho/src/shaders/radar.wgsl",
+        "docs/rea-integration.md",
+        "crates/hookecho/src/shaders/overlay.wgsl",
+        "crates/hookecho/src/workspace.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6",
+        "ev_a2c7326cb52673cd05789cbb0cae8b884b2f7dbe602aa920911a075ef41a0478"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP07",
+      "acceptance": "Switch display with preserved site/product/time and verify overlay placement.",
+      "runtime_verification": "16 camera and 9 motion tests, tile-cover/workspace tests, WGSL/WebGL2 translation and hardware GPU raster/field/radar/stroke alignment plus wind regression passed. Browser tilt/bearing controls and persistence verified using a local radar fixture. Building extrusion and radar-value surfaces remain absent."
+    },
+    {
+      "id": "RAD01",
+      "category": "radar",
+      "title": "Single-site product and elevation choice",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Active Hi-Res Reflectivity product and elevation visible; product groups and per-site tilt catalogs are defined.",
+      "observation_type": "runtime-controls+static-client",
+      "hookecho_implementation": "Shared product/elevation chooser includes supported moments, favorites, SRV and custom products.",
+      "remaining_gaps": [
+        "Full vendor product catalog, labels, site-dependent availability and elevation branches are not equivalent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD01",
+      "acceptance": "Site, product and actual elevation are always visible and selecting each loads matching data.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD02",
+      "category": "radar",
+      "title": "Reflectivity",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Hi-Res Reflectivity and extended tilts",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Public radar reflectivity, available tilts and high-precision display exist.",
+      "remaining_gaps": [
+        "Provider resolution, gate masks, preprocessing and all international feeds are not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD02",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD03",
+      "category": "radar",
+      "title": "Velocity",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Hi-Res Velocity, storm-relative velocity and spectrum width",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Native velocity/spectrum width and storm-relative velocity exist.",
+      "remaining_gaps": [
+        "Storm-motion estimates and provider processing may produce different SRV; no numerical equivalence validation."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD03",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD04",
+      "category": "radar",
+      "title": "Dual polarization",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Correlation coefficient, differential reflectivity and specific differential phase",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Native correlation coefficient, differential reflectivity and specific differential phase exist where available.",
+      "remaining_gaps": [
+        "Availability, calibration, processing and provider-specific high-resolution products need numerical comparison."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD04",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD05",
+      "category": "radar",
+      "title": "Accumulated precipitation",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Digital Accumulation Array, one-hour and storm-total precipitation",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing MRMS precipitation fields provide related accumulation views.",
+      "remaining_gaps": [
+        "Exact single-site DAA, one-hour and storm-total product menu and accumulation algorithms are not established as implemented equivalents."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD05",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD06",
+      "category": "radar",
+      "title": "Derived radar products",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "VIL, Hi-Res VIL, Echo Tops, Hi-Res Echo Tops, probable rotational threat and hydrometeor classification",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Level 3/derived VIL, echo tops, hydrometeor and hail-related fields exist.",
+      "remaining_gaps": [
+        "No matching probable rotational threat algorithm or complete provider-derived product suite; public/locally derived fields can differ."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD06",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD07",
+      "category": "radar",
+      "title": "TDWR and international sites",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Catalog variations for TDWR, Canada, Germany, Australia and other limited-product sites",
+      "observation_type": "static-client",
+      "hookecho_implementation": "US NEXRAD/TDWR, live German DWD site volumes, ODIM file import and Canadian ECCC rain/snow WMS composites provide public alternatives.",
+      "remaining_gaps": [
+        "User accepted public providers with different coverage. ECCC composites do not provide Canadian individual-site velocity/tilts. Advertised-window discovery is implemented; integrated rendering and playback remain to verify.",
+        "No live Australian BOM/Furuno/private-network adapter. An official BOM viewer link is implemented in the Weather map picker; file import, external viewing and satellite imagery are not embedded live radar coverage."
+      ],
+      "hookecho_sources": [
+        "crates/wxdata/src/lib.rs",
+        "docs/DATA.md",
+        "crates/wxdata/src/dwd.rs",
+        "crates/wxdata/src/odim.rs",
+        "crates/hookecho/src/tiles.rs",
+        "docs/public-data-alternatives.md",
+        "crates/hookecho/src/ui/basemap_picker.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD07",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "2026-10-14 16:49 UTC: existing native release headless DEOF REF tilt 0 passed; actual volume 20261014164020, elevation 0.50°, 720 × 720 grid / 423,586 echo gates, inspected 768 × 768 PNG. No other products/elevations, interactive playback, calibration, independent geolocation or browser path verified. Evidence: outputs/ro-parity/provider-runtime/results.json."
+    },
+    {
+      "id": "RAD08",
+      "category": "radar",
+      "title": "Radar range and ring",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Full Coverage Radar and Show Range Ring toggles.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Range rings and scan geometry are available.",
+      "remaining_gaps": [
+        "The competitor full-coverage extension toggle and all site-specific extent rules have not been mapped."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD08",
+      "acceptance": "Toggle coverage/ring while clearly indicating actual available scan extent.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD09",
+      "category": "radar",
+      "title": "Gate filtering",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Reflectivity minimum/maximum filter with -10 to 85 dBZ slider range and visible warning for aggressive filtering.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing native-value minimum/maximum filtering remains available.",
+      "remaining_gaps": [
+        "Filtering/smoothing algorithm and exact visual output differ; new workspace is not a numerical reconstruction."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/radar_appearance.rs",
+        "crates/hookecho/src/shaders/radar.wgsl",
+        "docs/rea-integration.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD09",
+      "acceptance": "Adjust min/max without modifying underlying sample values; legend reflects filtered range.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD10",
+      "category": "radar",
+      "title": "Color tables",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Built-in palette choices and .pal upload for reflectivity/velocity.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing palettes and custom palette import remain available.",
+      "remaining_gaps": [
+        "Vendor palettes, upload quotas, storage and account sync are not reproduced."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/colormap.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/shaders/radar.wgsl",
+        "docs/rea-integration.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD10",
+      "acceptance": "Select/import valid palette, reject malformed files and restore default.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD11",
+      "category": "radar",
+      "title": "Rapid updates and scan progress",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "RapidSweep enable, sweep bar and range-ring controls; streaming pipeline seen statically only.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Public Unidata chunk ingestion and changed-row GPU uploads already exist.",
+      "remaining_gaps": [
+        "Public incremental chunks are an independent implementation; RapidSweep service, latency, ordering and entitlement behavior are not reproduced."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/view.rs",
+        "docs/DATA.md",
+        "docs/rea-integration.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD11",
+      "acceptance": "Observe incremental scan arrival, progress display and fallback to completed scans.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD12",
+      "category": "radar",
+      "title": "Velocity units and audible new scan",
+      "priority": 1,
+      "status": "not-verified",
+      "observed_scope": "Velocity unit selector and new-scan audible alert.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Related display/unit and alert settings exist.",
+      "remaining_gaps": [
+        "Exact velocity-unit choices and once-per-new-scan audio behavior have not been mapped or exercised in this run."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD12",
+      "acceptance": "Unit conversion affects display consistently; alert occurs once per new scan and can be disabled.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "TIME01",
+      "category": "playback",
+      "title": "Frame count",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "7,14,21,30,50,75,100,150,200,250 frame choices in captured selector.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Workspace native frame choices are 7/14/21/30/50/75/100/150/200/250; browser offers its effective 2–4-frame live-loop choices.",
+      "remaining_gaps": [
+        "Web live loop remains capped at four; 250-frame native memory/latency not measured. Counts are requested loop limits, not guaranteed loaded frames."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME01",
+      "acceptance": "Configured frame count maps to available frames with explicit loading/missing states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "TIME02",
+      "category": "playback",
+      "title": "Transport, scrub and timestamp",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Visible play transport, frame/time card and scrubber variables/handlers.",
+      "observation_type": "runtime-screenshot+static-client",
+      "hookecho_implementation": "New transport shares existing frame-status track and step/play/pause/GoLive semantics.",
+      "remaining_gaps": [
+        "Current fixture interaction verification pending; exact competitor scrubber, missing-frame and forecast-tail behavior not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME02",
+      "acceptance": "Play/pause, step and scrub maintain matching timestamp/data; live/archive state is clear.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "TIME03",
+      "category": "playback",
+      "title": "Speed by data type",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Separate animation speed setting for Single Site Radar, MRMS, Satellite, NDFD and Models.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Four persisted source-family animation speeds (Radar/MRMS/Satellite/Forecasts), finite-clamped 0.5–20 fps. Workspace source transitions save previous family speed and restore selected family; Display Settings updates the active shared timeline immediately. Mixed source families retain the current shared speed.",
+      "remaining_gaps": [
+        "Uses the existing shared pane timeline, not independent field-time animation engines. Vendor NDFD/Models distinctions are not separate HookEcho source families."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME03",
+      "acceptance": "Set speeds per mode; changing mode restores appropriate speed.",
+      "runtime_verification": "Browser verified separate source speeds and a History speed change to 7 fps restored after reload for MRMS. Complete playback pacing across every provider and frame count remains unmeasured."
+    },
+    {
+      "id": "TIME04",
+      "category": "playback",
+      "title": "Hold to pause animation",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Toggle pauses animation while zooming or panning.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Existing pause-while-panning preference is exposed in Display Settings.",
+      "remaining_gaps": [
+        "Pan/zoom pause and resume behavior still needs final integrated fixture verification."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/camera_motion.rs",
+        "crates/hookecho/src/labelplace.rs",
+        "crates/hookecho/src/map_work.rs",
+        "crates/hookecho/src/vector_tiles.rs",
+        "docs/map-motion-refinements.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME04",
+      "acceptance": "Pointer interaction temporarily pauses playback and resumes correctly without jumping state.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "TIME05",
+      "category": "playback",
+      "title": "UTC/local time",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Time Display Format segmented control shows UTC and Local.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Display Settings exposes UTC and site-local time using existing formatting.",
+      "remaining_gaps": [
+        "All timestamps, timezone edge cases and DST transitions have not been compared in this run."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME05",
+      "acceptance": "All visible valid/scan timestamps agree with chosen format including daylight-saving boundaries.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "TIME06",
+      "category": "playback",
+      "title": "Historical radar navigation",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Client has archive transition hooks and storm-report action to load historical radar data.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Shared archive date controls, cut playback, browser offline packs and explicit Return to live are retained.",
+      "remaining_gaps": [
+        "Data retention and unavailable historical-product coverage differ; provider history links are not fully mapped."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME06",
+      "acceptance": "Select historical time, navigate frames, and explicitly return to live without silently switching.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA01",
+      "category": "settings",
+      "title": "Data opacity",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Data-opacity slider 0–100%.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Radar opacity control updates the active pane appearance.",
+      "remaining_gaps": [
+        "Not every non-radar data type shares identical opacity controls; final rendering verification pending."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA01",
+      "acceptance": "Adjust data overlay opacity without fading labels, warnings or other controls.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA02",
+      "category": "other-data",
+      "title": "MRMS regions/products/settings",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "CONUS, Alaska, Hawaii region selection; product catalog comes from data; General/Color Tables settings.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing NOAA MRMS fields are selectable through the source registry.",
+      "remaining_gaps": [
+        "Complete vendor region/product catalog, Alaska/Hawaii behavior, retention and settings organization are not matched."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA02",
+      "acceptance": "Region/product selection, animation, legend and no-data states match available independent feed.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA03",
+      "category": "other-data",
+      "title": "Satellite sectors and bands",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Regional/subregional/full disk/global composite groups; GOES mesoscale/Himawari targets; derived and ABI visible, IR and water-vapor groups.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Timed satellite layers, native ABI scenes, national MRMS fields and radar-linked clocks.",
+      "remaining_gaps": [
+        "Complete vendor satellite/sector/ABI/derived catalog, geolocation, scan history and region coverage not mapped."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA03",
+      "acceptance": "Satellite, sector and product choice preserve correct geolocation, units, scan time and animation.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA04",
+      "category": "other-data",
+      "title": "Numerical models",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "HRRR, RRFS, NAM3KM, NAM12KM, RAP, GFS, ECMWF, HWRF, HMON selectors.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "HRRR/RAP/GFS/ECMWF, sounding and model fields, forecast radar, time/source provenance.",
+      "remaining_gaps": [
+        "RRFS/NAM/HWRF/HMON and every parameter/member/region are not established as covered; existing global/open fields are not the full vendor model service."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA04",
+      "acceptance": "Model/run/forecast-hour/product selectors display valid time and units.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA05",
+      "category": "other-data",
+      "title": "NDFD forecasts and severe forecast mode",
+      "priority": 2,
+      "status": "external-service",
+      "observed_scope": "National Digital Forecast Database and HAZCAST Severe Outlook entries.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "NWS/Open-Meteo forecasts and public model products provide related guidance.",
+      "remaining_gaps": [
+        "No complete NDFD viewer or HAZCAST backend/model contract recovered; provider-specific severe forecast requires an independently authorized service."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA05",
+      "acceptance": "Independently available forecast products display issue/valid time and attribution.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV01",
+      "category": "overlays",
+      "title": "Weather alerts",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Weather Alerts.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Live/archive warning polygons, bulletin reader, severity/proximity filters, alert channels and speech.",
+      "remaining_gaps": [
+        "Exact warning coverage, reader presentation and subscription notification behavior differ."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV01",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV02",
+      "category": "overlays",
+      "title": "Mesoscale discussions",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Mesoscale Discussions.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "SPC mesoscale discussions are documented as an existing public overlay.",
+      "remaining_gaps": [
+        "Polygon styling, all popup contents and issue/expiry workflow are not fully compared."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV02",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV03",
+      "category": "overlays",
+      "title": "Severe weather outlooks",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Severe Weather.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "SPC Day 1–3 outlooks and hazard controls exist.",
+      "remaining_gaps": [
+        "Full vendor outlook catalog and probability/day presentation not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV03",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV04",
+      "category": "overlays",
+      "title": "Tropical weather",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Tropical Weather.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "NHC positions, cones, tracks, storm surge and reconnaissance feeds exist.",
+      "remaining_gaps": [
+        "Complete vendor tropical menus, spaghetti-model coverage and product history not mapped."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV04",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV05",
+      "category": "overlays",
+      "title": "Hydrological outlooks",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Hydrological Outlooks.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "WPC excessive rainfall and river-gauge integrations provide related hydrology layers.",
+      "remaining_gaps": [
+        "Every hydrological outlook/product and its historical coverage is not mapped."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV05",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV06",
+      "category": "overlays",
+      "title": "Fire weather",
+      "priority": 1,
+      "status": "not-verified",
+      "observed_scope": "Sidebar destination observed: Fire Weather.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Existing fire/perimeter layers are related capabilities.",
+      "remaining_gaps": [
+        "Those layers do not establish a matching Fire Weather outlook suite; specific forecast products and menu states remain unverified."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV06",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV07",
+      "category": "overlays",
+      "title": "Winter weather",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Winter Weather.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "WPC winter severity and snowfall analysis provide related layers.",
+      "remaining_gaps": [
+        "Full winter outlook suite, periods and probabilities are not established as equivalent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV07",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV08",
+      "category": "overlays",
+      "title": "Climatological outlooks",
+      "priority": 2,
+      "status": "not-verified",
+      "observed_scope": "Sidebar destination observed: Climatological Outlooks.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Weather models and historical climatology tools exist.",
+      "remaining_gaps": [
+        "Historical tornado climatology is not the observed climatological-outlook feature; exact outlook products need audit and implementation mapping."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV08",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV09",
+      "category": "overlays",
+      "title": "Surface observations",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: METARS.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "METAR station plots and nearest-station observations exist.",
+      "remaining_gaps": [
+        "Observation styling, filters, history and every station popup not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV09",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "Native public NWS nearby-station chain selected KLXT from KEAX and parsed 72 observations, retaining absent gust/pressure fields. This validates one station chain, not sensor-dashboard presentation, stale/error recovery or all surface-observation overlays."
+    },
+    {
+      "id": "OV10",
+      "category": "overlays",
+      "title": "Marine tools",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Marine Tools.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "NDBC buoys, coastal observations and tropical products provide related marine data.",
+      "remaining_gaps": [
+        "Full marine tool suite, forecasts and display settings are not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV10",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV11",
+      "category": "overlays",
+      "title": "Surface fronts",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Surface Fronts.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "WPC surface-front bulletin integration exists.",
+      "remaining_gaps": [
+        "All symbols, issue history and regional coverage not compared."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV11",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV12",
+      "category": "overlays",
+      "title": "Lightning detection",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Lightning Detection.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Public GOES GLM lightning integration exists.",
+      "remaining_gaps": [
+        "GLM detections are not a licensed ground-strike network; vendor strike type, coverage, latency and archives are not reproduced."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV12",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV13",
+      "category": "overlays",
+      "title": "Power outages",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Power Outages.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Existing ODIN power-outage overlay is registered.",
+      "remaining_gaps": [
+        "Provider coverage, update cadence, county summaries and history may differ; no current live provider validation."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV13",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV14",
+      "category": "overlays",
+      "title": "Local storm reports",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Live/Archive modes; event filters, range, sound, marker icons/values, clustering, date search and report details.",
+      "observation_type": "runtime-menu+static-client",
+      "hookecho_implementation": "Public live/archive local storm reports and report inspection exist.",
+      "remaining_gaps": [
+        "Vendor event categories, clustering, magnitude labels, report sounds and linked archive UX are not all matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/cell_window.rs",
+        "crates/hookecho/src/ui/cells_window.rs",
+        "crates/wxdata/src/level3.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV14",
+      "acceptance": "Filter reports; inspect event time/location/magnitude; archive search and linked historical radar work.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV15",
+      "category": "overlays",
+      "title": "Spotter Network",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Layer toggle and active time windows 5/15/30/60 minutes; detail popup has last-updated and supplied profile fields.",
+      "observation_type": "runtime-menu+static-client",
+      "hookecho_implementation": "Existing public spotter positions/cards plus new settings route provide an independent workflow.",
+      "remaining_gaps": [
+        "Full 5/15/30/60-minute filtering equivalence, reporting/login, personal fields and live video are not established; video association absent.",
+        "User accepted separate public weather/highway camera alternatives, not a claim of spotter-linked live video; integrated substitute validation pending."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/wxdata/src/spotters.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV15",
+      "acceptance": "Filter active spotters, inspect allowed details and make stale positions visibly distinct.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV16",
+      "category": "overlays",
+      "title": "NEXRAD hail history",
+      "priority": 2,
+      "status": "missing",
+      "observed_scope": "Nexrad History settings offer 1/2/3-inch-plus hail categories and time intervals, with magnitude/VIL details.",
+      "observation_type": "runtime-menu+static-client",
+      "hookecho_implementation": "HookEcho has hail attributes and storm-track tools.",
+      "remaining_gaps": [
+        "No demonstrated equivalent of the dedicated NEXRAD hail-history layer with 1/2/3-inch thresholds, interval selection and historical magnitude/VIL detail."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/cell_window.rs",
+        "crates/hookecho/src/ui/cells_window.rs",
+        "crates/wxdata/src/level3.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV16",
+      "acceptance": "Filter historical hail tracks and inspect magnitude, VIL and time.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN01",
+      "category": "analysis",
+      "title": "Storm tracks",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Initial point, track line, track cone, time points; speed units mph/kph/knots.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing storm attributes/SCIT tracks and chase tools provide related analysis.",
+      "remaining_gaps": [
+        "Manual track cone, time-point editing, units and vendor projection algorithm are not fully matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/cell_window.rs",
+        "crates/hookecho/src/ui/cells_window.rs",
+        "crates/wxdata/src/level3.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN01",
+      "acceptance": "Create/inspect track with speed, direction, forecast time and configurable geometry.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN02",
+      "category": "analysis",
+      "title": "Data probe",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Probe reports sample value/unit/product/tilt, distance/bearing from site and estimated beam height.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Workspace inspector button routes to native radar interrogation.",
+      "remaining_gaps": [
+        "Exact pin/card, beam-height/bearing presentation and all derived product probes need workflow comparison."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/legend.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN02",
+      "acceptance": "Probe sample agrees with source bins; distance/bearing/beam estimate clearly distinguished from measured values.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN03",
+      "category": "analysis",
+      "title": "Distance/bearing measurement",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Measurement HUD, line/circle and endpoint appearance, units and behavior settings.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Workspace ruler routes to existing distance/bearing measurement.",
+      "remaining_gaps": [
+        "Vendor endpoint/circle styling options and every measurement interaction are not fully matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/legend.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN03",
+      "acceptance": "Measure two known locations and verify distance/bearing, units and clear action.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN04",
+      "category": "analysis",
+      "title": "Drawing",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Pencil, eraser, undo, redo and clear controls.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Workspace pencil routes to existing session drawing.",
+      "remaining_gaps": [
+        "Full vendor pencil/eraser/undo/redo/export behavior is not established as equivalent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN04",
+      "acceptance": "Create annotations, undo/redo/clear and exit without unintended map actions.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN05",
+      "category": "analysis",
+      "title": "Broadcast presentation",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Warning counters and simplified site/product/elevation/time/legend presentation.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing broadcast overlay supports presentation.",
+      "remaining_gaps": [
+        "Exact warning counters, metadata layout and mode transitions not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN05",
+      "acceptance": "Presentation mode preserves data attribution/time and can restore ordinary controls.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN06",
+      "category": "analysis",
+      "title": "Screenshot/video/GIF export",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Share sheet includes Screenshot, Record Video, Record Gif and Save Screenshot.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing screenshot and loop export capabilities provide related output.",
+      "remaining_gaps": [
+        "All video/GIF codecs, browser capture paths, legend composition and vendor sharing workflow not verified."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN06",
+      "acceptance": "Export includes correct map/data/time/attribution and reports capture errors.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "LOC01",
+      "category": "personalization",
+      "title": "Custom locations and notification controls",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Custom Locations and NotifyontheFly sidebar entries.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Markers, saved camera/layout/appearance/workspaces and recovery persistence.",
+      "remaining_gaps": [
+        "No vendor account sync or NotifyontheFly backend; notification service behavior is independent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/recovery.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/ui/marker_window.rs",
+        "crates/hookecho/src/workspace.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#LOC01",
+      "acceptance": "Create/edit/delete location and configure notification scope without ambiguous save state.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "IOT01",
+      "category": "devices-media",
+      "title": "Device and streaming dashboard",
+      "priority": 2,
+      "status": "external-service",
+      "observed_scope": "Device Settings; dashboard buttons All Streaming, Inside Warnings, Refresh, Close dashboard.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Public NWS/METAR station dashboards and FAA/Caltrans/optional keyed Windy cameras are accepted substitutes; source integration exists and selected metadata probes succeeded.",
+      "remaining_gaps": [
+        "User accepted public-data alternatives; integrated sensor and camera acceptance remains pending. FAA bare metadata endpoint returned 401; current app access was not validated.",
+        "CyclonePORT device control/telemetry relationships and moving-spotter video associations are not implemented; fixed weather cameras are not equivalent chaser video."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/ui/sensor_window.rs",
+        "crates/wxdata/src/stations.rs",
+        "crates/wxdata/src/obs.rs",
+        "crates/wxdata/src/metar.rs",
+        "crates/wxdata/src/webcams.rs",
+        "crates/wxdata/src/dotcams.rs",
+        "docs/public-data-alternatives.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#IOT01",
+      "acceptance": "Authorized device/stream list, warning filter, refresh and playback errors work.",
+      "runtime_verification": "2026-10-14 16:49 UTC: existing native release --headless-obs KEAX passed; selected KLXT with 72 observations, latest clock label 16:30Z, temperature/dewpoint/RH/wind parsed and missing gust/pressure retained. Observation date not printed. Dashboard UI, stale/errors, browser and camera media remain unverified. Evidence: outputs/ro-parity/provider-runtime/results.json."
+    },
+    {
+      "id": "ACCOUNT01",
+      "category": "account",
+      "title": "Account, subscription, add-ons, support",
+      "priority": 2,
+      "status": "external-service",
+      "observed_scope": "Profile and Manage Subscription, Manage Add-ons, Support, Latest Update Info, keyboard shortcuts and guides entries.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "HookEcho has no user accounts; optional own-provider settings sync.",
+      "remaining_gaps": [
+        "No vendor authentication, subscription, billing or entitlement backend; client observations cannot reconstruct those services."
+      ],
+      "hookecho_sources": [
+        "README.md",
+        "docs/sync.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#ACCOUNT01",
+      "acceptance": "Use HookEcho account/help destinations with clear provider-specific feature availability.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    }
+  ],
+  "accepted_alternatives": {
+    "decision": "User accepted public-data alternatives for CyclonePORT/device telemetry, chaser video and international feeds.",
+    "status": "accepted scope; provider refinements implemented; metadata/time/cache tests, native NWS chain, one DWD reflectivity render, ECCC browser rain navigation and Caltrans browser catalogs passed; remaining media/product acceptance explicit",
+    "documentation": "docs/public-data-alternatives.md",
+    "evidence": "outputs/ro-parity/public-provider-probes.json",
+    "evidence_paths_relative_to": "original REA research workspace",
+    "mappings": {
+      "IOT01": "Public NWS/METAR station dashboards and FAA/Caltrans/optional keyed Windy cameras; no proprietary device control or chaser associations.",
+      "OV15": "Public spotter positions remain separate from fixed weather/highway cameras.",
+      "RAD07": "Existing live German DWD volumes and Canadian ECCC composites with advertised time-window discovery; official Australian BOM viewer link implemented, no embedded BOM adapter."
+    },
+    "completion_claim": false,
+    "refinements": {
+      "eccc": "Layer-filtered advertised WMS time availability intersects requested interval; no guessed fallback on failure; source-specific imagery labels.",
+      "caltrans": "Fifteen-minute metadata expiry for a stationary view, retaining changed-view refresh and retry cooldown.",
+      "australia": "External official BOM viewer link in Weather map picker; no embedded radar.",
+      "verification": "Camera expiry test passed (1/1); ECCC availability tests passed (3/3), production parser accepted captured proxy XML (31 frames), native and wasm compilation passed. Native NWS KEAX-to-KLXT observations and DWD DEOF REF 0.50° render passed. Final-source raw browser ECCC rain Current/Previous/Latest navigation passed with 42 PNG HTTP 200 responses. All 12 Caltrans district catalogs loaded in-browser, but prerequisite station lookup did not finish and no still image or timestamp was verified. Snow, continuous imagery playback, other DWD moments/elevations and feed-error acceptance remain unverified."
+    },
+    "proxy_validation_evidence": "outputs/ro-parity/eccc-proxy-validation.json",
+    "native_provider_validation_evidence": "outputs/ro-parity/provider-runtime/results.json",
+    "browser_imagery_validation_evidence": "outputs/ro-parity/eccc-browser-accepted/results.json",
+    "browser_camera_validation_evidence": "outputs/ro-parity/caltrans-browser/results.json"
+  }
+}

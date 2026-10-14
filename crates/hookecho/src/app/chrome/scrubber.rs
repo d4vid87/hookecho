@@ -13,25 +13,51 @@ impl HookEchoApp {
         use crate::timeline::FrameStatus as State;
         let view = &self.views[self.active];
         let downloads = book(&self.prefetching);
-        view.timeline.frames.iter().map(|frame| {
-            let name = frame.name();
-            if view.has_decoded_frame(name) || self.scan_cache.contains(&name.to_owned()) { State::Ready }
-            else if view.frame_request.pending_name() == Some(name) {
-                if view.load_phase == Some(level2::LoadPhase::Decoding) { State::Decoding } else { State::Downloading }
-            } else if downloads.get(name).is_some_and(|at| at.elapsed() < VOLUME_TIMEOUT) { State::Downloading }
-            else { view.frame_history.iter().find(|(previous, _)| previous == name).map_or(State::Unloaded, |(_, state)| *state) }
-        }).collect()
+        view.timeline
+            .frames
+            .iter()
+            .map(|frame| {
+                let name = frame.name();
+                if view.has_decoded_frame(name) || self.scan_cache.contains(&name.to_owned()) {
+                    State::Ready
+                } else if view.frame_request.pending_name() == Some(name) {
+                    if view.load_phase == Some(level2::LoadPhase::Decoding) {
+                        State::Decoding
+                    } else {
+                        State::Downloading
+                    }
+                } else if downloads
+                    .get(name)
+                    .is_some_and(|at| at.elapsed() < VOLUME_TIMEOUT)
+                {
+                    State::Downloading
+                } else {
+                    view.frame_history
+                        .iter()
+                        .find(|(previous, _)| previous == name)
+                        .map_or(State::Unloaded, |(_, state)| *state)
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn scrubber(&mut self, ctx: &egui::Context) {
         crate::prof_scope!("scrubber");
+        if self.settings.radar_workspace && !compact(ctx) {
+            self.omega_transport(ctx);
+            return;
+        }
         use egui_phosphor::regular as ph;
         if cfg!(target_os = "android") && !self.analyst_open {
             self.signal_scrubber(ctx);
             return;
         }
         let frame_statuses = self.timeline_frame_statuses();
-        let before_transport = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
+        let before_transport = (
+            self.views[self.active].timeline.playhead,
+            self.views[self.active].timeline.playing,
+            self.views[self.active].timeline.following,
+        );
         let accent = egui::Color32::WHITE;
         let tz = self.active_tz();
         let latest_cut = self.views[self.active].volume.as_ref().and_then(|volume| {
@@ -66,10 +92,15 @@ impl HookEchoApp {
         let retained_station = self.views[self.active].retained_station.clone();
         let station_failed = self.views[self.active].error.is_some();
         let loading = self.views[self.active].loading;
-        let loaded_time = self.views[self.active].volume.as_ref().map(|volume| volume.time);
+        let loaded_time = self.views[self.active]
+            .volume
+            .as_ref()
+            .map(|volume| volume.time);
         let requested_time = self.views[self.active].timeline.selected_time();
         let buffering = self.views[self.active].buffering;
-        let skipped_recently = self.views[self.active].last_skipped_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
+        let skipped_recently = self.views[self.active]
+            .last_skipped_at
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
         let load_label = match self.views[self.active].load_phase {
             Some(level2::LoadPhase::Downloading) => "Downloading radar…",
             Some(level2::LoadPhase::Decoding) => "Decoding radar…",
@@ -309,93 +340,15 @@ impl HookEchoApp {
                             );
                         }
 
-                            ui.horizontal(|ui| {
-                                ui.label("Date:");
-                                if ui.button(egui_phosphor::regular::CARET_LEFT).clicked() {
-                                    if let Some(d) = t.date.pred_opt() {
-                                        t.date = d;
-                                        t.following = false;
-                                    }
-                                }
-                                // The carets are still the fastest way to step a day, but they
-                                // were the *only* way: reaching a storm from years back meant
-                                // thousands of clicks. The archive runs to June 1991.
-                                let today = chrono::Utc::now().date_naive();
-                                if let Some(d) = archive_day_input(ui, t.date) {
-                                    // Clamp rather than trust the input: neither a calendar
-                                    // widget nor a typed string knows where the archive starts
-                                    // or that the future is empty.
-                                    t.date = d.clamp(wxdata::level2::ARCHIVE_START, today);
-                                    t.following = t.date >= today;
-                                }
-                                let is_today = t.date >= chrono::Utc::now().date_naive();
-                                if ui
-                                    .add_enabled(
-                                        !is_today,
-                                        egui::Button::new(egui_phosphor::regular::CARET_RIGHT),
-                                    )
-                                    .clicked()
-                                {
-                                    if let Some(d) = t.date.succ_opt() {
-                                        t.date = d;
-                                    }
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("⏮").on_hover_text("First frame").clicked() {
-                                    t.go_begin();
-                                }
-                                ui.checkbox(&mut t.loop_enabled, "Loop");
-                            });
-                            let mut cut_playback = t.cut_playback;
-                            if ui.checkbox(&mut cut_playback, "Play radar cuts")
-                                .on_hover_text("Step through completed sweeps in collection order, including repeated low-level cuts")
-                                .changed()
-                            {
-                                t.enable_cut_playback(cut_playback);
-                            }
-                            ui.add(
-                                egui::Slider::new(&mut t.speed, 1.0..=15.0)
-                                    .suffix(" fps")
-                                    .show_value(true),
+                            let result = history_controls(ui, t, &mut loop_frames,
+                                #[cfg(target_arch = "wasm32")] &packs,
+                                #[cfg(target_arch = "wasm32")] pack_status.as_deref(),
                             );
-                            ui.add(
-                                egui::DragValue::new(&mut loop_frames)
-                                    .range(2..=30)
-                                    .suffix(" frames"),
-                            )
-                            .on_hover_text(
-                                "How many of the newest volumes ▶ cycles through when live",
-                            );
+                            go_head |= result.go_live;
                             #[cfg(target_arch = "wasm32")]
                             {
-                                ui.separator();
-                                if ui
-                                    .button("Save this loop offline")
-                                    .on_hover_text(
-                                        "Keep this loop's volumes in the browser so it plays \
-                                         with no signal. Archived volumes only \u{2014} the live \
-                                         head is still being written.",
-                                    )
-                                    .clicked()
-                                {
-                                    save_pack = true;
-                                }
-                                for p in &packs {
-                                    ui.horizontal(|ui| {
-                                        if ui.button(p.label()).clicked() {
-                                            load_pack = Some(p.clone());
-                                        }
-                                        if ui.small_button("\u{d7}").on_hover_text("Delete").clicked()
-                                        {
-                                            load_pack = None;
-                                            crate::webcache::spawn_remove(p.key());
-                                        }
-                                    });
-                                }
-                                if let Some(msg) = &pack_status {
-                                    ui.weak(msg);
-                                }
+                                save_pack |= result.save_pack;
+                                if result.load_pack.is_some() { load_pack = result.load_pack; }
                             }
                         });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -480,15 +433,25 @@ impl HookEchoApp {
             self.views[self.active].timeline.go_head();
             self.views[self.active].pin_low_cut();
         }
-        let after = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
-        if before_transport != after { self.record_interaction("timeline_transport"); }
+        let after = (
+            self.views[self.active].timeline.playhead,
+            self.views[self.active].timeline.playing,
+            self.views[self.active].timeline.following,
+        );
+        if before_transport != after {
+            self.record_interaction("timeline_transport");
+        }
     }
 
     /// The compact transport used by the Android Signal Deck. It controls the same timeline as
     /// the desktop transport; only its presentation changes.
     fn signal_scrubber(&mut self, ctx: &egui::Context) {
         let retained_station = self.views[self.active].retained_station.clone();
-        let before_transport = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
+        let before_transport = (
+            self.views[self.active].timeline.playhead,
+            self.views[self.active].timeline.playing,
+            self.views[self.active].timeline.following,
+        );
         let frame_statuses = self.timeline_frame_statuses();
         use egui_phosphor::regular as ph;
         let tz = self.active_tz();
@@ -502,59 +465,140 @@ impl HookEchoApp {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(14, 38, 60))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(83, 125, 157)))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgb(83, 125, 157),
+                    ))
                     .corner_radius(13.0)
                     .inner_margin(egui::Margin::symmetric(10, 8))
                     .show(ui, |ui| {
                         ui.set_width(self.chrome_rect.width() - 40.0);
                         ui.spacing_mut().item_spacing = egui::vec2(5.0, 3.0);
                         ui.spacing_mut().interact_size.y = 26.0;
-                        ui.label(egui::RichText::new("RADAR PLAYBACK")
-                            .size(9.0).strong().color(egui::Color32::from_rgb(163, 209, 236)));
+                        ui.label(
+                            egui::RichText::new("RADAR PLAYBACK")
+                                .size(9.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(163, 209, 236)),
+                        );
                         let t = &mut self.views[self.active].timeline;
                         if t.slot_count() > 0 {
                             let live_window = t.live_window;
-                            track(ui, t, tz, egui::Color32::from_rgb(103, 185, 255), live_window, true, &frame_statuses);
+                            track(
+                                ui,
+                                t,
+                                tz,
+                                egui::Color32::from_rgb(103, 185, 255),
+                                live_window,
+                                true,
+                                &frame_statuses,
+                            );
                         }
                         let short_time = |id: Option<&wxdata::level2::Identifier>| -> String {
                             id.and_then(|id| id.date_time())
                                 .map(|dt| match tz {
-                                    Some(zone) => dt.with_timezone(&zone).format("%-I:%M %p").to_string(),
+                                    Some(zone) => {
+                                        dt.with_timezone(&zone).format("%-I:%M %p").to_string()
+                                    }
                                     None => dt.format("%-I:%M %p").to_string(),
                                 })
                                 .unwrap_or_else(|| "—".into())
                         };
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(short_time(t.frames.first())).size(9.0).color(egui::Color32::from_rgb(169, 193, 210)));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(short_time(t.frames.last())).size(9.0).color(egui::Color32::from_rgb(169, 193, 210)));
-                            });
+                            ui.label(
+                                egui::RichText::new(short_time(t.frames.first()))
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(169, 193, 210)),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(short_time(t.frames.last()))
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(169, 193, 210)),
+                                    );
+                                },
+                            );
                         });
                         ui.horizontal(|ui| {
-                            let transport = |ui: &mut egui::Ui, glyph: &str, name: &str, primary: bool| {
-                                ui.add_sized([30.0, 30.0], egui::Button::new(egui::RichText::new(glyph).size(15.0)
-                                    .color(if primary { egui::Color32::from_rgb(8, 31, 48) } else { egui::Color32::WHITE }))
-                                    .fill(if primary { egui::Color32::from_rgb(103, 185, 255) } else { egui::Color32::from_rgb(23, 52, 76) })
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(82, 126, 157)))
-                                    .corner_radius(7.0)).named(name).clicked()
-                            };
-                            if transport(ui, ph::SKIP_BACK, "Previous frame", false) { t.step_cut(-1); }
+                            let transport =
+                                |ui: &mut egui::Ui, glyph: &str, name: &str, primary: bool| {
+                                    ui.add_sized(
+                                        [30.0, 30.0],
+                                        egui::Button::new(
+                                            egui::RichText::new(glyph).size(15.0).color(
+                                                if primary {
+                                                    egui::Color32::from_rgb(8, 31, 48)
+                                                } else {
+                                                    egui::Color32::WHITE
+                                                },
+                                            ),
+                                        )
+                                        .fill(if primary {
+                                            egui::Color32::from_rgb(103, 185, 255)
+                                        } else {
+                                            egui::Color32::from_rgb(23, 52, 76)
+                                        })
+                                        .stroke(egui::Stroke::new(
+                                            1.0,
+                                            egui::Color32::from_rgb(82, 126, 157),
+                                        ))
+                                        .corner_radius(7.0),
+                                    )
+                                    .named(name)
+                                    .clicked()
+                                };
+                            if transport(ui, ph::SKIP_BACK, "Previous frame", false) {
+                                t.step_cut(-1);
+                            }
                             let playing = t.playing;
-                            if transport(ui, if playing { ph::PAUSE } else { ph::PLAY }, if playing { "Pause" } else { "Play" }, true) { t.toggle_play(); }
-                            if transport(ui, ph::SKIP_FORWARD, "Next frame", false) { t.step_cut(1); }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let status = if let Some(previous) = &retained_station { format!("Showing {previous}") }
-                                    else if !t.following { "Archive radar".into() } else if fresh { "Live radar".into() } else { "Radar stale".into() };
-                                ui.label(egui::RichText::new(status).size(13.0).strong().color(egui::Color32::WHITE));
-                            });
+                            if transport(
+                                ui,
+                                if playing { ph::PAUSE } else { ph::PLAY },
+                                if playing { "Pause" } else { "Play" },
+                                true,
+                            ) {
+                                t.toggle_play();
+                            }
+                            if transport(ui, ph::SKIP_FORWARD, "Next frame", false) {
+                                t.step_cut(1);
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let status = if let Some(previous) = &retained_station {
+                                        format!("Showing {previous}")
+                                    } else if !t.following {
+                                        "Archive radar".into()
+                                    } else if fresh {
+                                        "Live radar".into()
+                                    } else {
+                                        "Radar stale".into()
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(status)
+                                            .size(13.0)
+                                            .strong()
+                                            .color(egui::Color32::WHITE),
+                                    );
+                                },
+                            );
                         });
                         ui.horizontal(|ui| {
                             ui.spacing_mut().interact_size.y = 44.0;
-                            if (!t.following || t.cut_playback) && ui.button("Return to live").clicked() { go_head = true; }
+                            if (!t.following || t.cut_playback)
+                                && ui.button("Return to live").clicked()
+                            {
+                                go_head = true;
+                            }
                             ui.menu_button("History", |ui| {
                                 ui.label("Archive date (UTC)");
                                 if let Some(date) = archive_day_input(ui, t.date) {
-                                    t.date = date.clamp(wxdata::level2::ARCHIVE_START, Utc::now().date_naive());
+                                    t.date = date.clamp(
+                                        wxdata::level2::ARCHIVE_START,
+                                        Utc::now().date_naive(),
+                                    );
                                     t.following = t.date >= Utc::now().date_naive();
                                 }
                             });
@@ -567,14 +611,20 @@ impl HookEchoApp {
             self.views[self.active].timeline.go_head();
             self.views[self.active].pin_low_cut();
         }
-        let after = (self.views[self.active].timeline.playhead, self.views[self.active].timeline.playing, self.views[self.active].timeline.following);
-        if before_transport != after { self.record_interaction("timeline_transport"); }
+        let after = (
+            self.views[self.active].timeline.playhead,
+            self.views[self.active].timeline.playing,
+            self.views[self.active].timeline.following,
+        );
+        if before_transport != after {
+            self.record_interaction("timeline_transport");
+        }
     }
 }
 
 /// The time track: one tick per volume, hour labels, the forecast tail, the live loop window,
 /// and a knob you can drag. Returns its rect for the tour's spotlight.
-fn track(
+pub(super) fn track(
     ui: &mut egui::Ui,
     t: &mut crate::timeline::Timeline,
     tz: Option<wxdata::tz::Tz>,
@@ -702,12 +752,23 @@ fn track(
         };
         let left = bar.left() + index as f32 / slots as f32 * bar.width();
         let right = bar.left() + (index + 1) as f32 / slots as f32 * bar.width();
-        p.rect_filled(egui::Rect::from_min_max(egui::pos2(left, bar.bottom() - 2.0), egui::pos2(right, bar.bottom())), 0.0, color);
+        p.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(left, bar.bottom() - 2.0),
+                egui::pos2(right, bar.bottom()),
+            ),
+            0.0,
+            color,
+        );
     }
     if let Some(pos) = resp.hover_pos() {
         let index = (((pos.x - bar.left()) / bar.width()).clamp(0.0, 1.0) * slots as f32) as usize;
         if let Some(state) = frame_statuses.get(index.min(slots.saturating_sub(1))) {
-            let time = t.frames.get(index.min(slots.saturating_sub(1))).and_then(|frame| frame.date_time()).map_or_else(|| "Unknown time".into(), |time| time.to_rfc3339());
+            let time = t
+                .frames
+                .get(index.min(slots.saturating_sub(1)))
+                .and_then(|frame| frame.date_time())
+                .map_or_else(|| "Unknown time".into(), |time| time.to_rfc3339());
             resp.clone().on_hover_text(format!("{time} · {}\nGreen: ready · Yellow: downloading/decoding\nRed: unavailable · Purple: skipped · Gray: not downloaded", state.label()));
         }
     }
@@ -751,7 +812,9 @@ fn track(
     } else {
         format!("Timeline, frame {at} of {of}")
     };
-    let status = frame_statuses.get(t.playhead).map_or("Forecast", |state| state.label());
+    let status = frame_statuses
+        .get(t.playhead)
+        .map_or("Forecast", |state| state.label());
     let label = format!("{label}, {status}");
     resp.widget_info(|| egui::WidgetInfo::slider(true, at as f64, label.clone()));
     rect
@@ -774,5 +837,137 @@ fn hour_label(dt: chrono::DateTime<Utc>, tz: Option<wxdata::tz::Tz>) -> String {
     match tz {
         Some(tz) => dt.with_timezone(&tz).format("%-I %p").to_string(),
         None => dt.format("%HZ").to_string(),
+    }
+}
+
+/// Commands which need application state after the timeline menu releases its borrow.
+#[derive(Default)]
+pub(super) struct HistoryActions {
+    pub go_live: bool,
+    #[cfg(target_arch = "wasm32")]
+    pub save_pack: bool,
+    #[cfg(target_arch = "wasm32")]
+    pub load_pack: Option<crate::webcache::Pack>,
+}
+
+/// One history menu shared by the existing scrubber and radar workspace.
+#[inline(never)]
+pub(super) fn history_controls(
+    ui: &mut egui::Ui,
+    t: &mut crate::timeline::Timeline,
+    loop_frames: &mut usize,
+    #[cfg(target_arch = "wasm32")] packs: &[crate::webcache::Pack],
+    #[cfg(target_arch = "wasm32")] pack_status: Option<&str>,
+) -> HistoryActions {
+    let mut result = HistoryActions::default();
+    ui.horizontal(|ui| {
+        ui.label("Date:");
+        if ui
+            .add_enabled(
+                t.date > wxdata::level2::ARCHIVE_START,
+                egui::Button::new(egui_phosphor::regular::CARET_LEFT),
+            )
+            .clicked()
+        {
+            if let Some(d) = t.date.pred_opt() {
+                t.date = d;
+                t.following = false;
+            }
+        }
+        // The carets are still the fastest way to step a day, but they
+        // were the *only* way: reaching a storm from years back meant
+        // thousands of clicks. The archive runs to June 1991.
+        let today = chrono::Utc::now().date_naive();
+        if let Some(d) = archive_day_input(ui, t.date) {
+            // Clamp rather than trust the input: neither a calendar
+            // widget nor a typed string knows where the archive starts
+            // or that the future is empty.
+            t.date = d.clamp(wxdata::level2::ARCHIVE_START, today);
+            t.following = t.date >= today;
+        }
+        let is_today = t.date >= chrono::Utc::now().date_naive();
+        if ui
+            .add_enabled(
+                !is_today,
+                egui::Button::new(egui_phosphor::regular::CARET_RIGHT),
+            )
+            .clicked()
+        {
+            if let Some(d) = t.date.succ_opt() {
+                t.date = d;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui.button("⏮").on_hover_text("First frame").clicked() {
+            t.go_begin();
+        }
+        ui.checkbox(&mut t.loop_enabled, "Loop");
+    });
+    let mut cut_playback = t.cut_playback;
+    if ui
+        .checkbox(&mut cut_playback, "Play radar cuts")
+        .on_hover_text(
+            "Step through completed sweeps in collection order, including repeated low-level cuts",
+        )
+        .changed()
+    {
+        t.enable_cut_playback(cut_playback);
+    }
+    ui.add(
+        egui::Slider::new(&mut t.speed, 1.0..=15.0)
+            .suffix(" fps")
+            .show_value(true),
+    );
+    ui.add(
+        egui::DragValue::new(loop_frames)
+            .range(2..=live_loop_limit())
+            .suffix(" frames"),
+    )
+    .on_hover_text("How many of the newest volumes ▶ cycles through when live");
+    #[cfg(target_arch = "wasm32")]
+    {
+        ui.separator();
+        if ui
+            .button("Save this loop offline")
+            .on_hover_text(
+                "Keep this loop's volumes in the browser so it plays \
+                                         with no signal. Archived volumes only \u{2014} the live \
+                                         head is still being written.",
+            )
+            .clicked()
+        {
+            result.save_pack = true;
+        }
+        for p in packs {
+            ui.horizontal(|ui| {
+                if ui.button(p.label()).clicked() {
+                    result.load_pack = Some(p.clone());
+                }
+                if ui.small_button("\u{d7}").on_hover_text("Delete").clicked() {
+                    result.load_pack = None;
+                    crate::webcache::spawn_remove(p.key());
+                }
+            });
+        }
+        if let Some(msg) = pack_status {
+            ui.weak(msg);
+        }
+    }
+    if ui.button("Return to live").clicked() {
+        result.go_live = true;
+        ui.close();
+    }
+    result
+}
+
+/// The same limits used by the application's live prefetch window.
+pub(super) fn live_loop_limit() -> usize {
+    if cfg!(target_arch = "wasm32") {
+        WEB_LOOP_WINDOW
+    } else if cfg!(target_os = "android") {
+        ANDROID_LOOP_WINDOW
+    } else {
+        250
     }
 }

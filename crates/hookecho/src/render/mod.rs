@@ -599,6 +599,7 @@ pub struct MapCallback {
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
     pub globe: [f32; 4],
+    pub planar: [f32; 4],
     pub world_per_pixel: f32,
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
@@ -662,6 +663,7 @@ struct CameraUniform {
     // WebGL uniform bindings must occupy a multiple of 16 bytes.
     _pad: [f32; 2],
     globe: [f32; 4],
+    planar: [f32; 4],
 }
 
 struct TileGpu {
@@ -708,7 +710,7 @@ struct MrmsGpu {
 /// Per-pane GPU state: its own camera uniform, radar sweep, tile/radar quad buffers, and the
 /// draw lists staged during `prepare` and consumed during `paint`. (All `prepare`s run before
 /// any `paint`, so shared per-frame buffers would clobber across panes — hence per-pane.)
-type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool);
+type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool, [u32; 4]);
 
 struct PaneGpu {
     id: u32,
@@ -1572,6 +1574,7 @@ impl RenderResources {
             cb.camera_scale[1].to_bits(),
             cb.visible.len(),
             cb.globe[2] != 0.0,
+            cb.planar.map(f32::to_bits),
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
@@ -1591,6 +1594,7 @@ impl RenderResources {
                 ) as f32,
                 _pad: [0.0; 2],
                 globe: cb.globe,
+                planar: cb.planar,
             }),
         );
         if let Some(r) = &cb.radar_upload {
@@ -2288,5 +2292,36 @@ mod dirty_radar_rows_tests {
         assert_eq!(changed_rows(&[0; 16], &[1; 16], 4), vec![0..4]);
         assert_eq!(changed_rows(&[], &[1; 16], 4), vec![0..4]);
         assert!(changed_rows(&[], &[1; 3], 4).is_empty());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod projection_shader_tests {
+    #[test]
+    fn camera_shaders_validate_with_the_same_uniform_layout() {
+        use wgpu::naga;
+        for (name,source) in [
+            ("tiles",include_str!("../shaders/tiles.wgsl")),
+            ("radar",include_str!("../shaders/radar.wgsl")),
+            ("overlay",include_str!("../shaders/overlay.wgsl")),
+            ("mrms",include_str!("../shaders/mrms.wgsl")),
+            ("wind",include_str!("../shaders/wind.wgsl")),
+        ] {
+            let module=naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{name}: {}",e.emit_to_string(source)));
+            let info=naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            #[cfg(target_os = "linux")]
+            for entry in &module.entry_points {
+                let options=naga::back::glsl::Options {version:naga::back::glsl::Version::Embedded {version:300,is_webgl:true},..Default::default()};
+                let pipeline=naga::back::glsl::PipelineOptions {shader_stage:entry.stage,entry_point:entry.name.clone(),multiview:None};
+                let mut output=String::new();
+                naga::back::glsl::Writer::new(&mut output,&module,&info,&options,&pipeline,Default::default()).unwrap().write().unwrap_or_else(|e| panic!("WebGL2 {name}/{}: {e:?}",entry.name));
+            }
+            let uniform=module.types.iter().find_map(|(_,ty)| {
+                if ty.name.as_deref()==Some(if name=="wind" { "Wind" } else { "Camera" }) {
+                    if let naga::TypeInner::Struct {span,..}=ty.inner { return Some(span); }
+                } None
+            }).unwrap();
+            assert_eq!(uniform,if name=="wind" {112} else {std::mem::size_of::<super::CameraUniform>() as u32},"{name}");
+        }
     }
 }

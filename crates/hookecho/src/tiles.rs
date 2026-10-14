@@ -144,6 +144,8 @@ pub enum BasemapStyle {
     VectorPositron,
     /// Vector basemap, night-drive look.
     VectorMidnight,
+    /// Independent black/gray vector map with bright labels for weather presentations.
+    Presentation,
     EsriDarkGray,
     EsriLightGray,
     EsriNatGeo,
@@ -161,7 +163,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 59] = [
+    pub const ALL: [BasemapStyle; 60] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -221,6 +223,7 @@ impl BasemapStyle {
         BasemapStyle::MapTilerTopo,
         BasemapStyle::MapTilerBasic,
         BasemapStyle::MapTilerDatavizDark,
+        BasemapStyle::Presentation,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -308,6 +311,7 @@ impl BasemapStyle {
             BasemapStyle::VectorBright => "Bright",
             BasemapStyle::VectorPositron => "Positron",
             BasemapStyle::VectorMidnight => "Midnight",
+            BasemapStyle::Presentation => "Presentation",
             BasemapStyle::EsriDarkGray => "Esri Dark Gray Canvas",
             BasemapStyle::EsriLightGray => "Esri Light Gray Canvas",
             BasemapStyle::EsriNatGeo => "Esri National Geographic",
@@ -373,6 +377,7 @@ impl BasemapStyle {
             BasemapStyle::VectorBright => "bright",
             BasemapStyle::VectorPositron => "positron",
             BasemapStyle::VectorMidnight => "midnight",
+            BasemapStyle::Presentation => "presentation",
             BasemapStyle::EsriDarkGray => "esri-dark-gray",
             BasemapStyle::EsriLightGray => "esri-light-gray",
             BasemapStyle::EsriNatGeo => "esri-natgeo",
@@ -494,8 +499,8 @@ impl BasemapStyle {
     /// helper ([`wms_url`]) turns an XYZ tile into a GetMap and every such layer is a row here.
     ///
     /// `step` and `lag` are minutes: the publishing interval a `TIME=` must land on, and how far
-    /// behind the clock the newest published frame is. Both are per-publisher — DWD runs on 5
-    /// minutes and ECCC on 6 — and both are measured against the live servers, not guessed.
+    /// behind the clock the newest published frame is. DWD uses this five-minute cadence grid;
+    /// ECCC's six-minute cadence is descriptive here because frame discovery reads availability.
     pub(crate) fn wms_layer(self) -> Option<(&'static str, &'static str, i64, i64)> {
         const DWD: &str = "https://maps.dwd.de/geoserver/dwd/wms";
         const GEOMET: &str = "https://geo.weather.gc.ca/geomet";
@@ -526,6 +531,7 @@ impl BasemapStyle {
                 | BasemapStyle::VectorBright
                 | BasemapStyle::VectorPositron
                 | BasemapStyle::VectorMidnight
+                | BasemapStyle::Presentation
         )
     }
 
@@ -640,7 +646,8 @@ impl BasemapStyle {
             | BasemapStyle::VectorLiberty
             | BasemapStyle::VectorBright
             | BasemapStyle::VectorPositron
-            | BasemapStyle::VectorMidnight => Category::Vector,
+            | BasemapStyle::VectorMidnight
+            | BasemapStyle::Presentation => Category::Vector,
             BasemapStyle::Satellite
             | BasemapStyle::EsriImagery
             | BasemapStyle::HybridSatellite
@@ -689,6 +696,7 @@ impl BasemapStyle {
             BasemapStyle::VectorBright => Some(crate::basemap_style::Palette::Bright),
             BasemapStyle::VectorPositron => Some(crate::basemap_style::Palette::Positron),
             BasemapStyle::VectorMidnight => Some(crate::basemap_style::Palette::Midnight),
+            BasemapStyle::Presentation => Some(crate::basemap_style::Palette::Presentation),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
@@ -939,8 +947,8 @@ impl DetailLevel {
 
 fn tile_cover_at_level(cam: &Camera, viewport_px: (f32, f32), mut z: u8) -> Vec<VisibleTile> {
     let ((west, north), (east, south)) = cam.visible_bounds(viewport_px);
-    if cam.globe {
-        while z > 2 {
+    if cam.globe || cam.pitch_deg != 0.0 || cam.bearing_deg != 0.0 {
+        while z > if cam.globe { 2 } else { 0 } {
             let n = (1u32 << z) as f64;
             let count = ((east * n).ceil() - (west * n).floor())
                 * ((south * n).ceil() - (north * n).floor());
@@ -1048,7 +1056,7 @@ fn parse_iso_minutes(p: &str) -> Option<i64> {
     if let Some(m) = p.strip_suffix('M') {
         m.parse().ok()
     } else if let Some(h) = p.strip_suffix('H') {
-        h.parse::<i64>().ok().map(|h| h * 60)
+        h.parse::<i64>().ok().and_then(|h| h.checked_mul(60))
     } else {
         None
     }
@@ -1088,13 +1096,8 @@ pub fn goes_window(
 /// The frame times a WMS composite offers, oldest first, ending at the newest one `anchor` can
 /// expect to be published.
 ///
-/// ponytail: the grid is computed, not fetched. Both publishers run a fixed interval — DWD 5
-/// minutes, ECCC 6 — and each says so in a GetCapabilities document whose only useful sentence is
-/// that; DWD's is 850 KB, so downloading it every time the style changes would cost more than every
-/// tile in the loop put together. The lags are measured (DWD served the 16:05 frame at 16:10 and not
-/// 16:10; GeoMet served 16:30 by 16:33), and asking for one that has not landed yet costs a blank
-/// tile, not an error. A layer that ever publishes irregularly needs the capabilities parse; none of
-/// the ones here does.
+/// DWD retains the computed cadence/lag grid. ECCC uses its advertised rolling availability
+/// through `eccc_frame_times`, so an archived selection cannot synthesize expired frames.
 fn wms_frames(
     anchor: chrono::DateTime<chrono::Utc>,
     limit: usize,
@@ -1113,8 +1116,95 @@ fn wms_frames(
         .collect()
 }
 
-/// Fetch the available GOES frame times for `style` between `from` and `to` (best-effort; empty
-/// on any failure). Uses the GIBS REST DescribeDomains endpoint.
+/// Expand the advertised time dimension of the requested GeoMet layer, intersecting the
+/// requested window before applying the frame limit. Never invent frames for an expired archive.
+fn eccc_frame_times(
+    xml: &str,
+    layer: &str,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    limit: usize,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    let mut out = Vec::new();
+    if from > to || limit == 0 {
+        return out;
+    }
+    // GeoMet's layer-filtered WMS 1.3 response uses unprefixed Name/Dimension elements.
+    // Require the exact requested layer, and do not borrow a sibling's time dimension.
+    let Some((_, tail)) = xml.split_once(&format!("<Name>{layer}</Name>")) else {
+        return out;
+    };
+    let Some((body, _)) = tail.split_once("</Layer>") else {
+        return out;
+    };
+    for dimension in body.split("<Dimension ").skip(1) {
+        let Some((attrs, tail)) = dimension.split_once('>') else {
+            continue;
+        };
+        if !attrs
+            .split_whitespace()
+            .any(|a| a == "name=\"time\"" || a == "name='time'")
+        {
+            continue;
+        }
+        let Some((times, _)) = tail.split_once("</Dimension>") else {
+            continue;
+        };
+        for range in times.split(',') {
+            let parts: Vec<_> = range.trim().split('/').collect();
+            match parts.as_slice() {
+                [instant] => {
+                    if let Some(t) = parse_domain_instant(instant) {
+                        if from <= t && t <= to {
+                            out.push(t);
+                        }
+                    }
+                }
+                [start, end, period] => {
+                    let (Some(start), Some(end), Some(minutes)) = (
+                        parse_domain_instant(start),
+                        parse_domain_instant(end),
+                        parse_iso_minutes(period),
+                    ) else {
+                        continue;
+                    };
+                    if minutes <= 0 || minutes > 1440 || start > end {
+                        continue;
+                    }
+                    let upper = to.min(end);
+                    let lower = from.max(start);
+                    if lower > upper {
+                        continue;
+                    }
+                    let step = chrono::Duration::minutes(minutes);
+                    let offset = (upper - start).num_seconds() / step.num_seconds();
+                    let mut t = start + chrono::Duration::seconds(offset * step.num_seconds());
+                    // Bound expansion even if an upstream document contains an enormous range.
+                    for _ in 0..limit.min(512) {
+                        if t < lower {
+                            break;
+                        }
+                        out.push(t);
+                        let Some(previous) = t.checked_sub_signed(step) else {
+                            break;
+                        };
+                        t = previous;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    if out.len() > limit {
+        out.drain(..out.len() - limit);
+    }
+    out
+}
+
+/// Fetch imagery frame times for `style` between `from` and `to` (best-effort; empty on failure).
+/// GIBS uses DescribeDomains; ECCC uses its layer-filtered WMS availability document.
 ///
 /// The window is a parameter rather than "the last N hours" because the same call serves the live
 /// loop and archive replay: GIBS keeps GeoColor about two weeks back and Band 13 several months,
@@ -1126,9 +1216,34 @@ pub async fn fetch_frame_times(
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
-    if let Some((_, _, step, lag)) = style.wms_layer() {
-        // `to` is the end of the window the caller wants, which is now for a live pane and the
-        // end of the replayed hour for an archived one.
+    if let Some((endpoint, layer, step, lag)) = style.wms_layer() {
+        if matches!(style, BasemapStyle::EcccRadarRain | BasemapStyle::EcccRadarSnow) {
+            // GeoMet retains a short rolling window. Its advertised range, not the replay clock,
+            // determines availability; an old radar archive must not manufacture old WMS frames.
+            let url = format!("{endpoint}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities&LAYERS={layer}");
+            let response = client.get(wxdata::net::fetch_url(&url))
+                .header("User-Agent", USER_AGENT)
+                .timeout(wxdata::net::FEED_TIMEOUT).send().await;
+            if let Ok(response) = response {
+                if let Ok(response) = response.error_for_status() {
+                    use futures_util::StreamExt;
+                    // bytes_stream is available on native and wasm; Response::chunk is native-only.
+                    let mut body = response.bytes_stream();
+                    // The layer-filtered document is about 21 KB; bound unexpected responses.
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = body.next().await {
+                        match chunk {
+                            Ok(chunk) if bytes.len() + chunk.len() <= 256 * 1024 => bytes.extend_from_slice(&chunk),
+                            _ => return Vec::new(),
+                        }
+                    }
+                    if let Ok(xml) = std::str::from_utf8(&bytes) {
+                        return eccc_frame_times(xml, layer, from, to, limit);
+                    }
+                }
+            }
+            return Vec::new();
+        }
         return wms_frames(to, limit, step, lag);
     }
     let Some((layer, level)) = style.goes_layer() else {
@@ -2739,4 +2854,130 @@ mod detail_transition_tests {
         cam.zoom=12.0;assert_eq!(z(&mut level,&cam),12);
         cam.zoom=20.0;assert_eq!(z(&mut level,&cam),18);
     }
+}
+
+#[cfg(test)]
+mod eccc_availability_tests {
+    use super::*;
+
+    fn instant(s: &str) -> chrono::DateTime<chrono::Utc> {
+        s.parse().unwrap()
+    }
+    fn capabilities(domain: &str) -> String {
+        format!("<WMS_Capabilities><Layer><Name>RADAR_1KM_RRAI</Name><Dimension name=\"time\" units=\"ISO8601\">{domain}</Dimension></Layer></WMS_Capabilities>")
+    }
+
+    /// A captured public GetCapabilities response can exercise the exact production parser
+    /// without making default tests network-dependent or committing a changing live document.
+    #[test]
+    #[ignore = "set HOOKECHO_ECCC_CAPABILITIES_FIXTURE to a captured public response"]
+    fn eccc_captured_proxy_response_parses() {
+        let path = std::env::var("HOOKECHO_ECCC_CAPABILITIES_FIXTURE").expect("fixture path");
+        let xml = std::fs::read_to_string(path).expect("read captured XML");
+        let frames = eccc_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            chrono::DateTime::<chrono::Utc>::MIN_UTC,
+            chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            48,
+        );
+        assert!(!frames.is_empty(), "requested live layer must expose frame times");
+        assert!(frames.windows(2).all(|pair| pair[1] - pair[0] == chrono::Duration::minutes(6)));
+        println!("Parsed {} advertised frames: {} through {}", frames.len(), frames[0], frames[frames.len() - 1]);
+    }
+
+    #[test]
+    fn eccc_advertised_window_rejects_expired_archive_and_future_frames() {
+        let xml = capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT6M");
+        let frames = eccc_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-14T08:00:00Z"),
+            instant("2026-10-14T18:00:00Z"),
+            48,
+        );
+        assert_eq!(frames.len(), 31);
+        assert_eq!(frames[0], instant("2026-10-14T13:00:00Z"));
+        assert_eq!(frames[30], instant("2026-10-14T16:00:00Z"));
+        assert!(eccc_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-13T08:00:00Z"),
+            instant("2026-10-13T18:00:00Z"),
+            48
+        )
+        .is_empty());
+        assert!(eccc_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-14T16:01:00Z"),
+            instant("2026-10-14T18:00:00Z"),
+            48
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn eccc_intersects_before_limiting_and_honors_six_minute_boundaries() {
+        let xml = capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT6M");
+        let frames = eccc_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-14T13:01:00Z"),
+            instant("2026-10-14T13:29:00Z"),
+            2,
+        );
+        assert_eq!(
+            frames,
+            vec![
+                instant("2026-10-14T13:18:00Z"),
+                instant("2026-10-14T13:24:00Z")
+            ]
+        );
+        assert!(eccc_frame_times(
+            &xml,
+            "RADAR_1KM_RSNO",
+            instant("2026-10-14T13:00:00Z"),
+            instant("2026-10-14T16:00:00Z"),
+            48
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn eccc_malformed_or_empty_availability_never_falls_back_to_guessed_times() {
+        let from = instant("2026-10-14T13:00:00Z");
+        let to = instant("2026-10-14T16:00:00Z");
+        for xml in [
+            String::new(),
+            capabilities("bad"),
+            capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT0M"),
+            capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT9223372036854775807H"),
+        ] {
+            assert!(eccc_frame_times(&xml, "RADAR_1KM_RRAI", from, to, 48).is_empty());
+        }
+        assert!(eccc_frame_times(
+            &capabilities("2026-10-14T14:00:00Z"),
+            "RADAR_1KM_RRAI",
+            from,
+            to,
+            0
+        )
+        .is_empty());
+    }
+    #[test]
+    fn pitched_tile_cover_is_bounded_and_covers_inverse_viewport_samples() {
+        let vp=(1200.0,800.0);
+        for pitch in [0.0,60.0] { for bearing in [0.0,45.0,90.0,225.0] {
+            let mut cam=Camera::at_lonlat(179.9,35.0,8.0);
+            cam.set_orientation(pitch,bearing);
+            let cover=tile_cover_at_level(&cam,vp,8);
+            assert!(cover.len()<=512);
+            for iy in 0..10 { for ix in 0..10 {
+                let world=cam.screen_to_world((vp.0*(ix as f32+0.5)/10.0,vp.1*(iy as f32+0.5)/10.0),vp);
+                assert!(cover.iter().any(|t| world.0>=t.world_min[0] as f64 && world.0<=t.world_max[0] as f64 && world.1>=t.world_min[1] as f64 && world.1<=t.world_max[1] as f64), "missing tile at {world:?}");
+            } }
+        } }
+    }
+
 }

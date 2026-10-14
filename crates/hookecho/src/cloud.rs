@@ -20,8 +20,30 @@ const FILES_URL: &str = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD_URL: &str = "https://www.googleapis.com/upload/drive/v3/files";
 /// Only the app's own hidden folder — this grant cannot read the rest of your Drive.
 const SCOPE: &str = "https://www.googleapis.com/auth/drive.appdata";
-/// The synced blob's name inside `appDataFolder`.
-const REMOTE_NAME: &str = "settings.json";
+/// Keep ordinary HookEcho's existing remote object unchanged. The standalone workspace
+/// shares an OAuth client/appDataFolder when the user chooses, but never its settings object.
+fn remote_name_for_profile(radar_workspace: bool) -> &'static str {
+    if radar_workspace { "radar-workspace-settings.json" } else { "settings.json" }
+}
+
+fn remote_name() -> &'static str {
+    remote_name_for_profile(crate::paths::is_radar_workspace())
+}
+
+#[derive(Deserialize)]
+struct RemoteFile {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "modifiedTime")]
+    modified_time: String,
+}
+
+fn select_remote_file(files: Vec<RemoteFile>, radar_workspace: bool) -> Option<RemoteFile> {
+    // Defend against an unexpected list response as well as filtering in the Drive query.
+    // Never fall back to the first file: it may belong to the other local application.
+    files.into_iter().find(|file| file.name == remote_name_for_profile(radar_workspace))
+}
 
 /// Settings fields that belong to *this* machine and must survive a sync from another one.
 /// Everything else — markers, placefiles, palettes, theme, API keys — is shared.
@@ -305,15 +327,9 @@ pub struct Remote {
 /// Fetch the synced settings, or `None` when this account has never synced.
 pub async fn fetch(access: &str) -> Result<Option<Remote>, String> {
     #[derive(Deserialize)]
-    struct File {
-        id: String,
-        #[serde(rename = "modifiedTime")]
-        modified_time: String,
-    }
-    #[derive(Deserialize)]
     struct List {
         #[serde(default)]
-        files: Vec<File>,
+        files: Vec<RemoteFile>,
     }
     let list: List = parse(
         client()
@@ -321,15 +337,15 @@ pub async fn fetch(access: &str) -> Result<Option<Remote>, String> {
             .bearer_auth(access)
             .query(&[
                 ("spaces", "appDataFolder"),
-                ("q", &format!("name = '{REMOTE_NAME}'")),
-                ("fields", "files(id,modifiedTime)"),
+                ("q", &format!("name = '{}' and trashed = false", remote_name())),
+                ("fields", "files(id,name,modifiedTime)"),
             ])
             .send()
             .await
             .map_err(|e| e.to_string())?,
     )
     .await?;
-    let Some(f) = list.files.into_iter().next() else {
+    let Some(f) = select_remote_file(list.files, crate::paths::is_radar_workspace()) else {
         return Ok(None);
     };
     let body = client()
@@ -366,7 +382,7 @@ pub async fn push(access: &str, id: Option<&str>, body: String) -> Result<String
             .body(body),
         // Creating: multipart, so the metadata can put it in appDataFolder.
         None => {
-            let meta = serde_json::json!({"name": REMOTE_NAME, "parents": ["appDataFolder"]});
+            let meta = serde_json::json!({"name": remote_name(), "parents": ["appDataFolder"]});
             let boundary = "hookecho-sync-boundary";
             let payload = format!(
                 "--{b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n\
@@ -515,6 +531,22 @@ pub fn hash(v: &serde_json::Value) -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn profile_remote_files_never_fall_back_to_the_other_app() {
+        assert_eq!(remote_name_for_profile(false), "settings.json");
+        assert_ne!(remote_name_for_profile(false), remote_name_for_profile(true));
+        let files = || vec![
+            RemoteFile { id: "ordinary".into(), name: "settings.json".into(), modified_time: "now".into() },
+            RemoteFile { id: "workspace".into(), name: "radar-workspace-settings.json".into(), modified_time: "now".into() },
+        ];
+        assert_eq!(select_remote_file(files(), false).unwrap().id, "ordinary");
+        assert_eq!(select_remote_file(files(), true).unwrap().id, "workspace");
+        assert!(select_remote_file(vec![files().remove(0)], true).is_none());
+        assert!(select_remote_file(vec![files().remove(1)], false).is_none());
+        let unnamed = serde_json::from_str::<RemoteFile>(r#"{"id":"legacy","modifiedTime":"now"}"#).unwrap();
+        assert!(select_remote_file(vec![unnamed], true).is_none());
+    }
 
     #[test]
     fn loopback_listener_hands_back_the_code() {

@@ -5,12 +5,16 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use wxdata::level2::Moment;
 
+fn default_opacity() -> f32 { 1.0 }
+
 fn default_blend_width() -> f32 {
     0.55
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RadarAppearance {
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
     #[serde(default = "default_blend_width")]
     pub blend_width: f32,
     #[serde(default)]
@@ -89,6 +93,7 @@ mod portable_palettes {
 impl Default for RadarAppearance {
     fn default() -> Self {
         Self {
+            opacity: 1.0,
             blend_width: default_blend_width(),
             precision: false,
             multipass: false,
@@ -101,6 +106,7 @@ impl Default for RadarAppearance {
 
 impl RadarAppearance {
     pub fn sanitize(&mut self) {
+        self.opacity = if self.opacity.is_finite() { self.opacity.clamp(0.0, 1.0) } else { 1.0 };
         self.blend_width = if self.blend_width.is_finite() {
             self.blend_width.clamp(0.05, 1.0)
         } else {
@@ -137,6 +143,7 @@ impl RadarAppearance {
 
     pub fn fingerprint(&self, moment: Moment) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.opacity.to_bits().hash(&mut h);
         self.blend_width.to_bits().hash(&mut h);
         self.precision.hash(&mut h);
         self.multipass.hash(&mut h);
@@ -157,11 +164,19 @@ impl RadarAppearance {
     }
 
     pub fn apply_upload(&self, upload: &mut crate::render::RadarUpload, moment: Moment) {
+        scale_opacity(&mut upload.lut, self.opacity);
         upload.uniform[17] = self.blend_width;
         upload.uniform[19] = f32::from(self.multipass);
         if let Some(ceiling) = self.upper_bounds[moment.index()] {
             mask_above(&mut upload.lut, moment.value_range(), ceiling);
         }
+    }
+}
+
+fn scale_opacity(lut: &mut [u8], opacity: f32) {
+    let opacity = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
+    for rgba in lut.as_chunks_mut::<4>().0 {
+        rgba[3] = (f32::from(rgba[3]) * opacity).round() as u8;
     }
 }
 
@@ -182,6 +197,20 @@ fn mask_above(lut: &mut [u8], (lo, hi): (f32, f32), ceiling: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn display_opacity_preserves_colors_and_transparent_data() {
+        let mut lut = [10, 20, 30, 255, 40, 50, 60, 0, 70, 80, 90, 100];
+        scale_opacity(&mut lut, 0.5);
+        assert_eq!(lut, [10, 20, 30, 128, 40, 50, 60, 0, 70, 80, 90, 50]);
+        let mut appearance: RadarAppearance = serde_json::from_str("{}").unwrap();
+        assert_eq!(appearance.opacity, 1.0);
+        let old_key = appearance.fingerprint(Moment::Reflectivity);
+        appearance.opacity = 0.5;
+        assert_ne!(old_key, appearance.fingerprint(Moment::Reflectivity));
+        appearance.opacity = f32::NAN;
+        appearance.sanitize();
+        assert_eq!(appearance.opacity, 1.0);
+    }
 
     #[test]
     fn preset_roundtrip_copies_display_without_changing_station_or_product() {

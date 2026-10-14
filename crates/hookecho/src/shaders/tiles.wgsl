@@ -8,8 +8,23 @@ struct Camera {
     road_scale: f32,
     _pad: vec2<f32>,
     globe: vec4<f32>,
+    planar: vec4<f32>,
 };
 
+
+// Perspective Mercator plane; CPU mirror is Camera::planar_point.
+// Keep homogeneous W here so world/UV varyings interpolate on the ground plane.
+fn planar_clip(world: vec2<f32>) -> vec4<f32> {
+    if (all(camera.planar == vec4<f32>(1.0, 0.0, 1.0, 0.0))) {
+        return vec4<f32>((world - camera.center) * camera.scale, 0.0, 1.0);
+    }
+    let q = (world - camera.center) / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+    let r = vec2<f32>(camera.planar.x * q.x - camera.planar.y * q.y,
+        camera.planar.y * q.x + camera.planar.x * q.y);
+    let clip_scale = camera.scale * camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+    return vec4<f32>(r * vec2<f32>(1.0, camera.planar.z) * clip_scale, 0.0,
+        1.0 + r.y * camera.planar.w);
+}
 
 // Orthographic globe shared with CPU picking. globe.z == 0 retains Mercator.
 const G_PI: f32 = 3.14159265358979;
@@ -61,6 +76,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.ndc = p;
     out.transform = in.transform;
     out.clip = vec4<f32>(p, 0.0, 1.0);
+    if (camera.globe.z == 0.0) { out.clip = planar_clip(in.world); }
     out.uv = in.uv;
     return out;
 }

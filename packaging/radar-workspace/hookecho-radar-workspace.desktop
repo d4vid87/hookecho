@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=HookEcho Radar Workspace
+Comment=Map-centered weather radar workspace
+Exec=hookecho-radar-workspace %u
+Icon=hookecho-radar-workspace
+Terminal=false
+Categories=Science;Geoscience;Education;
+Keywords=weather;radar;nexrad;storm;forecast;
+StartupWMClass=hookecho-radar-workspace

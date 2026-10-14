@@ -212,11 +212,12 @@ pub fn build_tile_with_theme(
     tess_zoom: f64,
     theme: crate::settings::Theme,
 ) -> TileGeometry {
-    build_tile_detail(bytes, id, palette, tess_zoom, theme, false)
+    build_tile_detail(bytes, id, palette, tess_zoom, theme, false, basemap_style::MapDetailStyle::default())
 }
 
 fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
     tess_zoom: f64, theme: crate::settings::Theme, simplified: bool,
+    details: basemap_style::MapDetailStyle,
 ) -> TileGeometry {
     let (z, tx, ty) = id;
     let n = (1u64 << z) as f64;
@@ -366,8 +367,8 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                 continue;
             }
             let styled = match pass {
-                StrokePass::Casing => basemap_style::casing(palette, layer, &cls),
-                StrokePass::Road => basemap_style::stroke(palette, layer, &cls),
+                StrokePass::Casing => basemap_style::casing_with_details(palette, layer, &cls, details),
+                StrokePass::Road => basemap_style::stroke_with_details(palette, layer, &cls, details),
             };
             let Some((c, wpx)) = styled else {
                 continue;
@@ -427,7 +428,9 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
         }
     }
 
-    let labels = extract_labels(&reader, &names, n, txf, tyf, simplified);
+    let labels = if details.show_city_roads {
+        extract_labels(&reader, &names, n, txf, tyf, simplified)
+    } else { Vec::new() };
     (verts, indices, foreground_verts, foreground_indices, labels)
 }
 
@@ -857,13 +860,13 @@ struct FetchedVector {
 
 // Reuse the radar worker and its transferred buffers: no additional worker or WASM heap.
 #[cfg(any(target_arch = "wasm32", test))]
-type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings::Theme, bool);
+type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings::Theme, bool, basemap_style::MapDetailStyle);
 
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn build_worker_tile(payload: &[u8]) -> Result<Vec<u8>, postcard::Error> {
-    let (bytes, id, palette, zoom, theme, simplified): VectorJob = postcard::from_bytes(payload)?;
+    let (bytes, id, palette, zoom, theme, simplified, details): VectorJob = postcard::from_bytes(payload)?;
     let (vertices, indices, foreground_vertices, foreground_indices, labels) =
-        build_tile_detail(&bytes, id, palette, zoom, theme, simplified);
+        build_tile_detail(&bytes, id, palette, zoom, theme, simplified, details);
     postcard::to_allocvec(&FetchedVector {
         id, vertices, indices, foreground_vertices, foreground_indices, labels,
     })
@@ -896,6 +899,7 @@ pub struct VectorTileManager {
     palette: basemap_style::Palette,
     theme: crate::settings::Theme,
     simplified: bool,
+    details: basemap_style::MapDetailStyle,
     cache_root: Option<PathBuf>,
     template: Option<String>,
     template_tx: Sender<Option<String>>,
@@ -935,6 +939,7 @@ impl VectorTileManager {
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
             simplified: false,
+            details: basemap_style::MapDetailStyle::default(),
             cache_root,
             template: None,
             template_tx,
@@ -997,6 +1002,23 @@ impl VectorTileManager {
         self.labels.clear();
         self.label_gen += 1;
         self.speculative = None;
+        true
+    }
+
+    /// Apply resolved basemap detail preferences. Returns true when the caller must clear its
+    /// GPU vector buffers. Raw tile bytes stay cached; only derived geometry/labels are stale.
+    pub fn set_details(&mut self, details: basemap_style::MapDetailStyle) -> bool {
+        let details = details.normalized();
+        if self.details == details { return false; }
+        self.details = details;
+        self.render_generation += 1;
+        self.requested.clear();
+        self.failed.clear();
+        self.uploaded.clear();
+        self.labels.clear();
+        self.label_gen += 1;
+        self.speculative = None;
+        self.deferred_ready = None;
         true
     }
 
@@ -1088,6 +1110,7 @@ impl VectorTileManager {
         let palette = self.palette;
         let theme = self.theme;
         let simplified = self.simplified;
+        let details = self.details;
         for v in visible {
             if self.uploaded.contains(&v.id) { continue; }
             // Same reason the raster manager caps itself: a pan at low zoom asks for a screenful
@@ -1150,7 +1173,7 @@ impl VectorTileManager {
                 };
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme, simplified));
+                    let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme, simplified, details));
                     let result = match payload {
                         Ok(payload) => {
                             let encoded = match wxdata::wasm_worker::tessellate_vector(payload.clone()).await {
@@ -1168,7 +1191,7 @@ impl VectorTileManager {
                 #[cfg(not(target_arch = "wasm32"))]
                 blocking.spawn_blocking(move || {
                     let (vertices, indices, foreground_vertices, foreground_indices, labels) =
-                        build_tile_detail(&bytes, id, palette, tess_zoom, theme, simplified);
+                        build_tile_detail(&bytes, id, palette, tess_zoom, theme, simplified, details);
                     finish(Ok(FetchedVector {
                         id, vertices, indices, foreground_vertices, foreground_indices, labels,
                     }));
@@ -1230,10 +1253,10 @@ impl VectorTileManager {
             examined += 1;
             let Some((generation, f)) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) else { break };
             let completed_id = match &f { Ok(tile) => tile.id, Err(id) => *id };
-            if self.speculative == Some(completed_id) { self.speculative = None; }
             if generation != self.render_generation {
                 continue;
             }
+            if self.speculative == Some(completed_id) { self.speculative = None; }
             let f = match f {
                 Ok(f) => f,
                 // Out of `requested` so the next visibility pass is the retry, and into `failed`
@@ -1364,6 +1387,7 @@ mod tests {
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
             simplified: false,
+            details: basemap_style::MapDetailStyle::default(),
             cache_root: None,
             template: None,
             template_tx,
@@ -1374,6 +1398,92 @@ mod tests {
             deferred_ready: None,
             detail_level: std::cell::Cell::new(crate::tiles::DetailLevel::default()),
         }
+    }
+
+    // Small synthetic MVT, independent of network fixtures and tile providers.
+    fn detail_fixture() -> Vec<u8> {
+        fn varint(mut value: u64) -> Vec<u8> {
+            let mut out = Vec::new();
+            while value >= 128 { out.push((value as u8) | 128); value >>= 7; }
+            out.push(value as u8); out
+        }
+        fn scalar(tag: u8, value: u64) -> Vec<u8> {
+            let mut out = vec![tag << 3]; out.extend(varint(value)); out
+        }
+        fn bytes(tag: u8, value: &[u8]) -> Vec<u8> {
+            let mut out = vec![(tag << 3) | 2]; out.extend(varint(value.len() as u64)); out.extend(value); out
+        }
+        fn layer(name: &str, key: &str, classes: &[&str]) -> Vec<u8> {
+            let mut out = bytes(1, name.as_bytes());
+            for (i, class) in classes.iter().enumerate() {
+                let mut feature = bytes(2, &[0, i as u8]);
+                feature.extend(scalar(3, 2)); // LineString
+                let geometry: Vec<u8> = [9, 20, 20 + 80 * i as u64, 10, 200, 0]
+                    .into_iter().flat_map(varint).collect();
+                feature.extend(bytes(4, &geometry));
+                out.extend(bytes(2, &feature));
+                out.extend(bytes(4, &bytes(1, class.as_bytes())));
+            }
+            out.extend(bytes(3, key.as_bytes()));
+            out.extend(scalar(5, 4096)); out.extend(scalar(15, 2));
+            bytes(3, &out)
+        }
+        let mut out = layer("boundary", "admin_level", &["4", "6"]);
+        out.extend(layer("transportation", "class", &["motorway"]));
+        out
+    }
+
+    #[test]
+    fn detail_controls_change_real_geometry_and_worker_results() {
+        let bytes = detail_fixture();
+        let id = (8, 65, 95);
+        let palette = basemap_style::Palette::Presentation;
+        let theme = crate::settings::Theme::Dark;
+        let defaults = basemap_style::MapDetailStyle::default();
+        let all = build_tile_detail(&bytes, id, palette, 8.0, theme, false, defaults);
+        assert!(all.0.len() > 4 && !all.2.is_empty());
+        let hidden = basemap_style::MapDetailStyle {
+            states: basemap_style::BoundaryAppearance { enabled: false, ..Default::default() },
+            counties: basemap_style::BoundaryAppearance { enabled: false, ..Default::default() },
+            show_city_roads: false,
+        };
+        let nothing = build_tile_detail(&bytes, id, palette, 8.0, theme, false, hidden);
+        assert_eq!(nothing.0.len(), 4, "only the land quad remains");
+        assert!(nothing.2.is_empty() && nothing.4.is_empty());
+        let only_county = basemap_style::MapDetailStyle {
+            counties: basemap_style::BoundaryAppearance { enabled: true, color: Some([40,90,150]), width: Some(2.5) },
+            ..hidden
+        };
+        let direct = build_tile_detail(&bytes, id, palette, 8.0, theme, false, only_county);
+        assert!(direct.0.len() > 4 && direct.0.len() < all.0.len());
+        assert!(direct.0[4..].iter().all(|vertex| vertex.color == color([40,90,150,255])));
+        let payload = postcard::to_allocvec(&(bytes, id, palette, 8.0, theme, false, only_county)).unwrap();
+        let encoded = build_worker_tile(&payload).unwrap();
+        let result: FetchedVector = postcard::from_bytes(&encoded).unwrap();
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&result.vertices), bytemuck::cast_slice::<_, u8>(&direct.0));
+        assert_eq!(result.indices, direct.1);
+    }
+
+    #[tokio::test]
+    async fn details_changes_discard_stale_jobs_without_cancelling_new_requests() {
+        let mut manager = test_manager();
+        let id = (8, 65, 95);
+        let old = manager.render_generation;
+        let details = basemap_style::MapDetailStyle { show_city_roads: false, ..Default::default() };
+        assert!(manager.set_details(details));
+        assert!(!manager.set_details(details), "stable settings must not rebuild tiles every frame");
+        manager.requested.insert(id);
+        manager.speculative = Some(id);
+        manager.tx.send((old, Err(id))).unwrap();
+        manager.tx.send((old, Ok(FetchedVector { id, vertices: vec![], indices: vec![],
+            foreground_vertices: vec![], foreground_indices: vec![], labels: vec![] }))).unwrap();
+        assert!(manager.drain_ready().is_empty());
+        assert!(manager.requested.contains(&id));
+        assert_eq!(manager.speculative, Some(id));
+        assert!(!manager.failed.contains_key(&id));
+        manager.tx.send((manager.render_generation, Ok(FetchedVector { id, vertices: vec![], indices: vec![],
+            foreground_vertices: vec![], foreground_indices: vec![], labels: vec![] }))).unwrap();
+        assert_eq!(manager.drain_ready().len(), 1);
     }
 
     #[tokio::test]
@@ -1517,7 +1627,7 @@ mod tests {
         let id = (8, 65, 95);
         let palette = basemap_style::Palette::Dark;
         let theme = crate::settings::Theme::Dark;
-        let payload = postcard::to_allocvec(&(vec![] as Vec<u8>, id, palette, 8.0, theme, false)).unwrap();
+        let payload = postcard::to_allocvec(&(vec![] as Vec<u8>, id, palette, 8.0, theme, false, basemap_style::MapDetailStyle::default())).unwrap();
         let encoded = build_worker_tile(&payload).unwrap();
         let result: FetchedVector = postcard::from_bytes(&encoded).unwrap();
         let (vertices, indices, _, _, labels) =
@@ -1668,6 +1778,10 @@ mod tests {
         assert_eq!(labels[0].name, "35");
         assert_eq!(labels[0].shield, RoadShield::Interstate);
         assert!(labels[0].min_zoom <= 5.3);
+        let hidden = basemap_style::MapDetailStyle { show_city_roads: false, ..Default::default() };
+        let (_, _, _, _, hidden_labels) = build_tile_detail(bytes, (5,7,12), basemap_style::Palette::Dark,
+            5.0, crate::settings::Theme::Dark, false, hidden);
+        assert!(hidden_labels.is_empty());
     }
 
     #[test]

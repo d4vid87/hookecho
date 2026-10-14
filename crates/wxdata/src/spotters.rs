@@ -25,6 +25,19 @@ pub struct Spotter {
     pub status: String,
 }
 
+impl Spotter {
+    /// Inclusive report-age filter. Zero keeps all supplied reports, matching the unfiltered
+    /// feed. Bounded windows reject future timestamps rather than treating them as fresh.
+    pub fn within_active_timeframe(&self, now: DateTime<Utc>, max_age_minutes: u16) -> bool {
+        if max_age_minutes == 0 {
+            return true;
+        }
+        let age = now.signed_duration_since(self.time);
+        age >= chrono::Duration::zero()
+            && age <= chrono::Duration::minutes(i64::from(max_age_minutes))
+    }
+}
+
 /// Fetch and parse the current Spotter Network positions.
 pub async fn fetch_spotters(client: &reqwest::Client) -> anyhow::Result<Vec<Spotter>> {
     let body = client
@@ -127,6 +140,48 @@ pub fn parse_spotters(text: &str) -> Vec<Spotter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_timeframe_includes_exact_cutoff_without_rounding() {
+        let now = DateTime::parse_from_rfc3339("2026-10-14T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut spotter = Spotter {
+            name: "Test".into(),
+            lat: 35.0,
+            lon: -97.0,
+            time: now,
+            heading: None,
+            status: String::new(),
+        };
+        for minutes in [5, 15, 30, 60] {
+            let cutoff = now - chrono::Duration::minutes(i64::from(minutes));
+            spotter.time = cutoff;
+            assert!(spotter.within_active_timeframe(now, minutes));
+            spotter.time = cutoff - chrono::Duration::milliseconds(1);
+            assert!(!spotter.within_active_timeframe(now, minutes));
+            spotter.time = cutoff + chrono::Duration::milliseconds(1);
+            assert!(spotter.within_active_timeframe(now, minutes));
+        }
+        spotter.time = now;
+        assert!(spotter.within_active_timeframe(now, 5));
+        spotter.time = now + chrono::Duration::milliseconds(1);
+        assert!(!spotter.within_active_timeframe(now, 5));
+        assert!(spotter.within_active_timeframe(now, 0));
+        spotter.time = now - chrono::Duration::days(365);
+        assert!(!spotter.within_active_timeframe(now, 60));
+        assert!(spotter.within_active_timeframe(now, 0));
+    }
+
+    #[test]
+    fn missing_or_invalid_report_times_are_not_invented() {
+        for stamp in ["", "not a date"] {
+            let feed = format!(
+                "Object: 35.0,-97.0\nIcon: 0,0,0,6,10,\"Test\\n{stamp}\\nSTATIONARY\"\nEnd:\n"
+            );
+            assert!(parse_spotters(&feed).is_empty());
+        }
+    }
 
     #[test]
     fn parses_spotters_and_strips_email() {

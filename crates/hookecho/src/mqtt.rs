@@ -122,18 +122,22 @@ pub fn drain() -> Vec<Cmd> {
 /// every reconnect — which is idempotent, since a retained config is overwritten rather than
 /// appended.
 fn discovery(prefix: &str) -> Vec<(String, String)> {
+    discovery_for_identity(prefix, crate::paths::application_id(), crate::paths::application_name())
+}
+
+fn discovery_for_identity(prefix: &str, app_id: &str, app_name: &str) -> Vec<(String, String)> {
     let device = serde_json::json!({
-        "identifiers": ["hookecho"],
-        "name": "HookEcho",
+        "identifiers": [app_id],
+        "name": app_name,
         "manufacturer": "HookEcho",
         "model": "radar",
     });
     vec![
         (
-            "homeassistant/sensor/hookecho_status/config".to_string(),
+            format!("homeassistant/sensor/{app_id}_status/config"),
             serde_json::json!({
-                "name": "HookEcho status",
-                "unique_id": "hookecho_status",
+                "name": format!("{app_name} status"),
+                "unique_id": format!("{app_id}_status"),
                 "state_topic": format!("{prefix}/status"),
                 "value_template": "{{ value_json | length }}",
                 "json_attributes_topic": format!("{prefix}/nearest"),
@@ -142,10 +146,10 @@ fn discovery(prefix: &str) -> Vec<(String, String)> {
             .to_string(),
         ),
         (
-            "homeassistant/sensor/hookecho_nearest/config".to_string(),
+            format!("homeassistant/sensor/{app_id}_nearest/config"),
             serde_json::json!({
-                "name": "HookEcho nearest cell",
-                "unique_id": "hookecho_nearest",
+                "name": format!("{app_name} nearest cell"),
+                "unique_id": format!("{app_id}_nearest"),
                 "state_topic": format!("{prefix}/nearest"),
                 // A cell that is not there is `null`, which has no distance — the sensor goes
                 // unavailable rather than reporting a made-up zero.
@@ -156,10 +160,10 @@ fn discovery(prefix: &str) -> Vec<(String, String)> {
             .to_string(),
         ),
         (
-            "homeassistant/sensor/hookecho_alerts/config".to_string(),
+            format!("homeassistant/sensor/{app_id}_alerts/config"),
             serde_json::json!({
-                "name": "HookEcho last alert",
-                "unique_id": "hookecho_alerts",
+                "name": format!("{app_name} last alert"),
+                "unique_id": format!("{app_id}_alerts"),
                 "state_topic": format!("{prefix}/alerts"),
                 "value_template": "{{ value_json.title }}",
                 "device": device,
@@ -167,10 +171,10 @@ fn discovery(prefix: &str) -> Vec<(String, String)> {
             .to_string(),
         ),
         (
-            "homeassistant/switch/hookecho_mute/config".to_string(),
+            format!("homeassistant/switch/{app_id}_mute/config"),
             serde_json::json!({
-                "name": "HookEcho mute",
-                "unique_id": "hookecho_mute",
+                "name": format!("{app_name} mute"),
+                "unique_id": format!("{app_id}_mute"),
                 "command_topic": format!("{prefix}/cmd/mute"),
                 "payload_on": "on",
                 "payload_off": "off",
@@ -202,7 +206,7 @@ fn clean_prefix(raw: &str) -> String {
         .filter(|s| !s.is_empty() && !s.contains(['#', '+']))
         .collect();
     if cleaned.is_empty() {
-        "hookecho".to_string()
+        crate::paths::application_id().to_string()
     } else {
         cleaned.join("/")
     }
@@ -416,6 +420,31 @@ mod tests {
 
     /// Home Assistant keys entities by `unique_id` and the configs are retained, so a collision
     /// or a stray topic is a mess in somebody's house that outlives the app.
+    #[test]
+    fn standalone_discovery_identity_is_distinct_without_rewriting_user_prefixes() {
+        let ordinary = discovery_for_identity("my/selected/topic", "hookecho", "HookEcho");
+        let standalone = discovery_for_identity("my/selected/topic", "hookecho-radar-workspace", "HookEcho Radar Workspace");
+        for (index, ((normal_topic, normal), (workspace_topic, workspace))) in ordinary.iter().zip(&standalone).enumerate() {
+            let kind = ["status", "nearest", "alerts", "mute"][index];
+            let component = if kind == "mute" { "switch" } else { "sensor" };
+            assert_eq!(normal_topic, &format!("homeassistant/{component}/hookecho_{kind}/config"));
+            assert_ne!(normal_topic, workspace_topic);
+            let normal: serde_json::Value = serde_json::from_str(normal).unwrap();
+            let workspace: serde_json::Value = serde_json::from_str(workspace).unwrap();
+            assert_eq!(normal["unique_id"], format!("hookecho_{kind}"));
+            assert_eq!(workspace["unique_id"], format!("hookecho-radar-workspace_{kind}"));
+            assert_eq!(normal["device"]["identifiers"][0], "hookecho");
+            assert_eq!(workspace["device"]["identifiers"][0], "hookecho-radar-workspace");
+            assert_eq!(workspace["device"]["name"], "HookEcho Radar Workspace");
+            for key in ["state_topic", "command_topic", "json_attributes_topic"] {
+                assert_eq!(normal.get(key), workspace.get(key));
+                if let Some(topic) = workspace.get(key).and_then(|v| v.as_str()) {
+                    assert!(topic.starts_with("my/selected/topic/"));
+                }
+            }
+        }
+    }
+
     #[test]
     fn discovery_configs_are_distinct_and_point_at_our_prefix() {
         let configs = discovery("home/weather");

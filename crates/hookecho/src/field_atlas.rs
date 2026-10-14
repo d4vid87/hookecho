@@ -315,6 +315,8 @@ struct ViewKey {
     center: (f64, f64),
     zoom: f64,
     globe: bool,
+    pitch_deg: f64,
+    bearing_deg: f64,
     clip: Rect,
     scale: f32,
     ppp: f32,
@@ -472,6 +474,8 @@ impl Cache {
             center: key.center,
             zoom: key.zoom,
             globe: key.globe,
+            pitch_deg: key.pitch_deg,
+            bearing_deg: key.bearing_deg,
         };
         let vp = (key.clip.width(), key.clip.height());
         let (lo, hi) = cam.visible_bounds((vp.0 + 20.0, vp.1 + 20.0));
@@ -492,7 +496,7 @@ impl Cache {
                 if x1 < lo.0 || y1 < lo.1 || x0 > hi.0 || y0 > hi.1 {
                     continue;
                 }
-                if key.globe || (key.zoom < CLUSTER_ZOOM && !p.style.emergency) {
+                if key.globe || key.pitch_deg != 0.0 || (key.zoom < CLUSTER_ZOOM && !p.style.emergency) {
                     let stroke = Stroke::new(1.1 * key.scale, p.style.color());
                     for i in 0..ring.points.len() {
                         if !ring.exterior[i] {
@@ -503,7 +507,7 @@ impl Cache {
                         let b = key.clip.min + egui::vec2(b.0, b.1);
                         if let Some(edge) = clip_segment(a, b, key.clip.expand(8.0)) {
                             if p.style.warning {
-                                boundary_shapes(&mut shapes, &edge, key.clip, p.style, key.scale * 0.5);
+                                boundary_shapes(&mut shapes, &edge, key.clip, p.style, key.scale * if key.globe { 0.5 } else { 1.0 });
                             } else if let Some((dash, gap)) = p.style.dash {
                                 shapes.extend(Shape::dashed_line(&edge, stroke, dash, gap));
                             } else {
@@ -528,10 +532,10 @@ impl Cache {
                         boundary_shapes(&mut shapes, &pts, key.clip, p.style, key.scale);
                     }
                 }
-                let bounds = if key.globe {
+                let bounds = if key.globe || key.pitch_deg != 0.0 || key.bearing_deg != 0.0 {
                     let mut bounds = Rect::NOTHING;
                     for &point in &ring.points {
-                        if cam.world_visible(point) { bounds.extend_with(project(point)); }
+                        if cam.point_visible(point, vp) { bounds.extend_with(project(point)); }
                     }
                     if !bounds.is_positive() { continue; }
                     bounds
@@ -642,6 +646,8 @@ impl Cache {
             center: cam.center,
             zoom: cam.zoom,
             globe: cam.globe,
+            pitch_deg: cam.pitch_deg,
+            bearing_deg: cam.bearing_deg,
             clip,
             scale,
             ppp: ui.ctx().pixels_per_point(),

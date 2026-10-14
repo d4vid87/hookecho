@@ -326,6 +326,8 @@ impl MapView {
                 "pane_palette_count": self.appearance.palettes.len(),
                 "smooth": self.smooth,
                 "globe": self.camera.globe,
+                "pitch_deg": self.camera.pitch_deg,
+                "bearing_deg": self.camera.bearing_deg,
             },
             "thresholds": self.thresholds,
             "threshold_enabled": self.threshold_enabled,

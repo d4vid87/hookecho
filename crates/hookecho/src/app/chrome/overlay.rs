@@ -66,6 +66,7 @@ impl HookEchoApp {
             "Open Details beside a row to learn what it does \u{2014} including what the \
              abbreviation means",
         );
+        let spotter_options_was = (self.settings.spotter_range_km, self.settings.spotter_max_age_minutes);
         let accent = crate::theme::accent(self.settings.theme);
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
@@ -307,9 +308,9 @@ impl HookEchoApp {
                     ui.add_space(10.0);
                     if page == "Map settings" {
                         self.map_rows(ui, &mut opts);
-                    } else if page == "Outlooks" {
+                    } else if page == "Outlooks" || page == "Spotters" {
                         ui.ctx().data_mut(|d| {
-                            d.insert_temp(ui.id().with("layer_settings_section"), "Outlooks")
+                            d.insert_temp(ui.id().with("layer_settings_section"), page)
                         });
                         let glm_options = self.show_glm
                             || self.views[self.active]
@@ -355,6 +356,7 @@ impl HookEchoApp {
                             self.show_spotters,
                             self.show_local_tracks,
                             &mut self.settings.spotter_range_km,
+                            &mut self.settings.spotter_max_age_minutes,
                             &mut self.settings.detectors,
                             Some(mosaic.as_str()),
                             self.gefs_distribution.as_ref(),
@@ -468,6 +470,7 @@ impl HookEchoApp {
                                     self.show_spotters,
                                     self.show_local_tracks,
                                     &mut self.settings.spotter_range_km,
+                                    &mut self.settings.spotter_max_age_minutes,
                                     &mut self.settings.detectors,
                                     Some(mosaic.as_str()),
                                     self.gefs_distribution.as_ref(),
@@ -606,6 +609,9 @@ impl HookEchoApp {
                 });
             self.mobile_occlusion.push(panel.response.rect);
         }
+        if spotter_options_was != (self.settings.spotter_range_km, self.settings.spotter_max_age_minutes) {
+            self.settings.save();
+        }
         ctx.data_mut(|d| { d.insert_temp(settings_id, settings_page); d.insert_temp(all_id, all_controls); });
         self.panel_section = selected_card.unwrap_or(if home { PanelSection::Radar } else { section });
         self.show_alert_panel = self.panel_section == PanelSection::Alerts;
@@ -668,7 +674,12 @@ impl HookEchoApp {
     /// Fixed mode, section, and search controls remain reachable above the scrolling panel.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
         if !phone(ctx) {
-            self.clearview_controls(ctx);
+            if self.settings.radar_workspace {
+                self.omega_workspace_controls(ctx);
+                self.omega_display_settings(ctx);
+            } else {
+                self.clearview_controls(ctx);
+            }
             return;
         }
         let mut switch_to = None;

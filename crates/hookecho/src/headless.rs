@@ -499,6 +499,7 @@ pub fn run(
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         new_tiles,
         visible,
@@ -557,6 +558,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
             world_per_pixel: cam.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
@@ -1228,6 +1230,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1316,6 +1319,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1381,6 +1385,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1507,6 +1512,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1567,6 +1573,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1643,6 +1650,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1757,6 +1765,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -1876,6 +1885,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2204,6 +2214,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2282,6 +2293,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2471,6 +2483,7 @@ pub fn run_hrrr_layer(
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -2512,6 +2525,7 @@ fn render_field_png(
         camera_center: center,
         camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
         world_per_pixel: camera.world_per_pixel() as f32,
         basemap_key: 0,
         vector_over_raster: false,
@@ -3301,6 +3315,7 @@ mod golden_tests {
             camera_center: center,
             camera_scale: scale,
             globe: camera.globe_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32)),
+            planar: camera.planar_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32)),
             world_per_pixel: camera.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
@@ -3629,6 +3644,7 @@ mod golden_tests {
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
             world_per_pixel: camera.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
@@ -3728,6 +3744,7 @@ mod golden_tests {
         let mut cb = MapCallback {
             pane: 0, retain_only_pane: None, live_pane_count: None, camera_center: center, camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
             world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
             new_tiles: Vec::new(), visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None, None, false)),
@@ -3777,6 +3794,7 @@ mod golden_tests {
         let mut cb = MapCallback {
             pane: 0, retain_only_pane: None, live_pane_count: None, camera_center: center, camera_scale: scale,
             globe: camera.globe_uniform(vp),
+            planar: camera.planar_uniform(vp),
             world_per_pixel: camera.world_per_pixel() as f32, basemap_key: 0, vector_over_raster: false,
             new_tiles: Vec::new(), visible: Vec::new(),
             radar_upload: None,
@@ -3913,6 +3931,7 @@ mod golden_tests {
                 camera_center: center,
                 camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
                 world_per_pixel: camera.world_per_pixel() as f32,
                 basemap_key: 0,
                 vector_over_raster: false,
@@ -3962,6 +3981,7 @@ mod golden_tests {
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
             world_per_pixel: camera.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
@@ -4027,6 +4047,7 @@ mod golden_tests {
             camera_center: center,
             camera_scale: scale,
             globe: [0.0; 4],
+            planar: [1.0, 0.0, 1.0, 0.0],
             world_per_pixel: camera.world_per_pixel() as f32,
             basemap_key: 0,
             vector_over_raster: false,
@@ -4131,5 +4152,103 @@ mod golden_tests {
                 dump.display()
             );
         }
+    }    /// Synthetic surfaces must agree with CPU inverse picking after perspective interpolation.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_pitched_raster_field_radar_and_strokes_follow_picking() {
+        let vp=(GOLDEN_SIZE as f32,GOLDEN_SIZE as f32);
+        let rt=tokio::runtime::Runtime::new().unwrap();
+        let (device,queue,_)=init_gpu(&rt).expect("no wgpu adapter");
+        let format=wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target=new_target(&device,format,GOLDEN_SIZE);
+        let view=target.create_view(&Default::default());
+        let mut res=RenderResources::new(&device,format);
+        let sweep=synthetic_sweep();
+        let table=crate::colormap::default_table(Moment::Reflectivity).clone();
+        let palette=[[255u8,0,0,255],[0,255,0,255],[0,0,255,255],[255,255,0,255]];
+        let mut camera=Camera::at_lonlat(0.0,0.0,4.0);
+        let mut cb=performance_callback(&sweep,&table,camera,false);
+        cb.radar_upload=None;cb.draw_radar=false;
+        // All four field quadrants cover the viewport, including near-plane-clipped vertices.
+        cb.field_uploads.push((crate::render::FieldLayer::Mrms,crate::render::MrmsUpload {
+            data:palette.concat(),rgba:true,nx:2,ny:2,world_min:[0.0,0.0],world_max:[1.0,1.0],
+            uniform:[-180.0,85.0,180.0,-85.0,2.0,2.0,1.0,1.0,0.0,0.0,0.0,0.0],lut:vec![0;1024],
+        }));
+        for pitch in [0.0,30.0,60.0] { for bearing in [0.0,45.0,90.0,210.0] {
+            camera.set_orientation(pitch,bearing);
+            (cb.camera_center,cb.camera_scale)=camera.world_to_clip_uniform(vp);
+            cb.planar=camera.planar_uniform(vp);
+            cb.field_draws=vec![(crate::render::FieldLayer::Mrms,1.0)];
+            cb.visible.clear();
+            res.render_once(&device,&queue,&view,&cb,wgpu::Color::BLACK);
+            cb.field_uploads.clear();
+            let field=read_target(&device,&queue,&target,GOLDEN_SIZE);
+            // Raster source uses 2x2 tiles so its UVs, rather than just the quad outline, matter.
+            cb.field_draws.clear();
+            cb.visible=vec![crate::render::VisibleTile {id:(0,0,0),world_min:[0.0,0.0],world_max:[1.0,1.0]}];
+            cb.new_tiles=vec![crate::render::PendingTile {id:(0,0,0),style:0,rgba:palette.concat(),width:2,height:2}];
+            res.render_once(&device,&queue,&view,&cb,wgpu::Color::BLACK);
+            cb.new_tiles.clear();
+            let raster=read_target(&device,&queue,&target,GOLDEN_SIZE);
+            for y in (5..GOLDEN_SIZE-5).step_by(11) { for x in (5..GOLDEN_SIZE-5).step_by(13) {
+                let world=camera.pick_world((x as f32+0.5,y as f32+0.5),vp).unwrap();
+                let quadrant=usize::from(world.0>=0.5)+2*usize::from(world.1>=0.5);
+                if (world.0-0.5).abs()<0.0002 || (world.1-0.5).abs()<0.0002 {continue;}
+                let at=((y*GOLDEN_SIZE+x)*4) as usize;
+                assert_eq!(&field[at..at+4],palette[quadrant],"field {pitch}/{bearing} at {x},{y}");
+                // Bilinear raster filtering is expected; compare its analytic bilinear UV value.
+                let u=(world.0*2.0-0.5).clamp(0.0,1.0) as f32;
+                let v=(world.1*2.0-0.5).clamp(0.0,1.0) as f32;
+                for channel in 0..3 {
+                    let linear=(palette[0][channel] as f32*(1.0-u)+palette[1][channel] as f32*u)*(1.0-v)
+                        +(palette[2][channel] as f32*(1.0-u)+palette[3][channel] as f32*u)*v;
+                    let l=linear/255.0;
+                    let srgb=if l<=0.0031308 {12.92*l} else {1.055*l.powf(1.0/2.4)-0.055};
+                    assert!((raster[at+channel] as f32-srgb*255.0).abs()<3.0,"raster {pitch}/{bearing} at {x},{y}: {:?}",&raster[at..at+4]);
+                }
+            } }
+        } }
+        // A solid polar radar disk must still put its range boundary at the picked location.
+        camera=Camera::at_lonlat(-97.0,35.0,8.5);
+        camera.set_orientation(60.0,47.0);
+        cb=performance_callback(&sweep,&table,camera,false);
+        let upload=cb.radar_upload.as_mut().unwrap();
+        upload.data.fill(128);upload.lut=[255u8,0,0,255].repeat(256*3);
+        res.render_once(&device,&queue,&view,&cb,wgpu::Color::BLACK);
+        let radar=read_target(&device,&queue,&target,GOLDEN_SIZE);
+        let mut checked=0;
+        for y in (4..GOLDEN_SIZE-4).step_by(7) { for x in (4..GOLDEN_SIZE-4).step_by(7) {
+            let world=camera.pick_world((x as f32+0.5,y as f32+0.5),vp).unwrap();
+            let (lon,lat)=crate::render::mercator::world_to_lonlat(world.0,world.1);
+            let (range,_)=crate::geo::great_circle([-97.0,35.0],[lon,lat]);
+            if (range-2.125).abs()<0.2 || (range-52.125).abs()<0.2 {continue;}
+            let at=((y*GOLDEN_SIZE+x)*4) as usize;
+            assert_eq!(radar[at]>200,(2.125..52.125).contains(&range),"radar at {x},{y}: {range} km");
+            checked+=1;
+        } }
+        assert!(checked>100);
+        // Keep the centerline geographic and its 4px width constant under rotation/pitch.
+        camera=Camera::at_lonlat(0.0,0.0,8.0);
+        cb=performance_callback(&sweep,&table,camera,false);cb.radar_upload=None;cb.draw_radar=false;cb.draw_overlay=true;
+        let center=cb.camera_center;
+        cb.overlay_upload=Some(crate::render::OverlayUpload {
+            vertices:[(-0.02,-2.0),(0.02,-2.0),(0.02,2.0),(-0.02,2.0)].into_iter().map(|(x,y)| crate::render::OverlayVertex {
+                world:[center[0]+x,center[1]],color:[1.0;4],offset:[0.0,y,0.0],
+            }).collect(),indices:vec![0,1,2,0,2,3],
+        });
+        for (pitch,bearing) in [(0.0,0.0),(60.0,0.0),(60.0,90.0),(45.0,45.0)] {
+            camera.set_orientation(pitch,bearing);cb.planar=camera.planar_uniform(vp);
+            res.render_once(&device,&queue,&view,&cb,wgpu::Color::BLACK);cb.overlay_upload=None;
+            let pixels=read_target(&device,&queue,&target,GOLDEN_SIZE);
+            let tangent=camera.heading_on_screen(camera.center,90.0,vp);
+            let normal=(-tangent.1,tangent.0);
+            let width=(-9..=9).filter(|d| {
+                let x=(100.0+normal.0*(*d as f32)) as usize;
+                let y=(100.0+normal.1*(*d as f32)) as usize;
+                pixels[(y*GOLDEN_SIZE as usize+x)*4]>200
+            }).count();
+            assert!((3..=5).contains(&width),"stroke width {width} at {pitch}/{bearing}, normal {normal:?}, row {:?}",(85..115).map(|x|pixels[(100*GOLDEN_SIZE as usize+x)*4]).collect::<Vec<_>>());
+        }
     }
+
 }

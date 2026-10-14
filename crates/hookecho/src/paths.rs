@@ -5,11 +5,43 @@
 //! Every persistent path in the app (settings, color tables, marker icons, tile + climatology
 //! caches) goes through here, so the platform difference lives in exactly one place.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Storage base override (Android sets this once from the activity's internal data path).
 static BASE: OnceLock<PathBuf> = OnceLock::new();
+
+// Selected by the standalone desktop launcher before any settings, crash reporter or
+// background thread is initialized. Its storage never aliases the ordinary HookEcho profile.
+static RADAR_WORKSPACE: OnceLock<bool> = OnceLock::new();
+
+pub fn use_radar_workspace() {
+    let _ = RADAR_WORKSPACE.set(true);
+}
+
+pub fn is_radar_workspace() -> bool {
+    RADAR_WORKSPACE.get().copied().unwrap_or(false)
+}
+
+pub fn application_id() -> &'static str {
+    application_id_for_profile(is_radar_workspace())
+}
+
+fn application_id_for_profile(radar_workspace: bool) -> &'static str {
+    if radar_workspace {
+        "hookecho-radar-workspace"
+    } else {
+        "hookecho"
+    }
+}
+
+pub fn application_name() -> &'static str {
+    if is_radar_workspace() {
+        "HookEcho Radar Workspace"
+    } else {
+        "HookEcho"
+    }
+}
 
 /// Point every storage root at `base` (Android). One-shot: later calls are ignored.
 pub fn set_base(base: PathBuf) {
@@ -18,7 +50,12 @@ pub fn set_base(base: PathBuf) {
 
 /// Resolve a named root: the override's subfolder when set (Android), else the matching OS dir.
 fn root(kind: &str) -> Option<PathBuf> {
-    if let Some(base) = BASE.get() {
+    root_for_profile(kind, BASE.get().map(PathBuf::as_path), is_radar_workspace())
+}
+
+// Explicit inputs let profile isolation be verified without changing process-wide OnceLocks.
+fn root_for_profile(kind: &str, base: Option<&Path>, radar_workspace: bool) -> Option<PathBuf> {
+    if let Some(base) = base {
         return Some(base.join(kind));
     }
     // In a browser there is no filesystem. Every caller already treats `None` as "no cache", so
@@ -30,11 +67,11 @@ fn root(kind: &str) -> Option<PathBuf> {
     // deliberately left out of that bucket — they are large, per-scan, and would evict the map.
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = kind;
+        let _ = (kind, radar_workspace);
         return None;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let pd = directories::ProjectDirs::from("", "", "hookecho")?;
+    let pd = directories::ProjectDirs::from("", "", application_id_for_profile(radar_workspace))?;
     #[cfg(not(target_arch = "wasm32"))]
     Some(match kind {
         "config" => pd.config_dir().to_path_buf(),
@@ -101,12 +138,38 @@ pub fn cache_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn desktop_roots_resolve_without_override() {
-        // With no override set (the desktop path), all three resolve via `directories`.
-        // (On CI's headless Linux these still return Some — ProjectDirs needs no real HOME write.)
-        assert!(config_dir().is_some());
-        assert!(data_dir().is_some());
-        assert!(cache_dir().is_some());
+    fn desktop_profiles_have_separate_config_data_and_cache() {
+        for kind in ["config", "data", "cache"] {
+            let ordinary = root_for_profile(kind, None, false).expect("ordinary OS root");
+            let standalone = root_for_profile(kind, None, true).expect("standalone OS root");
+            assert_ne!(ordinary, standalone, "{kind} profiles must not alias");
+            assert!(!ordinary.starts_with(&standalone));
+            assert!(!standalone.starts_with(&ordinary));
+        }
+        assert_eq!(application_id_for_profile(false), "hookecho");
+        assert_eq!(application_id_for_profile(true), "hookecho-radar-workspace");
+    }
+
+    #[test]
+    fn android_override_keeps_its_existing_private_layout() {
+        let base = Path::new("app-private");
+        for kind in ["config", "data", "cache"] {
+            assert_eq!(
+                root_for_profile(kind, Some(base), false),
+                Some(base.join(kind))
+            );
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn browser_profiles_have_no_filesystem_roots() {
+        for standalone in [false, true] {
+            for kind in ["config", "data", "cache"] {
+                assert!(root_for_profile(kind, None, standalone).is_none());
+            }
+        }
     }
 }

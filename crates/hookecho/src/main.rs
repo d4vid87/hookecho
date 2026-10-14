@@ -41,11 +41,13 @@ fn main() -> eframe::Result<()> {
         env_logger::Env::default().default_filter_or("info,zbus=warn,tracing=warn,ksni=warn"),
     )
     .init();
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--radar-workspace") {
+        hookecho::paths::use_radar_workspace();
+    }
     // A panic on the desktop goes to a terminal nobody launched the app from; leave a report the
     // next start can offer back instead.
     hookecho::crash::install_hook();
-
-    let args: Vec<String> = std::env::args().collect();
 
     // `hookecho --version` — matches what the About window and the update check compare against.
     if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -1102,7 +1104,11 @@ mod single_instance {
     const GREETING: &[u8] = b"hookecho\n";
 
     pub fn another_is_running() -> bool {
-        probe(PORT)
+        probe(profile_port())
+    }
+
+    fn profile_port() -> u16 {
+        if hookecho::paths::is_radar_workspace() { PORT + 1 } else { PORT }
     }
 
     fn probe(port: u16) -> bool {
@@ -1119,7 +1125,7 @@ mod single_instance {
     /// Answer future launches. Silently does nothing if the port is unavailable — the app runs
     /// fine without this, it just stops being the one instance.
     pub fn listen() {
-        listen_on(PORT);
+        listen_on(profile_port());
     }
 
     /// Returns the port actually bound, so a test can use an ephemeral one.

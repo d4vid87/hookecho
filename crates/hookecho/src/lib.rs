@@ -171,17 +171,17 @@ pub fn run_desktop() -> eframe::Result<()> {
             // The floating chrome has fixed-width cards; below this they stack on top of the map
             // and each other.
             .with_min_inner_size([800.0, 500.0])
-            .with_title("HookEcho")
+            .with_title(paths::application_name())
             .with_decorations(os_decorated())
             // Matches the .desktop file, so Wayland taskbars find the icon.
-            .with_app_id("hookecho")
+            .with_app_id(paths::application_id())
             .with_icon(icon::icon_data()),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
     cap_texture_limit_to_adapter(&mut native_options.wgpu_options);
     eframe::run_native(
-        "HookEcho",
+        paths::application_name(),
         native_options,
         Box::new(|cc| Ok(Box::new(HookEchoApp::new(cc)))),
     )
