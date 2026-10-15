@@ -1479,9 +1479,10 @@
       "status": "partial",
       "observed_scope": "Initial point, track line, track cone, time points; speed units mph/kph/knots.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Automatic SCIT tracks remain available. A separate manual storm-track tool now lets the user click a storm center and a projected endpoint, deriving bearing and speed for the selected horizon. The map draws a user-defined track, 15-minute forecast points and an editable angular cone; direction, speed, horizon, cone angle and kt/mph/km/h units are adjustable in the tool chip. The tool is available in the transport and searchable controls.",
+      "hookecho_implementation": "Automatic SCIT tracks and a separate manual two-click storm-track tool are available. The manual tool draws an editable path, angular cone and 15-minute points with kt/mph/km/h motion controls. Automatic tracks now have independently persisted Initial Point, Track Line, Track Cone and Time Points switches plus mph/km/h/kt speed units; the selected-cell cone expands with forecast distance, and speed units carry through the map label and cell detail views.",
       "remaining_gaps": [
-        "RadarOmega's custom/cellular cone geometry, time-point editing, saved tracks, ETA city overlays and vendor projection algorithm are not matched. The HookEcho cone is an explicitly user-defined angular estimate, not an official storm forecast."
+        "RadarOmega's custom/cellular cone geometry, time-point editing, ETA city overlays and vendor projection algorithm are not matched. The manual HookEcho cone is an explicitly user-defined angular estimate, not an official storm forecast.",
+        "The captured RadarOmega client persists display settings; its track save/load methods are placeholders. No saved-track equivalence claim is made."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
@@ -1491,12 +1492,15 @@
         "crates/hookecho/src/app/mobile/mod.rs",
         "crates/hookecho/src/ui/cell_window.rs",
         "crates/hookecho/src/ui/cells_window.rs",
-        "crates/wxdata/src/level3.rs"
+        "crates/wxdata/src/level3.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/ui/priority.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
       ],
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN01",
       "acceptance": "Create/inspect track with speed, direction, forecast time and configurable geometry.",
-      "runtime_verification": "2026-10-14: The manual-track geometry test and full native library suite passed (661 tests, 30 ignored). Optimized web build passed at 4,550,475 gzipped bytes under the deliberate 4,552,000-byte limit. In a fresh local browser tab, the toolbar armed the tool; two map clicks drew the path, 15-minute points and cone in both linked panes. Switching speed units from kt to mph changed the displayed value without moving the path. A follow-up build/browser check showed staggered time labels on a short path. Saved-track and reference algorithm parity remain unverified."
+      "runtime_verification": "2026-10-14: The automatic-track component/unit implementation passed the full native library suite (662 tests, 30 ignored) and optimized web build (4,551,143 gzipped bytes under the 4,552,000-byte budget). The settings persistence/conversion test passed. A local two-pane browser run loaded the updated build and active projected storm tracks, but no selected storm cell was available to visually exercise the new cone and per-component switches. Previous manual-tool two-click browser verification remains valid."
     },
     {
       "id": "AN02",

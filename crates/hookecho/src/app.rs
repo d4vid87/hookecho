@@ -16100,18 +16100,36 @@ impl HookEchoApp {
                     && ui::priority::track_visible(c, &self.settings.priority_rules, chrono::Utc::now()) {
                     let dark = egui::Color32::from_rgb(6, 20, 33);
                     let blue = egui::Color32::from_rgb(98, 185, 255);
-                    let points: Vec<_> = c.track.iter().filter(|point| point.minutes <= self.settings.priority_rules.track_horizon_min.clamp(15,60)
+                    let rules = &self.settings.priority_rules;
+                    let points: Vec<_> = c.track.iter().filter(|point| point.minutes <= rules.track_horizon_min.clamp(15,60)
                         && point.lon.is_finite() && point.lat.is_finite()
                         && point.lon.abs() <= 180.0 && point.lat.abs() <= 90.0)
-                        .map(|tp| (to_screen(tp.lon, tp.lat), tp.minutes)).collect();
-                    let mut prev = p;
-                    for &(tpp, _) in &points {
-                        for (width, color) in [(9.0, dark), (4.5, blue)] {
-                            painter.line_segment([prev, tpp], egui::Stroke::new(width, color));
+                        .map(|tp| (to_screen(tp.lon, tp.lat), tp.minutes, [tp.lon, tp.lat])).collect();
+                    if rules.track_cone && self.cell_popup.as_ref().is_some_and(|selected| selected.id == c.id) {
+                        if let Some((_, _, end)) = points.last() {
+                            let (distance_km, bearing) = crate::geo::great_circle([c.lon, c.lat], *end);
+                            let width_km = 3.3 + distance_km * 0.15;
+                            let left = crate::geo::destination_point(*end, bearing - 90.0, width_km);
+                            let right = crate::geo::destination_point(*end, bearing + 90.0, width_km);
+                            painter.add(egui::Shape::convex_polygon(
+                                vec![p, to_screen(left[0], left[1]), to_screen(right[0], right[1])],
+                                blue.gamma_multiply(0.10), egui::Stroke::new(1.0, blue.gamma_multiply(0.65))));
                         }
-                        prev = tpp;
                     }
-                    for (tpp, minutes) in points {
+                    if rules.track_line {
+                        let mut prev = p;
+                        for &(tpp, _, _) in &points {
+                            for (width, color) in [(9.0, dark), (4.5, blue)] {
+                                painter.line_segment([prev, tpp], egui::Stroke::new(width, color));
+                            }
+                            prev = tpp;
+                        }
+                    }
+                    if rules.track_initial_point {
+                        painter.circle_stroke(p, 11.0, egui::Stroke::new(2.0, blue));
+                    }
+                    if rules.track_time_points {
+                      for (tpp, minutes, _) in points {
                         painter.circle_filled(tpp, 8.0, dark);
                         painter.circle_stroke(tpp, 6.0, egui::Stroke::new(2.0, blue));
                         painter.circle_filled(tpp, 2.0, blue);
@@ -16127,6 +16145,13 @@ impl HookEchoApp {
                                 egui::FontId::proportional(11.0),
                                 egui::Color32::WHITE,
                             );
+                        }
+                      }
+                    }
+                    if self.cell_popup.as_ref().is_some_and(|selected| selected.id == c.id) {
+                        if let Some(speed) = c.mvt_kt {
+                            painter.text(p + egui::vec2(14.0, 13.0), egui::Align2::LEFT_TOP,
+                                rules.format_track_speed(speed), egui::FontId::proportional(11.0), blue);
                         }
                     }
                 }
@@ -23081,6 +23106,7 @@ impl eframe::App for HookEchoApp {
             &cell_scores,
             &zdr_cells,
             &self.cell_trends,
+            &self.settings.priority_rules,
             crate::theme::accent(self.settings.theme),
             &mut self.drawer,
         ) {
@@ -23109,7 +23135,7 @@ impl eframe::App for HookEchoApp {
                 .is_some_and(|(_, c, _)| c.id == cell.id);
             let tz = self.active_tz();
             let (open, toggled, to_3d) =
-                ui::cell_window::show(ctx, cell, trend, following, tz, &mut self.popovers);
+                ui::cell_window::show(ctx, cell, trend, following, tz, &self.settings.priority_rules, &mut self.popovers);
             // Crop the volume to this storm before opening it: the full 300 km box is a wall of
             // echo you would then have to hunt through by hand. The clip is computed here, where
             // the cell is still borrowed, and applied below.

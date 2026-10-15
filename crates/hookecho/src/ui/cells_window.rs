@@ -140,6 +140,7 @@ pub fn show(
     // Per-cell-id history across volumes, oldest→newest — the same map the attributes popup
     // draws its trend rows from.
     trends: &std::collections::HashMap<String, Vec<crate::ui::cell_window::CellSample>>,
+    track_rules: &crate::settings::PriorityRules,
     _accent: egui::Color32,
     _drawer: &mut crate::ui::drawer::Drawer,
 ) -> Option<String> {
@@ -271,7 +272,7 @@ pub fn show(
                 if zdr_cells.contains(&c.id) { ui.label(egui::RichText::new("ZDR column detected").color(amber)); }
                 egui::CollapsingHeader::new("All radar details").show(ui, |ui| {
                     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                        crate::ui::cell_window::attributes(ui, c, trends.get(&c.id).map(Vec::as_slice).unwrap_or(&[]));
+                        crate::ui::cell_window::attributes(ui, c, trends.get(&c.id).map(Vec::as_slice).unwrap_or(&[]), track_rules);
                     });
                 });
             } else if order.is_empty() {

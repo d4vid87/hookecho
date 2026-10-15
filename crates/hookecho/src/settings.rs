@@ -79,15 +79,32 @@ pub struct PriorityRules {
     pub track_error_nm: f32,
     pub track_horizon_min: u16,
     pub track_min_dbz: f32,
+    /// Independent SCIT track components, matching the reference display controls.
+    pub track_initial_point: bool,
+    pub track_line: bool,
+    pub track_cone: bool,
+    pub track_time_points: bool,
+    /// 0 = mph, 1 = km/h, 2 = kt.
+    pub track_speed_unit: u8,
 }
 impl Default for PriorityRules {
     fn default() -> Self {
         Self { minimum: 0, radii_mi: [25.0, 75.0, 100.0, 150.0], track_age_min: 30,
             track_age_default_version: 1,
-            track_error_nm: 5.0, track_horizon_min: 30, track_min_dbz: 50.0 }
+            track_error_nm: 5.0, track_horizon_min: 30, track_min_dbz: 50.0,
+            track_initial_point: true, track_line: true, track_cone: false,
+            track_time_points: true, track_speed_unit: 0 }
     }
 }
 impl PriorityRules {
+    pub fn format_track_speed(&self, knots: f32) -> String {
+        match self.track_speed_unit {
+            1 => format!("{:.0} km/h", knots * 1.852),
+            2 => format!("{knots:.0} kt"),
+            _ => format!("{:.0} mph", knots * 1.150_78),
+        }
+    }
+
     fn migrate_track_age_default(&mut self) -> bool {
         if self.track_age_default_version != 0 {
             return false;
@@ -1804,6 +1821,24 @@ fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn storm_track_controls_round_trip_and_older_settings_keep_defaults() {
+        let older: super::PriorityRules = serde_json::from_str(r#"{"track_horizon_min":45}"#).unwrap();
+        assert!(older.track_line && older.track_initial_point && older.track_time_points);
+        assert!(!older.track_cone);
+        let mut controls = older;
+        controls.track_initial_point = false;
+        controls.track_line = false;
+        controls.track_cone = true;
+        controls.track_time_points = false;
+        controls.track_speed_unit = 1;
+        let restored: super::PriorityRules = serde_json::from_str(&serde_json::to_string(&controls).unwrap()).unwrap();
+        assert_eq!(restored, controls);
+        assert_eq!(restored.format_track_speed(30.0), "56 km/h");
+        controls.track_speed_unit = 2;
+        assert_eq!(controls.format_track_speed(30.0), "30 kt");
+    }
+
     use super::*;
 
     #[test]

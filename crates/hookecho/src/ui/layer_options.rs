@@ -76,6 +76,7 @@ fn stp_source(model: wxdata::hrrr::Model) -> bool {
 pub(crate) fn show(
     ui: &mut egui::Ui,
     filters: &mut OverlayFilters,
+    track_rules: &mut crate::settings::PriorityRules,
     fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
     // Which layers the active pane draws. Visibility is per-pane now; the map above is the shared
     // fetch state, which is what `fields` is still needed for (clearing a refetch clock).
@@ -1130,6 +1131,9 @@ pub(crate) fn show(
         header(ui, "Storm cells");
         crate::ui::style::toggle(ui, &mut filters.show_tracks, "Forecast tracks")
             .on_hover_text("15/30/45/60-min projected storm positions");
+        if filters.show_tracks {
+            ui.collapsing("Track display", |ui| crate::ui::priority::track_display_controls(ui, track_rules));
+        }
         crate::ui::style::toggle(ui, &mut filters.show_arrival_cones, "Arrival-time cones")
             .on_hover_text("Project cell motion forward + ETA to your saved markers");
     }

@@ -364,6 +364,7 @@ impl HookEchoApp {
                         crate::ui::layer_options::show(
                             ui,
                             &mut self.filters,
+                            &mut self.settings.priority_rules,
                             &mut self.fields,
                             &self.views[self.active].fields_on.clone(),
                             &mut self.rotation_minutes,
@@ -495,6 +496,7 @@ impl HookEchoApp {
                                 crate::ui::layer_options::show(
                                     ui,
                                     &mut self.filters,
+                                    &mut self.settings.priority_rules,
                                     &mut self.fields,
                                     &self.views[self.active].fields_on.clone(),
                                     &mut self.rotation_minutes,
