@@ -40,6 +40,7 @@ pub mod mosaic;
 pub mod mping;
 pub mod mrms;
 pub mod ndbc;
+pub mod ndfd;
 pub mod net;
 pub mod shared_read;
 pub mod nohrsc;

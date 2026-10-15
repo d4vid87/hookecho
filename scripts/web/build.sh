@@ -173,7 +173,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # NOAA's matching NDFD legend images are fetched only when a forecast map is selected. The
 # desktop loader and compact forecast controls measured 4,632,979 bytes gzip; retain 3,021 bytes
 # of margin (0.07%) for the main bundle without changing lite/startup budgets.
-budget="${HOOKECHO_WASM_BUDGET:-4636000}"
+# NOAA's exact raster-point readout adds 5,248 gzip bytes to the previous 4,632,160-byte build.
+# Allow 2,592 bytes of margin for the completed forecast inspection path; lite/startup stay put.
+budget="${HOOKECHO_WASM_BUDGET:-4640000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

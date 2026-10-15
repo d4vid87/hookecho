@@ -3972,6 +3972,9 @@ pub struct HookEchoApp {
         (i32, i32),
         std::sync::mpsc::Receiver<Result<wxdata::forecast::PointForecast, String>>,
     )>,
+    /// NOAA raster-point value for an interrogated NDFD map pixel. Replacing the receiver on a
+    /// second tap drops any older reply, so a slow first request cannot overwrite the new point.
+    ndfd_probe_rx: Option<std::sync::mpsc::Receiver<Result<(Option<f64>, &'static str, &'static str, chrono::DateTime<Utc>, f64, f64), String>>>,
     forecast_cache:
         std::collections::HashMap<(i32, i32), (Instant, wxdata::forecast::PointForecast)>,
     /// Current conditions for the same tapped point, fetched beside the forecast and cached the
@@ -4904,6 +4907,7 @@ impl HookEchoApp {
             forecast_at: None,
             forecast_state: ui::forecast_window::State::Loading,
             forecast_rx: None,
+            ndfd_probe_rx: None,
             forecast_cache: std::collections::HashMap::new(),
             forecast_obs_rx: None,
             forecast_obs_cache: std::collections::HashMap::new(),
@@ -7866,6 +7870,38 @@ impl HookEchoApp {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
+        });
+    }
+
+    /// Query the same raster point service NOAA's graphical forecast viewer uses. Its WMS
+    /// advertises these layers as non-queryable, so GetFeatureInfo cannot supply this value.
+    fn fetch_ndfd_point(&mut self, ctx: &egui::Context, idx: usize, style: crate::tiles::BasemapStyle, lon: f64, lat: f64) {
+        let Some((element, label, unit)) = style.ndfd_point() else { return; };
+        let Some(valid) = self.goes.get(idx).and_then(|catalog| {
+            self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
+        }) else {
+            self.toast(ToastKind::Info, "Forecast time is still loading".to_string());
+            return;
+        };
+        self.detail = Some(Detail {
+            title: "NDFD point forecast".to_string(),
+            body: format!("{label} · valid {}\n{lat:.4}°, {lon:.4}°\nLoading NOAA point value…", valid.format("%a %b %-d %HZ")),
+            color: [91, 164, 236, 255],
+            image: None,
+            link: Some(("NOAA graphical forecast".to_string(), "https://digital.weather.gov/".to_string())),
+            stream: None,
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ndfd_probe_rx = Some(rx);
+        let http = self.http.clone();
+        let ctx2 = ctx.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::ndfd::fetch_point(&http, lon, lat, valid, element)
+                .await
+                .map_err(|error| error.to_string());
+            let result = result.map(|value| (value, label, unit, valid, lon, lat));
+            let _ = tx.send(result);
+            ctx2.request_repaint();
         });
     }
 
@@ -13935,6 +13971,9 @@ impl HookEchoApp {
     }
 
     fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        if !self.views.get(idx)?.show_radar {
+            return None;
+        }
         if let Some(name) = self.views.get(idx).and_then(|view| view.custom_product.as_deref()) {
             return self.custom_radar_probe(idx, lon, lat).or_else(|| Some(format!("{name}\nCustom sample unavailable")));
         }
@@ -14930,6 +14969,13 @@ impl HookEchoApp {
                                             link: None,
                                             stream: None,
                                         });
+                                        if self.detail.is_none()
+                                            && pane_style.ndfd_point().is_some()
+                                            && !self.views[idx].show_radar
+                                            && self.views[idx].fields_on.is_empty()
+                                        {
+                                            self.fetch_ndfd_point(ctx, idx, pane_style, lon, lat);
+                                        }
                                     }
                                 }
                             }
@@ -23200,6 +23246,27 @@ impl eframe::App for HookEchoApp {
             self.goto_view(&site, lon, lat, 8.5, time);
         }
         // Point forecast: drain the fetch, cache the win, then draw.
+        if let Some(rx) = &self.ndfd_probe_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.ndfd_probe_rx = None;
+                if let Some(detail) = self.detail.as_mut().filter(|detail| detail.title == "NDFD point forecast") {
+                    detail.body = match result {
+                        Ok((Some(value), label, unit, valid, lon, lat)) => format!(
+                            "{label} · valid {}\n{lat:.4}°, {lon:.4}°\n{value:.0}{unit}\nNOAA/NWS raster point value",
+                            valid.format("%a %b %-d %HZ")
+                        ),
+                        Ok((None, label, _, valid, lon, lat)) => format!(
+                            "{label} · valid {}\n{lat:.4}°, {lon:.4}°\nNo forecast value at this point",
+                            valid.format("%a %b %-d %HZ")
+                        ),
+                        Err(error) => {
+                            log::warn!("NDFD point lookup: {error}");
+                            "NOAA point value is temporarily unavailable. The map still shows the selected forecast; try again later or use Point forecast for a separate NWS forecast.".to_string()
+                        }
+                    };
+                }
+            }
+        }
         if let Some((key, rx)) = &self.forecast_rx {
             if let Ok(res) = rx.try_recv() {
                 let key = *key;

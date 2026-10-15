@@ -560,6 +560,16 @@ impl BasemapStyle {
         }
     }
 
+    /// Element, label and display unit for NOAA's raster-point lookup.
+    pub(crate) fn ndfd_point(self) -> Option<(&'static str, &'static str, &'static str)> {
+        match self {
+            Self::NdfdRainChance => Some(("pop12", "12-hour rain chance", "%")),
+            Self::NdfdMaxTemp => Some(("maxt", "Daytime high", "°F")),
+            Self::NdfdMinTemp => Some(("mint", "Overnight low", "°F")),
+            _ => None,
+        }
+    }
+
     /// Does this style have a time dimension the frame bar can step through?
     pub fn timed(self) -> bool {
         self.goes_layer().is_some() || self.wms_layer().is_some()
