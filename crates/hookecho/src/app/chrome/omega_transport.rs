@@ -1,5 +1,6 @@
 //! A map-centered transport for the radar workspace, sharing the existing timeline and actions.
 use super::*;
+use chrono::Timelike as _;
 use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
@@ -178,24 +179,35 @@ impl HookEchoApp {
                                         .config(egui::containers::menu::MenuConfig::new()
                                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
                                         .ui(ui, |ui| {
-                                        ui.set_min_width(240.0);
+                                        ui.set_min_width(360.0_f32.min((self.chrome_rect.width() - 48.0).max(240.0)));
                                         ui.strong("Public MRMS archive");
-                                        ui.weak("Choose the UTC day and hour ending a six-frame loop.");
+                                        ui.weak("Seek anywhere in a UTC day; each position loads six mosaics.");
                                         let default_at = mrms_archive_at.or(mrms_last_time).unwrap_or_else(Utc::now);
                                         let id = egui::Id::new(("mrms-archive-window", layer.stable_id()));
                                         let mut draft: (String, u32) = ui.data_mut(|d| d.get_temp(id))
                                             .unwrap_or_else(|| (default_at.format("%Y-%m-%d").to_string(),
-                                                default_at.format("%H").to_string().parse().unwrap_or(0)));
+                                                default_at.hour() * 60 + default_at.minute()));
                                         ui.horizontal(|ui| {
                                             ui.label("Date");
                                             ui.add(egui::TextEdit::singleline(&mut draft.0).desired_width(100.0))
                                                 .on_hover_text("UTC date, YYYY-MM-DD");
                                         });
-                                        ui.add(egui::Slider::new(&mut draft.1, 0..=23).text("UTC hour"));
+                                        ui.label(format!("UTC time {:02}:{:02}", draft.1 / 60, draft.1 % 60));
+                                        let seek = ui.horizontal(|ui| {
+                                            ui.weak("00:00");
+                                            let width = (ui.available_width() - 55.0).clamp(140.0, 300.0);
+                                            ui.spacing_mut().slider_width = width;
+                                            let response = ui.add(egui::Slider::new(&mut draft.1, 0..=1439).show_value(false))
+                                                .on_hover_text("Seek through the selected UTC day; release to load six frames");
+                                            ui.weak("23:59");
+                                            response
+                                        }).inner;
                                         let parsed = chrono::NaiveDate::parse_from_str(&draft.0, "%Y-%m-%d").ok();
-                                        if ui.add_enabled(parsed.is_some(), egui::Button::new("Load six frames"))
-                                            .clicked() {
-                                            if let Some(at) = parsed.and_then(|day| day.and_hms_opt(draft.1, 59, 59)) {
+                                        let seek_finished = seek.drag_stopped() || (seek.changed() && !seek.dragged());
+                                        let load_clicked = ui.add_enabled(parsed.is_some(), egui::Button::new("Load selected time"))
+                                            .clicked();
+                                        if (seek_finished || load_clicked) && parsed.is_some() {
+                                            if let Some(at) = parsed.and_then(|day| day.and_hms_opt(draft.1 / 60, draft.1 % 60, 59)) {
                                                 mrms_archive_request = Some(Some(at.and_utc().min(Utc::now())));
                                                 ui.close();
                                             }
@@ -207,6 +219,9 @@ impl HookEchoApp {
                                                 .clicked() {
                                                 mrms_archive_request = mrms_first_time.map(|time|
                                                     Some(time - chrono::Duration::seconds(1)));
+                                                if let Some(Some(at)) = mrms_archive_request {
+                                                    draft = (at.format("%Y-%m-%d").to_string(), at.hour() * 60 + at.minute());
+                                                }
                                                 ui.close();
                                             }
                                             if ui.add_enabled(mrms_archive_at.is_some() && mrms_last_time.is_some()
@@ -216,18 +231,23 @@ impl HookEchoApp {
                                                 .on_hover_text("Load the next six mosaics toward live")
                                                 .clicked() {
                                                 mrms_archive_request = mrms_last_time.map(|time|
-                                                    Some((time + chrono::Duration::minutes(12)).min(Utc::now())));
+                                                    Some((time + chrono::Duration::minutes(13)).min(Utc::now())));
+                                                if let Some(Some(at)) = mrms_archive_request {
+                                                    draft = (at.format("%Y-%m-%d").to_string(), at.hour() * 60 + at.minute());
+                                                }
                                                 ui.close();
                                             }
                                         });
                                         if parsed.is_none() { ui.weak("Enter a complete YYYY-MM-DD date."); }
                                         if ui.button("Return to latest").clicked() {
                                             mrms_archive_request = Some(None);
+                                            let now = Utc::now();
+                                            draft = (now.format("%Y-%m-%d").to_string(), now.hour() * 60 + now.minute());
                                             ui.close();
                                         }
                                         if let Some(error) = mrms_error.as_deref() {
                                             let message = if error.contains("no MRMS frames found before") {
-                                                "No mosaics for this date and hour. Choose another window."
+                                                "No mosaics for this date and time. Choose another window."
                                             } else { error };
                                             ui.add(egui::Label::new(
                                                 egui::RichText::new(message).color(egui::Color32::from_rgb(255, 190, 42))
