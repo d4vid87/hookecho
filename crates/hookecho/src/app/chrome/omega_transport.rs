@@ -31,7 +31,7 @@ impl HookEchoApp {
                 .and_then(|_| volume.cuts.last())
                 .and_then(|cut| chrono::DateTime::from_timestamp_millis(cut.ended_at_ms))
         });
-        let loaded_time = v.volume.as_ref().map(|volume| volume.time);
+        let loaded_time = v.displayed_time();
         let selected_cut = v
             .selected_cut_ms()
             .and_then(chrono::DateTime::from_timestamp_millis);

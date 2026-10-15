@@ -386,7 +386,23 @@ impl MapView {
 
     pub fn displayed_time(&self) -> Option<DateTime<Utc>> {
         let volume = self.volume.as_ref()?;
-        Some(self.selected_cut_ms().and_then(chrono::DateTime::from_timestamp_millis).unwrap_or(volume.time))
+        if let Some(selected) = self.selected_cut_ms().and_then(chrono::DateTime::from_timestamp_millis) {
+            return Some(selected);
+        }
+        // Dublin's low-level velocity comes from a separate 15-minute PVOL while reflectivity
+        // refreshes every five minutes. Each is a distinct cut in the same displayed scan; the
+        // volume head time is only the reflectivity clock.
+        if volume.name.starts_with("IEDUB-") && self.custom_product.is_none() {
+            if let Some(&angle) = volume.elevations.get(self.tilt) {
+                if let Some(end) = volume.cuts.iter()
+                    .filter(|cut| (cut.elevation_deg - angle).abs() < 0.15
+                        && level2::cut_has_moment(&volume.scan, **cut, self.moment))
+                    .map(|cut| cut.ended_at_ms).max() {
+                    return chrono::DateTime::from_timestamp_millis(end).or(Some(volume.time));
+                }
+            }
+        }
+        Some(volume.time)
     }
 
     /// Compare the scan actually loaded, including a selected cut, with the linked target.
@@ -862,6 +878,27 @@ mod tests {
         assert!(!view.alignment_acceptable(Some(120)), "a fractional second beyond the limit is outside the window");
         view.timeline.alignment_target = None;
         assert!(view.alignment_acceptable(Some(0)));
+    }
+
+    #[test]
+    fn dublin_clock_follows_the_selected_moments_cut() {
+        let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![106]);
+        let make = |time, number, reflectivity, velocity| Radial::new(
+            time, 0, 0.0, 1.0, RadialStatus::ScanStart, number, 0.5,
+            reflectivity, velocity, None, None, None, None, None,
+        );
+        let vcp = scan_at(&[0.5]).coverage_pattern().clone();
+        let site = nexrad_model::meta::Site::new(*b"IEDU", 53.43, -6.24, 99, 0);
+        let scan = Arc::new(Scan::with_site(site, vcp, vec![
+            Sweep::new(1, vec![make(10_000, 1, Some(data.clone()), None)]),
+            Sweep::new(2, vec![make(5_000, 2, None, Some(data))]),
+        ]));
+        let mut view = MapView::new(Some("IEDUB".into()), Camera::at_lonlat(-6.24, 53.43, 7.0));
+        view.volume = Some(Volume::new(scan, "IEDUB-ref~vel".into(),
+            chrono::DateTime::from_timestamp_millis(10_000).unwrap()));
+        assert_eq!(view.displayed_time().unwrap().timestamp_millis(), 10_000);
+        view.moment = Moment::Velocity;
+        assert_eq!(view.displayed_time().unwrap().timestamp_millis(), 5_000);
     }
 
     #[test]

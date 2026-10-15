@@ -12,8 +12,8 @@ impl HookEchoApp {
 
     pub(in crate::app) fn radar_health(&self) -> SourceHealth {
         let v = &self.views[self.active];
-        let age = v.volume.as_ref().map(|volume| {
-            (chrono::Utc::now() - volume.time)
+        let age = v.displayed_time().map(|time| {
+            (chrono::Utc::now() - time)
                 .to_std()
                 .unwrap_or_default()
         });

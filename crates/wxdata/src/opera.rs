@@ -24,12 +24,12 @@
 //! * Spain alternates two- and three-cut PVOL strategies; the newest two-cut strategy carries both
 //!   reflectivity and velocity. Slovakia publishes one PVOL object per moment at each timestamp.
 //! * Dublin publishes eight reflectivity SCAN cuts over three minutes but velocity as a separate
-//!   fifteen-minute PVOL strategy. Mixing those ages would label old velocity as fresh radar.
+//!   fifteen-minute PVOL strategy. The latest low velocity cut keeps its own radial time.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use nexrad_model::data::{Scan, Sweep};
 use nexrad_model::meta::registry::SiteEntry;
 
@@ -395,6 +395,24 @@ fn newest_dublin_scan_group<'a>(xml: &'a str) -> Vec<&'a str> {
     Vec::new()
 }
 
+fn dublin_velocity_index_url(hour: DateTime<Utc>) -> String {
+    format!(
+        "{BUCKET}?list-type=2&prefix={}/IE/iedub/PVOL/iedub@{}",
+        hour.format("%Y/%m/%d"), hour.format("%Y%m%dT%H")
+    )
+}
+
+fn newest_dublin_velocity_key(xml: &str) -> Option<&str> {
+    keys(xml).into_iter().rev().find(|key| key.rsplit('/').next()
+        .is_some_and(|name| name.starts_with("iedub@") && name.ends_with("@VRADH.h5")))
+}
+
+fn key_minute(key: &str) -> Option<DateTime<Utc>> {
+    let stamp = key.rsplit('/').next()?.split('@').nth(1)?;
+    let naive = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M").ok()?;
+    Some(Utc.from_utc_datetime(&naive))
+}
+
 /// The newest volume for `id`, assembled from the objects EUMETNET published for it.
 pub async fn fetch_volume(
     http: &reqwest::Client,
@@ -491,7 +509,26 @@ pub async fn fetch_volume(
     let (time, base) = fetch(group[0].clone())
         .await
         .ok_or_else(|| anyhow::anyhow!("no decodable OPERA volume for {id}"))?;
-    if current_name == Some(volume_name(id, time).as_str()) {
+    let mut dublin_velocity = None;
+    if id.eq_ignore_ascii_case("IEDUB") {
+        for back in 0..2 {
+            let index = text(dublin_velocity_index_url(now - chrono::Duration::hours(back)))
+                .await.unwrap_or_default();
+            if let Some(key) = newest_dublin_velocity_key(&index) {
+                if key_minute(key).is_some_and(|at| (time - at).num_minutes().abs() <= 30) {
+                    dublin_velocity = Some(key.to_string());
+                }
+                break;
+            }
+        }
+    }
+    let base_name = volume_name(id, time);
+    let candidate_name = if let Some(key) = dublin_velocity.as_deref() {
+        format!("{base_name}~{}", key_minute(key).expect("checked key time").format("%Y%m%d%H%M"))
+    } else {
+        base_name.clone()
+    };
+    if current_name == Some(candidate_name.as_str()) {
         crate::stats::bump(crate::stats::Counter::FetchSkipped);
         return Ok(None);
     }
@@ -499,7 +536,7 @@ pub async fn fetch_volume(
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
     let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
     if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") || id.eq_ignore_ascii_case("IEDUB") {
-        let parts: Vec<(f32, Sweep)> = std::iter::once(&base)
+        let mut parts: Vec<(f32, Sweep)> = std::iter::once(&base)
             .chain(files.iter())
             .filter_map(|scan| {
                 (scan.sweeps().len() == 1).then(|| {
@@ -510,8 +547,18 @@ pub async fn fetch_volume(
             .filter(|(angle, _)| angle.is_finite())
             .collect();
         anyhow::ensure!(parts.len() >= if id.eq_ignore_ascii_case("IEDUB") { 8 } else if meta.state == "CH" { 2 } else { 5 }, "incomplete SCAN volume for {id}");
+        let mut delivered_name = base_name;
+        if let Some(key) = dublin_velocity {
+            if let Some((_, velocity)) = fetch(key).await {
+                if let Some(low) = velocity.sweeps().iter().find(|sweep| (angle(sweep) - 0.5).abs() < 0.15
+                    && sweep.radials().iter().any(|radial| radial.velocity().is_some())) {
+                    parts.push((angle(low), low.clone()));
+                    delivered_name = candidate_name;
+                }
+            }
+        }
         return Ok(Some((
-            volume_name(id, time),
+            delivered_name,
             time,
             Scan::with_site(meta.to_site(), base.coverage_pattern().clone(), crate::dwd::assemble(parts)),
         )));
@@ -731,6 +778,14 @@ mod tests {
     }
 
     #[test]
+    fn dublin_velocity_key_keeps_its_own_minute() {
+        let xml = "<Key>2026/10/15/IE/iedub/PVOL/iedub@20261015T0900@0.5_2.2@VRADH.h5</Key>\
+                   <Key>2026/10/15/IE/iedub/PVOL/iedub@20261015T0915@0.5_2.2@VRADH.h5</Key>";
+        let key = newest_dublin_velocity_key(xml).expect("velocity");
+        assert_eq!(key_minute(key).unwrap().to_rfc3339(), "2026-10-15T09:15:00+00:00");
+    }
+
+    #[test]
     fn norwegian_group_waits_for_matching_delayed_velocity() {
         let row = |time: &str, angles: &str, moment: &str| format!(
             "<Key>2026/10/15/NO/noand/PVOL/noand@{time}@{angles}@{moment}.h5</Key>"
@@ -916,16 +971,18 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
-    async fn live_dublin_scan_assembles_eight_reflectivity_cuts() {
+    async fn live_dublin_scan_assembles_reflectivity_and_low_velocity() {
         let http = reqwest::Client::new();
         let (_, _, scan) = fetch_volume(&http, "IEDUB", None)
             .await.expect("volume").expect("fresh volume");
-        assert_eq!(scan.sweeps().len(), 8);
+        assert!(scan.sweeps().len() >= 8);
         for tilt in 0..8 {
             crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
                 .unwrap_or_else(|e| panic!("IEDUB tilt {tilt} reflectivity: {e}"));
         }
-        assert!(!crate::level2::available_moments(&scan)[crate::level2::Moment::Velocity.index()]);
+        let vel = crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, 0)
+            .expect("Dublin low velocity");
+        assert!(vel.data.iter().any(|&gate| gate >= 2));
     }
 
     #[tokio::test]

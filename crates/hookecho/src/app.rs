@@ -10813,7 +10813,7 @@ impl HookEchoApp {
                 moment.short_name().to_string(),
                 moment.units(),
                 moment.short_name(),
-                volume.time,
+                view.displayed_time().unwrap_or(volume.time),
                 wxdata::field::DataClass::Observed,
                 wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
                     wxdata::level2::sample_native(
@@ -12035,7 +12035,7 @@ impl HookEchoApp {
         self.views[self.active]
             .timeline
             .selected_time()
-            .or_else(|| self.views[self.active].volume.as_ref().map(|volume| volume.time))
+            .or_else(|| self.views[self.active].displayed_time())
             .unwrap_or_else(Utc::now)
     }
 

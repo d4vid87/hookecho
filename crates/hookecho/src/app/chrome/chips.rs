@@ -18,9 +18,8 @@ impl HookEchoApp {
                 .as_deref()
                 .unwrap_or_else(|| view.moment.short_name());
             let valid = view
-                .volume
-                .as_ref()
-                .map(|volume| volume.time.format("%H:%MZ").to_string())
+                .displayed_time()
+                .map(|time| time.format("%H:%MZ").to_string())
                 .unwrap_or_else(|| "waiting".into());
             egui::Area::new("broadcast_source".into())
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(margin, margin))

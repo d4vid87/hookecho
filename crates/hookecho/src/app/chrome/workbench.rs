@@ -198,9 +198,7 @@ impl HookEchoApp {
                     quality,
                 )
             }).or_else(|| view.volume.as_ref().map(|volume| {
-                let time = view.selected_cut_ms()
-                    .and_then(chrono::DateTime::from_timestamp_millis)
-                    .unwrap_or(volume.time);
+                let time = view.displayed_time().unwrap_or(volume.time);
                 let displayed = view.displayed_station().unwrap_or("Unknown radar");
                 format!("{displayed} · {product} · valid {}", time.format("%H:%M UTC"))
             })).unwrap_or_else(|| format!("{site} · {product} · waiting for data")) + &health;
