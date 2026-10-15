@@ -143,6 +143,7 @@ impl HookEchoApp {
         let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
+        let max_loop = self.live_loop_limit(self.active);
         let narrow = super::overlay::compact(ctx);
         let phone_landscape = narrow && self.chrome_rect.width() > self.chrome_rect.height();
         let corner = !narrow && !self.analyst_open;
@@ -345,7 +346,7 @@ impl HookEchoApp {
                             );
                         }
 
-                            let result = history_controls(ui, t, &mut loop_frames,
+                            let result = history_controls(ui, t, &mut loop_frames, max_loop,
                                 #[cfg(target_arch = "wasm32")] &packs,
                                 #[cfg(target_arch = "wasm32")] pack_status.as_deref(),
                             );
@@ -861,6 +862,7 @@ pub(super) fn history_controls(
     ui: &mut egui::Ui,
     t: &mut crate::timeline::Timeline,
     loop_frames: &mut usize,
+    max_loop: usize,
     #[cfg(target_arch = "wasm32")] packs: &[crate::webcache::Pack],
     #[cfg(target_arch = "wasm32")] pack_status: Option<&str>,
 ) -> HistoryActions {
@@ -926,7 +928,7 @@ pub(super) fn history_controls(
     );
     ui.add(
         egui::DragValue::new(loop_frames)
-            .range(2..=live_loop_limit())
+            .range(2..=max_loop)
             .suffix(" frames"),
     )
     .on_hover_text("How many of the newest volumes ▶ cycles through when live");
@@ -964,15 +966,4 @@ pub(super) fn history_controls(
         ui.close();
     }
     result
-}
-
-/// The same limits used by the application's live prefetch window.
-pub(super) fn live_loop_limit() -> usize {
-    if cfg!(target_arch = "wasm32") {
-        WEB_LOOP_WINDOW
-    } else if cfg!(target_os = "android") {
-        ANDROID_LOOP_WINDOW
-    } else {
-        250
-    }
 }

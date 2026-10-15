@@ -13,6 +13,7 @@ impl HookEchoApp {
         );
         let statuses = self.timeline_frame_statuses();
         let tz = self.active_tz();
+        let max_loop = self.live_loop_limit(idx);
         let v = &self.views[idx];
         let radar_visible = v.show_radar;
         let imagery_map = v.basemap.timed() || v.abi_scene.is_some();
@@ -66,7 +67,6 @@ impl HookEchoApp {
             .is_some_and(|(pane, _, _)| *pane == idx);
         let was_cut_playback = v.timeline.cut_playback;
         let mut loop_frames = self.settings.live_loop_frames;
-        let max_loop = super::scrubber::live_loop_limit();
         let effective_loop = loop_frames.clamp(1, max_loop);
         let listed_loop = effective_loop.min(v.timeline.frames.len());
         let cached_loop = cached_loop_tail(&v.timeline.frames, listed_loop, |name| {
@@ -102,12 +102,16 @@ impl HookEchoApp {
                                 .width(92.0)
                                 .selected_text(egui::RichText::new(format!("{effective_loop} Frames")).color(accent))
                                 .show_ui(ui, |ui| {
-                                    let choices: &[usize] = if max_loop < 7 { &[2, 3, 4, 6] }
+                                    let choices: &[usize] = if cfg!(target_arch = "wasm32") {
+                                        &[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+                                    } else if max_loop < 7 { &[2, 3, 4, 6] }
                                         else { &[7, 14, 21, 30, 50, 75, 100, 150, 200, 250] };
                                     for &count in choices.iter().filter(|&&n| n <= max_loop) {
                                         ui.selectable_value(&mut loop_frames, count, format!("{count} Frames"));
                                     }
-                                    if max_loop < 7 {
+                                    if cfg!(target_arch = "wasm32") {
+                                        ui.weak(format!("Current radar memory allows up to {max_loop} live-loop frames."));
+                                    } else if max_loop < 7 {
                                         ui.weak(format!("This device supports up to {max_loop} live-loop frames."));
                                     }
                                     ui.weak("Limits the live loop; archive frames remain available.");
@@ -119,7 +123,7 @@ impl HookEchoApp {
                                 ui.set_min_width(260.0);
                                 ui.strong("History & playback");
                                 ui.label("Archive date (UTC)");
-                                let result = super::scrubber::history_controls(ui, &mut self.views[idx].timeline, &mut loop_frames,
+                                let result = super::scrubber::history_controls(ui, &mut self.views[idx].timeline, &mut loop_frames, max_loop,
                                     #[cfg(target_arch = "wasm32")] &packs,
                                     #[cfg(target_arch = "wasm32")] pack_status.as_deref(),
                                 );

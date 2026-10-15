@@ -2623,10 +2623,16 @@ fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) 
     tail.iter().rev().take_while(|id| cached(id.name())).count()
 }
 
-/// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
-/// severe-weather VCP is four volumes. A wasm heap is 32-bit and a decoded volume is tens of MB,
-/// so this is a memory budget as much as a time window.
-const WEB_LOOP_WINDOW: usize = 4;
+/// Upper bound for browser live replay. The actual limit is based on the current decoded scan's
+/// gate payload size, with room for the displayed head and an in-flight volume.
+const WEB_LOOP_WINDOW: usize = 12;
+
+fn web_loop_window_for_bytes(scan_bytes: usize, budget: usize) -> usize {
+    if scan_bytes == 0 { return 4; } // no measured scan yet
+    // Never regress the established four-frame loop for a large volume. The payload budget is
+    // soft, and the memory trimmer still evicts unpinned scans when a site exceeds it.
+    (budget / scan_bytes).saturating_sub(2).clamp(4, WEB_LOOP_WINDOW)
+}
 
 enum DataMsg {
     ListingFailed { view: usize, site: String, date: NaiveDate },
@@ -4338,8 +4344,8 @@ impl HookEchoApp {
         // actually afford (see ANDROID_LOOP_WINDOW) plus the head and the frame in flight —
         // enough that a loop stops re-downloading itself on every wrap, without the ~900 MB RSS
         // that holding a full desktop-sized window cost.
-        // The browser gets the same treatment for the same reason, only harder: a wasm heap is
-        // 32-bit, so thirty decoded volumes is not a large cache there, it is an out-of-memory.
+        // The browser reserves room for its adaptive loop ceiling plus displayed/in-flight scans;
+        // the separate payload budget limits encoded gates, though total 32-bit heap use is higher.
         let scan_cache_cap = if cfg!(target_os = "android") {
             ANDROID_LOOP_WINDOW + 2
         } else if cfg!(target_arch = "wasm32") {
@@ -12523,6 +12529,17 @@ impl HookEchoApp {
         self.views[view_idx].head_request.attach(generation, handle);
     }
 
+    /// Available live replay frames for the active platform and current radar payload. Browser
+    /// scans vary substantially by site/VCP; a fixed four-frame ceiling wastes the existing
+    /// memory budget on small volumes, while a fixed larger ceiling can thrash on large ones.
+    pub(crate) fn live_loop_limit(&mut self, idx: usize) -> usize {
+        if cfg!(target_os = "android") { return ANDROID_LOOP_WINDOW; }
+        if !cfg!(target_arch = "wasm32") { return 250; }
+        let bytes = self.views.get(idx).and_then(|view| view.volume.as_ref())
+            .map(|volume| self.radar_memory.scan_bytes(&volume.scan)).unwrap_or(0);
+        web_loop_window_for_bytes(bytes, radar_payload_budget())
+    }
+
     fn trim_radar_memory(&mut self) {
         let mut bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan)
             .chain(self.views.iter().flat_map(|view| view.retained_scans())));
@@ -13076,10 +13093,11 @@ impl HookEchoApp {
         }
 
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
+        let live_limit = self.live_loop_limit(idx);
         let wanted_window = if cfg!(target_os = "android") {
             self.settings.live_loop_frames.clamp(1, ANDROID_LOOP_WINDOW)
         } else if cfg!(target_arch = "wasm32") {
-            self.settings.live_loop_frames.clamp(1, WEB_LOOP_WINDOW)
+            self.settings.live_loop_frames.clamp(1, live_limit)
         } else {
             self.settings.live_loop_frames.max(1)
         };
@@ -13408,9 +13426,10 @@ impl HookEchoApp {
         let Some(site) = self.views[idx].site.clone() else {
             return;
         };
+        let live_limit = self.live_loop_limit(idx);
         let tl = &self.views[idx].timeline;
         let window = if cfg!(target_arch = "wasm32") {
-            self.settings.live_loop_frames.clamp(1, WEB_LOOP_WINDOW)
+            self.settings.live_loop_frames.clamp(1, live_limit)
         } else {
             tl.live_window.max(1)
         };
@@ -24750,6 +24769,16 @@ mod tests {
         assert_eq!(super::cached_loop_tail(&frames, 4, |name| name.ends_with("170000") || name.ends_with("170300")), 1);
         assert_eq!(super::cached_loop_tail(&frames, 4, |name| name.ends_with("170200") || name.ends_with("170300")), 2);
         assert_eq!(super::cached_loop_tail(&frames, 4, |_| true), 4);
+    }
+
+    #[test]
+    fn web_loop_limit_tracks_scan_payload_without_exceeding_budget() {
+        let mib = 1024 * 1024;
+        let budget = 192 * mib;
+        assert_eq!(super::web_loop_window_for_bytes(0, budget), 4);
+        assert_eq!(super::web_loop_window_for_bytes(8 * mib, budget), 12);
+        assert_eq!(super::web_loop_window_for_bytes(30 * mib, budget), 4);
+        assert_eq!(super::web_loop_window_for_bytes(64 * mib, budget), 4);
     }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,
