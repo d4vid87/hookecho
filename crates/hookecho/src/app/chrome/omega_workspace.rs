@@ -662,6 +662,34 @@ impl HookEchoApp {
                                             OverlayToggle::AlertPanel,
                                         ));
                                     }
+                                    egui::CollapsingHeader::new("Weather Products")
+                                        .id_salt("omega_weather_products")
+                                        .show(ui, |ui| {
+                                            for (label, mapped) in [
+                                                ("Mesoscale discussions", PaletteAction::ToggleOverlay(OverlayToggle::Mds)),
+                                                ("Severe weather outlooks", PaletteAction::OpenOutlooks),
+                                                ("Tropical cyclones", PaletteAction::ToggleOverlay(OverlayToggle::Tropical)),
+                                                ("Hydrological outlooks", PaletteAction::OpenOutlooks),
+                                                ("Fire weather outlooks", PaletteAction::OpenOutlooks),
+                                                ("Winter weather outlooks", PaletteAction::OpenOutlooks),
+                                                ("Climate outlooks", PaletteAction::OpenOutlooks),
+                                                ("METAR observations", PaletteAction::ToggleOverlay(OverlayToggle::Metar)),
+                                                ("Weather warnings (including marine)", PaletteAction::ToggleOverlay(OverlayToggle::Alerts)),
+                                                ("Surface fronts", PaletteAction::ToggleOverlay(OverlayToggle::Fronts)),
+                                                ("Local storm reports", PaletteAction::ToggleOverlay(OverlayToggle::StormReports)),
+                                                ("Lightning detection (GLM)", PaletteAction::ToggleOverlay(OverlayToggle::GlmLightning)),
+                                                ("Spotter Network", PaletteAction::ToggleOverlay(OverlayToggle::Spotters)),
+                                                ("Power outages", PaletteAction::ToggleOverlay(OverlayToggle::Outages)),
+                                            ] {
+                                                let on = entries.iter()
+                                                    .find(|entry| entry.action == mapped)
+                                                    .and_then(|entry| entry.on)
+                                                    .unwrap_or(false);
+                                                if menu_row(ui, label, on).clicked() {
+                                                    action = Some(mapped);
+                                                }
+                                            }
+                                        });
                                     egui::CollapsingHeader::new("Data Overlays")
                                         .id_salt("omega_data_overlays")
                                         .show(ui, |ui| {
