@@ -2,6 +2,13 @@
 use super::*;
 use crate::ui::{a11y::Named as _, priority};
 
+#[derive(Clone)]
+struct PriorityDockCache {
+    key: (u64, u64, u64, i64, crate::settings::PriorityRules),
+    count: usize,
+    first: Option<(wxdata::overlay::AlertInfo, usize, bool, f64)>,
+}
+
 fn national_signal_counts(features: &[GeoFeature]) -> [usize; 5] {
     let mut seen: [std::collections::HashSet<String>; 5] = std::array::from_fn(|_| Default::default());
     for feature in features {
@@ -136,21 +143,40 @@ impl HookEchoApp {
     }
     pub(crate) fn priority_dock(&mut self, ctx: &egui::Context) {
         let (point, reference) = self.priority_reference();
-        let rows = priority::rows(
-            self.active_alert_features(),
-            &self.settings.priority_rules,
-            point,
-            self.priority_time(),
+        let now = self.priority_time();
+        let key = (
+            self.overlay_gen,
+            point.0.to_bits(),
+            point.1.to_bits(),
+            now.timestamp() / 60,
+            self.settings.priority_rules.clone(),
         );
-        let count = rows.len();
-        let first = rows.first().map(|f| {
-            (
-                f.alert.as_ref().unwrap().clone(),
-                priority::category(f),
-                f.contains(point.0, point.1),
-                f.distance_km(point.0, point.1),
-            )
-        });
+        let cache_id = egui::Id::new("priority_dock_snapshot");
+        let cached = ctx.data_mut(|d| d.get_temp::<PriorityDockCache>(cache_id));
+        let snapshot = match cached {
+            Some(cached) if cached.key == key => cached,
+            _ => {
+                let rows = priority::rows(
+                    self.active_alert_features(),
+                    &self.settings.priority_rules,
+                    point,
+                    now,
+                );
+                let first = rows.first().map(|f| {
+                    (
+                        f.alert.as_ref().unwrap().clone(),
+                        priority::category(f),
+                        f.contains(point.0, point.1),
+                        f.distance_km(point.0, point.1),
+                    )
+                });
+                let snapshot = PriorityDockCache { key, count: rows.len(), first };
+                ctx.data_mut(|d| d.insert_temp(cache_id, snapshot.clone()));
+                snapshot
+            }
+        };
+        let count = snapshot.count;
+        let first = snapshot.first;
         let track_count = if self.cells_site.as_deref() == self.views[self.active].site.as_deref() {
             self.active_storm_cells()
                 .iter()

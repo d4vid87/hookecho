@@ -7,6 +7,9 @@ pub struct AdaptiveQuality {
     samples: VecDeque<f32>,
     setup_samples: VecDeque<f32>,
     chrome_samples: VecDeque<f32>,
+    primary_chrome_samples: VecDeque<f32>,
+    window_chrome_samples: VecDeque<f32>,
+    secondary_chrome_samples: VecDeque<f32>,
     sync_samples: VecDeque<f32>,
     map_samples: VecDeque<f32>,
     tail_samples: VecDeque<f32>,
@@ -34,6 +37,19 @@ impl AdaptiveQuality {
         }
     }
 
+    /// Split chrome timings identify which interface group consumes the frame.
+    pub fn observe_chrome_sections(&mut self, ms: [f32; 3]) {
+        for (samples, ms) in [
+            (&mut self.primary_chrome_samples, ms[0]),
+            (&mut self.window_chrome_samples, ms[1]),
+            (&mut self.secondary_chrome_samples, ms[2]),
+        ] {
+            if !ms.is_finite() || ms < 0.0 { continue; }
+            if samples.len() == 120 { samples.pop_front(); }
+            samples.push_back(ms.min(500.0));
+        }
+    }
+
     fn p95(samples: &VecDeque<f32>) -> Option<f32> {
         let mut values: Vec<_> = samples.iter().copied().collect();
         if values.is_empty() { return None; }
@@ -43,6 +59,9 @@ impl AdaptiveQuality {
 
     pub fn setup_p95_ms(&self) -> Option<f32> { Self::p95(&self.setup_samples) }
     pub fn chrome_p95_ms(&self) -> Option<f32> { Self::p95(&self.chrome_samples) }
+    pub fn primary_chrome_p95_ms(&self) -> Option<f32> { Self::p95(&self.primary_chrome_samples) }
+    pub fn window_chrome_p95_ms(&self) -> Option<f32> { Self::p95(&self.window_chrome_samples) }
+    pub fn secondary_chrome_p95_ms(&self) -> Option<f32> { Self::p95(&self.secondary_chrome_samples) }
     pub fn sync_p95_ms(&self) -> Option<f32> { Self::p95(&self.sync_samples) }
     pub fn map_p95_ms(&self) -> Option<f32> { Self::p95(&self.map_samples) }
     pub fn tail_p95_ms(&self) -> Option<f32> { Self::p95(&self.tail_samples) }

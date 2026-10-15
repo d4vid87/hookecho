@@ -116,7 +116,11 @@ impl HookEchoApp {
         let settings_page_was = settings_page;
         let (alert_count, _) = self.alert_badge();
         let bounds = self.view_bounds();
-        let feats = self.active_alert_features().to_vec();
+        let feats = if alerts_tab {
+            self.active_alert_features().to_vec()
+        } else {
+            Vec::new()
+        };
         let mut muted = self.settings.mute_alerts;
         let mut alert_hit = None;
         let mut export_alerts = false;

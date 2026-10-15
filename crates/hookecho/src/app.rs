@@ -20069,6 +20069,9 @@ impl HookEchoApp {
                 "ui_cpu_p95_ms":self.adaptive.p95_ms(),
                 "ui_setup_cpu_p95_ms":self.adaptive.setup_p95_ms(),
                 "chrome_cpu_p95_ms":self.adaptive.chrome_p95_ms(),
+                "primary_chrome_cpu_p95_ms":self.adaptive.primary_chrome_p95_ms(),
+                "window_chrome_cpu_p95_ms":self.adaptive.window_chrome_p95_ms(),
+                "secondary_chrome_cpu_p95_ms":self.adaptive.secondary_chrome_p95_ms(),
                 "pane_sync_cpu_p95_ms":self.adaptive.sync_p95_ms(),
                 "map_build_cpu_p95_ms":self.adaptive.map_p95_ms(),
                 "ui_tail_cpu_p95_ms":self.adaptive.tail_p95_ms(),
@@ -22958,6 +22961,8 @@ impl eframe::App for HookEchoApp {
                 crate::theme::accent(self.settings.theme),
             );
         }
+        let primary_chrome_ms = chrome_started.elapsed().as_secs_f32() * 1000.0;
+        let window_chrome_started = Instant::now();
 
         // Over everything, and only while a capture is pending.
         self.share_card_footer(ctx);
@@ -23666,6 +23671,8 @@ impl eframe::App for HookEchoApp {
         if let Some((i, day, wfo)) = self.rules_window.backtest_request.take() {
             self.start_backtest(i, day, wfo);
         }
+        let window_chrome_ms = window_chrome_started.elapsed().as_secs_f32() * 1000.0;
+        let secondary_chrome_started = Instant::now();
         if let Some(detail) = &self.detail {
             let tex = detail
                 .image
@@ -23981,6 +23988,7 @@ impl eframe::App for HookEchoApp {
         // selected; otherwise four-pane Analyst eagerly decodes three invisible radar volumes.
         let phone_solo = self.views.len() > 1 && chrome::compact(ctx);
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
+        let secondary_chrome_ms = secondary_chrome_started.elapsed().as_secs_f32() * 1000.0;
         let chrome_ms = chrome_started.elapsed().as_secs_f32() * 1000.0;
         let sync_started = Instant::now();
         for idx in 0..self.views.len() {
@@ -24307,6 +24315,11 @@ impl eframe::App for HookEchoApp {
         self.adaptive.observe_phases([
             setup_ms, chrome_ms, sync_ms, map_ms,
             tail_started.elapsed().as_secs_f32() * 1000.0,
+        ]);
+        self.adaptive.observe_chrome_sections([
+            primary_chrome_ms,
+            window_chrome_ms,
+            secondary_chrome_ms,
         ]);
         self.adaptive.observe_cadence(ctx.input(|i| i.unstable_dt) * 1000.0, moving);
         self.adaptive.observe(ui_started.elapsed().as_secs_f32() * 1000.0,
