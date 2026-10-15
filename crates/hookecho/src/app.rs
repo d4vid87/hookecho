@@ -3752,7 +3752,7 @@ pub struct HookEchoApp {
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
     /// its own toggle + pending GPU upload + refresh throttle. Keyed by [`crate::render::FieldLayer`].
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
-    mrms_loop: Option<MrmsLoop>,
+    mrms_loops: Vec<MrmsLoop>,
     pane_fields: std::collections::HashMap<(usize, crate::render::FieldLayer), FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
@@ -4784,7 +4784,7 @@ impl HookEchoApp {
             fields: crate::render::FieldLayer::draw_order()
                 .map(|l| (l, FieldState::default()))
                 .collect(),
-            mrms_loop: None,
+            mrms_loops: Vec::new(),
             rotation_minutes: 30,
             reflectivity_trail: wxdata::trail::ExtremaTrail::new(
                 30,
@@ -10134,6 +10134,9 @@ impl HookEchoApp {
             }
         } else {
             set.remove(&layer);
+            if !self.views.iter().any(|view| !view.show_radar && view.fields_on.contains(&layer)) {
+                self.mrms_loops.retain(|loop_state| loop_state.layer != layer);
+            }
         }
     }
 
@@ -10727,9 +10730,9 @@ impl HookEchoApp {
                     }
                 }
                 OverlayMsg::MrmsHistory(layer, frames) => {
-                    if frames.is_empty() || self.views[self.active].show_radar
-                        || !self.views[self.active].fields_on.contains(&layer) { continue; }
-                    let prior = self.mrms_loop.as_ref().filter(|old| old.layer == layer);
+                    if frames.is_empty() || !self.views.iter().any(|view|
+                        !view.show_radar && view.fields_on.contains(&layer)) { continue; }
+                    let prior = self.mrms_loops.iter().find(|old| old.layer == layer);
                     let prior_time = prior.and_then(|old| old.frames.get(old.index)).map(|frame| frame.stamp.valid_time);
                     let was_live = prior.is_none_or(|old| old.index + 1 == old.frames.len());
                     let playing = prior.is_some_and(|old| old.playing);
@@ -10737,8 +10740,13 @@ impl HookEchoApp {
                         prior_time.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time == time))
                             .unwrap_or(0)
                     };
-                    self.mrms_loop = Some(MrmsLoop { layer, frames, index, playing, last_step: Instant::now() });
-                    self.show_mrms_loop_frame();
+                    let loop_state = MrmsLoop { layer, frames, index, playing, last_step: Instant::now() };
+                    if let Some(slot) = self.mrms_loops.iter_mut().find(|old| old.layer == layer) {
+                        *slot = loop_state;
+                    } else {
+                        self.mrms_loops.push(loop_state);
+                    }
+                    self.show_mrms_loop_frame(layer);
                 }
                 OverlayMsg::PaneField(pane, layer, frame, display) => {
                     if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
@@ -18391,10 +18399,9 @@ impl HookEchoApp {
             .is_none_or(|(_, _, _, aligned)| aligned)
     }
 
-    fn show_mrms_loop_frame(&mut self) {
-        let Some((layer, frame)) = self.mrms_loop.as_ref().and_then(|loop_state| {
-            loop_state.frames.get(loop_state.index).map(|frame| (loop_state.layer, frame.clone()))
-        }) else { return; };
+    fn show_mrms_loop_frame(&mut self, layer: crate::render::FieldLayer) {
+        let Some(frame) = self.mrms_loops.iter().find(|loop_state| loop_state.layer == layer)
+            .and_then(|loop_state| loop_state.frames.get(loop_state.index)).cloned() else { return; };
         let upload = self.field_upload(layer, frame.field());
         if let Some(state) = self.fields.get_mut(&layer) {
             state.pending = Some(upload);
@@ -18403,13 +18410,13 @@ impl HookEchoApp {
         }
     }
 
-    fn step_mrms_loop(&mut self, delta: isize) {
-        let Some(loop_state) = self.mrms_loop.as_mut() else { return; };
+    fn step_mrms_loop(&mut self, layer: crate::render::FieldLayer, delta: isize) {
+        let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| loop_state.layer == layer) else { return; };
         let len = loop_state.frames.len();
         if len == 0 { return; }
         loop_state.index = (loop_state.index as isize + delta).rem_euclid(len as isize) as usize;
         loop_state.last_step = Instant::now();
-        self.show_mrms_loop_frame();
+        self.show_mrms_loop_frame(layer);
     }
 
     /// The field's source time, selected analysis time, tolerance, and alignment result.
@@ -18427,8 +18434,8 @@ impl HookEchoApp {
             .field_state(pane, layer)
             .and_then(|state| state.metadata.as_ref())
             .map(|(_, stamp)| stamp)?;
-        if pane == self.active && !self.views[pane].show_radar
-            && self.mrms_loop.as_ref().is_some_and(|loop_state| loop_state.layer == layer) {
+        if !self.views[pane].show_radar
+            && self.mrms_loops.iter().any(|loop_state| loop_state.layer == layer) {
             let tolerance = field_time_tolerance(layer);
             return Some((stamp.valid_time, stamp.valid_time, tolerance, true));
         }
@@ -22152,8 +22159,8 @@ impl eframe::App for HookEchoApp {
                 });
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
-                let regional_loop = !self.views[self.active].show_radar
-                    && self.views[self.active].fields_on.contains(&layer)
+                let regional_loop = self.views.iter().any(|view|
+                    !view.show_radar && view.fields_on.contains(&layer))
                     && matches!(product.split_once('/').map(|(region, _)| region),
                         Some("ALASKA" | "HAWAII" | "GUAM" | "CARIB"));
                 if regional_loop {

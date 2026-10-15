@@ -6,17 +6,19 @@ impl HookEchoApp {
     pub(super) fn omega_transport(&mut self, ctx: &egui::Context) {
         use egui_phosphor::regular as ph;
         let idx = self.active;
+        let active_field = crate::render::FieldLayer::draw_order().rev()
+            .find(|field| self.views[idx].fields_on.contains(field));
+        let active_mrms = if self.views[idx].show_radar { None } else { active_field };
         let mrms_interval = std::time::Duration::from_secs_f32(
             1.0 / crate::settings::SourceAnimationSpeeds::sanitize(self.views[idx].timeline.speed),
         );
-        let advance_mrms = self.mrms_loop.as_ref().is_some_and(|loop_state| {
+        let advance_mrms = self.mrms_loops.iter().find(|loop_state| Some(loop_state.layer) == active_mrms)
+            .is_some_and(|loop_state| {
             loop_state.playing && loop_state.frames.len() > 1
-                && !self.views[idx].show_radar
-                && self.views[idx].fields_on.contains(&loop_state.layer)
                 && loop_state.last_step.elapsed() >= mrms_interval
         });
-        if advance_mrms { self.step_mrms_loop(1); }
-        if self.mrms_loop.as_ref().is_some_and(|loop_state| loop_state.playing) {
+        if advance_mrms { if let Some(layer) = active_mrms { self.step_mrms_loop(layer, 1); } }
+        if self.mrms_loops.iter().any(|loop_state| Some(loop_state.layer) == active_mrms && loop_state.playing) {
             ctx.request_repaint_after(mrms_interval.min(std::time::Duration::from_millis(100)));
         }
         let before = (
@@ -30,11 +32,9 @@ impl HookEchoApp {
         let v = &self.views[idx];
         let radar_visible = v.show_radar;
         let imagery_map = v.basemap.timed() || v.abi_scene.is_some();
-        let field = crate::render::FieldLayer::draw_order()
-            .rev()
-            .find(|field| v.fields_on.contains(field));
-        let mrms_loop = self.mrms_loop.as_ref()
-            .filter(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+        let field = active_field;
+        let mrms_loop = self.mrms_loops.iter()
+            .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .map(|loop_state| (loop_state.frames.len(), loop_state.index, loop_state.playing));
         let field_name = field
             .and_then(|field| field.descriptor())
@@ -198,6 +198,7 @@ impl HookEchoApp {
                             let t = &self.views[idx].timeline;
                             let (color, status) = if !radar_visible {
                                 (accent, match field_time {
+                                    Some((_, _, _, true)) if mrms_loop.is_some_and(|(len, index, _)| index + 1 < len) => "Replay",
                                     Some((_, _, _, true)) => "Field valid",
                                     Some((_, _, _, false)) => "Field hidden",
                                     None if field.is_some() => "Awaiting field",
@@ -255,12 +256,13 @@ impl HookEchoApp {
                             if omega_button(ui, ph::BROADCAST, "Return to live", self.views[idx].timeline.following).clicked() { action = Some(PaletteAction::GoLive); }
                             ui.separator();
                             }
-                            if let Some((len, _, playing)) = mrms_loop.filter(|(len, _, _)| *len > 1) {
+                            if let Some((len, index, playing)) = mrms_loop.filter(|(len, _, _)| *len > 1) {
                                 if omega_button(ui, ph::SKIP_BACK, "Previous mosaic", false).clicked() { mrms_step = -1; }
                                 if omega_button(ui, if playing { ph::PAUSE } else { ph::PLAY },
                                     if playing { "Pause mosaic" } else { "Play mosaic" }, playing).clicked() { mrms_toggle = true; }
                                 if omega_button(ui, ph::SKIP_FORWARD, "Next mosaic", false).clicked() { mrms_step = 1; }
-                                ui.weak(format!("{len} frames"));
+                                if omega_button(ui, ph::BROADCAST, "Latest mosaic", index + 1 == len).clicked() { mrms_seek = Some(len - 1); }
+                                ui.weak(format!("{}/{len}", index + 1));
                                 ui.separator();
                             }
                             if omega_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
@@ -286,18 +288,20 @@ impl HookEchoApp {
                         }
                     });
             });
-        if let Some(index) = mrms_seek {
-            if let Some(loop_state) = self.mrms_loop.as_mut() {
+        if let (Some(layer), Some(index)) = (active_mrms, mrms_seek) {
+            if let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| loop_state.layer == layer) {
                 loop_state.index = index;
                 loop_state.playing = false;
             }
-            self.show_mrms_loop_frame();
+            self.show_mrms_loop_frame(layer);
         } else if mrms_step != 0 {
-            if let Some(loop_state) = self.mrms_loop.as_mut() { loop_state.playing = false; }
-            self.step_mrms_loop(mrms_step);
+            if let Some(layer) = active_mrms {
+                if let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| loop_state.layer == layer) { loop_state.playing = false; }
+                self.step_mrms_loop(layer, mrms_step);
+            }
         }
         if mrms_toggle {
-            if let Some(loop_state) = self.mrms_loop.as_mut() {
+            if let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| Some(loop_state.layer) == active_mrms) {
                 loop_state.playing = !loop_state.playing;
                 loop_state.last_step = Instant::now();
             }
