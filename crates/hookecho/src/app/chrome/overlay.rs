@@ -98,6 +98,11 @@ impl HookEchoApp {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .health(&RequestLane::Feed("CPC outlook"));
         let cpc_feature_count = self.cpc_features.len();
+        let fire_weather_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("SPC fire weather"));
+        let fire_weather_feature_count = self.fire_weather_features.len();
         let analysis_point = crate::render::mercator::world_to_lonlat(
             self.views[self.active].camera.center.0,
             self.views[self.active].camera.center.1,
@@ -369,6 +374,8 @@ impl HookEchoApp {
                             self.gefs_postage.as_ref(),
                             &cpc_health,
                             cpc_feature_count,
+                            &fire_weather_health,
+                            fire_weather_feature_count,
                             &mut opts,
                         );
                     } else {
@@ -486,6 +493,8 @@ impl HookEchoApp {
                                     self.gefs_postage.as_ref(),
                                     &cpc_health,
                                     cpc_feature_count,
+                                    &fire_weather_health,
+                                    fire_weather_feature_count,
                                     &mut opts,
                                 );
                             });

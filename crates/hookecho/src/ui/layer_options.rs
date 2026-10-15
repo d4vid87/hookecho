@@ -125,6 +125,8 @@ pub(crate) fn show(
     gefs_postage: Option<&wxdata::global::GefsPostageStamps>,
     cpc_health: &crate::app::SourceHealth,
     cpc_feature_count: usize,
+    fire_weather_health: &crate::app::SourceHealth,
+    fire_weather_feature_count: usize,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -738,6 +740,23 @@ pub(crate) fn show(
                 }
             });
         if filters.fire_weather_day != 0 {
+            let (status, color) = match fire_weather_health.state() {
+                crate::app::HealthState::Fetching =>
+                    ("Loading NOAA SPC fire-weather outlook…", egui::Color32::LIGHT_BLUE),
+                crate::app::HealthState::Failed if fire_weather_feature_count > 0 =>
+                    ("NOAA SPC refresh failed; showing previously loaded areas.", egui::Color32::YELLOW),
+                crate::app::HealthState::Failed =>
+                    ("NOAA SPC fire-weather outlook unavailable. Try refreshing the layer.", egui::Color32::YELLOW),
+                crate::app::HealthState::Stale =>
+                    ("NOAA SPC source refresh overdue; displayed areas may be old.", egui::Color32::YELLOW),
+                crate::app::HealthState::Fresh if fire_weather_feature_count == 0 =>
+                    ("NOAA SPC returned no areas for this selection.", egui::Color32::YELLOW),
+                crate::app::HealthState::Waiting =>
+                    ("Waiting for NOAA SPC fire-weather data…", egui::Color32::LIGHT_BLUE),
+                crate::app::HealthState::Fresh =>
+                    ("NOAA SPC fire-weather outlook loaded.", egui::Color32::LIGHT_GREEN),
+            };
+            ui.colored_label(color, egui::RichText::new(status).small());
             ui.horizontal_wrapped(|ui| {
                 for kind in [wxdata::fire_weather::Kind::Conditions, wxdata::fire_weather::Kind::DryThunderstorms] {
                     fire_changed |= ui.selectable_value(&mut filters.fire_weather_kind, kind, kind.label()).changed();
