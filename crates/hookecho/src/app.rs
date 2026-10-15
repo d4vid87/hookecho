@@ -3895,6 +3895,7 @@ pub struct HookEchoApp {
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
+    webcam_detail_last_fetch: Option<Instant>,
     /// WFIGS wildfires: perimeters (tessellated with the other overlay polygons), incident points,
     /// and the bbox/clock they were fetched for.
     show_fires: bool,
@@ -4857,6 +4858,7 @@ impl HookEchoApp {
             aqi_last_fetch: None,
             webcam_bounds: None,
             webcam_last_fetch: None,
+            webcam_detail_last_fetch: None,
             show_stations: false,
             stations: Default::default(),
             station_last_poll: None,
@@ -10746,8 +10748,10 @@ impl HookEchoApp {
                 OverlayMsg::Webcams(sites) => {
                     // Drop the cached stills with the list they belonged to. Windy's free-tier
                     // image URLs expire after ten minutes, and a kept texture would otherwise
-                    // show the same frame until the layer was toggled off and on.
-                    self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:"));
+                    // show the same frame until the layer was toggled off and on. Keep the open
+                    // card's image while its metadata refreshes, so the card does not blank.
+                    let open_image = self.detail.as_ref().and_then(|d| d.image.as_deref());
+                    self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:") || open_image == Some(k.as_str()));
                     self.webcams = sites;
                 }
                 OverlayMsg::Aqi(obs) => self.aqi = obs,
@@ -11540,6 +11544,7 @@ impl HookEchoApp {
                 .map(|u| ("View on Windy.com".to_string(), u)),
             stream: None,
         });
+        self.webcam_detail_last_fetch = Some(Instant::now());
         let (Some(key), Some(cam)) = (key, cam) else {
             return;
         };
@@ -11574,6 +11579,42 @@ impl HookEchoApp {
                     ctx2.request_repaint();
                 }
                 Err(e) => log::warn!("webcam image {url} failed: {e}"),
+            }
+        });
+    }
+
+    /// FAA publishes new stills at its own cadence. Keep an open card current without blanking
+    /// it between the metadata lookup and the replacement image arriving.
+    fn refresh_open_webcam(&mut self, ctx: &egui::Context) {
+        let Some((key, cam_id)) = self.detail.as_ref().and_then(|detail| {
+            if detail.link.is_some() { return None; } // Windy URLs arrive with the site list.
+            let key = detail.image.as_ref()?;
+            let id = key.strip_prefix("cam:")?.parse::<u64>().ok()?;
+            Some((key.clone(), id))
+        }) else {
+            self.webcam_detail_last_fetch = None;
+            return;
+        };
+        let loaded = self.pf_icon_tex.get(&key).and_then(Option::as_ref).is_some();
+        let interval = Duration::from_secs(if loaded { 600 } else { 60 });
+        let elapsed = self.webcam_detail_last_fetch.map(|time| time.elapsed()).unwrap_or_default();
+        if elapsed < interval {
+            ctx.request_repaint_after(interval - elapsed);
+            return;
+        }
+        self.webcam_detail_last_fetch = Some(Instant::now());
+        let (http, tx, ctx2) = (self.http.clone(), self.pf_icon_tx.clone(), ctx.clone());
+        self.spawner.spawn(async move {
+            match wxdata::webcams::latest_image(&http, cam_id).await {
+                Ok(Some(url)) => match fetch_icon_sheet(&http, &url).await {
+                    Ok(image) => {
+                        let _ = tx.send((key, image));
+                        ctx2.request_repaint();
+                    }
+                    Err(e) => log::warn!("webcam image {url} refresh failed: {e}"),
+                },
+                Ok(None) => log::info!("camera {cam_id} has no recent image"),
+                Err(e) => log::warn!("webcam {cam_id} refresh failed: {e}"),
             }
         });
     }
@@ -22474,6 +22515,7 @@ impl eframe::App for HookEchoApp {
         }
         self.sync_placefiles(ctx);
         self.sync_pf_icons(ctx);
+        self.refresh_open_webcam(ctx);
         self.refresh_open_dotcam(ctx);
         // Bindings are polled once, globally: a hotkey works the same in OBS mode, on mobile, and
         // with the drawer open. `capture_key` suppresses the table while the Hotkeys tab is
