@@ -133,6 +133,24 @@ fn source_field_changes(
     changes
 }
 
+/// Regional MRMS products have no useful pixels at the default CONUS camera.
+/// Frame the published grid footprint when one is chosen from the source menu.
+fn regional_mrms_camera(action: PaletteAction) -> Option<crate::render::mercator::Camera> {
+    use crate::render::FieldLayer as F;
+    let PaletteAction::ToggleField(F::MrmsCatalog(index)) = action else {
+        return None;
+    };
+    let product = wxdata::mrms::CATALOG.get(index as usize)?.product;
+    let (lon, lat, zoom) = match product.split_once('/')?.0 {
+        "ALASKA" => (-151.0, 61.0, 4.4),
+        "HAWAII" => (-157.5, 20.5, 6.1),
+        "GUAM" => (145.0, 13.5, 6.3),
+        "CARIB" => (-75.0, 17.5, 5.1),
+        _ => return None,
+    };
+    Some(crate::render::mercator::Camera::at_lonlat(lon, lat, zoom))
+}
+
 fn workspace_style(ui: &mut egui::Ui) {
     ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(237, 240, 245));
     ui.visuals_mut().selection.bg_fill = ACCENT.gamma_multiply(0.25);
@@ -797,6 +815,7 @@ impl HookEchoApp {
             }
         }
         if let Some(source) = choose_source {
+            let regional_camera = regional_mrms_camera(source);
             let speeds_before = self.settings.source_animation_speeds;
             if let Some(previous) = self.omega_animation_family() {
                 self.settings
@@ -815,6 +834,10 @@ impl HookEchoApp {
                 self.apply_palette(source, ctx);
             }
             self.views[self.active].show_radar = radar;
+            if let Some(camera) = regional_camera {
+                self.views[self.active].camera.center = camera.center;
+                self.views[self.active].camera.zoom = camera.zoom;
+            }
             self.sync_omega_animation_speed(ctx);
             if speeds_before != self.settings.source_animation_speeds {
                 self.settings.save();
@@ -967,6 +990,24 @@ mod source_tests {
         );
         assert!(source_product_rows(&entries, SourceMode::Mrms, "unavailable product").is_empty());
         assert_eq!(source_product_rows(&entries, SourceMode::Mrms, "").len(), 3);
+    }
+
+    #[test]
+    fn choosing_regional_mrms_frames_its_coverage() {
+        for (region, expected_lon) in [
+            ("ALASKA", -151.0),
+            ("HAWAII", -157.5),
+            ("GUAM", 145.0),
+            ("CARIB", -75.0),
+        ] {
+            let index = wxdata::mrms::CATALOG.iter().position(|entry|
+                entry.product.starts_with(region)).unwrap();
+            let camera = regional_mrms_camera(PaletteAction::ToggleField(F::MrmsCatalog(index as u8))).unwrap();
+            let (lon, _) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+            assert!((lon - expected_lon).abs() < 0.01);
+            assert!(camera.zoom > 4.0);
+        }
+        assert!(regional_mrms_camera(PaletteAction::ToggleField(F::Mrms)).is_none());
     }
 
     #[test]

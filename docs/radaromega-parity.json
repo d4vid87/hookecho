@@ -989,13 +989,14 @@
       "status": "partial",
       "observed_scope": "CONUS, Alaska, Hawaii region selection; product catalog comes from data; General/Color Tables settings.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Existing CONUS NOAA MRMS fields remain selectable through the source registry. Public Alaska, Hawaii, Guam and Caribbean composite-reflectivity products are now registered as additional map fields, appended after the existing catalog entries to preserve saved layer IDs.",
+      "hookecho_implementation": "Existing CONUS NOAA MRMS fields remain selectable through the source registry. Public Alaska, Hawaii, Guam and Caribbean composite-reflectivity products are registered as additional map fields, appended after the existing catalog entries to preserve saved layer IDs. Choosing a regional field in the workspace source menu centers the camera over its published coverage.",
       "remaining_gaps": [
         "Complete vendor region/product catalog, retained history, animation and settings organization are not matched; browser rendering of the Hawaii, Guam and Caribbean fields remains to be verified."
       ],
       "hookecho_sources": [
         "ROADMAP.md",
         "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
         "crates/wxdata/src/mrms.rs",
         "crates/wxdata/examples/mrms_region_probe.rs",
         "crates/hookecho/src/satellite_time.rs",
@@ -1004,7 +1005,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA02",
       "acceptance": "Region/product selection, animation, legend and no-data states match available independent feed.",
-      "runtime_verification": "2026-10-15: Anonymous listing of NOAA's public MRMS object store found ALASKA, HAWAII, GUAM and CARIB composite-reflectivity product trees. The production GRIB decoder fetched the latest grid from each: Alaska 5000×2200, Hawaii 2600×2200, Guam 2000×1800 and Caribbean 3000×1500, all with nonempty finite data and geographic bounds. The MRMS registration tests and optimized web build passed at 4,640,256/4,644,000 main WASM gzip bytes. In the local browser, search found Alaska composite reflectivity, toggling it raised active layers from 10 to 11, and regional reflectivity rendered over southern Alaska. Other regional browser rendering and animation remain unverified."
+      "runtime_verification": "2026-10-15: Anonymous listing of NOAA's public MRMS object store found ALASKA, HAWAII, GUAM and CARIB composite-reflectivity product trees. The production GRIB decoder fetched the latest grid from each: Alaska 5000×2200, Hawaii 2600×2200, Guam 2000×1800 and Caribbean 3000×1500, all with nonempty finite data and geographic bounds. The MRMS registration tests and optimized web build passed at 4,640,256/4,644,000 main WASM gzip bytes. In the local browser, search found Alaska composite reflectivity, toggling it raised active layers from 10 to 11, and regional reflectivity rendered over southern Alaska. A subsequent source-picker change centers the map on the chosen regional grid; six source-menu tests passed and the optimized main web bundle measured 4,640,201/4,644,000 gzip bytes. Browser interaction with that camera change, other regional rendering and animation remain unverified."
     },
     {
       "id": "DATA03",
