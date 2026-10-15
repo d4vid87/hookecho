@@ -6,7 +6,7 @@ pub mod mercator;
 mod radar_surface;
 pub use radar_surface::radar_surface_supported;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
@@ -42,6 +42,8 @@ pub struct VisibleTile {
 /// A binned sweep plus the world-space quad covering its range disk.
 pub struct RadarUpload {
     pub upload_token: u64,
+    /// Animation may revisit recent scans; retain bounded GPU textures for that loop.
+    pub cache_loop: bool,
     pub az_bins: u32,
     pub gate_count: u32,
     pub data: Vec<u8>,
@@ -727,6 +729,24 @@ struct RadarGpu {
     flag_bytes: Vec<u8>,
 }
 
+const RADAR_GPU_CACHE_ENTRIES: usize = 24;
+const RADAR_GPU_CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+impl RadarGpu {
+    fn shadow_bytes(&self) -> usize {
+        self.gate_bytes.len() + self.flag_bytes.len() + self.lut_width as usize * 12
+    }
+
+    fn matches_upload(&self, r: &RadarUpload, gates: &[u8], flags: &[u8]) -> bool {
+        self.dims == (r.gate_count, r.az_bins)
+            && self.flag_dims == flag_dims(r)
+            && self.precision == r.data16.is_some()
+            && self.lut_width as usize * 12 == r.lut.len()
+            && self.gate_bytes == gates
+            && self.flag_bytes == flags
+    }
+}
+
 struct OverlayGpu {
     vbuf: wgpu::Buffer,
     ibuf: wgpu::Buffer,
@@ -761,6 +781,7 @@ struct PaneGpu {
     tile_capacity: u64,
     radar_vbuf: wgpu::Buffer,
     radar: Option<RadarGpu>,
+    radar_cache: VecDeque<RadarGpu>,
     surface: Option<radar_surface::Target>,
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
@@ -779,6 +800,21 @@ struct PaneGpu {
     /// Field layers this pane draws this frame. Per-pane, not shared: two panes are how you look
     /// at two fields at once.
     field_draws: Vec<FieldLayer>,
+}
+
+impl PaneGpu {
+    /// Keep recent sweeps for animation; return an evicted texture that can be rewritten.
+    fn cache_radar(&mut self, radar: RadarGpu) -> Option<RadarGpu> {
+        self.radar_cache.push_back(radar);
+        let mut bytes: usize = self.radar_cache.iter().map(RadarGpu::shadow_bytes).sum();
+        let mut reusable = None;
+        while self.radar_cache.len() > RADAR_GPU_CACHE_ENTRIES || bytes > RADAR_GPU_CACHE_BYTES {
+            let old = self.radar_cache.pop_front().unwrap();
+            bytes = bytes.saturating_sub(old.shadow_bytes());
+            reusable = Some(old);
+        }
+        reusable
+    }
 }
 
 /// Long-lived GPU resources, stored in egui's `CallbackResources` type-map.
@@ -1166,6 +1202,7 @@ impl RenderResources {
                 tile_capacity: 512 * 6,
                 radar_vbuf,
                 radar: None,
+                radar_cache: VecDeque::new(),
                 surface: None,
                 frame_visible: Vec::new(),
                 quads_key: None,
@@ -1294,6 +1331,7 @@ impl RenderResources {
         queue: &wgpu::Queue,
         r: &RadarUpload,
         existing: Option<RadarGpu>,
+        cached_data: bool,
     ) -> Option<RadarGpu> {
         let flag_dims = flag_dims(r);
         let precision = r.data16.is_some();
@@ -1304,7 +1342,7 @@ impl RenderResources {
         // the only thing a bind group depends on here, so nothing else can go stale.
         if let Some(mut g) = existing {
             if g.dims == (r.gate_count, r.az_bins) && g.flag_dims == flag_dims && g.precision == precision && g.lut_width == lut_width {
-                if !r.lut_only {
+                if !r.lut_only && !cached_data {
                     write_texture_changes(queue, &g.tex, g.dims, bytes_per_gate, &mut g.gate_bytes, gate_data);
                     write_texture_changes(queue, &g.flag, g.flag_dims, 1, &mut g.flag_bytes, &flag_bytes(r, g.flag_dims));
                 }
@@ -1601,8 +1639,33 @@ impl RenderResources {
         // --- Per-pane state ---
         let new_radar = match cb.radar_upload.as_ref() {
             Some(r) => {
-                let existing = self.panes.get_mut(&cb.pane).and_then(|p| p.radar.take());
-                self.build_radar(device, queue, r, existing)
+                let (existing, cached_data) = if let Some(pane) = self.panes.get_mut(&cb.pane) {
+                    if !r.cache_loop {
+                        pane.radar_cache.clear();
+                        (pane.radar.take(), false)
+                    } else if r.lut_only {
+                        (pane.radar.take(), false)
+                    } else {
+                        let gates: &[u8] = r.data16.as_ref().map_or(r.data.as_slice(), |d| bytemuck::cast_slice(d));
+                        let flags = flag_bytes(r, flag_dims(r));
+                        if pane.radar.as_ref().is_some_and(|gpu| gpu.matches_upload(r, gates, &flags)) {
+                            (pane.radar.take(), true)
+                        } else {
+                            let hit = pane.radar_cache.iter()
+                                .position(|gpu| gpu.matches_upload(r, gates, &flags))
+                                .and_then(|idx| pane.radar_cache.remove(idx));
+                            let recycled = pane.radar.take().and_then(|gpu| pane.cache_radar(gpu));
+                            let cached_data = hit.is_some();
+                            (hit.or(recycled), cached_data)
+                        }
+                    }
+                } else {
+                    (None, false)
+                };
+                if cached_data {
+                    wxdata::stats::bump(wxdata::stats::Counter::RadarCacheHits);
+                }
+                self.build_radar(device, queue, r, existing, cached_data)
             }
             None => None,
         };
@@ -2047,7 +2110,7 @@ impl RenderResources {
         for pane in self.panes.values() {
             gpu += pane.camera_buf.size() + pane.tile_vbuf.size() + pane.radar_vbuf.size();
             if let Some(surface) = &pane.surface { gpu += surface.memory_bytes(); }
-            if let Some(radar) = &pane.radar {
+            for radar in pane.radar.iter().chain(pane.radar_cache.iter()) {
                 gpu += texture(&radar.tex)
                     + texture(&radar.flag)
                     + texture(&radar.lut)

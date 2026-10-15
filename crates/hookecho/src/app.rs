@@ -13772,6 +13772,8 @@ impl HookEchoApp {
         };
         match upload {
             Ok(mut up) => {
+                up.cache_loop = self.views[idx].timeline.playing
+                    && self.views[idx].timeline.frames.len() > 1;
                 self.views[idx].appearance.apply_upload(&mut up, moment);
                 apply_coverage_range(&mut up, self.settings.full_coverage_radar,
                     self.views[idx].displayed_station().is_some_and(wxdata::sites::is_nexrad)
@@ -20949,6 +20951,7 @@ pub(crate) fn to_upload(
 
     RadarUpload {
         upload_token: 0,
+        cache_loop: false,
         sector_opacity: None,
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,
@@ -24685,6 +24688,7 @@ mod tests {
         assert!(wxdata::sites::is_nexrad("KFWS"));
         let mut upload = RadarUpload {
             upload_token: 0,
+            cache_loop: false,
             sector_opacity: None,
             az_bins: 720,
             gate_count: 1824,

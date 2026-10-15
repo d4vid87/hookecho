@@ -4088,6 +4088,56 @@ mod golden_tests {
         assert_eq!(quads, 1, "a still camera keeps its tile quads");
     }
 
+    #[test]
+    #[ignore = "gpu"]
+    fn revisiting_a_loop_frame_reuses_its_gpu_texture_and_pixels() {
+        use wxdata::stats::Counter;
+        let a = synthetic_sweep();
+        let mut b = synthetic_sweep();
+        b.data.fill(200);
+        let table = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let camera = Camera::at_lonlat(a.radar_lon as f64, a.radar_lat as f64, 8.5);
+        let (center, scale) = camera.world_to_clip_uniform((GOLDEN_SIZE as f32, GOLDEN_SIZE as f32));
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let Ok((device, queue, _adapter)) = init_gpu(&rt) else { return; };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut res = RenderResources::new(&device, format);
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let counter = |c: Counter| wxdata::stats::snapshot()
+            .into_iter().find(|(name, _)| *name == Counter::LABELS[c as usize]).unwrap().1;
+        let make_callback = |sweep: &BinnedSweep| {
+            let mut upload = crate::app::to_upload(sweep, &table, None, false, None, None, false);
+            upload.cache_loop = true;
+            MapCallback {
+                pane: 0, retain_only_pane: None, live_pane_count: None,
+                camera_center: center, camera_scale: scale,
+                globe: [0.0; 4], planar: [1.0, 0.0, 1.0, 0.0],
+                world_per_pixel: camera.world_per_pixel() as f32,
+                basemap_key: 0, vector_over_raster: false,
+                new_tiles: Vec::new(), visible: Vec::new(), radar_upload: Some(upload),
+                radar_surface: false, draw_radar: true,
+                overlay_upload: None, draw_overlay: false,
+                field_uploads: Vec::new(), field_draws: Vec::new(),
+                clear_tiles: false, drop_tiles: Vec::new(), drop_fields: Vec::new(),
+                new_vector_tiles: Vec::new(), visible_vector: Vec::new(),
+                clear_vector: false, drop_vector_tiles: Vec::new(),
+                wind_upload: None, wind: None,
+            }
+        };
+        res.render_once(&device, &queue, &view, &make_callback(&a), clear_color());
+        let first = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        res.render_once(&device, &queue, &view, &make_callback(&b), clear_color());
+        let changed = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        let before = (counter(Counter::RadarUploadBytes), counter(Counter::RadarCacheHits));
+        res.render_once(&device, &queue, &view, &make_callback(&a), clear_color());
+        let returned = read_target(&device, &queue, &target, GOLDEN_SIZE);
+        assert_ne!(first, changed, "the fixture must visibly change between scans");
+        assert_eq!(first, returned, "cached sweep must render the original pixels");
+        assert_eq!(counter(Counter::RadarCacheHits) - before.1, 1);
+        assert!(counter(Counter::RadarUploadBytes) - before.0 < a.data.len() as u64);
+    }
+
 
     #[test]
     #[ignore = "gpu"]

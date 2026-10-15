@@ -37,6 +37,8 @@ pub enum Counter {
     SweepsBinned,
     /// Radar GPU textures built from scratch.
     RadarTexturesBuilt,
+    /// Previously uploaded radar sweeps reused without rewriting gate/flag textures.
+    RadarCacheHits,
     /// Tile-quad vertex lists rebuilt and re-uploaded.
     TileQuadsBuilt,
     /// Radar gate, flag and palette bytes submitted to the GPU.
@@ -56,7 +58,7 @@ impl Counter {
     const COUNT: usize = Self::LABELS.len();
 
     /// Prometheus/log names, in declaration order.
-    pub const LABELS: [&'static str; 20] = [
+    pub const LABELS: [&'static str; 21] = [
         "net_requests",
         "net_bytes",
         "net_not_modified",
@@ -68,6 +70,7 @@ impl Counter {
         "frames_drawn",
         "sweeps_binned",
         "radar_textures_built",
+        "radar_cache_hits",
         "tile_quads_built",
         "radar_upload_bytes",
         "decode_path_micros",
