@@ -5106,6 +5106,12 @@ impl HookEchoApp {
             log::warn!("HOOKECHO_GOTO: want SITE[,lon,lat,zoom[,RFC3339|product|tilt]], got {v:?}");
             return;
         };
+        // A point value belongs to the map location and forecast frame where it was requested.
+        // Fragment-only navigation keeps the app alive, so discard that card and any late reply.
+        if self.detail.as_ref().is_some_and(|detail| detail.title == "NDFD point forecast") {
+            self.detail = None;
+        }
+        self.ndfd_probe_rx = None;
         self.firstrun.open = false;
         self.settings.setup_done = true;
         self.goto_view(&g.site, g.lon, g.lat, g.zoom, g.time);

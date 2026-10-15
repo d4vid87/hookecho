@@ -21,7 +21,7 @@ struct Entry {
 }
 
 pub struct NdfdLegends {
-    entries: [Entry; 9],
+    entries: [Entry; 12],
 }
 
 impl Default for NdfdLegends {
@@ -39,6 +39,9 @@ fn slot(style: BasemapStyle) -> Option<(usize, &'static str, &'static str)> {
         BasemapStyle::NdfdHawaiiRainChance => Some((6, "pop12", "Hawaii rain chance · %")),
         BasemapStyle::NdfdHawaiiMaxTemp => Some((7, "maxt", "Hawaii daytime high · °F")),
         BasemapStyle::NdfdHawaiiMinTemp => Some((8, "mint", "Hawaii overnight low · °F")),
+        BasemapStyle::NdfdWindGust => Some((9, "windgust", "Wind gust · mph")),
+        BasemapStyle::NdfdAlaskaWindGust => Some((10, "windgust", "Alaska wind gust · mph")),
+        BasemapStyle::NdfdHawaiiWindGust => Some((11, "windgust", "Hawaii wind gust · mph")),
 
         _ => None,
     }
@@ -147,6 +150,11 @@ mod tests {
         assert_eq!(slot(BasemapStyle::NdfdMinTemp).unwrap().1, "mint");
         assert_eq!(slot(BasemapStyle::NdfdAlaskaMaxTemp).unwrap().0, 4);
         assert_eq!(slot(BasemapStyle::NdfdHawaiiRainChance).unwrap().0, 6);
+        for style in [BasemapStyle::NdfdWindGust, BasemapStyle::NdfdAlaskaWindGust,
+            BasemapStyle::NdfdHawaiiWindGust] {
+            assert_eq!(slot(style).unwrap().1, "windgust");
+            assert!(url(style.ndfd_region().unwrap(), "windgust", valid).contains("element=windgust"));
+        }
         assert!(slot(BasemapStyle::Dark).is_none());
     }
 }
