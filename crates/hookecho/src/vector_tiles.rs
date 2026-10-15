@@ -897,6 +897,19 @@ fn label_detail_bias(zoom: f64) -> f64 {
     if (5.0..6.0).contains(&zoom) { 6.0 - zoom } else { 0.0 }
 }
 
+/// A requested tile remains useful while moving if it overlaps a visible tile: the renderer
+/// draws either parent or child tiles as a fallback while exact detail is loading.
+fn tile_overlaps_view(id: TileId, visible: &[VisibleTile]) -> bool {
+    visible.iter().any(|tile| {
+        let (z, x, y) = tile.id;
+        if id.0 <= z {
+            (x >> (z - id.0), y >> (z - id.0)) == (id.1, id.2)
+        } else {
+            (id.1 >> (id.0 - z), id.2 >> (id.0 - z)) == (x, y)
+        }
+    })
+}
+
 /// Headless helper: fetch + tessellate all `visible` vector tiles, returning GPU-ready geometry
 /// and the merged label list (no async drain loop).
 pub async fn fetch_visible_vector(
@@ -1344,6 +1357,14 @@ impl VectorTileManager {
     }
 
     pub fn drain_ready_budget(&mut self, budget: &mut crate::map_work::UploadBudget) -> Vec<PendingVectorTile> {
+        self.drain_ready_for_view(budget, &[], false)
+    }
+
+    /// During a gesture, old view completions must not spend the small upload budget ahead of
+    /// tiles covering the camera's current view. Their raw bytes remain in the tile cache, and
+    /// removing `requested` lets a later view request them again if the camera returns.
+    pub fn drain_ready_for_view(&mut self, budget: &mut crate::map_work::UploadBudget,
+        visible: &[VisibleTile], moving: bool) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
         // Bound upload batches rather than allowing completed downloads to monopolize one
         // render frame. Leave the remainder queued and explicitly schedule the next frame.
@@ -1368,6 +1389,10 @@ impl VectorTileManager {
             };
             if self.uploaded.peek(&f.id) == Some(&generation) {
                 continue; // already resident at this generation
+            }
+            if moving && !tile_overlaps_view(f.id, visible) {
+                self.requested.remove(&f.id);
+                continue;
             }
             let bytes = (f.vertices.len() + f.foreground_vertices.len()) * std::mem::size_of::<OverlayVertex>()
                 + (f.indices.len() + f.foreground_indices.len()) * std::mem::size_of::<u32>();
@@ -1696,6 +1721,28 @@ mod tests {
                 (tile.id.1>>shift,tile.id.2>>shift)==(parent.id.1,parent.id.2)
             }));
         }
+    }
+
+    #[tokio::test]
+    async fn moving_view_drops_offscreen_uploads_but_keeps_visible_and_parent_tiles() {
+        let mut manager = test_manager();
+        let visible = [VisibleTile { id: (6, 12, 20), world_min: [0.0; 2], world_max: [1.0; 2] }];
+        let offscreen = (6, 13, 20);
+        let parent = (5, 6, 10);
+        for id in [offscreen, parent, visible[0].id] {
+            manager.requested.insert(id);
+            manager.tx.send((manager.render_generation, Ok(FetchedVector {
+                id, vertices: Vec::new(), indices: Vec::new(),
+                foreground_vertices: Vec::new(), foreground_indices: Vec::new(), labels: Vec::new(),
+            }))).unwrap();
+        }
+        let uploaded = manager.drain_ready_for_view(&mut crate::map_work::UploadBudget::frame(true), &visible, true);
+        assert_eq!(uploaded.iter().map(|tile| tile.id).collect::<Vec<_>>(), [parent, visible[0].id]);
+        assert!(!manager.requested.contains(&offscreen), "a later view may request it again");
+        assert!(!manager.uploaded.contains(&offscreen));
+        assert!(manager.uploaded.contains(&parent));
+        assert!(tile_overlaps_view((7, 24, 40), &visible), "child fallback remains useful");
+        assert!(!tile_overlaps_view((6, 13, 20), &visible));
     }
 
     #[tokio::test]
