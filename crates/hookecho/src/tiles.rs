@@ -889,7 +889,7 @@ fn tile_bbox_3857(z: u8, x: u32, y: u32) -> (f64, f64, f64, f64) {
 ///
 /// `time` is an instant the server's time dimension accepts, or empty for the layer's default.
 /// Servers reject an instant that is not on their published step, so the caller picks from
-/// [`wms_frames`] rather than rounding here.
+/// the advertised time dimension rather than rounding here.
 fn wms_url(base: &str, layer: &str, z: u8, x: u32, y: u32, time: &str) -> String {
     let (x0, y0, x1, y1) = tile_bbox_3857(z, x, y);
     // EPSG:3857 is an easting/northing CRS, so 1.3.0's axis-order rule leaves BBOX as x,y; the
@@ -1108,32 +1108,9 @@ pub fn goes_window(
     }
 }
 
-/// The frame times a WMS composite offers, oldest first, ending at the newest one `anchor` can
-/// expect to be published.
-///
-/// DWD retains the computed cadence/lag grid. ECCC uses its advertised rolling availability
-/// through `eccc_frame_times`, so an archived selection cannot synthesize expired frames.
-fn wms_frames(
-    anchor: chrono::DateTime<chrono::Utc>,
-    limit: usize,
-    step_min: i64,
-    lag_min: i64,
-) -> Vec<chrono::DateTime<chrono::Utc>> {
-    let step = chrono::Duration::minutes(step_min);
-    let newest = anchor - chrono::Duration::minutes(lag_min);
-    // Down to the step boundary: an off-step instant is rejected outright.
-    let newest = newest
-        - chrono::Duration::seconds(newest.timestamp().rem_euclid(step_min * 60))
-        - chrono::Duration::nanoseconds(i64::from(newest.timestamp_subsec_nanos()));
-    (0..limit as i64)
-        .map(|i| newest - step * (i as i32))
-        .rev()
-        .collect()
-}
-
-/// Expand the advertised time dimension of the requested GeoMet layer, intersecting the
+/// Expand the advertised time dimension of the requested WMS layer, intersecting the
 /// requested window before applying the frame limit. Never invent frames for an expired archive.
-fn eccc_frame_times(
+fn wms_advertised_frame_times(
     xml: &str,
     layer: &str,
     from: chrono::DateTime<chrono::Utc>,
@@ -1144,7 +1121,7 @@ fn eccc_frame_times(
     if from > to || limit == 0 {
         return out;
     }
-    // GeoMet's layer-filtered WMS 1.3 response uses unprefixed Name/Dimension elements.
+    // GeoMet and DWD WMS 1.3 responses use unprefixed Name/Dimension elements.
     // Require the exact requested layer, and do not borrow a sibling's time dimension.
     let Some((_, tail)) = xml.split_once(&format!("<Name>{layer}</Name>")) else {
         return out;
@@ -1219,7 +1196,7 @@ fn eccc_frame_times(
 }
 
 /// Fetch imagery frame times for `style` between `from` and `to` (best-effort; empty on failure).
-/// GIBS uses DescribeDomains; ECCC uses its layer-filtered WMS availability document.
+/// GIBS uses DescribeDomains; ECCC and DWD use their WMS availability documents.
 ///
 /// The window is a parameter rather than "the last N hours" because the same call serves the live
 /// loop and archive replay: GIBS keeps GeoColor about two weeks back and Band 13 several months,
@@ -1231,35 +1208,36 @@ pub async fn fetch_frame_times(
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
-    if let Some((endpoint, layer, step, lag)) = style.wms_layer() {
-        if matches!(style, BasemapStyle::EcccRadarRain | BasemapStyle::EcccRadarSnow) {
-            // GeoMet retains a short rolling window. Its advertised range, not the replay clock,
-            // determines availability; an old radar archive must not manufacture old WMS frames.
-            let url = format!("{endpoint}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities&LAYERS={layer}");
-            let response = client.get(wxdata::net::fetch_url(&url))
-                .header("User-Agent", USER_AGENT)
-                .timeout(wxdata::net::FEED_TIMEOUT).send().await;
-            if let Ok(response) = response {
-                if let Ok(response) = response.error_for_status() {
-                    use futures_util::StreamExt;
-                    // bytes_stream is available on native and wasm; Response::chunk is native-only.
-                    let mut body = response.bytes_stream();
-                    // The layer-filtered document is about 21 KB; bound unexpected responses.
-                    let mut bytes = Vec::new();
-                    while let Some(chunk) = body.next().await {
-                        match chunk {
-                            Ok(chunk) if bytes.len() + chunk.len() <= 256 * 1024 => bytes.extend_from_slice(&chunk),
-                            _ => return Vec::new(),
-                        }
-                    }
-                    if let Ok(xml) = std::str::from_utf8(&bytes) {
-                        return eccc_frame_times(xml, layer, from, to, limit);
+    if let Some((endpoint, layer, _, _)) = style.wms_layer() {
+        // GeoMet returns a ~21 KB layer-filtered document. DWD currently ignores LAYERS for
+        // GetCapabilities and returns ~1 MB; both are capped before text parsing.
+        let max_bytes = if matches!(style, BasemapStyle::DwdRadarRV | BasemapStyle::DwdRadarWN) {
+            2 * 1024 * 1024
+        } else {
+            256 * 1024
+        };
+        let url = format!("{endpoint}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities&LAYERS={layer}");
+        let response = client.get(wxdata::net::fetch_url(&url))
+            .header("User-Agent", USER_AGENT)
+            .timeout(wxdata::net::FEED_TIMEOUT).send().await;
+        if let Ok(response) = response {
+            if let Ok(response) = response.error_for_status() {
+                use futures_util::StreamExt;
+                // bytes_stream works on native and wasm; Response::chunk is native-only.
+                let mut body = response.bytes_stream();
+                let mut bytes = Vec::new();
+                while let Some(chunk) = body.next().await {
+                    match chunk {
+                        Ok(chunk) if bytes.len() + chunk.len() <= max_bytes => bytes.extend_from_slice(&chunk),
+                        _ => return Vec::new(),
                     }
                 }
+                if let Ok(xml) = std::str::from_utf8(&bytes) {
+                    return wms_advertised_frame_times(xml, layer, from, to, limit);
+                }
             }
-            return Vec::new();
         }
-        return wms_frames(to, limit, step, lag);
+        return Vec::new();
     }
     let Some((layer, level)) = style.goes_layer() else {
         return Vec::new();
@@ -2813,39 +2791,7 @@ mod tests {
         );
     }
 
-    /// DWD rejects a TIME that is not on its 5-minute step outright, so every frame the bar can
-    /// select has to land on one — and none of them may be newer than the publisher.
-    #[test]
-    fn wms_frames_land_on_the_publishers_step() {
-        // 12:03:17Z, deliberately off-step and off-second.
-        let anchor = chrono::DateTime::from_timestamp(1_700_000_597, 0).unwrap();
-        let f = wms_frames(anchor, 12, 5, 10);
-        assert_eq!(f.len(), 12);
-        assert!(f.windows(2).all(|w| w[0] < w[1]), "oldest first");
-        for t in &f {
-            assert_eq!(t.timestamp() % 300, 0, "{t} is off the 5-minute step");
-            assert!(
-                *t <= anchor - chrono::Duration::minutes(10),
-                "{t} is ahead of the publisher"
-            );
-        }
-        // GeoMet runs on 6 minutes, so the same grid has to move with the publisher, not with a
-        // constant baked in for the first one.
-        let g = wms_frames(anchor, 12, 6, 6);
-        for t in &g {
-            assert_eq!(t.timestamp() % 360, 0, "{t} is off the 6-minute step");
-            assert!(
-                *t <= anchor - chrono::Duration::minutes(6),
-                "{t} is ahead of the publisher"
-            );
-        }
-        let last = *f.last().unwrap();
-        assert!(
-            anchor - last < chrono::Duration::minutes(15),
-            "the newest frame is the newest one there is"
-        );
-        assert_eq!(last - f[f.len() - 2], chrono::Duration::minutes(5));
-    }
+
 }
 
 #[cfg(test)]
@@ -2911,7 +2857,7 @@ mod eccc_availability_tests {
     fn eccc_captured_proxy_response_parses() {
         let path = std::env::var("HOOKECHO_ECCC_CAPABILITIES_FIXTURE").expect("fixture path");
         let xml = std::fs::read_to_string(path).expect("read captured XML");
-        let frames = eccc_frame_times(
+        let frames = wms_advertised_frame_times(
             &xml,
             "RADAR_1KM_RRAI",
             chrono::DateTime::<chrono::Utc>::MIN_UTC,
@@ -2926,7 +2872,7 @@ mod eccc_availability_tests {
     #[test]
     fn eccc_advertised_window_rejects_expired_archive_and_future_frames() {
         let xml = capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT6M");
-        let frames = eccc_frame_times(
+        let frames = wms_advertised_frame_times(
             &xml,
             "RADAR_1KM_RRAI",
             instant("2026-10-14T08:00:00Z"),
@@ -2936,7 +2882,7 @@ mod eccc_availability_tests {
         assert_eq!(frames.len(), 31);
         assert_eq!(frames[0], instant("2026-10-14T13:00:00Z"));
         assert_eq!(frames[30], instant("2026-10-14T16:00:00Z"));
-        assert!(eccc_frame_times(
+        assert!(wms_advertised_frame_times(
             &xml,
             "RADAR_1KM_RRAI",
             instant("2026-10-13T08:00:00Z"),
@@ -2944,7 +2890,7 @@ mod eccc_availability_tests {
             48
         )
         .is_empty());
-        assert!(eccc_frame_times(
+        assert!(wms_advertised_frame_times(
             &xml,
             "RADAR_1KM_RRAI",
             instant("2026-10-14T16:01:00Z"),
@@ -2957,7 +2903,7 @@ mod eccc_availability_tests {
     #[test]
     fn eccc_intersects_before_limiting_and_honors_six_minute_boundaries() {
         let xml = capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT6M");
-        let frames = eccc_frame_times(
+        let frames = wms_advertised_frame_times(
             &xml,
             "RADAR_1KM_RRAI",
             instant("2026-10-14T13:01:00Z"),
@@ -2971,7 +2917,7 @@ mod eccc_availability_tests {
                 instant("2026-10-14T13:24:00Z")
             ]
         );
-        assert!(eccc_frame_times(
+        assert!(wms_advertised_frame_times(
             &xml,
             "RADAR_1KM_RSNO",
             instant("2026-10-14T13:00:00Z"),
@@ -2991,9 +2937,9 @@ mod eccc_availability_tests {
             capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT0M"),
             capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT9223372036854775807H"),
         ] {
-            assert!(eccc_frame_times(&xml, "RADAR_1KM_RRAI", from, to, 48).is_empty());
+            assert!(wms_advertised_frame_times(&xml, "RADAR_1KM_RRAI", from, to, 48).is_empty());
         }
-        assert!(eccc_frame_times(
+        assert!(wms_advertised_frame_times(
             &capabilities("2026-10-14T14:00:00Z"),
             "RADAR_1KM_RRAI",
             from,
@@ -3001,6 +2947,67 @@ mod eccc_availability_tests {
             0
         )
         .is_empty());
+    }
+
+    #[test]
+    fn dwd_availability_uses_only_the_requested_layer_and_expired_scans_are_absent() {
+        let xml = concat!(
+            "<WMS_Capabilities><Layer><Name>Radar_rv_product_1x1km_ger</Name>",
+            "<Dimension name=\"time\" default=\"current\" units=\"ISO8601\">",
+            "2026-10-11T00:00:00.000Z/2026-10-15T02:00:00.000Z/PT5M",
+            "</Dimension></Layer><Layer><Name>Radar_wn-analysis_1x1km_ger</Name>",
+            "<Dimension name=\"time\" default=\"2026-10-15T00:00:00Z\" units=\"ISO8601\">",
+            "2026-10-11T00:00:00.000Z/2026-10-15T00:00:00.000Z/PT5M",
+            "</Dimension></Layer></WMS_Capabilities>"
+        );
+        let from = instant("2026-10-14T23:30:00Z");
+        let to = instant("2026-10-15T00:30:00Z");
+        let analysis = wms_advertised_frame_times(xml, "Radar_wn-analysis_1x1km_ger", from, to, 48);
+        assert_eq!(analysis.len(), 7);
+        assert_eq!(analysis.last().copied(), Some(instant("2026-10-15T00:00:00Z")));
+        let nowcast = wms_advertised_frame_times(xml, "Radar_rv_product_1x1km_ger", from, to, 48);
+        assert_eq!(nowcast.last().copied(), Some(to));
+        assert!(wms_advertised_frame_times(
+            xml,
+            "Radar_wn-analysis_1x1km_ger",
+            instant("2026-10-10T00:00:00Z"),
+            instant("2026-10-10T23:59:00Z"),
+            48
+        ).is_empty());
+    }
+
+    #[test]
+    #[ignore = "set HOOKECHO_DWD_CAPABILITIES_FIXTURE to a captured public response"]
+    fn dwd_captured_capabilities_parse() {
+        let path = std::env::var("HOOKECHO_DWD_CAPABILITIES_FIXTURE").expect("fixture path");
+        let xml = std::fs::read_to_string(path).expect("read captured XML");
+        for layer in ["Radar_rv_product_1x1km_ger", "Radar_wn-analysis_1x1km_ger"] {
+            let frames = wms_advertised_frame_times(
+                &xml,
+                layer,
+                instant("2026-10-14T23:00:00Z"),
+                instant("2026-10-15T00:00:00Z"),
+                48,
+            );
+            assert!(!frames.is_empty(), "{layer} has no advertised frames");
+            assert!(frames.windows(2).all(|pair| pair[1] - pair[0] == chrono::Duration::minutes(5)));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "live DWD service check; run explicitly"]
+    async fn dwd_live_frame_discovery() {
+        let now = chrono::Utc::now();
+        let frames = fetch_frame_times(
+            &reqwest::Client::new(),
+            BasemapStyle::DwdRadarWN,
+            now - chrono::Duration::hours(2),
+            now,
+            24,
+        ).await;
+        assert!(!frames.is_empty(), "DWD WN advertised no recent frames");
+        assert!(frames.windows(2).all(|pair| pair[1] - pair[0] == chrono::Duration::minutes(5)));
+        assert!(frames.last().is_some_and(|last| *last <= now));
     }
     #[test]
     fn pitched_tile_cover_is_bounded_and_covers_inverse_viewport_samples() {
