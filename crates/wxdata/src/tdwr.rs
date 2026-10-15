@@ -155,13 +155,12 @@ async fn keys_near_hour(http: &reqwest::Client, prefix: &str, hour: DateTime<Utc
     listings.into_iter().flatten().collect()
 }
 
-async fn newest_near_hour(http: &reqwest::Client, prefix: &str, now: DateTime<Utc>) -> Option<String> {
-    let current = format!("{prefix}_{}", now.format("%Y_%m_%d_%H"));
-    if let Some(key) = keys_for_prefix(http, &current).await.ok()?.pop() {
-        return Some(key);
-    }
-    let previous = format!("{prefix}_{}", (now - chrono::Duration::hours(1)).format("%Y_%m_%d_%H"));
-    keys_for_prefix(http, &previous).await.ok()?.pop()
+fn latest_key_at_or_before(keys: Vec<String>, anchor: DateTime<Utc>) -> Option<String> {
+    keys.into_iter()
+        .filter_map(|key| key_time(&key).map(|time| (key, time)))
+        .filter(|(_, time)| *time <= anchor && anchor.signed_duration_since(*time) <= chrono::Duration::minutes(10))
+        .max_by_key(|(_, time)| *time)
+        .map(|(key, _)| key)
 }
 
 /// Timestamp encoded in an S3 key (`OKC_TZ0_2026_08_01_17_27_13`).
@@ -276,8 +275,8 @@ fn sweep_from(
 
 /// Fetch the newest tilt products for a TDWR and assemble them into a volume.
 ///
-/// Returns the scan plus the volume name and time. The name is the newest contributing key, so
-/// the app's "has this volume changed?" comparison works unchanged.
+/// Returns the scan plus the volume name and time. The name follows the newest low-tilt
+/// reflectivity key, so later product arrivals cannot rename an already displayed frame.
 pub async fn fetch_volume(
     http: &reqwest::Client,
     id: &str,
@@ -285,23 +284,47 @@ pub async fn fetch_volume(
 ) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a TDWR"))?;
     let short = &meta.id[1..];
-    // A low-tilt reflectivity key anchors the volume identity and timeline frame. Query the
-    // current and preceding UTC hour: a whole-day prefix can exceed S3's 1,000-key page late in
-    // the day, and the previous hour keeps the first minutes after midnight live.
+    // A low-tilt reflectivity key anchors the volume identity and timeline frame. Fetch the
+    // current hour for every product concurrently, then fall back to the preceding hour only
+    // where needed. Selecting all products at or before the anchor avoids mixing a newer tilt
+    // into a frame identified by an older low-tilt scan.
     let now = Utc::now();
-    let keys = futures_util::future::join_all(PRODUCTS.iter().map(|(product, _)| {
+    let listings = futures_util::future::join_all(PRODUCTS.iter().map(|(product, _)| {
         let (http, prefix) = (http.clone(), format!("{short}_{product}"));
-        async move { newest_near_hour(&http, &prefix, now).await }
+        async move {
+            let hour = format!("{prefix}_{}", now.format("%Y_%m_%d_%H"));
+            keys_for_prefix(&http, &hour).await.unwrap_or_default()
+        }
     }))
     .await;
-    let anchor = keys.first().and_then(|key| key.as_deref()).and_then(key_time)
-        .ok_or_else(|| anyhow::anyhow!("no recent low-tilt TDWR reflectivity for {id}"))?;
+    let current_anchor = listings.first().and_then(|keys| keys.iter().filter_map(|key| key_time(key)).max());
+    let anchor = if let Some(anchor) = current_anchor {
+        anchor
+    } else {
+        let previous = format!("{short}_TZ0_{}", (now - chrono::Duration::hours(1)).format("%Y_%m_%d_%H"));
+        keys_for_prefix(http, &previous).await.unwrap_or_default().iter().filter_map(|key| key_time(key)).max()
+            .ok_or_else(|| anyhow::anyhow!("no recent low-tilt TDWR reflectivity for {id}"))?
+    };
     let name = frame_name(meta.id, anchor);
     if current_name == Some(name.as_str()) {
         crate::stats::bump(crate::stats::Counter::FetchSkipped);
         return Ok(None);
     }
 
+    let fallback_hour = if anchor.timestamp().div_euclid(3600) == now.timestamp().div_euclid(3600) {
+        anchor - chrono::Duration::hours(1)
+    } else {
+        anchor
+    };
+    let keys = futures_util::future::join_all(PRODUCTS.iter().zip(listings).map(|((product, _), current)| {
+        let (http, prefix) = (http.clone(), format!("{short}_{product}"));
+        async move {
+            if let Some(key) = latest_key_at_or_before(current, anchor) { return Some(key); }
+            let fallback = format!("{prefix}_{}", fallback_hour.format("%Y_%m_%d_%H"));
+            latest_key_at_or_before(keys_for_prefix(&http, &fallback).await.unwrap_or_default(), anchor)
+        }
+    })).await;
+    anyhow::ensure!(keys.first().and_then(|key| key.as_ref()).is_some(), "TDWR low tilt unavailable at selected anchor");
     assemble_volume(http, meta, keys, anchor).await.map(Some)
 }
 
@@ -315,10 +338,7 @@ pub async fn fetch_volume_at(http: &reqwest::Client, id: &Identifier) -> anyhow:
     let keys = futures_util::future::join_all(PRODUCTS.iter().map(|(product, _)| {
         let (http, prefix) = (http.clone(), format!("{short}_{product}"));
         async move {
-            keys_near_hour(&http, &prefix, anchor).await.into_iter()
-                .filter_map(|key| key_time(&key).map(|time| (key, time)))
-                .filter(|(_, time)| *time <= anchor && anchor.signed_duration_since(*time) <= chrono::Duration::minutes(10))
-                .max_by_key(|(_, time)| *time).map(|(key, _)| key)
+            latest_key_at_or_before(keys_near_hour(&http, &prefix, anchor).await, anchor)
         }
     })).await;
     anyhow::ensure!(keys.first().and_then(|key| key.as_deref()).is_some(), "TDWR frame's low tilt unavailable");
@@ -432,23 +452,23 @@ mod tests {
         assert!(key_time("OKC_TZ0_garbage").is_none());
     }
 
-    /// The name a TDWR volume is known by is the newest contributing key, and that is exactly
-    /// what the listings hand back — which is what lets six cheap listings decide whether the six
-    /// product bodies are worth fetching at all. This pins the "newest wins" rule that decision
-    /// rests on: keys sort by their embedded timestamp, not lexically and not by product order.
     #[test]
-    fn the_newest_listed_key_is_the_volume_name() {
+    fn live_products_do_not_advance_past_the_low_tilt_frame() {
+        let anchor = key_time("DFW_TZ0_2026_10_15_15_04_31").unwrap();
         let keys = [
-            "OKC_TZ0_2026_08_01_17_27_13",
-            "OKC_TV0_2026_08_01_17_28_02",
-            "OKC_TZ1_2026_08_01_17_26_44",
-        ];
-        let newest = keys
-            .iter()
-            .filter_map(|k| key_time(k).map(|t| (*k, t)))
-            .max_by_key(|(_, t)| *t)
-            .map(|(k, _)| k);
-        assert_eq!(newest, Some("OKC_TV0_2026_08_01_17_28_02"));
+            "DFW_TV0_2026_10_15_14_50_00",
+            "DFW_TV0_2026_10_15_15_03_30",
+            "DFW_TV0_2026_10_15_15_05_31",
+        ].into_iter().map(str::to_owned).collect();
+        assert_eq!(latest_key_at_or_before(keys, anchor).as_deref(), Some("DFW_TV0_2026_10_15_15_03_30"));
+    }
+
+    /// A later velocity object must not change the identity of a low-tilt reflectivity frame.
+    #[test]
+    fn low_tilt_key_names_the_volume() {
+        let low_tilt = key_time("OKC_TZ0_2026_08_01_17_27_13").unwrap();
+        assert_eq!(frame_name("TOKC", low_tilt), "TOKC20260801_172713_TDWR");
+        assert!(latest_key_at_or_before(vec!["OKC_TV0_2026_08_01_17_28_02".to_owned()], low_tilt).is_none());
     }
 
     /// A synthetic tilt product round-trips through the fixed-point packing back to its own dBZ.
@@ -524,7 +544,7 @@ mod tests {
     #[ignore = "network"]
     async fn fetches_a_live_tdwr_volume() {
         let http = reqwest::Client::new();
-        let (name, _time, scan) = fetch_volume(&http, "TOKC", None)
+        let (name, time, scan) = fetch_volume(&http, "TOKC", None)
             .await
             .expect("TOKC volume")
             .expect("a fresh fetch is never up to date");
@@ -533,6 +553,14 @@ mod tests {
         let tilts = crate::level2::elevation_angles(&scan);
         assert!(!tilts.is_empty(), "at least one tilt");
         assert!(bin_scan_opts(&scan, Moment::Reflectivity, 0, false).is_ok());
+        for sweep in scan.sweeps() {
+            for radial in sweep.radials() {
+                let at = radial.collection_timestamp();
+                // The Level 3 product header can trail its S3 key by several seconds.
+                assert!(at <= (time + chrono::Duration::minutes(2)).timestamp_millis(), "a tilt is much newer than its frame: product {at}, key {}", time.timestamp_millis());
+                assert!(at >= (time - chrono::Duration::minutes(10)).timestamp_millis(), "a tilt is older than its frame window: product {at}, key {}", time.timestamp_millis());
+            }
+        }
     }
 
     #[tokio::test]
