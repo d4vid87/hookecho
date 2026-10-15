@@ -15699,6 +15699,8 @@ impl HookEchoApp {
                 )
             };
             let z = cam.zoom;
+            let blue_regional = basemap.vector_palette() == Some(crate::basemap_style::Palette::Blue)
+                && z < 9.0;
             // Repeat route shields from regional zoom; collision placement still prevents overlap.
             let repeat_shields = z >= 5.0;
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
@@ -15714,6 +15716,7 @@ impl HookEchoApp {
                     let returning = self.labels.was_shown(label_key(l));
                     // Different enter/leave thresholds prevent a label toggling at its minzoom.
                     l.visible_stable(z, returning)
+                        && !(blue_regional && l.shield != crate::vector_tiles::RoadShield::None)
                         && (!(self.gesture_live
                             && self.settings.map_quality == crate::settings::MapQuality::Auto)
                             || returning || l.city || l.priority() <= 1)
