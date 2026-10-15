@@ -161,6 +161,7 @@ pub struct SettingsWindow {
     pub open: bool,
     tab: Tab,
     alert_tab: AlertTab,
+    requested_page: Option<(Tab, AlertTab)>,
     pub map_changed: bool,
     prev_open: bool,
     /// Cached `.pal` file stems in the color-tables folder; rescanned on window/tab open.
@@ -186,6 +187,12 @@ pub struct SettingsWindow {
 }
 
 impl SettingsWindow {
+    /// Open the notification controls from a workspace shortcut, even when Settings was closed.
+    pub fn open_notifications(&mut self) {
+        self.open = true;
+        self.requested_page = Some((Tab::Alerts, AlertTab::Notify));
+    }
+
     /// `palettes` is read-only here (for parse-error badges); edits go through `settings` and
     /// the app reloads tables via the settings dirty-diff.
     #[allow(clippy::too_many_arguments)] // Settings and live map filters have separate owners.
@@ -210,6 +217,10 @@ impl SettingsWindow {
             {
                 self.storage_rows = None; // and re-measure the caches, which move between visits
             }
+        }
+        if let Some((tab, alert_tab)) = self.requested_page.take() {
+            self.tab = tab;
+            self.alert_tab = alert_tab;
         }
         self.prev_open = self.open;
 

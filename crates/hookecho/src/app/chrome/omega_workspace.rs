@@ -252,6 +252,7 @@ impl HookEchoApp {
         let mut action = None;
         let mut display = false;
         let mut spotter_settings = false;
+        let mut notification_settings = false;
         let mut return_to_radar = false;
         let mut compare_panes = None;
         let entries = self.palette_entries();
@@ -701,6 +702,9 @@ impl HookEchoApp {
                                                 }
                                             }
                                         });
+                                    if menu_row(ui, "Notifications", false).clicked() {
+                                        notification_settings = true;
+                                    }
                                     section(ui, "SETTINGS");
                                     if menu_row(ui, "Display Settings", false).clicked() {
                                         display = true;
@@ -727,6 +731,7 @@ impl HookEchoApp {
             self.set_pane_count(count);
         }
         if menu_was_open && !menu_open && action.is_none() && !display && !spotter_settings
+            && !notification_settings
             && !return_to_radar && compare_panes.is_none() {
             if let Some((panel, drawer)) = ctx.data_mut(|d| {
                 d.get_temp::<(bool, bool)>(egui::Id::new("omega_menu_previous_surface"))
@@ -773,6 +778,10 @@ impl HookEchoApp {
                 d.insert_temp(egui::Id::new("quick_launch_home"), false);
                 d.insert_temp(egui::Id::new("panel_settings_page"), Some("Spotters"));
             });
+        }
+        if notification_settings {
+            menu_open = false;
+            self.settings_window.open_notifications();
         }
         if display {
             menu_open = false;

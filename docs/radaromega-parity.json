@@ -170,7 +170,7 @@
       "status": "partial",
       "observed_scope": "General and Settings groups with category disclosure, dimmed/blurred map backdrop.",
       "observation_type": "runtime-screenshot",
-      "hookecho_implementation": "New grouped workspace drawer routes supported controls to existing actions.",
+      "hookecho_implementation": "The grouped workspace drawer routes supported controls to existing actions. Its Notifications entry opens HookEcho's alert-delivery settings directly on the Notify me page, rather than implying access to RadarOmega's private NotifyontheFly service.",
       "remaining_gaps": [
         "Only supported HookEcho destinations are exposed; complete competitor menu/catalog parity is absent."
       ],
@@ -187,7 +187,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI02",
       "acceptance": "Open and close navigation; access every registered destination without overlap.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "In the optimized local browser build, opening the workspace drawer and clicking Notifications opened Settings directly on Alerts → Notify me, with notification controls visible. Other drawer destinations and full layout equivalence remain unverified."
     },
     {
       "id": "UI03",
