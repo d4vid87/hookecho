@@ -1357,14 +1357,15 @@ impl VectorTileManager {
     }
 
     pub fn drain_ready_budget(&mut self, budget: &mut crate::map_work::UploadBudget) -> Vec<PendingVectorTile> {
-        self.drain_ready_for_view(budget, &[], false)
+        self.drain_ready_for_view(budget, &[])
     }
 
-    /// During a gesture, old view completions must not spend the small upload budget ahead of
-    /// tiles covering the camera's current view. Their raw bytes remain in the tile cache, and
-    /// removing `requested` lets a later view request them again if the camera returns.
+    /// Old view completions must not spend the upload budget ahead of tiles covering the
+    /// camera's current view. Downloads often finish after the gesture ends; filtering only
+    /// while moving misses them. Keep the one intentional speculative preload. Raw bytes remain
+    /// in the tile cache, and removing `requested` lets a later view request them again.
     pub fn drain_ready_for_view(&mut self, budget: &mut crate::map_work::UploadBudget,
-        visible: &[VisibleTile], moving: bool) -> Vec<PendingVectorTile> {
+        visible: &[VisibleTile]) -> Vec<PendingVectorTile> {
         let mut ready = Vec::new();
         // Bound upload batches rather than allowing completed downloads to monopolize one
         // render frame. Leave the remainder queued and explicitly schedule the next frame.
@@ -1376,7 +1377,8 @@ impl VectorTileManager {
             if generation != self.render_generation {
                 continue;
             }
-            if self.speculative == Some(completed_id) { self.speculative = None; }
+            let speculative = self.speculative == Some(completed_id);
+            if speculative { self.speculative = None; }
             let f = match f {
                 Ok(f) => f,
                 // Out of `requested` so the next visibility pass is the retry, and into `failed`
@@ -1390,8 +1392,9 @@ impl VectorTileManager {
             if self.uploaded.peek(&f.id) == Some(&generation) {
                 continue; // already resident at this generation
             }
-            if moving && !tile_overlaps_view(f.id, visible) {
+            if !visible.is_empty() && !speculative && !tile_overlaps_view(f.id, visible) {
                 self.requested.remove(&f.id);
+                wxdata::stats::bump(wxdata::stats::Counter::VectorTileOffscreenSkips);
                 continue;
             }
             let bytes = (f.vertices.len() + f.foreground_vertices.len()) * std::mem::size_of::<OverlayVertex>()
@@ -1420,6 +1423,7 @@ impl VectorTileManager {
                 foreground_vertices: f.foreground_vertices,
                 foreground_indices: f.foreground_indices,
             });
+            wxdata::stats::bump(wxdata::stats::Counter::VectorTileUploads);
         }
         if budget.exhausted() || self.deferred_ready.is_some() || examined == 32 {
             if let Some(ctx) = &self.ctx {
@@ -1724,7 +1728,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn moving_view_drops_offscreen_uploads_but_keeps_visible_and_parent_tiles() {
+    async fn current_view_drops_offscreen_uploads_but_keeps_visible_and_parent_tiles() {
         let mut manager = test_manager();
         let visible = [VisibleTile { id: (6, 12, 20), world_min: [0.0; 2], world_max: [1.0; 2] }];
         let offscreen = (6, 13, 20);
@@ -1736,13 +1740,29 @@ mod tests {
                 foreground_vertices: Vec::new(), foreground_indices: Vec::new(), labels: Vec::new(),
             }))).unwrap();
         }
-        let uploaded = manager.drain_ready_for_view(&mut crate::map_work::UploadBudget::frame(true), &visible, true);
+        let uploaded = manager.drain_ready_for_view(&mut crate::map_work::UploadBudget::frame(false), &visible);
         assert_eq!(uploaded.iter().map(|tile| tile.id).collect::<Vec<_>>(), [parent, visible[0].id]);
         assert!(!manager.requested.contains(&offscreen), "a later view may request it again");
         assert!(!manager.uploaded.contains(&offscreen));
         assert!(manager.uploaded.contains(&parent));
         assert!(tile_overlaps_view((7, 24, 40), &visible), "child fallback remains useful");
         assert!(!tile_overlaps_view((6, 13, 20), &visible));
+    }
+
+    #[tokio::test]
+    async fn speculative_preload_survives_offscreen_filter() {
+        let mut manager = test_manager();
+        let id = (6, 13, 20);
+        manager.speculative = Some(id);
+        manager.requested.insert(id);
+        manager.tx.send((manager.render_generation, Ok(FetchedVector {
+            id, vertices: Vec::new(), indices: Vec::new(),
+            foreground_vertices: Vec::new(), foreground_indices: Vec::new(), labels: Vec::new(),
+        }))).unwrap();
+        let visible = [VisibleTile { id: (6, 12, 20), world_min: [0.0; 2], world_max: [1.0; 2] }];
+        let uploaded = manager.drain_ready_for_view(&mut crate::map_work::UploadBudget::frame(false), &visible);
+        assert_eq!(uploaded.iter().map(|tile| tile.id).collect::<Vec<_>>(), [id]);
+        assert_eq!(manager.speculative, None);
     }
 
     #[tokio::test]

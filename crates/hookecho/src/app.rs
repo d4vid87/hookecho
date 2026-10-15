@@ -14694,7 +14694,7 @@ impl HookEchoApp {
         let upload_turn = !self.gesture_live || chrome::compact(ctx)
             || idx == self.frame_nr as usize % self.views.len();
         let new_vector_tiles = if upload_turn {
-            self.pane_vtiles[idx].drain_ready_for_view(&mut self.map_upload_budget, &visible_vector_tiles, self.gesture_live)
+            self.pane_vtiles[idx].drain_ready_for_view(&mut self.map_upload_budget, &visible_vector_tiles)
         } else { Vec::new() };
         if !new_tiles.is_empty() || !new_vector_tiles.is_empty() { ctx.request_repaint(); }
 

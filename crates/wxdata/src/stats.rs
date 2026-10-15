@@ -46,13 +46,17 @@ pub enum Counter {
     CustomCompiles,
     CustomEvaluations,
     CustomCacheHits,
+    /// Vector tile geometry accepted for GPU upload.
+    VectorTileUploads,
+    /// Completed vector tiles skipped because they no longer overlap the view.
+    VectorTileOffscreenSkips,
 }
 
 impl Counter {
     const COUNT: usize = Self::LABELS.len();
 
     /// Prometheus/log names, in declaration order.
-    pub const LABELS: [&'static str; 18] = [
+    pub const LABELS: [&'static str; 20] = [
         "net_requests",
         "net_bytes",
         "net_not_modified",
@@ -71,6 +75,8 @@ impl Counter {
         "custom_compiles",
         "custom_evaluations",
         "custom_cache_hits",
+        "vector_tile_uploads",
+        "vector_tile_offscreen_skips",
     ];
 }
 

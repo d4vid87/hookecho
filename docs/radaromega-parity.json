@@ -429,7 +429,7 @@
       "status": "implemented-related",
       "observed_scope": "Captured Mapbox wrapper sets fadeDuration 0, zoom rate 0.02, wheel zoom rate 0.004444.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Cursor anchored easing, drag inertia, direct pinch, detail hysteresis, retained geography and bounded gesture work. Each wheel event is capped at two zoom levels so a browser Page-unit scroll cannot jump directly from a regional map to world scale. During a gesture, completed vector tiles outside the current view and its parent/child fallback hierarchy no longer consume the GPU upload budget.",
+      "hookecho_implementation": "Cursor anchored easing, drag inertia, direct pinch, detail hysteresis, retained geography and bounded gesture work. Each wheel event is capped at two zoom levels so a browser Page-unit scroll cannot jump directly from a regional map to world scale. Completed vector tiles outside the current view and its parent/child fallback hierarchy no longer consume the GPU upload budget, including completions that arrive just after a gesture. The intentional one-tile speculative preload remains eligible. Upload and offscreen-skip counts are exposed in Performance counters.",
       "remaining_gaps": [
         "No claim of equal smoothness: prior cross-app measurements do not rank engines and matched fresh performance trials remain needed."
       ],
@@ -438,12 +438,13 @@
         "crates/hookecho/src/labelplace.rs",
         "crates/hookecho/src/map_work.rs",
         "crates/hookecho/src/vector_tiles.rs",
+        "crates/wxdata/src/stats.rs",
         "docs/map-motion-refinements.md"
       ],
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP06",
       "acceptance": "Measure matched pan/wheel tasks for frame time, interaction latency, label stability and tile completion.",
-      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking. A later HookEcho browser regression reproduced an oversized Page-unit scroll jumping from California zoom 7 toward world scale; after the two-level per-event cap, the same scroll settled at zoom 5 near California with no console errors. A focused tile test confirms offscreen completions are skipped during movement, while visible tiles and fallback parents/children remain eligible; native tests, WASM library compilation and the full web build pass (4,535,129 gzipped bytes against a 4,540,000-byte budget). The upload change has not yet had a matched runtime performance trial. No cross-app presented-frame or input-latency claim."
+      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking. A later HookEcho browser regression reproduced an oversized Page-unit scroll jumping from California zoom 7 toward world scale; after the two-level per-event cap, the same scroll settled at zoom 5 near California with no console errors. In a local 1196×720 browser trial on 2026-10-14, the original gesture-only filter recorded 167 vector uploads and zero skips after rapid pans. Revised current-view filtering recorded one offscreen skip and 51 uploads after returning from the U.S. East Coast to KEAX, then 60 uploads and one cumulative skip after three more pans; the in-app rolling UI CPU and gesture-cadence p95 read 17.3 and 17.1 ms at the last observation. This demonstrates that the filter activates, not a speed improvement: the runs had different camera paths and cache states, and GPU timing was unsupported. Focused tests preserve visible, parent/child and speculative tiles; 657 native tests and the full web build pass (4,535,196 gzipped bytes against a 4,540,000-byte budget). Matched cross-app presented-frame and input-latency trials remain needed."
     },
     {
       "id": "MAP07",
