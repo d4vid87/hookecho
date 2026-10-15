@@ -337,6 +337,8 @@ impl HookEchoApp {
                                 ui.ctx().data_mut(|d| d.remove::<&'static str>(section_id));
                             } else {
                                 settings_page = None;
+                                all_controls = true;
+                                selected_card = Some(PanelSection::Tools);
                             }
                         }
                         ui.label(
@@ -683,6 +685,7 @@ impl HookEchoApp {
                 });
             self.mobile_occlusion.push(panel.response.rect);
         } else {
+            let mut floating_scroll_offset = 0.0;
             let panel = egui::Area::new(egui::Id::new("panel"))
                 .constrain_to(chrome)
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(if context_bar { 16.0 } else { PANEL_X }, panel_top))
@@ -699,15 +702,47 @@ impl HookEchoApp {
                     if wide_library {
                         body(ui);
                     } else {
-                    egui::ScrollArea::vertical()
+                    let scroll = egui::ScrollArea::vertical()
                             .id_salt(("floating_panel_scroll", settings_page_was, section))
                         .max_height(max_h)
                         .show(ui, |ui| {
                             body(ui);
                         });
+                    floating_scroll_offset = scroll.state.offset.y;
                     }
                 });
             self.mobile_occlusion.push(panel.response.rect);
+            if settings_page_was == Some("Outlooks")
+                && settings_page == Some("Outlooks")
+                && floating_scroll_offset > 60.0
+            {
+                egui::Area::new("outlooks_sticky_header".into())
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(panel.response.rect.min)
+                    .show(ctx, |ui| {
+                        egui::Frame::new()
+                            .fill(egui::Color32::from_rgb(29, 36, 41))
+                            .stroke(ui.visuals().window_stroke)
+                            .inner_margin(egui::Margin::symmetric(12, 8))
+                            .show(ui, |ui| {
+                                ui.set_width(panel.response.rect.width() - 24.0);
+                                ui.horizontal(|ui| {
+                                    if ui.button("‹ All controls").clicked() {
+                                        settings_page = None;
+                                        all_controls = true;
+                                        selected_card = Some(PanelSection::Tools);
+                                    }
+                                    ui.heading("Outlooks");
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.button(egui_phosphor::regular::X)
+                                            .named("Close settings panel").clicked() {
+                                            hide = true;
+                                        }
+                                    });
+                                });
+                            });
+                    });
+            }
         }
         if spotter_options_was != (self.settings.spotter_range_km, self.settings.spotter_max_age_minutes) {
             self.settings.save();

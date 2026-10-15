@@ -170,10 +170,9 @@
       "status": "partial",
       "observed_scope": "General and Settings groups with category disclosure, dimmed/blurred map backdrop.",
       "observation_type": "runtime-screenshot",
-      "hookecho_implementation": "The grouped workspace drawer routes supported controls to existing actions. Its Notifications entry opens HookEcho alert-delivery settings directly on the Notify me page. A Weather Products section now exposes public-data routes for mesoscale discussions, convective/fire/winter/rainfall/climate outlook controls, tropical cyclones, METARs, fronts, reports, GLM lightning, spotters, and ODIN power outages. Outlook menu entries scroll the shared control page to their severe, climate, fire, rainfall, or winter section.",
+      "hookecho_implementation": "The grouped workspace drawer routes supported controls to existing actions. Its Notifications entry opens HookEcho alert-delivery settings directly on the Notify me page. A Weather Products section now exposes public-data routes for mesoscale discussions, convective/fire/winter/rainfall/climate outlook controls, tropical cyclones, METARs, fronts, reports, GLM lightning, spotters, and ODIN power outages. Outlook menu entries scroll the shared control page to their severe, climate, fire, rainfall, or winter section. A fixed Outlooks header keeps Back and Close visible when a lower forecast section is in view; Back opens the full controls catalog.",
       "remaining_gaps": [
-        "The menu still differs from RadarOmega's complete vendor catalog, including subscription-only services; several outlook routes share HookEcho's Outlooks control page rather than opening distinct vendor pages.",
-        "The shared Outlooks page still scrolls its title and Back button offscreen for lower sections; a fixed header and distinct category pages remain to be implemented."
+        "The menu still differs from RadarOmega's complete vendor catalog, including subscription-only services; several outlook routes share HookEcho's Outlooks control page rather than opening distinct vendor pages."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/clearview.rs",
@@ -188,7 +187,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI02",
       "acceptance": "Open and close navigation; access every registered destination without overlap.",
-      "runtime_verification": "In the optimized local browser build, opening the workspace drawer and clicking Notifications opened Settings directly on Alerts \u2192 Notify me, with notification controls visible. Other drawer destinations and full layout equivalence remain unverified. Native UI/action compile and 680 active library tests passed on 2026-10-15 after adding public-data Weather Products routes. Optimized local browser build passed; Weather Products expanded in the workspace drawer, and Hydrological outlooks opened the shared Outlooks controls with public NOAA rainfall choices visible. In the optimized local browser, Fire, Rainfall, Winter, and Climate menu routes each opened Outlooks with their matching NOAA controls visible. Severe scroll reset was added afterward and passed native compile/tests, but has not been separately browser-verified."
+      "runtime_verification": "In the optimized local browser build, opening the workspace drawer and clicking Notifications opened Settings directly on Alerts \u2192 Notify me, with notification controls visible. Other drawer destinations and full layout equivalence remain unverified. Native UI/action compile and 680 active library tests passed on 2026-10-15 after adding public-data Weather Products routes. Optimized local browser build passed; Weather Products expanded in the workspace drawer, and Hydrological outlooks opened the shared Outlooks controls with public NOAA rainfall choices visible. In the optimized local browser, Fire, Rainfall, Winter, and Climate menu routes each opened Outlooks with their matching NOAA controls visible. 2026-10-15 optimized-browser run verified Winter opens with its controls and a fixed Back/Close header, Close dismisses it, Back opens the full categorized controls catalog, and Severe returns to the page top after visiting a lower section."
     },
     {
       "id": "UI03",
