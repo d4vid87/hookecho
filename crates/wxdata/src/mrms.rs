@@ -682,6 +682,75 @@ pub async fn fetch_latest_frame(
     ))
 }
 
+/// List the most recent public objects for a product, oldest to newest.
+///
+/// MRMS publishes timestamped objects under a UTC day prefix. A normal day has fewer than the
+/// 2,000 keys requested here. Include yesterday around midnight so the loop does not collapse
+/// to a single frame when the date changes. This deliberately performs a full listing rather
+/// than using the incremental latest-key cursor, which would omit earlier loop frames.
+pub async fn recent_keys(
+    http: &reqwest::Client,
+    product: &str,
+    count: usize,
+) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(descriptor_for_product(product).is_some(), "unregistered MRMS product {product}");
+    anyhow::ensure!(count <= 32, "MRMS history is limited to 32 frames");
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let today = chrono::Utc::now().date_naive();
+    let yesterday = today.pred_opt().unwrap_or(today);
+    let mut keys = Vec::new();
+    for day in [today, yesterday] {
+        let prefix = format!("{product}/{}/", day.format("%Y%m%d"));
+        let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000");
+        let xml = http
+            .get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        keys.extend(listed_keys(&xml).into_iter().filter(|key| {
+            key.starts_with(&prefix) && key.ends_with(".grib2.gz")
+        }));
+        if keys.len() >= count {
+            break;
+        }
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    anyhow::ensure!(!keys.is_empty(), "no MRMS history found for {product}");
+    Ok(keys.into_iter().rev().take(count).collect::<Vec<_>>().into_iter().rev().collect())
+}
+
+/// Fetch one object selected from [`recent_keys`] through the same decoder and cache as live MRMS.
+pub async fn fetch_frame_key(
+    http: &reqwest::Client,
+    product: &str,
+    key: &str,
+) -> anyhow::Result<FieldFrame> {
+    let descriptor = descriptor_for_product(product)
+        .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
+    anyhow::ensure!(
+        key.starts_with(&format!("{product}/")) && key.ends_with(".grib2.gz"),
+        "MRMS key does not belong to {product}"
+    );
+    let (field, received_time) = fetch_key(http, product, key).await?;
+    let valid_time = field.time;
+    Ok(FieldFrame::new(descriptor, field, DataStamp {
+        source_identity: key.to_owned(),
+        issue_time: None,
+        run_time: None,
+        valid_time,
+        received_time,
+        class: DataClass::Analysis,
+        quality: QualitySummary::Unknown,
+        available_members: None,
+    }))
+}
+
 /// Registry metadata for a currently supported MRMS object path.
 pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor> {
     Some(match product {
@@ -966,6 +1035,13 @@ fn last_key(xml: &str) -> Option<String> {
     })
 }
 
+fn listed_keys(xml: &str) -> Vec<String> {
+    xml.split("<Key>")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("</Key>").map(|(key, _)| key.to_owned()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -995,6 +1071,13 @@ mod tests {
             Some("a/current.grib2.gz")
         );
         assert_eq!(listing_result("<ListBucketResult/>", None), None);
+    }
+
+    #[test]
+    fn history_listing_extracts_keys_in_order() {
+        let xml = "<ListBucketResult><Contents><Key>p/20261015/a.grib2.gz</Key></Contents><Contents><Key>p/20261015/b.grib2.gz</Key></Contents></ListBucketResult>";
+        assert_eq!(listed_keys(xml), ["p/20261015/a.grib2.gz", "p/20261015/b.grib2.gz"]);
+        assert!(listed_keys("<ListBucketResult/>").is_empty());
     }
 
     #[test]
