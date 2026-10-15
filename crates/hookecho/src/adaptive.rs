@@ -5,6 +5,11 @@ use std::collections::VecDeque;
 #[derive(Default)]
 pub struct AdaptiveQuality {
     samples: VecDeque<f32>,
+    setup_samples: VecDeque<f32>,
+    chrome_samples: VecDeque<f32>,
+    sync_samples: VecDeque<f32>,
+    map_samples: VecDeque<f32>,
+    tail_samples: VecDeque<f32>,
     cadence_samples: VecDeque<f32>,
     previous_motion: bool,
     cadence_pressure: f32,
@@ -14,6 +19,34 @@ pub struct AdaptiveQuality {
 }
 
 impl AdaptiveQuality {
+    /// Bounded CPU timing windows for each part of the UI frame.
+    pub fn observe_phases(&mut self, ms: [f32; 5]) {
+        for (samples, ms) in [
+            (&mut self.setup_samples, ms[0]),
+            (&mut self.chrome_samples, ms[1]),
+            (&mut self.sync_samples, ms[2]),
+            (&mut self.map_samples, ms[3]),
+            (&mut self.tail_samples, ms[4]),
+        ] {
+            if !ms.is_finite() || ms < 0.0 { continue; }
+            if samples.len() == 120 { samples.pop_front(); }
+            samples.push_back(ms.min(500.0));
+        }
+    }
+
+    fn p95(samples: &VecDeque<f32>) -> Option<f32> {
+        let mut values: Vec<_> = samples.iter().copied().collect();
+        if values.is_empty() { return None; }
+        values.sort_by(f32::total_cmp);
+        Some(values[(values.len() * 95).div_ceil(100).saturating_sub(1)])
+    }
+
+    pub fn setup_p95_ms(&self) -> Option<f32> { Self::p95(&self.setup_samples) }
+    pub fn chrome_p95_ms(&self) -> Option<f32> { Self::p95(&self.chrome_samples) }
+    pub fn sync_p95_ms(&self) -> Option<f32> { Self::p95(&self.sync_samples) }
+    pub fn map_p95_ms(&self) -> Option<f32> { Self::p95(&self.map_samples) }
+    pub fn tail_p95_ms(&self) -> Option<f32> { Self::p95(&self.tail_samples) }
+
     /// UI CPU time, measured within the frame rather than from the idle repaint cadence.
     pub fn observe(&mut self, ms: f32, enabled: bool) {
         if !enabled { self.reduced = false; self.slow = 0; self.healthy = 0; }
@@ -48,17 +81,11 @@ impl AdaptiveQuality {
     }
 
     pub fn cadence_p95_ms(&self) -> Option<f32> {
-        let mut values: Vec<_> = self.cadence_samples.iter().copied().collect();
-        if values.is_empty() { return None; }
-        values.sort_by(f32::total_cmp);
-        Some(values[(values.len() * 95).div_ceil(100).saturating_sub(1)])
+        Self::p95(&self.cadence_samples)
     }
 
     pub fn p95_ms(&self) -> Option<f32> {
-        let mut values: Vec<_> = self.samples.iter().copied().collect();
-        if values.is_empty() { return None; }
-        values.sort_by(f32::total_cmp);
-        Some(values[(values.len() * 95).div_ceil(100).saturating_sub(1)])
+        Self::p95(&self.samples)
     }
 }
 

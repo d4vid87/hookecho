@@ -20067,6 +20067,11 @@ impl HookEchoApp {
                 "visual_quality_degraded":crate::ui::motion::degraded(),
                 "adaptive_quality_reduced":self.adaptive.reduced,
                 "ui_cpu_p95_ms":self.adaptive.p95_ms(),
+                "ui_setup_cpu_p95_ms":self.adaptive.setup_p95_ms(),
+                "chrome_cpu_p95_ms":self.adaptive.chrome_p95_ms(),
+                "pane_sync_cpu_p95_ms":self.adaptive.sync_p95_ms(),
+                "map_build_cpu_p95_ms":self.adaptive.map_p95_ms(),
+                "ui_tail_cpu_p95_ms":self.adaptive.tail_p95_ms(),
                 "gesture_cadence_p95_ms":self.adaptive.cadence_p95_ms(),
                 "scope":"Map draw timing excludes uploads and wind advection. Memory excludes metadata, allocator and driver overhead and framework resources.",
             },
@@ -22886,6 +22891,8 @@ impl eframe::App for HookEchoApp {
         self.chrome_rect = root.available_rect_before_wrap();
         // Before any chrome: everything below asks `motion::reduced()`, and the answer has to be
         // the same for every surface in a frame.
+        let setup_ms = ui_started.elapsed().as_secs_f32() * 1000.0;
+        let chrome_started = Instant::now();
         ui::motion::frame(ctx, self.settings.reduce_motion);
 
         // Chrome: touch-first on Android (top chips + bottom sheet + docked toolbar), desktop
@@ -23697,7 +23704,7 @@ impl eframe::App for HookEchoApp {
         // A cell within 15 km of a ZDR column owns it — the column marks the updraft, and the
         // updraft belongs to the storm the table is already listing.
         let zdr_cells: std::collections::HashSet<String> = match &self.zdr_cache {
-            Some((_, hits, _)) if self.filters.show_zdr_columns => cells
+            Some((_, hits, _)) if self.cells_window.open && self.filters.show_zdr_columns => cells
                 .iter()
                 .filter(|c| {
                     hits.iter().any(|h| {
@@ -23726,7 +23733,11 @@ impl eframe::App for HookEchoApp {
             Some((_, hits)) => hits,
             None => &[],
         };
-        let cell_scores = wxdata::cellscore::score_all(cells, &self.probsevere, couplets);
+        let cell_scores = if self.cells_window.open {
+            wxdata::cellscore::score_all(cells, &self.probsevere, couplets)
+        } else {
+            Vec::new()
+        };
         if let Some(id) = ui::cells_window::show(
             &mut self.cells_window,
             ctx,
@@ -23970,6 +23981,8 @@ impl eframe::App for HookEchoApp {
         // selected; otherwise four-pane Analyst eagerly decodes three invisible radar volumes.
         let phone_solo = self.views.len() > 1 && chrome::compact(ctx);
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
+        let chrome_ms = chrome_started.elapsed().as_secs_f32() * 1000.0;
+        let sync_started = Instant::now();
         for idx in 0..self.views.len() {
             if !phone_solo || idx == self.active {
                 self.sync_pane(idx, ctx);
@@ -23983,6 +23996,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.sync_overlay();
+        let sync_ms = sync_started.elapsed().as_secs_f32() * 1000.0;
 
         // OBS-mode hint so the chrome-free view is still escapable.
         if self.obs_mode {
@@ -24005,6 +24019,7 @@ impl eframe::App for HookEchoApp {
                 });
         }
 
+        let map_started = Instant::now();
         let placefile_labels = self.placefile_labels_cached();
         // Visibility history spans the frame; each clipped pane starts a fresh collision pass.
         self.labels.begin();
@@ -24133,6 +24148,8 @@ impl eframe::App for HookEchoApp {
                 }
             }
         });
+        let map_ms = map_started.elapsed().as_secs_f32() * 1000.0;
+        let tail_started = Instant::now();
 
         // Dirty-diff persistence: one write per actual change, from any mutation site. The
         // comparison walks the whole settings tree (palettes, placefiles, markers), so it runs at
@@ -24287,6 +24304,10 @@ impl eframe::App for HookEchoApp {
         }
         let moving = self.gesture_live && ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO
             || i.smooth_scroll_delta != egui::Vec2::ZERO || (i.zoom_delta() - 1.0).abs() > f32::EPSILON);
+        self.adaptive.observe_phases([
+            setup_ms, chrome_ms, sync_ms, map_ms,
+            tail_started.elapsed().as_secs_f32() * 1000.0,
+        ]);
         self.adaptive.observe_cadence(ctx.input(|i| i.unstable_dt) * 1000.0, moving);
         self.adaptive.observe(ui_started.elapsed().as_secs_f32() * 1000.0,
             self.settings.map_quality == crate::settings::MapQuality::Auto);
