@@ -2486,6 +2486,7 @@ struct MrmsLoop {
     last_step: Instant,
     requested_at: Option<DateTime<Utc>>,
     follow_through_archive: bool,
+    reverse_playback: bool,
     follow_from: Option<DateTime<Utc>>,
     backward_from: Option<DateTime<Utc>>,
     error: Option<String>,
@@ -10771,6 +10772,7 @@ impl HookEchoApp {
                     let loop_state = MrmsLoop { layer, frames, index, playing: playing && !exhausted,
                         last_step: Instant::now(), requested_at: at,
                         follow_through_archive: prior.is_some_and(|old| old.follow_through_archive),
+                        reverse_playback: prior.is_some_and(|old| old.reverse_playback),
                         follow_from: None,
                         backward_from: None,
                         error: exhausted.then(|| if backward_from.is_some() {

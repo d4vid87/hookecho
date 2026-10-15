@@ -20,12 +20,15 @@ impl HookEchoApp {
                 && loop_state.last_step.elapsed() >= mrms_interval
         });
         if advance_mrms { if let Some(layer) = active_mrms {
+            let direction = self.mrms_loops.iter().find(|state| state.layer == layer)
+                .map_or(1, |state| if state.reverse_playback { -1 } else { 1 });
             let next_window = self.mrms_loops.iter().find(|state| state.layer == layer)
                 .filter(|state| state.follow_through_archive && state.requested_at.is_some()
-                    && state.index + 1 == state.frames.len())
+                    && if direction < 0 { state.index == 0 }
+                       else { state.index + 1 == state.frames.len() })
                 .is_some();
-            if next_window { self.request_mrms_adjacent_window(layer, 1, true); }
-            else { self.step_mrms_loop(layer, 1); }
+            if next_window { self.request_mrms_adjacent_window(layer, direction, true); }
+            else { self.step_mrms_loop(layer, direction); }
         } }
         if self.mrms_loops.iter().any(|loop_state| Some(loop_state.layer) == active_mrms && loop_state.playing) {
             ctx.request_repaint_after(mrms_interval.min(std::time::Duration::from_millis(100)));
@@ -51,6 +54,9 @@ impl HookEchoApp {
         let mrms_follow_archive = self.mrms_loops.iter()
             .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .is_some_and(|loop_state| loop_state.follow_through_archive);
+        let mrms_reverse_playback = self.mrms_loops.iter()
+            .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+            .is_some_and(|loop_state| loop_state.reverse_playback);
         let mrms_last_time = self.mrms_loops.iter()
             .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .and_then(|loop_state| loop_state.frames.last().map(|frame| frame.stamp.valid_time));
@@ -122,6 +128,7 @@ impl HookEchoApp {
         let mut mrms_toggle = false;
         let mut mrms_archive_request = None;
         let mut mrms_follow_change = None;
+        let mut mrms_reverse_change = None;
         #[cfg(target_arch = "wasm32")]
         let (packs, pack_status) = (self.packs(), self.pack_status());
         #[cfg(target_arch = "wasm32")]
@@ -264,9 +271,15 @@ impl HookEchoApp {
                                         }
                                         if mrms_archive_at.is_some() {
                                             let mut follow = mrms_follow_archive;
-                                            if ui.checkbox(&mut follow, "Continue playback into later windows").changed() {
+                                            if ui.checkbox(&mut follow, "Continue playback across archive windows").changed() {
                                                 mrms_follow_change = Some(follow);
                                             }
+                                        }
+                                        let mut reverse = mrms_reverse_playback;
+                                        if ui.checkbox(&mut reverse, "Play backward").on_hover_text(
+                                            "Replay older mosaics first. With continuous archive playback enabled, cross into earlier six-frame windows."
+                                        ).changed() {
+                                            mrms_reverse_change = Some(reverse);
                                         }
                                         if let Some(error) = mrms_error.as_deref() {
                                             let message = if error.contains("no MRMS frames found before") {
@@ -390,7 +403,8 @@ impl HookEchoApp {
                                     else { mrms_step = -1; }
                                 }
                                 if omega_button(ui, if playing { ph::PAUSE } else { ph::PLAY },
-                                    if playing { "Pause mosaic" } else { "Play mosaic" }, playing).clicked() { mrms_toggle = true; }
+                                    if playing { "Pause mosaic" } else if mrms_reverse_playback { "Play mosaic backward" }
+                                    else { "Play mosaic forward" }, playing).clicked() { mrms_toggle = true; }
                                 if omega_button(ui, ph::SKIP_FORWARD, "Next mosaic", false).clicked() {
                                     if mrms_archive_at.is_some() && index + 1 == len { mrms_boundary_step = 1; }
                                     else { mrms_step = 1; }
@@ -448,6 +462,12 @@ impl HookEchoApp {
         if let (Some(layer), Some(follow)) = (active_mrms, mrms_follow_change) {
             if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
                 loop_state.follow_through_archive = follow;
+            }
+        }
+        if let (Some(layer), Some(reverse)) = (active_mrms, mrms_reverse_change) {
+            if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
+                loop_state.reverse_playback = reverse;
+                loop_state.last_step = Instant::now();
             }
         }
         if let (Some(layer), Some(at)) = (active_mrms, mrms_archive_request) {
