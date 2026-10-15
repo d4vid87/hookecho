@@ -22,6 +22,7 @@ impl HookEchoApp {
             self.settings.reduce_motion,
             self.settings.radar_workspace,
             self.settings.show_tdwr_sites,
+            self.settings.full_coverage_radar,
         );
         let area = egui::Modal::new(id)
             .frame(
@@ -141,6 +142,8 @@ impl HookEchoApp {
                             left.separator();
                             left.checkbox(&mut self.views[self.active].show_legend, "Color scale");
                             left.checkbox(&mut self.views[self.active].smooth, "Smooth radar");
+                            left.checkbox(&mut self.settings.full_coverage_radar, "Full coverage radar")
+                                .on_hover_text("Show every available NEXRAD gate; when off, display the standard 230 km range.");
                             left.checkbox(
                                 &mut self.views[self.active].appearance.precision,
                                 "Higher-precision radar",
@@ -248,6 +251,7 @@ impl HookEchoApp {
                     self.settings.reduce_motion,
                     self.settings.radar_workspace,
                     self.settings.show_tdwr_sites,
+                    self.settings.full_coverage_radar,
                 )
         {
             self.settings.save();

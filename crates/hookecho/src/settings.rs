@@ -304,6 +304,9 @@ pub struct Settings {
     /// Unfold aliased Doppler velocity (region-based dealiasing) when displaying VEL.
     #[serde(default)]
     pub dealias_velocity: bool,
+    /// Show every gate in a NEXRAD sweep. Off clips display to the standard 230 km radius.
+    #[serde(default = "default_true")]
+    pub full_coverage_radar: bool,
     /// Mapbox access token (enables the Mapbox raster basemap styles). Held locally only.
     #[serde(default)]
     pub mapbox_key: String,
@@ -1395,6 +1398,7 @@ impl Default for Settings {
             markers: Vec::new(),
             precip_tint: false,
             dealias_velocity: false,
+            full_coverage_radar: true,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
             tempest_token: String::new(),
@@ -2144,6 +2148,7 @@ mod tests {
                 home: true,
             }],
             dealias_velocity: true,
+            full_coverage_radar: true,
             mapbox_key: "pk.test".to_string(),
             tempest_token: String::new(),
             wu_key: String::new(),
@@ -2258,6 +2263,10 @@ mod tests {
         old.as_object_mut().unwrap().remove("storm_warn_sound");
         let restored: Settings = serde_json::from_value(old).unwrap();
         assert_eq!(restored.storm_warn_sound, AlertSound::StormChime);
+        let mut old = serde_json::to_value(&s).unwrap();
+        old.as_object_mut().unwrap().remove("full_coverage_radar");
+        let restored: Settings = serde_json::from_value(old).unwrap();
+        assert!(restored.full_coverage_radar);
     }
 
     #[test]

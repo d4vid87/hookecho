@@ -9544,6 +9544,7 @@ impl HookEchoApp {
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
         let mut srv_from_cells = false;
         let mut dealias = self.settings.dealias_velocity;
+        let mut full_coverage = self.settings.full_coverage_radar;
         let mut precip_tint = self.settings.precip_tint;
         let mut srv_on = srv;
         let mi = moment.index();
@@ -9676,6 +9677,10 @@ impl HookEchoApp {
                 egui::CollapsingHeader::new("Product settings")
                     .default_open(false)
                     .show(ui, |ui| {
+                        ui.add_enabled_ui(wxdata::sites::is_nexrad(&site), |ui| {
+                            ui.checkbox(&mut full_coverage, "Full coverage radar")
+                                .on_hover_text("Show every available NEXRAD gate. Off displays the standard 230 km radius; source data stays loaded.");
+                        });
                         if moment == wxdata::level2::Moment::Reflectivity {
                             ui.checkbox(&mut precip_tint, "Tint by precipitation type")
                                 .on_hover_text(
@@ -9758,6 +9763,10 @@ impl HookEchoApp {
         }
         if self.settings.precip_tint != precip_tint {
             self.settings.precip_tint = precip_tint;
+            self.settings.save();
+        }
+        if self.settings.full_coverage_radar != full_coverage {
+            self.settings.full_coverage_radar = full_coverage;
             self.settings.save();
         }
         self.settings.dealias_velocity = dealias;
@@ -13412,7 +13421,7 @@ impl HookEchoApp {
             None,
             precision,
         );
-        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(u64::from(self.adaptive.reduced)).wrapping_add(
+        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(u64::from(self.adaptive.reduced)).wrapping_add(u64::from(self.settings.full_coverage_radar)).wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
                 0x9e37_79b9_7f4a_7c15
             } else {
@@ -13459,6 +13468,9 @@ impl HookEchoApp {
         match upload {
             Ok(mut up) => {
                 self.views[idx].appearance.apply_upload(&mut up, moment);
+                apply_coverage_range(&mut up, self.settings.full_coverage_radar,
+                    self.views[idx].displayed_station().is_some_and(wxdata::sites::is_nexrad)
+                    || self.views[idx].site.as_deref().is_some_and(wxdata::sites::is_nexrad));
                 let view = &self.views[idx];
                 if view.appearance.fade_old_sectors && view.timeline.following && cut_end_ms.is_none() {
                     up.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
@@ -13638,7 +13650,8 @@ impl HookEchoApp {
             .gen
             .wrapping_add(product_hash)
             .wrapping_add(self.views[idx].appearance.fingerprint(palette_moment))
-            .wrapping_add(u64::from(self.adaptive.reduced));
+            .wrapping_add(u64::from(self.adaptive.reduced))
+            .wrapping_add(u64::from(self.settings.full_coverage_radar));
         let same_data = reuse && self.pane_shown.get(&idx) == Some(&key);
         let token = self.pane_upload_tokens.get(&idx).copied().unwrap_or(0);
         let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
@@ -13651,6 +13664,9 @@ impl HookEchoApp {
                 .appearance
                 .table(&self.palettes, palette_moment, self.settings.theme);
         let mut upload = to_upload(sweep, &table, None, smooth, None, None, lut_only);
+        apply_coverage_range(&mut upload, self.settings.full_coverage_radar,
+            self.views[idx].displayed_station().is_some_and(wxdata::sites::is_nexrad)
+            || self.views[idx].site.as_deref().is_some_and(wxdata::sites::is_nexrad));
         if self.views[idx].appearance.fade_old_sectors && self.views[idx].timeline.following && cut_end_ms.is_none() {
             upload.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
                 let status = volume
@@ -17221,7 +17237,7 @@ impl HookEchoApp {
                     }
                 }
                 if self.show_scan_boundary {
-                    if let Some(extent) = view.volume.as_ref().and_then(|volume| {
+                    if let Some(source_extent) = view.volume.as_ref().and_then(|volume| {
                         wxdata::level2::display_extent_km(
                             &volume.scan,
                             view.moment,
@@ -17229,6 +17245,9 @@ impl HookEchoApp {
                             view.selected_cut_ms(),
                         )
                     }) {
+                        let clipped = !self.settings.full_coverage_radar
+                            && wxdata::sites::is_nexrad(site.id);
+                        let extent = if clipped { source_extent.min(230.0) } else { source_extent };
                         let boundary: Vec<_> = (0..=120)
                             .map(|i| crate::geo::destination_point(origin, i as f64 * 3.0, extent))
                             .collect();
@@ -17239,7 +17258,7 @@ impl HookEchoApp {
                             painter.text(
                                 to_screen(top[0], top[1]),
                                 egui::Align2::CENTER_BOTTOM,
-                                format!("Scan extent {:.0} km", extent),
+                                format!("Display extent {:.0} km", extent),
                                 egui::FontId::proportional(11.0),
                                 edge,
                             );
@@ -20433,6 +20452,22 @@ impl HookEchoApp {
             }
         }
     }
+}
+
+/// RadarOmega's NORMAL radius is 230 km for the observed KFWS reflectivity and velocity sweeps;
+/// their FULL radii differ with gate depth. Keep the source texture intact and clip only the
+/// shader's displayed gate count, so switching modes needs no data fetch or texture rebuild.
+fn apply_coverage_range(upload: &mut RadarUpload, full_coverage: bool, nexrad: bool) {
+    if full_coverage || !nexrad {
+        return;
+    }
+    let first = upload.uniform[2];
+    let spacing = upload.uniform[3];
+    if !spacing.is_finite() || spacing <= 0.0 {
+        return;
+    }
+    let standard_gates = ((230.0 - first) / spacing).ceil().max(1.0);
+    upload.uniform[5] = standard_gates.min(upload.gate_count as f32);
 }
 
 /// Convert a binned sweep into a GPU upload with its world-space bounding box.
@@ -24166,6 +24201,40 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coverage_range_uses_observed_full_gate_depth_per_product() {
+        use super::RadarUpload;
+        assert!(wxdata::sites::is_nexrad("KFWS"));
+        let mut upload = RadarUpload {
+            upload_token: 0,
+            sector_opacity: None,
+            az_bins: 720,
+            gate_count: 1824,
+            data: Vec::new(),
+            data16: None,
+            uniform: [0.0; 20],
+            lut: Vec::new(),
+            precip_flag: Vec::new(),
+            world_min: [0.0; 2],
+            world_max: [0.0; 2],
+            lut_only: false,
+        };
+        upload.uniform[2] = 2.125;
+        upload.uniform[3] = 0.25;
+        upload.uniform[5] = 1824.0;
+        super::apply_coverage_range(&mut upload, false, true);
+        assert_eq!(upload.uniform[5], 912.0);
+        upload.gate_count = 1184;
+        upload.uniform[5] = 1184.0;
+        super::apply_coverage_range(&mut upload, false, true);
+        assert_eq!(upload.uniform[5], 912.0);
+        upload.uniform[5] = 1184.0;
+        super::apply_coverage_range(&mut upload, true, true);
+        assert_eq!(upload.uniform[5], 1184.0);
+        super::apply_coverage_range(&mut upload, false, false);
+        assert_eq!(upload.uniform[5], 1184.0);
+    }
+
     #[test]
     fn manual_storm_track_uses_clicked_horizon_and_edited_motion() {
         let mut track = super::ManualStormTrack::default();
