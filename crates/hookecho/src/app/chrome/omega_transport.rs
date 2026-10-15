@@ -98,6 +98,7 @@ impl HookEchoApp {
                         ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 33, 33);
                         ui.visuals_mut().selection.bg_fill = egui::Color32::from_rgb(88, 65, 17);
                         ui.horizontal(|ui| {
+                            if radar_visible {
                             egui::ComboBox::from_id_salt("omega_frame_count")
                                 .width(92.0)
                                 .selected_text(egui::RichText::new(format!("{effective_loop} Frames")).color(accent))
@@ -134,8 +135,9 @@ impl HookEchoApp {
                                     if result.load_pack.is_some() { load_pack = result.load_pack; }
                                 }
                             }).0.named("Open radar history and playback settings").on_hover_text("History & playback");
-                            if radar_visible { self.radar_product_controls(ui, true); }
-                            else {
+                            self.radar_product_controls(ui, true);
+                            }
+                            if !radar_visible {
                                 ui.label(egui::RichText::new(field_name).size(12.0).color(accent));
                                 if field == Some(crate::render::FieldLayer::HailSwath) {
                                     let size = if self.hail_threshold_inches == 0 {
@@ -203,14 +205,14 @@ impl HookEchoApp {
                         let t = &mut self.views[idx].timeline;
                         if !radar_visible {
                             ui.weak(if field.is_some() {
-                                "Radar time reference · field timing shown above"
+                                "Latest field only · mosaic history is not available"
                             } else if imagery_map {
                                 "Radar timeline · imagery has separate time controls"
                             } else {
                                 "Radar timeline · radar hidden"
                             });
                         }
-                        if t.slot_count() > 0 {
+                        if radar_visible && t.slot_count() > 0 {
                             let window = t.live_window;
                             super::scrubber::track(ui, t, tz, accent, window, false, &statuses);
                         }
@@ -218,12 +220,14 @@ impl HookEchoApp {
                             ui.weak(format!("Loop: {cached_loop}/{listed_loop} recent frames ready"));
                         }
                         ui.horizontal(|ui| {
+                            if radar_visible {
                             if omega_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
                             let playing = self.views[idx].timeline.playing;
                             if omega_button(ui, if playing { ph::PAUSE } else { ph::PLAY }, if playing { "Pause" } else { "Play" }, playing).clicked() { self.views[idx].timeline.toggle_play(); }
                             if omega_button(ui, ph::SKIP_FORWARD, "Next frame", false).clicked() { self.views[idx].timeline.step_cut(1); }
                             if omega_button(ui, ph::BROADCAST, "Return to live", self.views[idx].timeline.following).clicked() { action = Some(PaletteAction::GoLive); }
                             ui.separator();
+                            }
                             if omega_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
                             if omega_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
                             if omega_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }

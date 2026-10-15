@@ -2406,6 +2406,14 @@ fn mrms_reference_time(
     if following { Some(now) } else { selected }
 }
 
+fn accept_near_future_mrms_time(
+    reference: chrono::DateTime<Utc>,
+    valid: chrono::DateTime<Utc>,
+    tolerance: chrono::Duration,
+) -> chrono::DateTime<Utc> {
+    if valid > reference && valid - reference <= tolerance { valid } else { reference }
+}
+
 /// The ZDR-column cache: the volume it was computed for, its columns, and the bright band the
 /// same pass found.
 /// A place the proximity alerts watch: a saved marker, or wherever the GPS says you are.
@@ -18357,17 +18365,19 @@ impl HookEchoApp {
         };
         // Live MRMS fields are independent of the site's last completed scan. That scan can
         // lag while the national field is fresh; archive scrubs still use their selected instant.
-        let analysis_time = if matches!(layer, crate::render::FieldLayer::Mrms | crate::render::FieldLayer::HailSwath) {
-            mrms_reference_time(self.views[pane].timeline.following, selected_time, Utc::now())?
-        } else {
-            selected_time?
-        };
         let tolerance = self
             .settings
             .alignment_tolerance_minutes
             .map_or_else(|| field_time_tolerance(layer), |minutes| {
                 chrono::Duration::minutes(i64::from(minutes))
             });
+        let live_mrms = matches!(layer, crate::render::FieldLayer::Mrms | crate::render::FieldLayer::MrmsCatalog(_) | crate::render::FieldLayer::HailSwath);
+        let analysis_time = if live_mrms {
+            let reference = mrms_reference_time(self.views[pane].timeline.following, selected_time, Utc::now())?;
+            if self.views[pane].timeline.following {
+                accept_near_future_mrms_time(reference, stamp.valid_time, tolerance)
+            } else { reference }
+        } else { selected_time? };
         let available = [wxdata::timecoord::TimedFrame {
             valid: stamp.valid_time,
             value: (),
@@ -24682,6 +24692,19 @@ mod tests {
         let archive = super::mrms_reference_time(false, Some(old_scan), now).unwrap();
         assert!(align(&[mosaic], archive, TimePolicy::NearestPast, tolerance).is_none());
         assert_eq!(super::mrms_reference_time(true, None, now), Some(now));
+    }
+
+    #[test]
+    fn live_mrms_accepts_only_near_future_posted_times() {
+        use wxdata::timecoord::{align, TimePolicy, TimedFrame};
+        let now = chrono::Utc::now();
+        let tolerance = super::field_time_tolerance(crate::render::FieldLayer::MrmsCatalog(0));
+        let near = now + chrono::Duration::minutes(1);
+        let far = now + tolerance + chrono::Duration::seconds(1);
+        let near_reference = super::accept_near_future_mrms_time(now, near, tolerance);
+        let far_reference = super::accept_near_future_mrms_time(now, far, tolerance);
+        assert!(align(&[TimedFrame { valid: near, value: () }], near_reference, TimePolicy::NearestPast, tolerance).is_some());
+        assert!(align(&[TimedFrame { valid: far, value: () }], far_reference, TimePolicy::NearestPast, tolerance).is_none());
     }
 
     #[test]
