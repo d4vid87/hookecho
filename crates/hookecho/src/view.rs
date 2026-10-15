@@ -293,6 +293,8 @@ pub struct MapView {
     pub show_legend: bool,
     pub loading: bool,
     pub last_poll: Option<Instant>,
+    /// Selected TDWR product-key set for the newest live head, independent of frame name.
+    pub tdwr_revision: Option<String>,
     pub error: Option<String>,
     pub fetch_failures: u8,
     pub failover_from: Option<String>,
@@ -479,6 +481,7 @@ impl MapView {
             show_legend: true,
             loading: false,
             last_poll: None,
+            tdwr_revision: None,
             error: None,
             fetch_failures: 0,
             failover_from: None,
@@ -546,6 +549,7 @@ impl MapView {
             self.retained_station = self.loaded_site.clone();
         }
         self.loaded_site = self.site.clone();
+        self.tdwr_revision = None;
         self.head_request.cancel();
         self.list_request.cancel();
         self.timeline.listing = false;
@@ -570,10 +574,10 @@ impl MapView {
         self.failed_frame = None;
         let restored_cut = self.recovery_cut.take();
         self.cut_selection = None;
-        let vol = self
-            .recent
-            .pop(&name)
-            .unwrap_or_else(|| Volume::new(scan, name, time));
+        let vol = match self.recent.pop(&name) {
+            Some(cached) if Arc::ptr_eq(&cached.scan, &scan) => cached,
+            _ => Volume::new(scan, name, time),
+        };
         if let Some(old) = self.volume.replace(vol) {
             // Not a volume still being written, and not a stale copy of the one just shown.
             if !was_retained && !old.live && old.name != self.volume.as_ref().expect("just set").name {
@@ -590,6 +594,12 @@ impl MapView {
             })
         });
         self.pin_low_cut();
+    }
+
+    /// A public feed can revise a frame without changing its archive name. Discard the older
+    /// binned allocation so the next loop lap uses the newly decoded scan from the shared cache.
+    pub fn forget_recent_frame(&mut self, name: &str) {
+        self.recent.pop(name);
     }
 
     /// Follow the lowest standard NEXRAD cut while live. Repeated cuts share the same tilt
@@ -997,18 +1007,20 @@ mod tests {
             Some("KTLX".into()),
             crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
         );
+        let scan_a = scan_at(&[0.5, 1.5]);
+        let scan_b = scan_at(&[0.5, 1.5]);
         let sample = |volume: &mut Volume| volume.shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
-        view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
+        view.show_volume(Arc::clone(&scan_a), "a".into(), now);
         assert!(view.volume.as_ref().unwrap().binned.is_empty());
         let first_a = sample(view.volume.as_mut().unwrap());
         assert_eq!(view.volume.as_ref().unwrap().binned.len(), 1);
-        view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
+        view.show_volume(Arc::clone(&scan_b), "b".into(), now);
         let first_b = sample(view.volume.as_mut().unwrap());
-        view.show_volume(scan_at(&[0.5, 1.5]), "a".into(), now);
+        view.show_volume(Arc::clone(&scan_a), "a".into(), now);
         assert_eq!(view.volume.as_ref().unwrap().name, "a");
         assert!(Arc::ptr_eq(&first_a, &sample(view.volume.as_mut().unwrap())), "second lap must retain the actual binned allocation");
         view.forget_recent();
-        view.show_volume(scan_at(&[0.5, 1.5]), "b".into(), now);
+        view.show_volume(Arc::clone(&scan_b), "b".into(), now);
         assert!(!Arc::ptr_eq(&first_b, &sample(view.volume.as_mut().unwrap())), "site reset must discard the old allocation");
 
         // A volume still being written must never be kept: half its tilts may not have arrived,
@@ -1043,16 +1055,30 @@ mod tests {
         let unique: std::collections::HashSet<_> = fresh.iter().map(Arc::as_ptr).collect();
         assert_eq!(unique.len(), 30, "fresh volumes allocate on every lap");
         let mut view = MapView::new(Some("KTLX".into()), crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0));
+        let scans: std::collections::HashMap<_, _> = names.iter().map(|name| (name.clone(), scan_at(&[0.5, 1.5]))).collect();
         let mut retained = std::collections::HashMap::new();
         for _ in 0..3 {
             for name in &names {
-                view.show_volume(scan_at(&[0.5, 1.5]), name.clone(), now);
+                view.show_volume(Arc::clone(&scans[name]), name.clone(), now);
                 let sweep = sample(view.volume.as_mut().unwrap());
                 if let Some(previous) = retained.get(name) { assert!(Arc::ptr_eq(previous, &sweep)); }
                 else { retained.insert(name.clone(), sweep); }
             }
         }
         assert_eq!(retained.len(), 10, "one allocation per volume, then two free laps");
+    }
+
+    #[test]
+    fn a_revised_frame_replaces_its_recent_scan() {
+        let now = Utc::now();
+        let mut view = MapView::new(Some("TDFW".into()), Camera::at_lonlat(-96.918, 33.065, 7.0));
+        let old = scan_at(&[0.5]);
+        let replacement = scan_at(&[0.5, 1.5]);
+        view.show_volume(Arc::clone(&old), "same".into(), now);
+        view.show_volume(scan_at(&[0.5]), "other".into(), now);
+        view.show_volume(Arc::clone(&replacement), "same".into(), now);
+        assert!(Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &replacement));
+        assert!(!Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &old));
     }
 
     /// A live volume that has only just started has no tilts in it yet. Applying it emptied the
@@ -1132,8 +1158,10 @@ mod tests {
         let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
         view.loaded_site = view.site.clone();
         view.show_volume(Arc::clone(&old), "old".into(), Utc::now());
+        view.tdwr_revision = Some("old-key-set".into());
         view.site = Some("KDMX".into());
         view.begin_station_switch();
+        assert!(view.tdwr_revision.is_none());
         assert!(Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &old));
         assert_eq!(view.retained_station.as_deref(), Some("KTLX"));
         assert_eq!(view.displayed_station(), Some("KTLX"));

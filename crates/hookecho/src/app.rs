@@ -2646,6 +2646,7 @@ enum DataMsg {
         name: String,
         time: DateTime<Utc>,
         scan: Scan,
+        tdwr_revision: Option<String>,
     },
     /// A live radial-block update (merged full volume) from the chunk streamer.
     Live {
@@ -12400,12 +12401,13 @@ impl HookEchoApp {
     ) {
         let generation = self.views[view_idx].head_request.start(site.clone());
         let request_site = site.clone();
+        let current_tdwr_revision = self.views[view_idx].tdwr_revision.clone();
         let tx = self.msg_tx.clone();
         let network = wxdata::sites::network(&site);
         if network != wxdata::sites::Network::Nexrad {
-            // None of these has a Level 2 feed or an archive: one volume per poll, synthesized
-            // from the newest Level 3 tilt products (TDWR) or assembled from the newest ODIM
-            // files (DWD, OPERA).
+            // None of these has a Level 2 feed: each live poll synthesizes the newest TDWR
+            // Level 3 products or assembles the newest DWD/OPERA ODIM files. TDWR also has a
+            // timestamped Level 3 archive for timeline playback.
             let http = self.http.clone();
             let handle = self.spawner.spawn_abortable(async move {
                 use wxdata::sites::Network;
@@ -12416,10 +12418,13 @@ impl HookEchoApp {
                 // DWD meant ~50 requests and ~2 MB discarded on nine polls out of ten.
                 let cur = current_name.as_deref();
                 let fetched = match network {
-                    Network::Dwd => wxdata::dwd::fetch_volume(&http, &site, cur).await,
-                    Network::Opera => wxdata::opera::fetch_volume(&http, &site, cur).await,
+                    Network::Dwd => wxdata::dwd::fetch_volume(&http, &site, cur).await
+                        .map(|result| result.map(|(name, time, scan)| (name, time, scan, None))),
+                    Network::Opera => wxdata::opera::fetch_volume(&http, &site, cur).await
+                        .map(|result| result.map(|(name, time, scan)| (name, time, scan, None))),
                     Network::Tdwr | Network::Nexrad => {
-                        wxdata::tdwr::fetch_volume(&http, &site, cur).await
+                        wxdata::tdwr::fetch_volume(&http, &site, cur, current_tdwr_revision.as_deref()).await
+                            .map(|result| result.map(|(name, time, scan, revision)| (name, time, scan, Some(revision))))
                     }
                 };
                 let msg = match fetched {
@@ -12429,19 +12434,20 @@ impl HookEchoApp {
                     },
                     // A feed that hands back the name we already hold anyway — a probe that could
                     // not decode, say — is still up to date.
-                    Ok(Some((name, _, _))) if current_name.as_deref() == Some(name.as_str()) => {
+                    Ok(Some((name, _, _, _))) if network != Network::Tdwr && current_name.as_deref() == Some(name.as_str()) => {
                         DataMsg::UpToDate {
                             view: view_idx,
                             site,
                         }
                     }
-                    Ok(Some((name, time, scan))) => DataMsg::Volume {
+                    Ok(Some((name, time, scan, tdwr_revision))) => DataMsg::Volume {
                         selected_frame: None,
                         view: view_idx,
                         site,
                         name,
                         time,
                         scan,
+                        tdwr_revision,
                     },
                     Err(e) => DataMsg::Error {
                         view: view_idx,
@@ -12503,6 +12509,7 @@ impl HookEchoApp {
                                 name,
                                 time,
                                 scan,
+                                tdwr_revision: None,
                             },
                             Err(e) => DataMsg::Error {
                                 view: view_idx,
@@ -12618,6 +12625,7 @@ impl HookEchoApp {
                     name,
                     time,
                     scan,
+                    tdwr_revision,
                     selected_frame,
                     ..
                 } => {
@@ -12629,11 +12637,15 @@ impl HookEchoApp {
                     } else if !v.timeline.following && v.timeline.current().is_some() && !frame_result_is_current(&v.timeline, &name) {
                         continue;
                     }
+                    if selected_frame.is_none() && tdwr_revision.is_some() {
+                        v.tdwr_revision = tdwr_revision;
+                        v.forget_recent_frame(&name);
+                    }
                     let looping = v.timeline.live_looping();
                     // A newly-arrived live head (following): roll the day at UTC midnight, or grow
                     // the frame list so the loop window slides forward. A frame-fetch result for a
                     // scrubbed/loop-display frame is older than the head and isn't a new head.
-                    let new_head = v.timeline.following
+                    let _new_head = v.timeline.following
                         && v.site.as_deref().is_some_and(|site| matches!(wxdata::sites::network(site), wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr))
                         && {
                             let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
@@ -12650,14 +12662,15 @@ impl HookEchoApp {
                                 false
                             }
                         };
-                    // While looping, the playhead frame owns the display; a genuinely new head is
-                    // only appended, not shown. Every other case updates the displayed volume.
-                    if !(looping && new_head) {
+                    // While looping, the playhead frame owns the display. A live head update,
+                    // including a same-name TDWR revision, belongs in the cache until playback
+                    // reaches that frame.
+                    if !(looping && selected_frame.is_none()) {
                         v.show_volume(scan, name, time);
-                        v.loading = false;
-                        v.error = None;
                         self.pane_shown.remove(&view);
                     }
+                    v.loading = false;
+                    v.error = None;
                     v.fetch_failures = 0;
                     v.clamp_tilt();
                     v.clamp_moment();
@@ -13475,6 +13488,7 @@ impl HookEchoApp {
                     name,
                     time,
                     scan,
+                    tdwr_revision: None,
                 },
                 Err(e) => DataMsg::FrameError {
                     name,

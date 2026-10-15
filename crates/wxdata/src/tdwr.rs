@@ -276,12 +276,14 @@ fn sweep_from(
 /// Fetch the newest tilt products for a TDWR and assemble them into a volume.
 ///
 /// Returns the scan plus the volume name and time. The name follows the newest low-tilt
-/// reflectivity key, so later product arrivals cannot rename an already displayed frame.
+/// reflectivity key, so later product arrivals cannot rename an already displayed frame. The
+/// revision identifies the selected product-key set and allows a same-name frame to gain tilts.
 pub async fn fetch_volume(
     http: &reqwest::Client,
     id: &str,
     current_name: Option<&str>,
-) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
+    current_revision: Option<&str>,
+) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan, String)>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a TDWR"))?;
     let short = &meta.id[1..];
     // A low-tilt reflectivity key anchors the volume identity and timeline frame. Fetch the
@@ -306,11 +308,6 @@ pub async fn fetch_volume(
             .ok_or_else(|| anyhow::anyhow!("no recent low-tilt TDWR reflectivity for {id}"))?
     };
     let name = frame_name(meta.id, anchor);
-    if current_name == Some(name.as_str()) {
-        crate::stats::bump(crate::stats::Counter::FetchSkipped);
-        return Ok(None);
-    }
-
     let fallback_hour = if anchor.timestamp().div_euclid(3600) == now.timestamp().div_euclid(3600) {
         anchor - chrono::Duration::hours(1)
     } else {
@@ -325,7 +322,12 @@ pub async fn fetch_volume(
         }
     })).await;
     anyhow::ensure!(keys.first().and_then(|key| key.as_ref()).is_some(), "TDWR low tilt unavailable at selected anchor");
-    assemble_volume(http, meta, keys, anchor).await.map(Some)
+    let revision = keys.iter().map(|key| key.as_deref().unwrap_or("-")).collect::<Vec<_>>().join("|");
+    if current_name == Some(name.as_str()) && current_revision == Some(revision.as_str()) {
+        crate::stats::bump(crate::stats::Counter::FetchSkipped);
+        return Ok(None);
+    }
+    assemble_volume(http, meta, keys, anchor).await.map(|(name, time, scan)| Some((name, time, scan, revision)))
 }
 
 /// Fetch the product set that was current at a listed low-tilt frame, for playback and scrubbing.
@@ -544,11 +546,16 @@ mod tests {
     #[ignore = "network"]
     async fn fetches_a_live_tdwr_volume() {
         let http = reqwest::Client::new();
-        let (name, time, scan) = fetch_volume(&http, "TOKC", None)
+        let (name, time, scan, revision) = fetch_volume(&http, "TOKC", None, None)
             .await
             .expect("TOKC volume")
             .expect("a fresh fetch is never up to date");
         assert!(name.starts_with("TOKC"), "{name}");
+        assert!(revision.contains("OKC_TZ0_"));
+        if let Some((next_name, _, _, next_revision)) = fetch_volume(&http, "TOKC", Some(&name), Some(&revision))
+            .await.expect("TDWR revision probe") {
+            assert!(next_name != name || next_revision != revision, "unchanged product set was decoded again");
+        }
         assert!(Identifier::new(name).date_time().is_some());
         let tilts = crate::level2::elevation_angles(&scan);
         assert!(!tilts.is_empty(), "at least one tilt");

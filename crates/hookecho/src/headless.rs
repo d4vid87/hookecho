@@ -331,7 +331,8 @@ pub fn run(
                 .user_agent(wxdata::alerts::USER_AGENT)
                 .build()?;
             let fetched = match wxdata::sites::network(site) {
-                wxdata::sites::Network::Tdwr => wxdata::tdwr::fetch_volume(&http, site, None).await,
+                wxdata::sites::Network::Tdwr => wxdata::tdwr::fetch_volume(&http, site, None, None).await
+                    .map(|result| result.map(|(name, time, scan, _)| (name, time, scan))),
                 wxdata::sites::Network::Dwd => wxdata::dwd::fetch_volume(&http, site, None).await,
                 wxdata::sites::Network::Opera => {
                     wxdata::opera::fetch_volume(&http, site, None).await
