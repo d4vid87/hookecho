@@ -103,9 +103,8 @@ impl Timeline {
 
     /// Time at the playhead, including a pending archive seek before its frame list arrives.
     pub fn selected_time(&self) -> Option<DateTime<Utc>> {
-        self.current()
-            .and_then(Identifier::date_time)
-            .or(self.seek_target)
+        self.seek_target
+            .or_else(|| self.current().and_then(Identifier::date_time))
     }
 
     /// Total scrub slots: observed frames plus the forecast tail (only when frames exist).
@@ -662,6 +661,10 @@ mod tests {
         timeline.frames.clear();
         timeline.seek_target = Some(first);
         assert_eq!(timeline.selected_time(), Some(first));
+        timeline.frames = day("KTLX", 3);
+        let next_day = first + chrono::Duration::days(1);
+        timeline.seek_target = Some(next_day);
+        assert_eq!(timeline.selected_time(), Some(next_day), "a pending archive seek wins over retained frames");
     }
 
     #[test]

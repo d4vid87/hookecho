@@ -411,6 +411,19 @@ impl MapView {
         Some(volume.time)
     }
 
+    /// Time linked panes should request. A new playhead or archive seek takes priority over a
+    /// retained scan; only a cut from the selected, already-loaded volume overrides its head.
+    pub fn linked_requested_time(&self) -> Option<DateTime<Utc>> {
+        if let Some(target) = self.timeline.seek_target { return Some(target); }
+        if let Some(source) = self.timeline.current() {
+            if self.volume.as_ref().is_some_and(|volume| volume.name == source.name()) {
+                if let Some(time) = self.displayed_time() { return Some(time); }
+            }
+            if let Some(time) = source.date_time() { return Some(time); }
+        }
+        self.displayed_time()
+    }
+
     /// Compare the scan actually loaded, including a selected cut, with the linked target.
     /// A pending playhead fetch must not make the previously painted scan appear synchronized.
     pub fn alignment_offset_seconds(&self) -> Option<i64> {
@@ -906,6 +919,27 @@ mod tests {
         assert!(!view.alignment_acceptable(Some(120)), "a fractional second beyond the limit is outside the window");
         view.timeline.alignment_target = None;
         assert!(view.alignment_acceptable(Some(0)));
+    }
+
+    #[test]
+    fn linked_request_uses_new_playhead_before_old_scan_finishes_loading() {
+        let mut view = MapView::new(None, Camera::at_lonlat(0.0, 0.0, 3.0));
+        let old = wxdata::level2::Identifier::new("KTLX20130520_000000_V06".into());
+        let next = wxdata::level2::Identifier::new("KTLX20130520_000500_V06".into());
+        let old_time = old.date_time().unwrap();
+        let next_time = next.date_time().unwrap();
+        view.timeline.frames = vec![old, next];
+        view.timeline.playhead = 1;
+        view.volume = Some(Volume::new(scan_at(&[0.5]), view.timeline.frames[0].name().into(), old_time));
+        assert_eq!(view.displayed_time(), Some(old_time));
+        assert_eq!(view.linked_requested_time(), Some(next_time));
+        let tomorrow = next_time + chrono::Duration::days(1);
+        view.timeline.seek_target = Some(tomorrow);
+        assert_eq!(view.linked_requested_time(), Some(tomorrow));
+        view.timeline.seek_target = None;
+        view.volume.as_mut().unwrap().name = view.timeline.frames[1].name().into();
+        view.volume.as_mut().unwrap().time = next_time + chrono::Duration::seconds(30);
+        assert_eq!(view.linked_requested_time(), view.displayed_time());
     }
 
     #[test]

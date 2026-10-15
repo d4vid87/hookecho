@@ -24062,26 +24062,26 @@ impl eframe::App for HookEchoApp {
             if self.link_times {
                 let active = self.active.min(n - 1);
                 let leader = &self.views[active].timeline;
-                if let Some(source) = leader.current().cloned() {
-                    let selected_cut = self.views[active].selected_cut_ms();
-                    let lock_loaded_source = self.lock_source_frame && self.views[active].volume.as_ref().is_some_and(|v| v.name == source.name());
-                    if let Some(time) = selected_cut
-                        .and_then(chrono::DateTime::from_timestamp_millis)
-                        .or_else(|| self.views[active].displayed_time())
-                        .or_else(|| source.date_time())
-                    {
-                        let (following, playing) = (leader.following, leader.playing);
-                        for (i, view) in self.views.iter_mut().enumerate() {
-                            if i != active { view.timeline.alignment_target = Some(time); }
-                            if i != active
-                                && (selected_cut.is_some()
-                                    || !lock_loaded_source
-                                    || !view.timeline.align_to_source(
-                                        &source, following, playing,
-                                    ))
-                            {
-                                view.timeline.align_to(time, following, playing);
-                            }
+                let source = leader.current().cloned();
+                let source_loaded = source.as_ref().is_some_and(|source| {
+                    self.views[active].volume.as_ref().is_some_and(|volume| volume.name == source.name())
+                });
+                let selected_cut = source_loaded && self.views[active].selected_cut_ms().is_some();
+                let pending_seek = leader.seek_target.is_some();
+                if let Some(time) = self.views[active].linked_requested_time() {
+                    let (following, playing) = (leader.following, leader.playing);
+                    for (i, view) in self.views.iter_mut().enumerate() {
+                        if i != active { view.timeline.alignment_target = Some(time); }
+                        if i != active
+                            && (selected_cut
+                                || pending_seek
+                                || !self.lock_source_frame
+                                || !source_loaded
+                                || source.as_ref().is_none_or(|source| !view.timeline.align_to_source(
+                                    source, following, playing,
+                                )))
+                        {
+                            view.timeline.align_to(time, following, playing);
                         }
                     }
                 }
