@@ -14,6 +14,7 @@ impl HookEchoApp {
         let mut basemap = self.views[self.active].basemap;
         let mut sites = self.show_radar_sites;
         let mut rings = self.show_range_rings;
+        let mut scan_boundary = self.show_scan_boundary;
         let before = (
             self.settings.map_details,
             self.settings.pause_while_panning,
@@ -75,6 +76,8 @@ impl HookEchoApp {
                             });
                             left.checkbox(&mut rings, "Range rings")
                                 .named("Show range rings");
+                            left.checkbox(&mut scan_boundary, "Live scan boundary")
+                                .named("Show actual scan boundary");
                             let vector = basemap
                                 .resolve(left.visuals().dark_mode)
                                 .vector_palette()
@@ -232,6 +235,9 @@ impl HookEchoApp {
         }
         if rings != self.show_range_rings {
             self.apply_palette(PaletteAction::ToggleOverlay(OverlayToggle::RangeRings), ctx);
+        }
+        if scan_boundary != self.show_scan_boundary {
+            self.apply_palette(PaletteAction::ToggleOverlay(OverlayToggle::ScanBoundary), ctx);
         }
         if speeds_before != self.settings.source_animation_speeds
             || before

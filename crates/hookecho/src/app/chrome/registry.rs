@@ -1030,6 +1030,13 @@ impl HookEchoApp {
                 true,
             ),
             (
+                T::ScanBoundary,
+                "Reference",
+                "Live scan boundary",
+                "Boundary at the farthest gate of the radar scan on screen",
+                true,
+            ),
+            (
                 T::LinkCameras,
                 "Reference",
                 "Link pane cameras",

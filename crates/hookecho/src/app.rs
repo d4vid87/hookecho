@@ -1927,6 +1927,7 @@ pub(crate) enum OverlayToggle {
     Aviation,
     Tfr,
     RangeRings,
+    ScanBoundary,
     Sensors,
     Hodo,
     Cells,
@@ -1974,7 +1975,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 43] = [
+    pub(crate) const ALL: [OverlayToggle; 44] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1992,6 +1993,7 @@ impl OverlayToggle {
         Self::Aviation,
         Self::Tfr,
         Self::RangeRings,
+        Self::ScanBoundary,
         Self::Sensors,
         Self::Hodo,
         Self::Cells,
@@ -3697,6 +3699,7 @@ pub struct HookEchoApp {
     tropical_text_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
     /// Range rings + azimuth spokes around the active site (feature HH).
     show_range_rings: bool,
+    show_scan_boundary: bool,
     /// Optional live-scan azimuth age ring in the analyst workbench.
     show_scan_progress: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
@@ -4674,6 +4677,7 @@ impl HookEchoApp {
             tropical_window: ui::tropical_window::TropicalWindow::default(),
             tropical_text_rx: None,
             show_range_rings: false,
+            show_scan_boundary: false,
             show_scan_progress: false,
             show_radar_sites: true,
             show_blockage: false,
@@ -9845,6 +9849,7 @@ impl HookEchoApp {
             T::Aviation => &mut self.show_aviation,
             T::Tfr => &mut self.show_tfr,
             T::RangeRings => &mut self.show_range_rings,
+            T::ScanBoundary => &mut self.show_scan_boundary,
             T::Fronts => &mut self.show_fronts,
             T::GlmLightning => &mut self.show_glm,
             T::Strikes => &mut self.show_strikes,
@@ -16983,8 +16988,8 @@ impl HookEchoApp {
             }
         }
 
-        // Range rings + azimuth spokes around the scan actually on screen.
-        if self.show_range_rings {
+        // Fixed distance reference and the actual loaded-scan edge have separate switches.
+        if self.show_range_rings || self.show_scan_boundary {
             if let Some(site) = view.displayed_station().or(view.site.as_deref()).and_then(wxdata::sites::site_by_id) {
                 let origin = [site.longitude as f64, site.latitude as f64];
                 let col = egui::Color32::from_gray(150).gamma_multiply(0.55);
@@ -16993,46 +16998,50 @@ impl HookEchoApp {
                     let (sx, sy) = cam.world_to_screen(w, vp);
                     egui::pos2(prect.left() + sx, prect.top() + sy)
                 };
-                for km in [50.0, 100.0, 150.0, 200.0] {
-                    let pts: Vec<_> = (0..=72).map(|i| crate::geo::destination_point(origin, i as f64 * 5.0, km)).collect();
-                    crate::geo::paint_path(&painter, &cam, prect, &pts, egui::Stroke::new(1.0, col));
-                    if cam.zoom >= 6.0 {
-                        let top = crate::geo::destination_point(origin, 0.0, km);
-                        painter.text(
-                            to_screen(top[0], top[1]),
-                            egui::Align2::CENTER_BOTTOM,
-                            format!("{km:.0} km"),
-                            egui::FontId::proportional(10.0),
-                            col,
-                        );
+                if self.show_range_rings {
+                    for km in [50.0, 100.0, 150.0, 200.0] {
+                        let pts: Vec<_> = (0..=72).map(|i| crate::geo::destination_point(origin, i as f64 * 5.0, km)).collect();
+                        crate::geo::paint_path(&painter, &cam, prect, &pts, egui::Stroke::new(1.0, col));
+                        if cam.zoom >= 6.0 {
+                            let top = crate::geo::destination_point(origin, 0.0, km);
+                            painter.text(
+                                to_screen(top[0], top[1]),
+                                egui::Align2::CENTER_BOTTOM,
+                                format!("{km:.0} km"),
+                                egui::FontId::proportional(10.0),
+                                col,
+                            );
+                        }
+                    }
+                    for az in (0..360).step_by(45) {
+                        let far = crate::geo::destination_point(origin, az as f64, 200.0);
+                        crate::geo::paint_path(&painter, &cam, prect, &[origin, far], egui::Stroke::new(0.6, col.gamma_multiply(0.7)));
                     }
                 }
-                for az in (0..360).step_by(45) {
-                    let far = crate::geo::destination_point(origin, az as f64, 200.0);
-                    crate::geo::paint_path(&painter, &cam, prect, &[origin, far], egui::Stroke::new(0.6, col.gamma_multiply(0.7)));
-                }
-                if let Some(extent) = view.volume.as_ref().and_then(|volume| {
-                    wxdata::level2::display_extent_km(
-                        &volume.scan,
-                        view.moment,
-                        view.tilt,
-                        view.selected_cut_ms(),
-                    )
-                }) {
-                    let boundary: Vec<_> = (0..=120)
-                        .map(|i| crate::geo::destination_point(origin, i as f64 * 3.0, extent))
-                        .collect();
-                    let edge = egui::Color32::from_rgb(75, 170, 255);
-                    crate::geo::paint_path(&painter, &cam, prect, &boundary, egui::Stroke::new(1.4, edge));
-                    if cam.zoom >= 5.0 {
-                        let top = crate::geo::destination_point(origin, 0.0, extent);
-                        painter.text(
-                            to_screen(top[0], top[1]),
-                            egui::Align2::CENTER_BOTTOM,
-                            format!("Scan extent {:.0} km", extent),
-                            egui::FontId::proportional(11.0),
-                            edge,
-                        );
+                if self.show_scan_boundary {
+                    if let Some(extent) = view.volume.as_ref().and_then(|volume| {
+                        wxdata::level2::display_extent_km(
+                            &volume.scan,
+                            view.moment,
+                            view.tilt,
+                            view.selected_cut_ms(),
+                        )
+                    }) {
+                        let boundary: Vec<_> = (0..=120)
+                            .map(|i| crate::geo::destination_point(origin, i as f64 * 3.0, extent))
+                            .collect();
+                        let edge = egui::Color32::from_rgb(75, 170, 255);
+                        crate::geo::paint_path(&painter, &cam, prect, &boundary, egui::Stroke::new(1.4, edge));
+                        if cam.zoom >= 5.0 {
+                            let top = crate::geo::destination_point(origin, 0.0, extent);
+                            painter.text(
+                                to_screen(top[0], top[1]),
+                                egui::Align2::CENTER_BOTTOM,
+                                format!("Scan extent {:.0} km", extent),
+                                egui::FontId::proportional(11.0),
+                                edge,
+                            );
+                        }
                     }
                 }
             }
