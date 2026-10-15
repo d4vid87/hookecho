@@ -15385,6 +15385,17 @@ impl HookEchoApp {
                                     wxdata::radar_status::Availability::Unknown => "NOAA status unavailable".to_owned(),
                                 };
                                 ui.label(egui::RichText::new(status).small());
+                                ui.label(egui::RichText::new("Pin color reflects NOAA network status").small().color(egui::Color32::from_rgb(149, 188, 211)));
+                                if self.views[idx].site.as_deref() == Some(site.id) {
+                                    let displayed = self.views[idx].displayed_time().map_or_else(
+                                        || "Displayed scan: not loaded".to_owned(),
+                                        |time| {
+                                            let age = Utc::now().signed_duration_since(time).num_minutes().max(0);
+                                            format!("Displayed scan: {age} min old")
+                                        },
+                                    );
+                                    ui.label(egui::RichText::new(displayed).small());
+                                }
                                 ui.label(egui::RichText::new("Visual range guide").small().color(egui::Color32::from_rgb(149, 188, 211)));
                             }
                     });

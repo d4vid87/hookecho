@@ -399,6 +399,22 @@ impl HookEchoApp {
             .site
             .clone()
             .unwrap_or_else(|| "Select radar".into());
+        let station_status = self.radar_site_status.as_ref().map_or(
+            wxdata::radar_status::Availability::Unknown,
+            |report| report.availability(&station, Utc::now()),
+        );
+        let station_status = match station_status {
+            wxdata::radar_status::Availability::Recent => "NOAA Level II receipt: recent",
+            wxdata::radar_status::Availability::Delayed => "NOAA Level II receipt: delayed",
+            wxdata::radar_status::Availability::Stale => "NOAA Level II receipt: stale",
+            wxdata::radar_status::Availability::NotOperating => "NOAA RDA: not operating",
+            wxdata::radar_status::Availability::Unknown => "NOAA network status: unavailable",
+        };
+        let scan_status = self.views[self.active].displayed_time().map_or_else(
+            || "Displayed scan: not loaded".to_owned(),
+            |time| format!("Displayed scan: {} min old", Utc::now().signed_duration_since(time).num_minutes().max(0)),
+        );
+        let station_details = format!("{station_status}\n{scan_status}\nPin color reflects NOAA network status.");
         let station_area = egui::Area::new("omega_workspace_station".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
@@ -437,6 +453,7 @@ impl HookEchoApp {
                                     .color(ACCENT),
                             )
                             .named("Select radar station")
+                            .on_hover_text(&station_details)
                             .clicked()
                         {
                             action = Some(PaletteAction::OpenWindow(AppWindow::Site));

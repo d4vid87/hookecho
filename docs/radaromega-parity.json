@@ -403,12 +403,13 @@
       "status": "partial",
       "observed_scope": "Map shows labeled radar towers; Show TDWR Towers toggle is visible.",
       "observation_type": "runtime-screenshot",
-      "hookecho_implementation": "Existing radar-site markers and range rings are exposed by Display Settings. Persisted show_tdwr_sites (default true) independently filters TDWR marker drawing, hover and click hit-testing by registry Network::Tdwr; selected station data and full site picker remain available. At city zoom (8+), unselected TDWRs use an outlined cyan pin instead of a faint small dot. A public NWS radar-stations feed now colors delayed, stale, and non-operating station pins and labels the RDA state/Level II receipt category in the radar lens. A missing station or report older than five minutes reverts to unknown rather than claiming an outage.",
+      "hookecho_implementation": "Existing radar-site markers and range rings are exposed by Display Settings. Persisted show_tdwr_sites (default true) independently filters TDWR marker drawing, hover and click hit-testing by registry Network::Tdwr; selected station data and full site picker remain available. At city zoom (8+), unselected TDWRs use an outlined cyan pin instead of a faint small dot. A public NWS radar-stations feed now colors delayed, stale, and non-operating station pins and labels the RDA state/Level II receipt category in the radar lens. The classic lens and workspace station tooltip explicitly identify pin color as NOAA network status and show the selected site's displayed scan age separately. A missing station or report older than five minutes reverts to unknown rather than claiming an outage.",
       "remaining_gaps": [
-        "NOAA receipt/status categories are independent public-data signals, not proven equivalent to RadarOmega's tower colors or to the freshness of a scan rendered in HookEcho. Every international tower catalog remains incomplete."
+        "NOAA receipt/status categories are independent public-data signals and are not proven equivalent to RadarOmega's tower colors. A displayed scan can be older than NOAA's latest receipt; the lens now shows its age separately, but full station-to-scan provenance and every international tower catalog remain incomplete."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
         "crates/hookecho/src/products.rs",
         "crates/hookecho/src/view.rs",
         "crates/hookecho/src/settings.rs",
