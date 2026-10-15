@@ -3,7 +3,8 @@
 //!
 //! ORD is an OGC EDR API on `api.meteogate.eu`, but the API only serves CoverageJSON: the ODIM
 //! files themselves live in a public S3 bucket, `openradar-24h`, one object per volume per moment,
-//! keyed `YYYY/MM/DD/CC/nod/PVOL/nod@YYYYMMDDThhmm@<elevations>@<moments>.h5`. Anonymous, no key,
+//! keyed `YYYY/MM/DD/CC/nod/PVOL/nod@YYYYMMDDThhmm@<elevations>@<moments>.h5`. Swedish sites
+//! instead publish one `SCAN` object per elevation. Anonymous, no key,
 //! no registration, CC BY 4.0, and the bucket lists with a prefix — so finding the newest volume
 //! is one ~5 KB listing of the current hour rather than the megabyte of HTML DWD charges for the
 //! same question.
@@ -16,10 +17,12 @@
 //! ponytail: a curated table of the sites that verify live, not the whole 129-radar feed. Three
 //! things disqualify a country, and all three were measured rather than assumed:
 //!
-//! * Norway (12 sites) writes HDF5 with 4-byte file offsets and Malta writes big-endian
-//!   datatypes; `hdf5lite` reads neither. Nothing in this crate can fix that.
-//! * Switzerland, Finland, France, Estonia, Lithuania and Sweden publish `SCAN/`, one file per
-//!   elevation, which is DWD's shape and a different fetch loop. Later, if ever.
+//! * Norway (12 sites) uses 4-byte HDF5 file addresses, which `hdf5lite` now reads, but its
+//!   live volume shape and gate metadata still need validation. Malta writes big-endian
+//!   datatypes, which `hdf5lite` does not yet read.
+//! * Switzerland, Finland, France, Estonia and Lithuania publish `SCAN/`, one file per
+//!   elevation; their publishing cadence and file shape still need validation. Sweden's
+//!   nine-elevation `SCAN/` volumes are supported below.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
@@ -97,6 +100,16 @@ pub const SITES: &[SiteEntry] = &[
     site("ROTIM", "Timisoara", "RO", 45.7717, 21.2577, 145),
     site("SILIS", "Lisca", "SI", 46.0678, 15.2849, 950),
     site("SIPAS", "Pasja ravan", "SI", 46.0980, 14.2282, 1043),
+    site("SEANG", "Ängelholm", "SE", 56.3675, 12.8517, 209),
+    site("SEATV", "Åtvidaberg", "SE", 58.1059, 15.9365, 222),
+    site("SEBAA", "Bålsta", "SE", 59.6110, 17.5833, 83),
+    site("SEHUV", "Hudiksvall", "SE", 61.5771, 16.7144, 389),
+    site("SEKAA", "Karlskrona", "SE", 56.2955, 15.6102, 132),
+    site("SEKRN", "Kiruna", "SE", 67.7088, 20.6178, 647),
+    site("SELEK", "Leksand", "SE", 60.7230, 14.8776, 457),
+    site("SELLA", "Luleå (Rosvik)", "SE", 65.4309, 21.8650, 69),
+    site("SEOER", "Örnsköldsvik", "SE", 63.6395, 18.4019, 522),
+    site("SEOSD", "Östersund", "SE", 63.2951, 14.7591, 466),
 ];
 
 /// The OPERA radar with this id, if any (case-insensitive).
@@ -114,8 +127,9 @@ fn index_url(country: &str, nod: &str, hour: DateTime<Utc>) -> String {
     // The `@` in the key is left as-is: S3 accepts it unescaped in a prefix, and escaping it would
     // have to survive the proxy's path rewrite as well.
     format!(
-        "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/PVOL/{nod}@{}",
+        "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/{}/{nod}@{}",
         hour.format("%Y/%m/%d"),
+        if country == "SE" { "SCAN" } else { "PVOL" },
         hour.format("%Y%m%dT%H")
     )
 }
@@ -167,6 +181,29 @@ fn newest_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     group
 }
 
+/// Pick the latest *complete enough* Swedish scan. Individual elevations arrive separately;
+/// choosing a timestamp after only its base tilt lands would repeatedly replace a full volume
+/// with a one-tilt one. Five of the nine published elevations is the minimum for display.
+fn newest_scan_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    let all = keys(xml);
+    let mut stamps: Vec<&str> = all.iter().filter_map(|key| {
+        let mut parts = key.rsplit('/').next()?.split('@');
+        (parts.next()? == nod).then(|| parts.next()).flatten()
+    }).collect();
+    stamps.sort_unstable();
+    stamps.dedup();
+    for stamp in stamps.into_iter().rev() {
+        let prefix = format!("{nod}@{stamp}@");
+        let group: Vec<&str> = all.iter().copied().filter(|key| {
+            key.rsplit('/').next().is_some_and(|name| name.starts_with(&prefix) && name.contains("DBZH"))
+        }).collect();
+        if group.len() >= 5 {
+            return group;
+        }
+    }
+    Vec::new()
+}
+
 /// The newest volume for `id`, assembled from the objects EUMETNET published for it.
 pub async fn fetch_volume(
     http: &reqwest::Client,
@@ -203,7 +240,11 @@ pub async fn fetch_volume(
         ))
         .await
         .unwrap_or_default();
-        group = newest_group(&index, &nod)
+        group = (if meta.state == "SE" {
+            newest_scan_group(&index, &nod)
+        } else {
+            newest_group(&index, &nod)
+        })
             .into_iter()
             .map(str::to_string)
             .collect();
@@ -255,12 +296,30 @@ pub async fn fetch_volume(
     }
 
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
-    let files = files.into_iter().flatten();
+    let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
+    if meta.state == "SE" {
+        let parts: Vec<(f32, Sweep)> = std::iter::once(&base)
+            .chain(files.iter())
+            .filter_map(|scan| {
+                (scan.sweeps().len() == 1).then(|| {
+                    let sweep = scan.sweeps()[0].clone();
+                    (angle(&sweep), sweep)
+                })
+            })
+            .filter(|(angle, _)| angle.is_finite())
+            .collect();
+        anyhow::ensure!(parts.len() >= 5, "incomplete Swedish scan for {id}");
+        return Ok(Some((
+            volume_name(id, time),
+            time,
+            Scan::with_site(meta.to_site(), base.coverage_pattern().clone(), crate::dwd::assemble(parts)),
+        )));
+    }
     // Every object in the group is the same scan sampled at once, so sweep `i` of one is sweep `i`
     // of the others; a file that disagrees about the scan it describes is dropped rather than
     // smeared across it.
     let extras: Vec<Scan> = files
-        .map(|(_, s)| s)
+        .into_iter()
         .filter(|s| {
             s.sweeps().len() == base.sweeps().len()
                 && std::iter::zip(s.sweeps(), base.sweeps()).all(|(a, b)| angle(a) == angle(b))
@@ -372,6 +431,25 @@ mod tests {
         assert!(newest_group("<Key>", "plgsa").is_empty());
     }
 
+    #[test]
+    fn swedish_scan_waits_for_multiple_elevations() {
+        let entry = |stamp: &str, angle: &str| format!(
+            "<Key>2026/10/15/SE/seang/SCAN/seang@{stamp}@{angle}@DBZH_TH_VRADH.h5</Key>"
+        );
+        let mut xml = String::new();
+        for angle in ["0.5", "1.0", "1.5", "2.0", "2.5", "4.0"] {
+            xml.push_str(&entry("20261015T0730", angle));
+        }
+        xml.push_str(&entry("20261015T0735", "0.5"));
+        assert_eq!(newest_scan_group(&xml, "seang").len(), 6);
+        for angle in ["1.0", "1.5", "2.0", "2.5"] {
+            xml.push_str(&entry("20261015T0735", angle));
+        }
+        let picked = newest_scan_group(&xml, "seang");
+        assert_eq!(picked.len(), 5);
+        assert!(picked.iter().all(|key| key.contains("T0735")));
+    }
+
     /// One digit out in the prefix and the listing comes back empty.
     #[test]
     fn the_index_url_names_one_hour_of_one_site() {
@@ -425,5 +503,17 @@ mod tests {
             "base tilt carries reflectivity"
         );
         assert!(base.velocity().is_some(), "and velocity");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_swedish_scan_assembles_reflectivity_and_velocity() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "SEANG", None)
+            .await.expect("volume").expect("fresh volume");
+        assert!(scan.sweeps().len() >= 5);
+        let base = &scan.sweeps()[0].radials()[0];
+        assert!(base.reflectivity().is_some());
+        assert!(base.velocity().is_some());
     }
 }

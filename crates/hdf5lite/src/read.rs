@@ -57,10 +57,25 @@ impl<'a> Cur<'a> {
 
     /// An unsigned value of `n` bytes — HDF5 sizes several fields by a width stored elsewhere.
     pub fn uint(&mut self, n: usize) -> Result<u64> {
+        if n == 0 || n > 8 {
+            return Err(Error::Unsupported(format!("{n}-byte integer width")));
+        }
         let b = self.take(n)?;
         let mut a = [0u8; 8];
         a[..n.min(8)].copy_from_slice(&b[..n.min(8)]);
         Ok(u64::from_le_bytes(a))
+    }
+
+    /// File addresses and HDF5 lengths use widths declared by the superblock. Small ODIM files
+    /// commonly use four-byte fields; the all-ones address is the undefined-address sentinel.
+    pub fn addr(&mut self) -> Result<u64> {
+        let width = file_widths(self.d)?.0;
+        let value = self.uint(width)?;
+        Ok(if value == u64::MAX >> (8 * (8 - width)) { u64::MAX } else { value })
+    }
+
+    pub fn length(&mut self) -> Result<u64> {
+        self.uint(file_widths(self.d)?.1)
     }
 
     pub fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
@@ -84,6 +99,17 @@ impl<'a> Cur<'a> {
 
 const MAGIC: [u8; 8] = [0x89, b'H', b'D', b'F', b'\r', b'\n', 0x1a, b'\n'];
 
+fn file_widths(d: &[u8]) -> Result<(usize, usize)> {
+    let version = *d.get(8).ok_or(Error::Truncated { what: "superblock", need: 9, have: d.len() })?;
+    let at = if version < 2 { 13 } else { 9 };
+    let address = *d.get(at).ok_or(Error::Truncated { what: "superblock", need: at + 2, have: d.len() })? as usize;
+    let length = *d.get(at + 1).ok_or(Error::Truncated { what: "superblock", need: at + 2, have: d.len() })? as usize;
+    if !matches!(address, 4 | 8) || !matches!(length, 4 | 8) {
+        return Err(Error::Unsupported(format!("{address}-byte offsets and {length}-byte lengths")));
+    }
+    Ok((address, length))
+}
+
 /// Validate the superblock and return the root group's object-header address.
 pub(crate) fn superblock_root(d: &[u8]) -> Result<u64> {
     if d.len() < 8 || d[..8] != MAGIC {
@@ -105,33 +131,25 @@ pub(crate) fn superblock_root(d: &[u8]) -> Result<u64> {
         // libhdf5 defaults) still do, so the address is worth digging out.
         c.skip(4)?; // free-space version, root symbol-table version, reserved, shared-message version
         let offset_size = c.u8()? as usize;
-        let _length_size = c.u8()?;
+        let length_size = c.u8()? as usize;
         c.skip(1)?; // reserved
-        if offset_size != 8 {
-            return Err(Error::Unsupported(format!(
-                "{offset_size}-byte file offsets"
-            )));
-        }
+        file_widths(d)?;
         c.skip(2 + 2 + 4)?; // group leaf/internal node K, file consistency flags
         if version == 1 {
             c.skip(4)?; // indexed storage internal node K, plus its padding
         }
-        c.skip(8 * 4)?; // base address, free-space info, end of file, driver info
-        c.skip(8)?; // the root entry's link name offset — the root has no name
-        return c.u64();
+        c.skip(offset_size * 4)?; // base address, free-space info, end of file, driver info
+        c.skip(length_size)?; // the root entry's link name offset — the root has no name
+        return c.addr();
     }
-    let offset_size = c.u8()? as usize;
+    let _offset_size = c.u8()?;
     let _length_size = c.u8()?;
-    if offset_size != 8 {
-        return Err(Error::Unsupported(format!(
-            "{offset_size}-byte file offsets"
-        )));
-    }
+    file_widths(d)?;
     let _flags = c.u8()?;
-    let _base = c.u64()?;
-    let _ext = c.u64()?;
-    let _eof = c.u64()?;
-    let root = c.u64()?;
+    let _base = c.addr()?;
+    let _ext = c.addr()?;
+    let _eof = c.addr()?;
+    let root = c.addr()?;
     Ok(root)
 }
 

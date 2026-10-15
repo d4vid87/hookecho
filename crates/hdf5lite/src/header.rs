@@ -257,8 +257,8 @@ fn messages_v1(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
             }
             if kind == MSG_CONTINUATION {
                 let mut cc = Cur::new(d, start, "continuation");
-                let caddr = cc.u64()? as usize;
-                let clen = cc.u64()? as usize;
+                let caddr = cc.addr()? as usize;
+                let clen = cc.length()? as usize;
                 queue.push((caddr, caddr.saturating_add(clen)));
             } else if kind != 0 {
                 // Type 0 is NIL — space freed by an edit, holding nothing.
@@ -332,8 +332,8 @@ fn messages_v2(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
             }
             if kind == MSG_CONTINUATION {
                 let mut cc = Cur::new(d, start, "continuation");
-                let caddr = cc.u64()?;
-                let clen = cc.u64()?;
+                let caddr = cc.addr()?;
+                let clen = cc.length()?;
                 queue.push((caddr, Some(clen)));
             } else {
                 out.push(Msg { kind, start });
@@ -413,7 +413,7 @@ fn parse_dataspace(d: &[u8], at: usize) -> Result<Vec<u64>> {
     }
     let mut dims = Vec::with_capacity(rank);
     for _ in 0..rank {
-        dims.push(c.u64()?);
+        dims.push(c.length()?);
     }
     // Max dims follow when flagged; the current extent is what we read.
     let _ = flags;
@@ -481,14 +481,14 @@ fn parse_layout(d: &[u8], at: usize) -> Result<Layout> {
     let class = c.u8()?;
     match class {
         1 => {
-            let addr = c.u64()?;
-            let size = c.u64()?;
+            let addr = c.addr()?;
+            let size = c.length()?;
             Ok(Layout::Contiguous { addr, size })
         }
         2 => {
             // Dimensionality counts the chunk dims plus a trailing element-size entry.
             let rank = c.u8()? as usize;
-            let btree_addr = c.u64()?;
+            let btree_addr = c.addr()?;
             let mut dims = Vec::with_capacity(rank.saturating_sub(1));
             for _ in 0..rank.saturating_sub(1) {
                 dims.push(c.u32()?);

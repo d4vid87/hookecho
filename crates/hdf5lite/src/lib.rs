@@ -16,7 +16,7 @@
 //! Since then it has grown a second consumer: ODIM_H5, the European radar volume format, which
 //! libhdf5 writes with its *oldest* on-disk structures. So both eras are read.
 //!
-//! - Superblock versions 0–3 (8-byte offsets/lengths).
+//! - Superblock versions 0–3 (4- or 8-byte offsets/lengths).
 //! - Object header versions 1 and 2 (`OHDR`), both with continuation blocks.
 //! - Groups whose links live in a fractal heap (`FRHP`/`FHIB`/`FHDB`), and old-style symbol-table
 //!   groups (`TREE`/`SNOD` plus a `HEAP` of names). Nested paths resolve through either.

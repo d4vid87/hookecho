@@ -297,6 +297,7 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
         2 => 16,
         n => anyhow::bail!("{path}: {n}-byte gates"),
     };
+    let signed = matches!(ds.dtype, hdf5lite::Datatype::Int { signed: true, .. });
     let values = f.read_f64(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
     if values.len() < gates {
         anyhow::bail!("{path}: {} gates, expected {gates}", values.len());
@@ -308,7 +309,11 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
     if gain == 0.0 {
         anyhow::bail!("{path}: zero gain");
     }
-    let (scale, offset) = (1.0 / gain, -num(&what, "offset").unwrap_or(0.0) / gain);
+    // MomentData reserves codes 0 and 1 and interprets every other code as unsigned. Swedish
+    // ODIM uses signed int16 gates with -32768/-32767 as nodata/undetect: biasing by 32768 maps
+    // those sentinels to 0/1 and keeps valid negative velocities on the correct side of zero.
+    let bias = if signed { 1i32 << (word_bits - 1) } else { 0 };
+    let (scale, offset) = (1.0 / gain, bias as f64 - num(&what, "offset").unwrap_or(0.0) / gain);
 
     // Raw 0 means below threshold to the model, which is exactly ODIM's `undetect`. `nodata` has
     // no separate representation, so it collapses onto the same level.
@@ -323,7 +328,7 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
         let v = if Some(v) == undetect || Some(v) == nodata || v.is_nan() {
             0
         } else {
-            v as u32
+            (v as i32 + bias) as u32
         };
         if word_bits == 8 {
             raw.push(v as u8);
@@ -406,6 +411,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn signed_swedish_velocity_retains_its_sign() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../hdf5lite/tests/data/seang.h5");
+        let (_, scan) = decode(std::fs::read(p).expect("seang.h5 fixture")).expect("decode");
+        let sweep = &scan.sweeps()[0];
+        let negative = sweep.radials()[2].velocity().unwrap().values()[1];
+        let positive = sweep.radials()[1].velocity().unwrap().values()[1];
+        assert!(matches!(negative, MomentValue::Value(v) if (v + 0.24069).abs() < 0.001), "{negative:?}");
+        assert!(matches!(positive, MomentValue::Value(v) if (v - 0.48138).abs() < 0.001), "{positive:?}");
+        assert_eq!(sweep.radials()[0].velocity().unwrap().values()[0], MomentValue::BelowThreshold);
+        let binned = crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, 0).unwrap();
+        assert!(binned.data.iter().filter(|&&v| v >= 2).count() > 1_000);
     }
 
     #[test]

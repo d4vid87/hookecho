@@ -46,8 +46,8 @@ pub(crate) fn links(d: &[u8], group_hdr: u64) -> Result<HashMap<String, u64>> {
             }
             crate::header::MSG_SYMBOL_TABLE => {
                 let mut c = Cur::new(d, m.start, "symbol table message");
-                let btree = c.u64()?;
-                let local_heap = c.u64()?;
+                let btree = c.addr()?;
+                let local_heap = c.addr()?;
                 symbol_table_links(d, btree, local_heap, &mut out)?;
             }
             _ => {}
@@ -88,10 +88,11 @@ fn symbol_table_links(
         }
         let level = c.u8()?;
         let entries = c.u16()? as usize;
-        c.skip(8 * 2)?; // left and right sibling addresses
+        c.addr()?; // left sibling
+        c.addr()?; // right sibling
         for _ in 0..entries {
-            let _key = c.u64()?; // offset into the local heap of the entry's first name
-            let child = c.u64()?;
+            let _key = c.length()?; // offset into the local heap of the entry's first name
+            let child = c.addr()?;
             if level == 0 {
                 symbol_table_node(d, child, names, out)?;
             } else {
@@ -114,8 +115,8 @@ fn symbol_table_node(
     c.skip(2)?; // version, reserved
     let count = c.u16()? as usize;
     for _ in 0..count {
-        let name_at = names + c.u64()? as usize;
-        let header = c.u64()?;
+        let name_at = names + c.length()? as usize;
+        let header = c.addr()?;
         c.skip(4 + 4 + 16)?; // cache type, reserved, scratch pad
         out.insert(heap_string(d, name_at), header);
     }
@@ -131,8 +132,9 @@ fn local_heap_data(d: &[u8], addr: u64) -> Result<usize> {
         return Err(Error::Unsupported(format!("local heap version {version}")));
     }
     c.skip(3)?; // reserved
-    c.skip(8 * 2)?; // data segment size, offset of the free list head
-    Ok(c.u64()? as usize)
+    c.length()?; // data segment size
+    c.length()?; // offset of the free list head
+    Ok(c.addr()? as usize)
 }
 
 /// A NUL-terminated name out of a local heap.
