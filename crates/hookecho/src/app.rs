@@ -3279,6 +3279,7 @@ pub struct HookEchoApp {
     _rt: Runtime,
     spawner: crate::rt::Spawner,
     tiles: TileManager,
+    ndfd_legends: ui::ndfd_legend::NdfdLegends,
     vtiles: crate::vector_tiles::VectorTileManager,
     pane_vtiles: Vec<crate::vector_tiles::VectorTileManager>,
     /// One shared label-occupancy pass for the whole frame — see [`crate::labelplace`].
@@ -4464,6 +4465,7 @@ impl HookEchoApp {
             #[cfg(not(target_arch = "wasm32"))]
             _rt: rt,
             tiles,
+            ndfd_legends: Default::default(),
             saved: settings.clone(),
             settings,
             views: vec![view],
@@ -14921,6 +14923,11 @@ impl HookEchoApp {
                 .clamp(0.0, bias_cap) as f64
         };
         let satellite_time = self.prepare_satellite_pane(idx, pane_style);
+        if self.views[idx].show_legend {
+            if let Some(valid) = satellite_time.filter(|_| pane_style.ndfd_layer().is_some()) {
+                self.ndfd_legends.update(ctx, &self.spawner, &self.http, pane_style, valid);
+            }
+        }
         self.tiles.set_goes_time(satellite_time);
         let is_raster = is_raster && (!pane_style.timed() || satellite_time.is_some());
         let visible = if is_raster {
@@ -18039,6 +18046,9 @@ impl HookEchoApp {
             // call rather than a slot in DRAW_ORDER.
             if self.show_wind && self.wind.is_some() {
                 y += ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
+            }
+            if view.basemap.ndfd_layer().is_some() {
+                y += self.ndfd_legends.draw(&painter, prect, view.basemap, y);
             }
             if workspace_chrome { field_status_y = y + 20.0; }
         }

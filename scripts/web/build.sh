@@ -170,7 +170,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Keep roughly 5 KB of regression headroom while leaving the lite and startup caps unchanged.
 # Dublin's complete velocity volume and product-specific tilt picker measure 4,628,168 gzip bytes.
 # Keep 832 bytes of headroom without changing the lite or startup caps.
-budget="${HOOKECHO_WASM_BUDGET:-4629000}"
+# NOAA's matching NDFD legend images are fetched only when a forecast map is selected, but the
+# on-demand loader adds 1,626 gzip bytes beyond the prior cap. The optimized bundle measured
+# 4,630,626 bytes; keep 2,374 bytes of margin (0.05%) without changing lite/startup budgets.
+budget="${HOOKECHO_WASM_BUDGET:-4633000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

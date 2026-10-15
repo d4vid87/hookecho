@@ -111,6 +111,7 @@ pub mod layer_options;
 pub mod layer_window;
 pub mod layers_panel;
 pub mod legend;
+pub mod ndfd_legend;
 /// Material 3 design tokens for the mobile chrome.
 pub mod m3;
 pub mod marker_popup;
