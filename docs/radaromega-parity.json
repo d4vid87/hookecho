@@ -668,15 +668,20 @@
         "HookEcho still renders its full decoded sweep and has no NORMAL/FULL switch. The retained client does not reveal which server sweeps supply radius_full or the NORMAL radius values for each station/product; inventing a universal 2/3 crop would conceal legitimate velocity or short-range TDWR gates. The live KTLX NORMAL/FULL switch comparison showed no measurable map change at the captured viewport, so station/product-specific rules and more representative zoom levels still need runtime capture."
       ],
       "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs",
         "crates/hookecho/src/products.rs",
         "crates/hookecho/src/view.rs",
         "crates/wxdata/src/level2.rs"
       ],
-      "observation_evidence_ids": ["ev_0de0005531cca51c333f3a1e58f4798fba676c570907cdf4ed1adf82b2aa942a", "ev_7a4dbc2829784f76d5cfcb052a14202586910415384e4c9ce8b11359c7cd6bd4"],
+      "observation_evidence_ids": [
+        "ev_0de0005531cca51c333f3a1e58f4798fba676c570907cdf4ed1adf82b2aa942a",
+        "ev_7a4dbc2829784f76d5cfcb052a14202586910415384e4c9ce8b11359c7cd6bd4"
+      ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD08",
       "acceptance": "Toggle coverage/ring while clearly indicating actual available scan extent.",
-      "runtime_verification": "2026-10-14: REA live Radar Settings confirmed both Full Coverage Radar and Show Range Ring controls. A controlled KTLX FULL→NORMAL→FULL comparison completed, but pixel difference at 920×1028 was limited to the setting switch at this viewport; it does not establish the behavior on supported towers. HookEcho cargo check and selected-cut range unit test passed. Integrated range-ring UI still needs screenshot verification."
+      "runtime_verification": "2026-10-14: REA live Radar Settings confirmed both Full Coverage Radar and Show Range Ring controls. A controlled KTLX FULL→NORMAL→FULL comparison completed, but pixel difference at 920×1028 was limited to the setting switch at this viewport; it does not establish the behavior on supported towers. HookEcho cargo check and selected-cut range unit test passed. In the local HookEcho browser at KEAX, zoom 8, REF 0.4°, enabling Map reference → Range rings displayed labeled 50/100/150 km circles and the blue selected-sweep boundary. Switching to VEL 0.4° retained the rings and live product display. This verifies the integrated ring toggle, not Normal/Full parity."
     },
     {
       "id": "RAD09",
