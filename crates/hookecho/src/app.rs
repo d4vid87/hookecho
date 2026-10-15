@@ -17440,7 +17440,7 @@ impl HookEchoApp {
         }
 
         // Fixed distance reference and the actual loaded-scan edge have separate switches.
-        if self.show_range_rings || self.show_scan_boundary {
+        if view.show_radar && (self.show_range_rings || self.show_scan_boundary) {
             if let Some(site) = view.displayed_station().or(view.site.as_deref()).and_then(wxdata::sites::site_by_id) {
                 let origin = [site.longitude as f64, site.latitude as f64];
                 let col = egui::Color32::from_gray(150).gamma_multiply(0.55);
