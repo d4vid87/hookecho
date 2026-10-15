@@ -7222,10 +7222,15 @@ impl HookEchoApp {
             return;
         }
         let times = self.goes[idx].times.clone();
-        let loop_times = crate::satellite_time::loop_window(&times, Utc::now(), self.goes[idx].hour);
+        let forecast = self.views[idx].basemap.ndfd_layer().is_some();
+        let loop_times = if forecast { times.as_slice() } else {
+            crate::satellite_time::loop_window(&times, Utc::now(), self.goes[idx].hour)
+        };
         let radar = self.views[idx].displayed_time();
         let frame_interval = Duration::from_secs_f32(
-            1.0 / self.settings.source_animation_speeds.get(crate::settings::AnimationSource::Satellite)
+            1.0 / self.settings.source_animation_speeds.get(if forecast {
+                crate::settings::AnimationSource::Forecasts
+            } else { crate::settings::AnimationSource::Satellite })
         );
         if self.goes[idx].playing {
             if loop_times.len() < 2 || self.goes[idx].imagery_incomplete {
@@ -7236,15 +7241,16 @@ impl HookEchoApp {
                     && self.goes[idx].last_advance.is_none_or(|at| at.elapsed() >= frame_interval)
                 {
                     let selection = &mut self.views[idx].satellite;
-                    selection.time = crate::satellite_time::next_loop_frame(
-                        loop_times, selection.selected(&times, radar)
-                    );
+                    let current = if forecast { selection.selected_forecast(&times, Utc::now()) }
+                        else { selection.selected(&times, radar) };
+                    selection.time = crate::satellite_time::next_loop_frame(loop_times, current);
                     selection.follow_radar = false;
                     self.goes[idx].last_advance = Some(Instant::now());
                 }
             }
         }
-        let selected = self.views[idx].satellite.selected(&times, radar);
+        let selected = if forecast { self.views[idx].satellite.selected_forecast(&times, Utc::now()) }
+            else { self.views[idx].satellite.selected(&times, radar) };
         let tz = self.active_tz();
         let workspace = self.settings.radar_workspace && !chrome::compact(ctx);
         let bottom_offset = if workspace {
@@ -7274,7 +7280,7 @@ impl HookEchoApp {
                         ui.label(format!("{} {state}:", self.views[idx].basemap.label()));
                         let selection = &mut self.views[idx].satellite;
                         if ui
-                            .selectable_label(selection.follow_radar, "Follow radar")
+                            .selectable_label(selection.follow_radar, if forecast { "Next forecast" } else { "Follow radar" })
                             .clicked()
                         {
                             self.goes[idx].playing = false;
@@ -7311,8 +7317,9 @@ impl HookEchoApp {
                             selection.time = cur.map(|i| times[i - 1]);
                         }
                         if let Some(time) = selected {
-                            ui.monospace(crate::timefmt::fmt_clock(time, tz, false));
-                            if let Some(radar) = radar {
+                            ui.monospace(if forecast { time.format("%a %b %-d %HZ").to_string() }
+                                else { crate::timefmt::fmt_clock(time, tz, false) });
+                            if let Some(radar) = radar.filter(|_| !forecast) {
                                 ui.label(format!(
                                     "Δ radar {:+.1}s",
                                     (time - radar).num_milliseconds() as f64 / 1000.0
@@ -7336,15 +7343,15 @@ impl HookEchoApp {
                             selection.follow_radar = false;
                             selection.time = cur.map(|i| times[i + 1]);
                         }
-                        if ui.button("Latest").clicked() {
+                        if ui.button(if forecast { "Next valid" } else { "Latest" }).clicked() {
                             self.goes[idx].playing = false;
-                            selection.follow_radar = false;
+                            selection.follow_radar = forecast;
                             selection.time = None;
                         }
                         if ui
                             .checkbox(
                                 &mut self.settings.link_satellite_times,
-                                "Link imagery panes",
+                                if forecast { "Link forecast panes" } else { "Link imagery panes" },
                             )
                             .changed()
                         {
@@ -7389,7 +7396,9 @@ impl HookEchoApp {
         } else {
             self.views[idx].satellite.time
         };
-        let (hour, from, to) = crate::tiles::goes_window(Utc::now(), clock);
+        let (hour, from, to) = if style.ndfd_layer().is_some() {
+            (None, Utc::now() - chrono::Duration::hours(12), Utc::now() + chrono::Duration::days(8))
+        } else { crate::tiles::goes_window(Utc::now(), clock) };
         let catalog = &mut self.goes[idx];
         let changed = catalog.style != Some(style) || catalog.hour != hour;
         let refresh = catalog.rx.is_none()
@@ -7415,7 +7424,11 @@ impl HookEchoApp {
                 let _ = tx.send(times);
             });
         }
-        self.views[idx].satellite.selected(&catalog.times, selection_clock)
+        if style.ndfd_layer().is_some() {
+            self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
+        } else {
+            self.views[idx].satellite.selected(&catalog.times, selection_clock)
+        }
     }
 
     /// Open the gpsd stream and enter chase mode. Shared by the Chase tab's connect button,
@@ -14923,8 +14936,13 @@ impl HookEchoApp {
             self.goes[idx].imagery_ready = ready;
             self.goes[idx].imagery_incomplete = self.tiles.visible_failed(pane_style, &visible);
             let status = if let Some(time) = satellite_time {
-                let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
-                format!("{} · {} {}{}", pane_style.label(), if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" }, crate::timefmt::fmt_clock(time, self.active_tz(), false), offset)
+                let state = if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" };
+                if pane_style.ndfd_layer().is_some() {
+                    format!("{} · {state} · valid {}", pane_style.label(), time.format("%a %b %-d %HZ"))
+                } else {
+                    let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
+                    format!("{} · {state} {}{offset}", pane_style.label(), crate::timefmt::fmt_clock(time, self.active_tz(), false))
+                }
             } else { format!("{} · frame unavailable", pane_style.label()) };
             Some(status)
         } else { None };

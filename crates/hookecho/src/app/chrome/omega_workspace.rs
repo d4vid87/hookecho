@@ -60,7 +60,7 @@ impl SourceMode {
             Self::Radar => "Selected station's observed radar",
             Self::Mrms => "NOAA national radar mosaics and derived fields",
             Self::Satellite => "Satellite imagery and lightning products",
-            Self::Forecasts => "Model guidance, not observed radar",
+            Self::Forecasts => "NOAA NDFD forecasts and model guidance",
         }
     }
 }
@@ -185,6 +185,7 @@ impl HookEchoApp {
     pub(super) fn omega_animation_family(&self) -> Option<crate::settings::AnimationSource> {
         let mut modes = SourceMode::ALL.into_iter().filter(|mode| {
             (*mode == SourceMode::Radar && self.views[self.active].show_radar)
+                || (*mode == SourceMode::Forecasts && self.views[self.active].basemap.ndfd_layer().is_some())
                 || self.views[self.active].fields_on.iter().any(|field| {
                     SourceMode::for_action(PaletteAction::ToggleField(*field)) == Some(*mode)
                 })
@@ -238,6 +239,7 @@ impl HookEchoApp {
             .into_iter()
             .filter(|mode| {
                 (*mode == SourceMode::Radar && self.views[self.active].show_radar)
+                    || (*mode == SourceMode::Forecasts && self.views[self.active].basemap.ndfd_layer().is_some())
                     || self.views[self.active].fields_on.iter().any(|field| {
                         SourceMode::for_action(PaletteAction::ToggleField(*field)) == Some(*mode)
                     })
@@ -249,6 +251,7 @@ impl HookEchoApp {
             _ => "Mixed sources",
         };
         let mut choose_source = None;
+        let mut choose_ndfd_style = None;
         let mut action = None;
         let mut display = false;
         let mut spotter_settings = false;
@@ -302,8 +305,15 @@ impl HookEchoApp {
                                     ctx.data_mut(|d| d.insert_temp(search_id, query.clone()));
                                     let total = source_product_rows(&entries, mode, "").len();
                                     let rows = source_product_rows(&entries, mode, &query);
-                                    ui.weak(format!("{} of {} products", rows.len(), total));
-                                    if rows.is_empty() {
+                                    let ndfd_rows = if mode == SourceMode::Forecasts {
+                                        [crate::tiles::BasemapStyle::NdfdRainChance,
+                                         crate::tiles::BasemapStyle::NdfdMaxTemp,
+                                         crate::tiles::BasemapStyle::NdfdMinTemp]
+                                            .into_iter().filter(|style| style.label().to_lowercase().contains(&query.to_lowercase())).count()
+                                    } else { 0 };
+                                    ui.weak(format!("{} of {} products", rows.len() + ndfd_rows,
+                                        total + usize::from(mode == SourceMode::Forecasts) * 3));
+                                    if rows.is_empty() && ndfd_rows == 0 {
                                         ui.weak("No matching products.");
                                     }
                                     egui::ScrollArea::vertical()
@@ -315,6 +325,21 @@ impl HookEchoApp {
                                             (self.chrome_rect.height() - 180.0).clamp(120.0, 420.0),
                                         )
                                         .show(ui, |ui| {
+                                            if mode == SourceMode::Forecasts {
+                                                for style in [
+                                                    crate::tiles::BasemapStyle::NdfdRainChance,
+                                                    crate::tiles::BasemapStyle::NdfdMaxTemp,
+                                                    crate::tiles::BasemapStyle::NdfdMinTemp,
+                                                ] {
+                                                    if !query.is_empty() && !style.label().to_lowercase().contains(&query.to_lowercase()) { continue; }
+                                                    let selected = self.views[self.active].basemap == style;
+                                                    if ui.selectable_label(selected, style.label())
+                                                        .named_toggle(style.label(), selected).clicked() {
+                                                        choose_ndfd_style = Some(style);
+                                                        ui.close();
+                                                    }
+                                                }
+                                            }
                                             for entry in rows {
                                                 let selected = entry.on.unwrap_or(false)
                                                     && match entry.action {
@@ -749,6 +774,9 @@ impl HookEchoApp {
                     .source_animation_speeds
                     .set(previous, self.views[self.active].timeline.speed);
             }
+            if self.views[self.active].basemap.ndfd_layer().is_some() {
+                self.set_basemap(crate::tiles::BasemapStyle::Dark);
+            }
             let changes = source_field_changes(&self.views[self.active].fields_on, source);
             for field in changes {
                 self.apply_palette(PaletteAction::ToggleField(field), ctx);
@@ -762,6 +790,18 @@ impl HookEchoApp {
             if speeds_before != self.settings.source_animation_speeds {
                 self.settings.save();
             }
+            self.panel_open = false;
+            self.show_alert_panel = false;
+            self.drawer.show_search();
+        }
+        if let Some(style) = choose_ndfd_style {
+            for field in source_field_changes(&self.views[self.active].fields_on,
+                PaletteAction::SetMoment(wxdata::level2::Moment::Reflectivity, false)) {
+                self.apply_palette(PaletteAction::ToggleField(field), ctx);
+            }
+            self.views[self.active].show_radar = false;
+            self.set_basemap(style);
+            self.sync_omega_animation_speed(ctx);
             self.panel_open = false;
             self.show_alert_panel = false;
             self.drawer.show_search();

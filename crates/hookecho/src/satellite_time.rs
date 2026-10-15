@@ -48,6 +48,20 @@ impl Selection {
             })
         }
     }
+
+    /// Forecast maps lead with the next advertised valid period, rather than the most distant
+    /// frame or the radar-time nearest-neighbor rule used for observed imagery.
+    pub fn selected_forecast(
+        &self,
+        frames: &[DateTime<Utc>],
+        now: DateTime<Utc>,
+    ) -> Option<DateTime<Utc>> {
+        if self.follow_radar || self.time.is_none() {
+            frames.iter().copied().find(|t| *t >= now).or_else(|| frames.last().copied())
+        } else {
+            self.time.filter(|time| frames.contains(time))
+        }
+    }
 }
 
 /// Reject imagery more than thirty minutes from the loaded radar scan.
@@ -108,6 +122,21 @@ pub fn loop_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forecast_selection_starts_with_next_valid_period_and_honors_manual_step() {
+        let now = DateTime::parse_from_rfc3339("2026-10-15T05:00:00Z").unwrap().with_timezone(&Utc);
+        let frames = [
+            DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z").unwrap().with_timezone(&Utc),
+            DateTime::parse_from_rfc3339("2026-10-15T12:00:00Z").unwrap().with_timezone(&Utc),
+            DateTime::parse_from_rfc3339("2026-10-16T00:00:00Z").unwrap().with_timezone(&Utc),
+        ];
+        let mut selected = Selection::default();
+        assert_eq!(selected.selected_forecast(&frames, now), Some(frames[1]));
+        selected.follow_radar = false;
+        selected.time = Some(frames[2]);
+        assert_eq!(selected.selected_forecast(&frames, now), Some(frames[2]));
+    }
     #[test]
     fn independent_cursors_and_missing_manual_frames() {
         let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();

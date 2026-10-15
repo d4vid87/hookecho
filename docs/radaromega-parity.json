@@ -12,10 +12,10 @@
     "not-verified": "Insufficient evidence to map the observed feature to an actual working equivalent."
   },
   "status_counts": {
-    "partial": 32,
+    "partial": 33,
     "implemented-related": 26,
     "not-verified": 0,
-    "external-service": 3,
+    "external-service": 2,
     "missing": 0
   },
   "research_artifacts": {
@@ -1050,14 +1050,19 @@
       "category": "other-data",
       "title": "NDFD forecasts and severe forecast mode",
       "priority": 2,
-      "status": "external-service",
+      "status": "partial",
       "observed_scope": "National Digital Forecast Database and HAZCAST Severe Outlook entries.",
       "observation_type": "static-client",
-      "hookecho_implementation": "NWS/Open-Meteo forecasts and public model products provide related guidance.",
+      "hookecho_implementation": "Public NOAA/NWS NDFD WMS rain-chance (12-hour), daytime-high-temperature, and overnight-low-temperature forecast maps are selectable in Forecasts and the map picker. The app reads each layer's advertised valid times, requests those times through the allowlisted proxy, provides forecast animation controls and valid-time labels, and attributes NOAA/NWS. NWS/Open-Meteo forecasts and public model products provide related guidance.",
       "remaining_gaps": [
-        "No complete NDFD viewer or HAZCAST backend/model contract recovered; provider-specific severe forecast requires an independently authorized service."
+        "NDFD has additional products, a richer legend, point values, and issue-time context that are not yet exposed in this viewer.",
+        "HAZCAST's backend/model contract is unavailable; provider-specific severe forecasts require an independently authorized service or a clearly labeled public-data alternative."
       ],
       "hookecho_sources": [
+        "crates/hookecho/src/tiles.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
         "crates/hookecho/src/fielddiff.rs",
         "crates/hookecho/src/render/mod.rs",
         "crates/hookecho/src/ui/sounding_window.rs",
@@ -1065,8 +1070,8 @@
       ],
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA05",
-      "acceptance": "Independently available forecast products display issue/valid time and attribution.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "acceptance": "Independently available forecast products display valid time and attribution; add issue time when the public service supplies it.",
+      "runtime_verification": "2026-10-15: NOAA's live NDFD WMS capabilities advertised current/future valid times for the three selected products; direct GetMap probes returned PNG imagery. Local browser verification showed rain chance, high temperature, and low temperature rendering over the map with NOAA/NWS attribution and valid-time controls; rain-chance animation advanced the forecast. HookEcho and wxdata library tests, worker proxy tests, and optimized web build passed. HAZCAST and the wider NDFD catalog remain unimplemented."
     },
     {
       "id": "OV01",

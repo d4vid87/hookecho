@@ -38,6 +38,7 @@ export const ALLOWED_HOSTS = [
   "ftp.cpc.ncep.noaa.gov",
   "www.cpc.ncep.noaa.gov",
   "www.wpc.ncep.noaa.gov",
+  "digital.weather.gov",
   "ftp-wpc.ncep.noaa.gov",
   "www.spc.noaa.gov",
   "www.nhc.noaa.gov",

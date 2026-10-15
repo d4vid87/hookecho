@@ -37,17 +37,19 @@ pub enum Category {
     Topo,
     /// Rendered weather fields (national radar composites), not a map of the ground.
     Weather,
+    Forecast,
     Other,
 }
 
 impl Category {
     /// Groups in picker order.
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 7] = [
         Category::Vector,
         Category::Streets,
         Category::Satellite,
         Category::Topo,
         Category::Weather,
+        Category::Forecast,
         Category::Other,
     ];
 
@@ -58,6 +60,7 @@ impl Category {
             Category::Satellite => "Satellite",
             Category::Topo => "Terrain",
             Category::Weather => "Weather",
+            Category::Forecast => "Forecast",
             Category::Other => "Other",
         }
     }
@@ -114,6 +117,12 @@ pub enum BasemapStyle {
     EcccRadarSnow,
     /// RainViewer's public worldwide precipitation composite, including Australia.
     RainViewerGlobal,
+    /// NOAA's operational NDFD 12-hour precipitation probability for CONUS.
+    NdfdRainChance,
+    /// NOAA's operational NDFD daytime high temperature for CONUS.
+    NdfdMaxTemp,
+    /// NOAA's operational NDFD overnight low temperature for CONUS.
+    NdfdMinTemp,
     MapboxStreets,
     MapboxSatellite,
     MapboxSatelliteStreets,
@@ -169,7 +178,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 63] = [
+    pub const ALL: [BasemapStyle; 66] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -234,6 +243,9 @@ impl BasemapStyle {
         BasemapStyle::BlankWhite,
         BasemapStyle::BlueMap,
         BasemapStyle::RainViewerGlobal,
+        BasemapStyle::NdfdRainChance,
+        BasemapStyle::NdfdMaxTemp,
+        BasemapStyle::NdfdMinTemp,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -300,6 +312,9 @@ impl BasemapStyle {
             BasemapStyle::EcccRadarRain => "ECCC radar (rain)",
             BasemapStyle::EcccRadarSnow => "ECCC radar (snow)",
             BasemapStyle::RainViewerGlobal => "Global rain radar (RainViewer)",
+            BasemapStyle::NdfdRainChance => "NDFD rain chance (12 h)",
+            BasemapStyle::NdfdMaxTemp => "NDFD high temperature",
+            BasemapStyle::NdfdMinTemp => "NDFD low temperature",
             BasemapStyle::MapboxStreets => "Mapbox Streets",
             BasemapStyle::MapboxSatellite => "Mapbox Satellite",
             BasemapStyle::MapboxSatelliteStreets => "Mapbox Satellite Streets",
@@ -369,6 +384,9 @@ impl BasemapStyle {
             BasemapStyle::EcccRadarRain => "eccc-radar-rain",
             BasemapStyle::EcccRadarSnow => "eccc-radar-snow",
             BasemapStyle::RainViewerGlobal => "rainviewer-global",
+            BasemapStyle::NdfdRainChance => "ndfd-rain-chance",
+            BasemapStyle::NdfdMaxTemp => "ndfd-high-temp",
+            BasemapStyle::NdfdMinTemp => "ndfd-low-temp",
             BasemapStyle::MapboxStreets => "mapbox-streets",
             BasemapStyle::MapboxSatellite => "mapbox-satellite",
             BasemapStyle::MapboxSatelliteStreets => "mapbox-satellite-streets",
@@ -473,6 +491,7 @@ impl BasemapStyle {
                     "Radar data © Environment and Climate Change Canada (Open Government Licence – Canada)"
                 }
                 BasemapStyle::RainViewerGlobal => "Weather data by RainViewer ↗",
+                BasemapStyle::NdfdRainChance | BasemapStyle::NdfdMaxTemp | BasemapStyle::NdfdMinTemp => "NOAA/NWS National Digital Forecast Database",
                 BasemapStyle::HimawariIR
                 | BasemapStyle::HimawariAirMass
                 | BasemapStyle::HimawariVisible => "NASA GIBS · JMA Himawari",
@@ -530,9 +549,21 @@ impl BasemapStyle {
         }
     }
 
+    /// NDFD uses WMS with the nonstandard VTIT valid-time dimension. Keep it separate from
+    /// TIME-based radar WMS sources so a forecast request cannot silently return a default map.
+    pub(crate) fn ndfd_layer(self) -> Option<&'static str> {
+        match self {
+            Self::NdfdRainChance => Some("ndfd.conus.pop12"),
+            Self::NdfdMaxTemp => Some("ndfd.conus.maxt"),
+            Self::NdfdMinTemp => Some("ndfd.conus.mint"),
+            _ => None,
+        }
+    }
+
     /// Does this style have a time dimension the frame bar can step through?
     pub fn timed(self) -> bool {
-        self.goes_layer().is_some() || self.wms_layer().is_some() || self == BasemapStyle::RainViewerGlobal
+        self.goes_layer().is_some() || self.wms_layer().is_some()
+            || self.ndfd_layer().is_some() || self == BasemapStyle::RainViewerGlobal
     }
 
     /// Is this style a raster-tile source (as opposed to the vector MVT basemap or None)?
@@ -573,6 +604,9 @@ impl BasemapStyle {
         // is cheaper for us to do that from a tile we already hold.
         if self.wms_layer().is_some() {
             return 12;
+        }
+        if self.ndfd_layer().is_some() {
+            return 11;
         }
         match self {
             // USGS ArcGIS services (imagery and topo alike) stop at 16.
@@ -661,6 +695,9 @@ impl BasemapStyle {
         if self.wms_layer().is_some() {
             return Category::Weather;
         }
+        if self.ndfd_layer().is_some() {
+            return Category::Forecast;
+        }
         match self {
             BasemapStyle::None | BasemapStyle::BlankWhite | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
             BasemapStyle::Dark
@@ -723,6 +760,7 @@ impl BasemapStyle {
             BasemapStyle::BlueMap => Some(crate::basemap_style::Palette::Blue),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
             BasemapStyle::RainViewerGlobal => Some(crate::basemap_style::Palette::HybridOverlay),
+            BasemapStyle::NdfdRainChance | BasemapStyle::NdfdMaxTemp | BasemapStyle::NdfdMinTemp => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
     }
@@ -834,6 +872,10 @@ impl BasemapStyle {
                 BasemapStyle::CustomXyz => valid_xyz_template(custom)
                     .then(|| crate::vector_tiles::fill_template(custom, z, x, y)),
                 BasemapStyle::RainViewerGlobal => rainviewer_tile_url(None, z, x, y),
+                style if style.ndfd_layer().is_some() => Some(wms_url(
+                    "https://digital.weather.gov/ndfd.conus/wms",
+                    style.ndfd_layer().unwrap(), z, x, y, "",
+                )),
                 // Standard XYZ `{z}/{x}/{y}.png` slippy tiles. Single subdomain shard where the
                 // provider uses them (ponytail: rotate a-c only if throttled).
                 BasemapStyle::OsmStandard => {
@@ -1206,6 +1248,31 @@ fn wms_advertised_frame_times(
     out
 }
 
+/// NDFD advertises discrete future valid times in a `vtit` dimension. Do not synthesize times:
+/// the WMS serves its default map for an unavailable VTIT, which would mislabel a forecast.
+fn ndfd_advertised_frame_times(
+    xml: &str,
+    layer: &str,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    limit: usize,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    use chrono::NaiveDateTime;
+    if from > to || limit == 0 { return Vec::new(); }
+    let Some((_, tail)) = xml.split_once(&format!("<Name>{layer}</Name>")) else { return Vec::new() };
+    let Some((body, _)) = tail.split_once("</Layer>") else { return Vec::new() };
+    let Some((_, dimension)) = body.split_once("<Dimension name=\"vtit\"") else { return Vec::new() };
+    let Some((_, dimension)) = dimension.split_once('>') else { return Vec::new() };
+    let Some((values, _)) = dimension.split_once("</Dimension>") else { return Vec::new() };
+    let mut out: Vec<_> = values.split(',').filter_map(|stamp| {
+        let t = NaiveDateTime::parse_from_str(stamp.trim(), "%Y-%m-%dT%H:%M").ok()?.and_utc();
+        (from <= t && t <= to).then_some(t)
+    }).collect();
+    out.sort_unstable(); out.dedup();
+    if out.len() > limit { out.drain(..out.len() - limit); }
+    out
+}
+
 #[derive(serde::Deserialize)]
 struct RainviewerIndex {
     host: String,
@@ -1270,6 +1337,24 @@ pub async fn fetch_frame_times(
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
+    if let Some(layer) = style.ndfd_layer() {
+        let url = "https://digital.weather.gov/ndfd.conus/wms?REQUEST=GetCapabilities";
+        let Ok(response) = client.get(wxdata::net::fetch_url(url))
+            .header("User-Agent", USER_AGENT).timeout(wxdata::net::FEED_TIMEOUT)
+            .send().await.and_then(reqwest::Response::error_for_status) else { return Vec::new() };
+        use futures_util::StreamExt;
+        let mut body = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = body.next().await {
+            match chunk {
+                Ok(chunk) if bytes.len() + chunk.len() <= 1024 * 1024 => bytes.extend_from_slice(&chunk),
+                _ => return Vec::new(),
+            }
+        }
+        return std::str::from_utf8(&bytes).map_or_else(|_| Vec::new(), |xml| {
+            ndfd_advertised_frame_times(xml, layer, from, to, limit)
+        });
+    }
     if style == BasemapStyle::RainViewerGlobal {
         let response = client
             .get(wxdata::net::fetch_url("https://api.rainviewer.com/public/weather-maps.json"))
@@ -1687,6 +1772,8 @@ impl TileManager {
                     let iso = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                     if style == BasemapStyle::RainViewerGlobal {
                         // Its opaque path already names the selected immutable frame.
+                    } else if style.ndfd_layer().is_some() {
+                        url.push_str(&format!("&VTIT={}", t.format("%Y-%m-%dT%H:%M")));
                     } else if style.wms_layer().is_some() {
                         url.push_str(&format!("&TIME={iso}"));
                     } else {
@@ -2726,7 +2813,8 @@ mod tests {
             let both = s.is_raster() && s.vector_palette().is_some();
             assert_eq!(
                 both,
-                matches!(s, BasemapStyle::HybridSatellite | BasemapStyle::RainViewerGlobal),
+                matches!(s, BasemapStyle::HybridSatellite | BasemapStyle::RainViewerGlobal
+                    | BasemapStyle::NdfdRainChance | BasemapStyle::NdfdMaxTemp | BasemapStyle::NdfdMinTemp),
                 "{s:?} raster+vector should be an intentional hybrid"
             );
         }
@@ -2810,6 +2898,37 @@ mod tests {
         assert_eq!(BasemapStyle::RainViewerGlobal.max_raster_z(), 7);
         assert!(BasemapStyle::RainViewerGlobal.timed());
         assert_eq!(BasemapStyle::RainViewerGlobal.key(), 62);
+    }
+
+    #[test]
+    fn ndfd_uses_advertised_forecast_times_and_valid_time_urls() {
+        let from = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let to = from + chrono::Duration::days(2);
+        let xml = r#"<Layer><Name>ndfd.conus.maxt</Name><Dimension name="vtit" default="1970-01-01T00:00">2026-10-15T00:00,2026-10-16T00:00,2026-10-17T00:00</Dimension></Layer>"#;
+        assert_eq!(ndfd_advertised_frame_times(xml, "ndfd.conus.maxt", from, to, 2),
+            vec![from + chrono::Duration::days(1), from + chrono::Duration::days(2)]);
+        assert!(ndfd_advertised_frame_times(xml, "ndfd.conus.pop12", from, to, 8).is_empty());
+        for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp] {
+            assert!(style.timed());
+            assert_eq!(style.category(), Category::Forecast);
+            assert!(style.attribution().contains("NOAA/NWS"));
+            let url = style.url(5, 7, 12, false, "", "", "").unwrap();
+            assert!(url.contains("digital.weather.gov/ndfd.conus/wms"));
+            assert!(url.contains(style.ndfd_layer().unwrap()));
+            assert!(!url.contains("&TIME="));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_ndfd_catalog_has_current_and_future_forecasts() {
+        let client = reqwest::Client::new();
+        let now = chrono::Utc::now();
+        for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp] {
+            let times = fetch_frame_times(&client, style, now - chrono::Duration::hours(12),
+                now + chrono::Duration::days(8), 48).await;
+            assert!(times.iter().any(|time| *time > now), "{style:?}: {times:?}");
+        }
     }
 
     /// The picker draws one section per category. A style in no section is invisible, and a
