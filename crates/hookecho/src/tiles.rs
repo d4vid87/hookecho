@@ -1587,6 +1587,9 @@ pub struct TileManager {
     failed: std::collections::HashMap<crate::render::TileKey, wxdata::clock::Instant>,
     requested: HashSet<crate::render::TileKey>,
     rainviewer_started: VecDeque<wxdata::clock::Instant>,
+    /// NDFD's VTIT names a valid time, not an immutable issue. Recheck resident forecast tiles
+    /// once per hour even when the selected valid time has not changed.
+    ndfd_refresh_hour: i64,
     /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
     /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
     /// two can never disagree about whether a tile still exists.
@@ -1636,6 +1639,7 @@ impl TileManager {
             failed: std::collections::HashMap::new(),
             requested: HashSet::new(),
             rainviewer_started: VecDeque::new(),
+            ndfd_refresh_hour: chrono::Utc::now().timestamp().div_euclid(3600),
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
             frame_visible: 0,
@@ -1667,6 +1671,21 @@ impl TileManager {
     pub fn frame_key(&self, style: BasemapStyle) -> u64 {
         let time = if style.timed() { self.goes_time.map_or(0, |t| t.timestamp() as u64) } else { 0 };
         (time << 8) | u64::from(style.key())
+    }
+
+    fn refresh_ndfd_at(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        let hour = now.timestamp().div_euclid(3600);
+        if self.ndfd_refresh_hour == hour { return; }
+        self.ndfd_refresh_hour = hour;
+        let mut ndfd_styles = [false; 256];
+        for style in BasemapStyle::ALL {
+            if style.ndfd_layer().is_some() { ndfd_styles[style.key() as usize] = true; }
+        }
+        // Leave resident GPU textures in place until replacement bytes arrive. An in-flight
+        // tile has not yet been displayed, so let its bounded fetch finish rather than duplicate it.
+        self.requested.retain(|key| {
+            !ndfd_styles[(key.0 & 0xff) as usize] || !self.uploaded.contains(key)
+        });
     }
 
     /// Turn `@2x` tiles on or off (high-DPI screen, and not on a metered link). Returns true if it
@@ -1825,6 +1844,7 @@ impl TileManager {
     /// Kick off fetches for any visible tiles not yet requested.
     pub fn request_missing(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
         use std::sync::atomic::Ordering;
+        if style.ndfd_layer().is_some() { self.refresh_ndfd_at(chrono::Utc::now()); }
         let skey = self.frame_key(style);
         self.failed.retain(|_, time| time.elapsed() < RETRY_AFTER);
         for v in visible {
@@ -1868,7 +1888,11 @@ impl TileManager {
                             &format!("/{iso}/GoogleMapsCompatible"),
                         );
                     }
-                    t.format("%Y%m%dT%H%M%S").to_string()
+                    if style.ndfd_layer().is_some() {
+                        format!("{}-r{}", t.format("%Y%m%dT%H%M%S"), self.ndfd_refresh_hour)
+                    } else {
+                        t.format("%Y%m%dT%H%M%S").to_string()
+                    }
                 }
                 _ => "default".to_string(),
             };
@@ -2059,8 +2083,6 @@ impl TileManager {
             if let Some((id, _)) = evicted.filter(|(id, _)| *id != key) {
                 self.requested.remove(&id);
                 self.evicted.push(id);
-            } else if evicted.is_some() {
-                continue; // already resident
             }
             ready.push(PendingTile {
                 id: t.id,
@@ -2558,6 +2580,33 @@ mod tests {
         assert!(!manager.uploaded.contains(&(manager.frame_key(style), id)));
         manager.set_goes_time(Some(first));
         assert_eq!(manager.frame_key(style), key);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn ndfd_new_issue_replaces_resident_tile_without_blanking_map() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut manager = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let now = chrono::Utc::now();
+        manager.ndfd_refresh_hour = now.timestamp().div_euclid(3600);
+        manager.set_goes_time(Some(now + chrono::Duration::hours(3)));
+        let forecast = (manager.frame_key(BasemapStyle::NdfdWindSpeed), (4, 3, 5));
+        let streets = (manager.frame_key(BasemapStyle::OsmStandard), (4, 3, 5));
+        for key in [forecast, streets] {
+            manager.requested.insert(key);
+            manager.uploaded.put(key, 4);
+        }
+        manager.refresh_ndfd_at(now + chrono::Duration::hours(1));
+        assert!(!manager.requested.contains(&forecast));
+        assert!(manager.uploaded.contains(&forecast), "keep the old forecast visible during refresh");
+        assert!(manager.requested.contains(&streets), "do not reload unrelated map sources");
+        manager.tx.send(Ok(FetchedTile {
+            id: forecast.1, style: forecast.0, rgba: vec![4, 3, 2, 1], width: 1, height: 1,
+        })).unwrap();
+        let ready = manager.drain_ready();
+        assert_eq!(ready.len(), 1, "a resident key must accept replacement pixels");
+        assert_eq!(ready[0].rgba, vec![4, 3, 2, 1]);
+        assert_eq!(ready[0].style, forecast.0);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
