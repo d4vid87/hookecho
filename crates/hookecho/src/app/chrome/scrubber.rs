@@ -117,13 +117,12 @@ impl HookEchoApp {
             .live_stream
             .as_ref()
             .is_some_and(|(v, _, _)| *v == self.active);
-        // TDWR and DWD radars publish no archive, so their timeline is empty by design and stays
-        // live. Saying "(no volumes)" there reads as a failed fetch while a live volume is on
-        // screen; only a site that HAS an archive can be genuinely missing one.
+        // NEXRAD and TDWR have timestamped archives. DWD's empty timeline is live-only; an empty
+        // NEXRAD/TDWR listing can instead indicate that no archive volumes were found.
         let archived = self.views[self.active]
             .site
             .as_deref()
-            .is_some_and(wxdata::sites::is_nexrad);
+            .is_some_and(|site| wxdata::sites::is_nexrad(site) || wxdata::tdwr::is_tdwr(site));
         let mut go_head = false;
         let mut history_popup = None;
         // Offline chase packs are a browser-only idea: on desktop the volumes are already on disk.

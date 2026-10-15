@@ -799,7 +799,7 @@
       "observation_type": "runtime-controls",
       "hookecho_implementation": "Workspace native frame choices are 7/14/21/30/50/75/100/150/200/250. The browser live-loop ceiling remains at least four and can rise to 12 based on the current decoded scan's measured gate payload and the existing 192 MiB payload budget, reserving space for two other volumes; before a scan is measured the limit remains four. The transport reports how many consecutive recent frames are currently decoded when fewer than the requested loop length are ready.",
       "remaining_gaps": [
-        "The adaptive browser loop above four frames has not yet been browser-verified under a live site or memory pressure; 250-frame native memory/latency not measured. Counts are requested loop limits, not guaranteed loaded frames."
+        "The adaptive browser selector reaches ten frames at TDFW, but ten distinct decoded frames and longer-running memory behavior remain unverified; 250-frame native memory/latency not measured. Counts are requested loop limits, not guaranteed loaded frames."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/omega_display.rs",
@@ -814,7 +814,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME01",
       "acceptance": "Configured frame count maps to available frames with explicit loading/missing states.",
-      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14. On 2026-10-15 the optimized local web build loaded a live KTLX VCP212 scan and the frame selector showed a four-frame ceiling after measurement, confirming large scans retain the former minimum. The adaptive ceiling above four and longer-running memory behavior remain unverified. Source review confirms the native selector allows 250 frames while its decoded LRU holds 30 scans, so a requested count is not a fully cached count. Evidence: outputs/ro-parity/tdwr-time/archive-1530.png and archive-1531.png."
+      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14. On 2026-10-15 the optimized local web build loaded a live KTLX VCP212 scan and the selector showed a four-frame ceiling after measurement. A live TDFW VCP80 scan then showed ten selected frames, verifying that smaller measured scans can raise the ceiling. Play initially reported 1/10 recent frames ready; the feed subsequently reported recent radar issues, so ten-frame playback and sustained memory behavior remain unverified. Source review confirms the native selector allows 250 frames while its decoded LRU holds 30 scans, so a requested count is not a fully cached count. Evidence: outputs/ro-parity/tdwr-time/archive-1530.png and archive-1531.png."
     },
     {
       "id": "TIME02",
