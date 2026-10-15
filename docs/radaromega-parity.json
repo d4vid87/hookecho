@@ -801,7 +801,7 @@
       "observation_type": "runtime-controls",
       "hookecho_implementation": "Workspace native frame choices are 7/14/21/30/50/75/100/150/200/250. The browser live-loop ceiling remains at least four and can rise to 12 based on the current decoded scan's measured gate payload and the existing 192 MiB payload budget, reserving space for two other volumes; before a scan is measured the limit remains four. The transport reports how many consecutive recent frames are currently decoded when fewer than the requested loop length are ready.",
       "remaining_gaps": [
-        "One two-minute TDFW browser run verified ten consecutive decoded frames, but longer-session cadence and total browser heap/GPU memory remain unmeasured. Native now allows 252 decoded cache entries, enough for a 250-frame small-scan loop plus head/in-flight slots, but the 512 MiB encoded-payload budget can evict large scans; actual 250-frame native memory and latency remain unmeasured."
+        "One two-minute TDFW browser run verified ten consecutive decoded frames, but longer-session cadence and total browser heap/GPU memory remain unmeasured. Native now allows 252 decoded cache entries. One 250-copy stress run measured retention of a real TDFW scan under the 512 MiB encoded-payload budget, but 250 distinct historical downloads, rendering/playback latency, variation between scans and long-session eviction behavior remain unverified."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/omega_display.rs",
@@ -809,6 +809,7 @@
         "crates/hookecho/src/app/chrome/omega_workspace.rs",
         "crates/hookecho/src/app/chrome/scrubber.rs",
         "crates/hookecho/src/app.rs",
+        "crates/hookecho/examples/tdwr_cache_profile.rs",
         "crates/hookecho/src/radar_memory.rs",
         "crates/hookecho/src/timeline.rs",
         "crates/hookecho/src/view.rs"
@@ -816,7 +817,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME01",
       "acceptance": "Configured frame count maps to available frames with explicit loading/missing states.",
-      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14. On 2026-10-15 the optimized local web build loaded a live KTLX VCP212 scan and the selector showed a four-frame ceiling after measurement. A separate live TDFW VCP80 session selected ten frames and ran playback for 120 seconds. At the end, exported diagnostics listed 436 available frame names with exactly the newest ten consecutive entries Ready, playing=true, following_live=true, 12,787,200 encoded scan payload bytes against a 201,326,592-byte budget and zero radar-cache evictions. Start/end screenshots displayed different scan times; 234 radar-related HTTP responses and no HTTP errors were counted during the run. This measures encoded payload only, not browser heap/GPU memory or a longer session. The native decoded-cache entry cap was subsequently raised from 30 to 252, while its 512 MiB payload trimmer remains in place; 250-frame native playback still needs an actual runtime measurement. Evidence: outputs/ro-parity/tdwr-loop-measure/results.json, playing-start.png, playing-after-120s.png and hookecho-diagnostics.json."
+      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14. On 2026-10-15 the optimized local web build loaded a live KTLX VCP212 scan and the selector showed a four-frame ceiling after measurement. A separate live TDFW VCP80 session selected ten frames and ran playback for 120 seconds. At the end, exported diagnostics listed 436 available frame names with exactly the newest ten consecutive entries Ready, playing=true, following_live=true, 12,787,200 encoded scan payload bytes against a 201,326,592-byte budget and zero radar-cache evictions. Start/end screenshots displayed different scan times; 234 radar-related HTTP responses and no HTTP errors were counted during the run. This measures encoded payload only, not browser heap/GPU memory or a longer session. The native decoded-cache entry cap was subsequently raised from 30 to 252, while its 512 MiB payload trimmer remains in place. A native stress run fetched one live TDFW volume, cloned it into 250 independent decoded allocations, retained all 250 with 250/250 cache hits, and measured 319,680,000 encoded payload bytes, 514,408,448 process RSS bytes, 321 ms clone/insert time and 84 microseconds for one full cache pass. This is a representative cache measurement, not 250 distinct historical fetches or full playback latency. Evidence: outputs/ro-parity/tdwr-loop-measure/results.json, playing-start.png, playing-after-120s.png, hookecho-diagnostics.json and outputs/ro-parity/native-loop-profile/results.json."
     },
     {
       "id": "TIME02",

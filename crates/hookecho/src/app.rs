@@ -95,10 +95,11 @@ fn new_tds_locations(
 
 /// Soft encoded-payload cap. Displayed frames and actively borrowed scans are never evicted;
 /// diagnostics explicitly report when those pinned allocations alone exceed the cap.
+pub const NATIVE_RADAR_PAYLOAD_BUDGET: usize = 512 * 1024 * 1024;
 fn radar_payload_budget() -> usize {
     if cfg!(target_os = "android") { 96 * 1024 * 1024 }
     else if cfg!(target_arch = "wasm32") { 192 * 1024 * 1024 }
-    else { 512 * 1024 * 1024 }
+    else { NATIVE_RADAR_PAYLOAD_BUDGET }
 }
 
 /// Loop frames in flight, keyed by volume name, with when each was kicked off.
@@ -2635,7 +2636,8 @@ fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) 
 const WEB_LOOP_WINDOW: usize = 12;
 /// Desktop's largest selectable loop, plus two slots below for the head and an in-flight scan.
 /// The separate encoded-payload budget still evicts large scans before this count is reached.
-const NATIVE_LOOP_WINDOW: usize = 250;
+pub const NATIVE_LOOP_WINDOW: usize = 250;
+pub const NATIVE_SCAN_CACHE_CAPACITY: usize = NATIVE_LOOP_WINDOW + 2;
 
 fn web_loop_window_for_bytes(scan_bytes: usize, budget: usize) -> usize {
     if scan_bytes == 0 { return 4; } // no measured scan yet
@@ -4362,7 +4364,7 @@ impl HookEchoApp {
         } else if cfg!(target_arch = "wasm32") {
             WEB_LOOP_WINDOW + 4
         } else {
-            NATIVE_LOOP_WINDOW + 2
+            NATIVE_SCAN_CACHE_CAPACITY
         };
         // The alert overlay from the last run, minus anything that has expired since. Also seeds
         // the known-warning ids, so a restart during an event doesn't re-banner and re-speak
