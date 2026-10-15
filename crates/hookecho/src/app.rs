@@ -3690,6 +3690,8 @@ pub struct HookEchoApp {
     afd_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::afd::Afd, String>>>,
     cpc_discussion: ui::cpc_discussion_window::CpcDiscussionWindow,
     cpc_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::cpc::Discussion, String>>>,
+    fire_weather_discussion: ui::fire_weather_discussion_window::FireWeatherDiscussionWindow,
+    fire_weather_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::fire_weather::Discussion, String>>>,
     /// NHC public advisory / forecast discussion reader.
     tropical_window: ui::tropical_window::TropicalWindow,
     tropical_text_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
@@ -4667,6 +4669,8 @@ impl HookEchoApp {
             afd_rx: None,
             cpc_discussion: ui::cpc_discussion_window::CpcDiscussionWindow::default(),
             cpc_discussion_rx: None,
+            fire_weather_discussion: ui::fire_weather_discussion_window::FireWeatherDiscussionWindow::default(),
+            fire_weather_discussion_rx: None,
             tropical_window: ui::tropical_window::TropicalWindow::default(),
             tropical_text_rx: None,
             show_range_rings: false,
@@ -9021,6 +9025,11 @@ impl HookEchoApp {
             if (1..=8).contains(&self.filters.fire_weather_day) {
                 self.spawn_overlay(ctx, OverlaySource::FireWeather(self.filters.fire_weather_day, self.filters.fire_weather_kind));
             }
+            if self.fire_weather_discussion.open { self.fetch_fire_weather_discussion(); }
+        }
+        if actions.fire_weather_discussion {
+            self.fire_weather_discussion.open = true;
+            self.fetch_fire_weather_discussion();
         }
         if actions.cpc_changed {
             self.cpc_features.clear();
@@ -10857,6 +10866,21 @@ impl HookEchoApp {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
+        });
+    }
+
+    fn fetch_fire_weather_discussion(&mut self) {
+        let day = self.filters.fire_weather_day;
+        self.fire_weather_discussion.day = day;
+        self.fire_weather_discussion.discussion = None;
+        self.fire_weather_discussion.error = None;
+        self.fire_weather_discussion.busy = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fire_weather_discussion_rx = Some(rx);
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::fire_weather::fetch_discussion(&http, day).await.map_err(|e| e.to_string());
+            let _ = tx.send(result);
         });
     }
 
@@ -22505,6 +22529,19 @@ impl eframe::App for HookEchoApp {
             if refresh {
                 self.fetch_afd();
             }
+        }
+        if let Some(rx) = &self.fire_weather_discussion_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.fire_weather_discussion_rx = None;
+                self.fire_weather_discussion.busy = false;
+                match result {
+                    Ok(discussion) => self.fire_weather_discussion.discussion = Some(discussion),
+                    Err(error) => self.fire_weather_discussion.error = Some(error),
+                }
+            }
+        }
+        if self.fire_weather_discussion.open && self.fire_weather_discussion.show(ctx, &mut self.drawer) {
+            self.fetch_fire_weather_discussion();
         }
         if let Some(rx) = &self.cpc_discussion_rx {
             if let Ok(result) = rx.try_recv() {

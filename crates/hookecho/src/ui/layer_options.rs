@@ -24,6 +24,8 @@ pub struct UiActions {
     pub outlook_kind_changed: bool,
     /// NOAA SPC fire-weather day or category changed.
     pub fire_weather_changed: bool,
+    /// Open the public NOAA SPC forecast reasoning for the selected fire-weather day.
+    pub fire_weather_discussion: bool,
     /// CPC period or variable changed; clear old polygons and fetch selected NOAA layer.
     pub cpc_changed: bool,
     /// Open the NOAA CPC forecast reasoning for the selected period.
@@ -763,6 +765,7 @@ pub(crate) fn show(
                 }
             });
             ui.weak("Conditions: elevated/critical risk; dry thunderstorms: isolated/scattered risk. Days 3–8 use probability contours.");
+            if ui.button("Read NOAA forecast discussion").clicked() { actions.fire_weather_discussion = true; }
         }
         if fire_changed {
             actions.fire_weather_changed = true;

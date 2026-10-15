@@ -24,7 +24,7 @@ pub fn discussion_url(period: Period) -> &'static str {
     }
 }
 
-fn plain_text(markup: &str) -> String {
+pub(crate) fn plain_text(markup: &str) -> String {
     let mut out = String::with_capacity(markup.len());
     let mut tag = String::new();
     let mut in_tag = false;

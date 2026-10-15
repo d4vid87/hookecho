@@ -5,6 +5,41 @@ use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
 
 const BASE: &str = "https://mapservices.weather.noaa.gov/vector/rest/services/fire_weather/SPC_firewx/MapServer";
 
+#[derive(Debug, Clone)]
+pub struct Discussion {
+    pub day: u8,
+    pub text: String,
+    pub source_url: &'static str,
+}
+
+pub fn discussion_url(day: u8) -> Option<&'static str> {
+    match day {
+        1 => Some("https://www.spc.noaa.gov/products/fire_wx/fwdy1.html"),
+        2 => Some("https://www.spc.noaa.gov/products/fire_wx/fwdy2.html"),
+        3..=8 => Some("https://www.spc.noaa.gov/products/exper/fire_wx/"),
+        _ => None,
+    }
+}
+
+pub fn parse_discussion(body: &str, day: u8) -> anyhow::Result<Discussion> {
+    let source_url = discussion_url(day).ok_or_else(|| anyhow::anyhow!("fire-weather day out of range"))?;
+    anyhow::ensure!(body.len() <= 1024 * 1024, "fire-weather discussion exceeds 1 MB");
+    let lower = body.to_ascii_lowercase();
+    let start = lower.find("<pre").ok_or_else(|| anyhow::anyhow!("fire-weather discussion body missing"))?;
+    let text_start = lower[start..].find('>').ok_or_else(|| anyhow::anyhow!("fire-weather discussion body malformed"))? + start + 1;
+    let end = lower[text_start..].find("</pre>").ok_or_else(|| anyhow::anyhow!("fire-weather discussion body incomplete"))? + text_start;
+    let text = crate::cpc::plain_text(&body[text_start..end]);
+    anyhow::ensure!(text.contains("Fire Weather Outlook") && text.len() > 100, "fire-weather discussion text unavailable");
+    Ok(Discussion { day, text, source_url })
+}
+
+pub async fn fetch_discussion(client: &reqwest::Client, day: u8) -> anyhow::Result<Discussion> {
+    let url = discussion_url(day).ok_or_else(|| anyhow::anyhow!("fire-weather day out of range"))?;
+    let body = client.get(crate::net::fetch_url(url)).timeout(crate::net::FEED_TIMEOUT)
+        .header("User-Agent", USER_AGENT).send().await?.error_for_status()?.text().await?;
+    parse_discussion(&body, day)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Kind {
     #[default]
@@ -102,6 +137,17 @@ pub async fn fetch(client: &reqwest::Client, day: u8, kind: Kind) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_public_discussion_for_correct_forecast_page() {
+        let html = format!("<html><pre>ZCZC SPCFWDDY1 ALL\nDay 1 Fire Weather Outlook\n{}</pre></html>", "Forecast reasoning. ".repeat(10));
+        let discussion = parse_discussion(&html, 1).unwrap();
+        assert_eq!(discussion.day, 1);
+        assert!(discussion.text.contains("Forecast reasoning"));
+        assert!(discussion.source_url.ends_with("fwdy1.html"));
+        assert!(parse_discussion(&html, 0).is_err());
+        assert!(parse_discussion("<html>missing text</html>", 1).is_err());
+        assert!(discussion_url(8).unwrap().ends_with("/exper/fire_wx/"));
+    }
     #[test]
     fn public_layers_cover_all_days_and_categories() {
         assert_eq!(layer_id(1, Kind::Conditions), Some(1));

@@ -158,7 +158,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Allow 6,192 bytes of margin above that measured result; lite/startup caps are unchanged.
 # Public Level III DAA/DSA accumulation adds two real radar products to the first-load bundle.
 # The measured optimized main WASM is 4,531,260 bytes gzip; retain under 0.2% headroom.
-budget="${HOOKECHO_WASM_BUDGET:-4540000}"
+# NOAA SPC fire-weather discussion adds 1,305 gzip bytes to the measured 4,539,943-byte
+# main WASM. Keep a narrow 8,752-byte margin for this public-data parity feature.
+budget="${HOOKECHO_WASM_BUDGET:-4550000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
