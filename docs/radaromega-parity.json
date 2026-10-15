@@ -376,7 +376,7 @@
       "status": "partial",
       "observed_scope": "Show Always, Show only when towers are OFF, No City & Road Layer choices.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "Vector display settings add always/when radar stations hidden/hidden city-and-road modes.",
+      "hookecho_implementation": "Vector display settings add always/when radar stations hidden/hidden city-and-road modes. All transportation strokes and casings now render once above the radar layer, while labels remain in the later egui pass.",
       "remaining_gaps": [
         "Independent label collision and road placement differ; interaction verification remains pending."
       ],

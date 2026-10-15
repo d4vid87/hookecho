@@ -1917,8 +1917,7 @@ impl RenderResources {
                 }
             }
         }
-        // Only the small major-road subset is repeated here. Town labels and route shields are
-        // painted by egui above this callback, so orientation survives an opaque radar core.
+        // All road strokes are drawn here above radar; labels and route shields follow in egui.
         self.draw_vector_foreground(pane, cam, pass);
         // Field layers over the radar (rotation/hail/shear/lightning signals).
         self.draw_fields(pane, pass, false);

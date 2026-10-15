@@ -514,12 +514,14 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                     }
                 }),
             );
-            let foreground = *layer == "transportation"
-                && matches!(cls.as_str(), "motorway" | "trunk");
-            if foreground {
-                append(&mut foreground_verts, &mut foreground_indices, buf.clone());
+            // The radar sits below the complete road layer, not just major highways. Keep each
+            // stroke in one geometry band so local streets and their casings remain visible over
+            // intense echoes without paying for a duplicate under-radar draw.
+            if *layer == "transportation" {
+                append(&mut foreground_verts, &mut foreground_indices, buf);
+            } else {
+                append(&mut verts, &mut indices, buf);
             }
-            append(&mut verts, &mut indices, buf);
         }
     }
 
@@ -1610,8 +1612,24 @@ mod tests {
             bytes(3, &out)
         }
         let mut out = layer("boundary", "admin_level", &["4", "6"]);
-        out.extend(layer("transportation", "class", &["motorway"]));
+        out.extend(layer("transportation", "class", &["motorway", "secondary"]));
         out
+    }
+
+    #[test]
+    fn road_strokes_are_drawn_once_above_radar() {
+        let bytes = detail_fixture();
+        let id = (8, 65, 95);
+        let defaults = basemap_style::MapDetailStyle::default();
+        let roads = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 8.0,
+            crate::settings::Theme::Dark, false, defaults);
+        let no_roads = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 8.0,
+            crate::settings::Theme::Dark, false,
+            basemap_style::MapDetailStyle { show_city_roads: false, ..defaults });
+        assert_eq!(roads.0.len(), no_roads.0.len(), "base geometry excludes every road class");
+        assert_eq!(roads.1, no_roads.1);
+        assert!(roads.2.len() > no_roads.2.len(), "roads and casings occupy the foreground");
+        assert!(roads.3.len() > no_roads.3.len());
     }
 
     #[test]
