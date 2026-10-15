@@ -178,7 +178,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Alaska/Hawaii NDFD regions measured 4,639,631 gzip bytes; retain 4,369 bytes of margin.
 # Six-frame regional MRMS replay measured 4,650,476 gzip bytes with binaryen 130. Allow 4,524
 # bytes of headroom for the new source-backed transport; lite and startup budgets stay unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4655000}"
+# UTC archive-day and hour navigation adds a source-backed historical loop without storing days of
+# grids in memory. The optimized main bundle measured 4,653,737 gzip bytes; retain under 0.2%
+# headroom while preserving the Lite and startup gates.
+budget="${HOOKECHO_WASM_BUDGET:-4662000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

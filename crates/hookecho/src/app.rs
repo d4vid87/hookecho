@@ -298,7 +298,7 @@ enum OverlayMsg {
         wxdata::field::FieldFrame,
         Option<wxdata::mrms::MrmsField>,
     ),
-    MrmsHistory(crate::render::FieldLayer, Vec<wxdata::field::FieldFrame>),
+    MrmsHistory(crate::render::FieldLayer, Option<DateTime<Utc>>, Vec<wxdata::field::FieldFrame>),
     /// A registry-backed grid owned by one pane (satellite or single-site radar).
     PaneField(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
     PaneRgb(usize, crate::render::FieldLayer, wxdata::abi::RgbImage),
@@ -408,7 +408,7 @@ enum OverlaySource {
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
-    MrmsHistory(crate::render::FieldLayer, String),
+    MrmsHistory(crate::render::FieldLayer, String, Option<DateTime<Utc>>),
     /// Native GOES ABI imagery for a registered band.
     GoesAbi(
         usize,
@@ -849,8 +849,12 @@ impl OverlaySource {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
             }
-            OverlaySource::MrmsHistory(layer, product) => {
-                let keys = wxdata::mrms::recent_keys(http, &product, 6).await?;
+            OverlaySource::MrmsHistory(layer, product, at) => {
+                let keys = if let Some(at) = at {
+                    wxdata::mrms::history_keys_before(http, &product, at, 6).await?
+                } else {
+                    wxdata::mrms::recent_keys(http, &product, 6).await?
+                };
                 let mut frames = Vec::with_capacity(keys.len());
                 for key in keys {
                     let frame = wxdata::mrms::fetch_frame_key(http, &product, &key).await?;
@@ -860,7 +864,7 @@ impl OverlaySource {
                         frame.descriptor, display, frame.stamp.clone(),
                     ));
                 }
-                OverlayMsg::MrmsHistory(layer, frames)
+                OverlayMsg::MrmsHistory(layer, at, frames)
             }
             OverlaySource::GoesAbi(pane, layer, band, scene, at) => {
                 let received = Utc::now();
@@ -2480,6 +2484,9 @@ struct MrmsLoop {
     index: usize,
     playing: bool,
     last_step: Instant,
+    requested_at: Option<DateTime<Utc>>,
+    error: Option<String>,
+    loading: bool,
 }
 
 impl FieldState {
@@ -10523,7 +10530,7 @@ impl HookEchoApp {
                         Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneField(_, _, frame, _)) => {
                             Some(frame.stamp.valid_time)
                         }
-                        Ok(OverlayMsg::MrmsHistory(_, frames)) => frames.last().map(|frame| frame.stamp.valid_time),
+                        Ok(OverlayMsg::MrmsHistory(_, _, frames)) => frames.last().map(|frame| frame.stamp.valid_time),
                         _ => None,
                     };
                     let current = self
@@ -10543,6 +10550,12 @@ impl HookEchoApp {
                     match result {
                         Ok(msg) => msg,
                         Err(err) => {
+                            if let RequestLane::Field(layer) = &lane {
+                                if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == *layer) {
+                                    loop_state.error = Some(err.clone());
+                                    loop_state.loading = false;
+                                }
+                            }
                             note_feed_error(lane.label(), err);
                             continue;
                         }
@@ -10729,10 +10742,11 @@ impl HookEchoApp {
                         s.frame = Some(frame);
                     }
                 }
-                OverlayMsg::MrmsHistory(layer, frames) => {
+                OverlayMsg::MrmsHistory(layer, at, frames) => {
                     if frames.is_empty() || !self.views.iter().any(|view|
                         !view.show_radar && view.fields_on.contains(&layer)) { continue; }
                     let prior = self.mrms_loops.iter().find(|old| old.layer == layer);
+                    if prior.is_some_and(|old| old.requested_at != at) { continue; }
                     let prior_time = prior.and_then(|old| old.frames.get(old.index)).map(|frame| frame.stamp.valid_time);
                     let was_live = prior.is_none_or(|old| old.index + 1 == old.frames.len());
                     let playing = prior.is_some_and(|old| old.playing);
@@ -10740,7 +10754,7 @@ impl HookEchoApp {
                         prior_time.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time == time))
                             .unwrap_or(0)
                     };
-                    let loop_state = MrmsLoop { layer, frames, index, playing, last_step: Instant::now() };
+                    let loop_state = MrmsLoop { layer, frames, index, playing, last_step: Instant::now(), requested_at: at, error: None, loading: false };
                     if let Some(slot) = self.mrms_loops.iter_mut().find(|old| old.layer == layer) {
                         *slot = loop_state;
                     } else {
@@ -22152,10 +22166,12 @@ impl eframe::App for HookEchoApp {
             let wanted = self.field_wanted(layer)
                 || (layer == FL::Mrms && self.field_wanted(FL::MrmsReflectivityTrail))
                 || (layer == FL::PrecipType && self.settings.precip_tint);
+            let archive_at = self.mrms_loops.iter().find(|state| state.layer == layer)
+                .and_then(|state| state.requested_at);
             let stale = wanted
                 && self.fields.get(&layer).is_none_or(|s| {
                     s.last_fetch
-                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+                        .is_none_or(|t| archive_at.is_none() && t.elapsed().as_secs() >= field_refresh_secs(layer))
                 });
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
@@ -22164,7 +22180,7 @@ impl eframe::App for HookEchoApp {
                     && matches!(product.split_once('/').map(|(region, _)| region),
                         Some("ALASKA" | "HAWAII" | "GUAM" | "CARIB"));
                 if regional_loop {
-                    self.spawn_overlay(ctx, OverlaySource::MrmsHistory(layer, product));
+                    self.spawn_overlay(ctx, OverlaySource::MrmsHistory(layer, product, archive_at));
                 } else {
                     self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
                 }

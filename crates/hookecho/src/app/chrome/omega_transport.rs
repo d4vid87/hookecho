@@ -36,6 +36,17 @@ impl HookEchoApp {
         let mrms_loop = self.mrms_loops.iter()
             .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .map(|loop_state| (loop_state.frames.len(), loop_state.index, loop_state.playing));
+        let mrms_archive_at = self.mrms_loops.iter()
+            .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+            .and_then(|loop_state| loop_state.requested_at);
+        let mrms_last_time = self.mrms_loops.iter()
+            .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+            .and_then(|loop_state| loop_state.frames.last().map(|frame| frame.stamp.valid_time));
+        let mrms_error = self.mrms_loops.iter()
+            .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+            .and_then(|loop_state| loop_state.error.clone());
+        let mrms_loading = self.mrms_loops.iter()
+            .any(|loop_state| !radar_visible && Some(loop_state.layer) == field && loop_state.loading);
         let field_name = field
             .and_then(|field| field.descriptor())
             .map_or("Radar controls", |d| d.display_name);
@@ -93,6 +104,7 @@ impl HookEchoApp {
         let mut mrms_step = 0isize;
         let mut mrms_seek = None;
         let mut mrms_toggle = false;
+        let mut mrms_archive_request = None;
         #[cfg(target_arch = "wasm32")]
         let (packs, pack_status) = (self.packs(), self.pack_status());
         #[cfg(target_arch = "wasm32")]
@@ -158,6 +170,49 @@ impl HookEchoApp {
                             }
                             if !radar_visible {
                                 ui.label(egui::RichText::new(field_name).size(12.0).color(accent));
+                                if let Some(layer) = field.filter(|_| mrms_loop.is_some()) {
+                                    egui::containers::menu::MenuButton::new("History")
+                                        .config(egui::containers::menu::MenuConfig::new()
+                                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+                                        .ui(ui, |ui| {
+                                        ui.set_min_width(240.0);
+                                        ui.strong("Public MRMS archive");
+                                        ui.weak("Choose the UTC day and hour ending a six-frame loop.");
+                                        let default_at = mrms_archive_at.or(mrms_last_time).unwrap_or_else(Utc::now);
+                                        let id = egui::Id::new(("mrms-archive-window", layer.stable_id()));
+                                        let mut draft: (String, u32) = ui.data_mut(|d| d.get_temp(id))
+                                            .unwrap_or_else(|| (default_at.format("%Y-%m-%d").to_string(),
+                                                default_at.format("%H").to_string().parse().unwrap_or(0)));
+                                        ui.horizontal(|ui| {
+                                            ui.label("Date");
+                                            ui.add(egui::TextEdit::singleline(&mut draft.0).desired_width(100.0))
+                                                .on_hover_text("UTC date, YYYY-MM-DD");
+                                        });
+                                        ui.add(egui::Slider::new(&mut draft.1, 0..=23).text("UTC hour"));
+                                        let parsed = chrono::NaiveDate::parse_from_str(&draft.0, "%Y-%m-%d").ok();
+                                        if ui.add_enabled(parsed.is_some(), egui::Button::new("Load six frames"))
+                                            .clicked() {
+                                            if let Some(at) = parsed.and_then(|day| day.and_hms_opt(draft.1, 59, 59)) {
+                                                mrms_archive_request = Some(Some(at.and_utc().min(Utc::now())));
+                                                ui.close();
+                                            }
+                                        }
+                                        if parsed.is_none() { ui.weak("Enter a complete YYYY-MM-DD date."); }
+                                        if ui.button("Return to latest").clicked() {
+                                            mrms_archive_request = Some(None);
+                                            ui.close();
+                                        }
+                                        if let Some(error) = mrms_error.as_deref() {
+                                            let message = if error.contains("no MRMS frames found before") {
+                                                "No mosaics for this date and hour. Choose another window."
+                                            } else { error };
+                                            ui.add(egui::Label::new(
+                                                egui::RichText::new(message).color(egui::Color32::from_rgb(255, 190, 42))
+                                            ).wrap());
+                                        }
+                                        ui.data_mut(|d| d.insert_temp(id, draft));
+                                    });
+                                }
                                 if field == Some(crate::render::FieldLayer::HailSwath) {
                                     let size = if self.hail_threshold_inches == 0 {
                                         "All".to_owned()
@@ -198,6 +253,9 @@ impl HookEchoApp {
                             let t = &self.views[idx].timeline;
                             let (color, status) = if !radar_visible {
                                 (accent, match field_time {
+                                    _ if mrms_loading => "Loading archive",
+                                    _ if mrms_error.is_some() => "Archive unavailable",
+                                    _ if mrms_archive_at.is_some() => "Archive",
                                     Some((_, _, _, true)) if mrms_loop.is_some_and(|(len, index, _)| index + 1 < len) => "Replay",
                                     Some((_, _, _, true)) => "Field valid",
                                     Some((_, _, _, false)) => "Field hidden",
@@ -224,13 +282,17 @@ impl HookEchoApp {
                         });
                         let t = &mut self.views[idx].timeline;
                         if !radar_visible {
-                            ui.weak(if field.is_some() {
-                                if mrms_loop.is_some() { "Public MRMS mosaic history" }
-                                else { "Latest field only · mosaic history is not available" }
+                            ui.weak(if mrms_loading {
+                                "Loading selected history · previous mosaic remains visible".to_owned()
+                            } else if let Some(at) = mrms_archive_at {
+                                format!("Public MRMS archive · window ending {} UTC", at.format("%Y-%m-%d %H:%M"))
+                            } else if field.is_some() {
+                                if mrms_loop.is_some() { "Public MRMS mosaic history".to_owned() }
+                                else { "Latest field only · mosaic history is not available".to_owned() }
                             } else if imagery_map {
-                                "Radar timeline · imagery has separate time controls"
+                                "Radar timeline · imagery has separate time controls".to_owned()
                             } else {
-                                "Radar timeline · radar hidden"
+                                "Radar timeline · radar hidden".to_owned()
                             });
                         }
                         if radar_visible && t.slot_count() > 0 {
@@ -305,6 +367,16 @@ impl HookEchoApp {
                 loop_state.playing = !loop_state.playing;
                 loop_state.last_step = Instant::now();
             }
+        }
+        if let (Some(layer), Some(at)) = (active_mrms, mrms_archive_request) {
+            if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
+                loop_state.requested_at = at;
+                loop_state.index = loop_state.frames.len().saturating_sub(1);
+                loop_state.playing = false;
+                loop_state.error = None;
+                loop_state.loading = true;
+            }
+            self.fields.entry(layer).or_default().last_fetch = None;
         }
         self.settings.live_loop_frames = loop_frames;
         if was_cut_playback && !self.views[idx].timeline.cut_playback {

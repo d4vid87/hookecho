@@ -725,6 +725,39 @@ pub async fn recent_keys(
     Ok(keys.into_iter().rev().take(count).collect::<Vec<_>>().into_iter().rev().collect())
 }
 
+/// Return up to `count` objects at or before a selected UTC instant, oldest first.
+///
+/// Listing is bounded to the selected UTC day and its predecessor. A request near midnight can
+/// therefore still build a complete short loop, without scanning the bucket's full archive.
+pub async fn history_keys_before(
+    http: &reqwest::Client,
+    product: &str,
+    at: chrono::DateTime<chrono::Utc>,
+    count: usize,
+) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(descriptor_for_product(product).is_some(), "unregistered MRMS product {product}");
+    anyhow::ensure!(count <= 32, "MRMS history is limited to 32 frames");
+    if count == 0 { return Ok(Vec::new()); }
+    let day = at.date_naive();
+    let yesterday = day.pred_opt().unwrap_or(day);
+    let mut keys = Vec::new();
+    for day in [day, yesterday] {
+        let prefix = format!("{product}/{}/", day.format("%Y%m%d"));
+        let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000");
+        let xml = http.get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT).send().await?.error_for_status()?.text().await?;
+        keys.extend(listed_keys(&xml).into_iter().filter(|key| {
+            key.starts_with(&prefix) && key.ends_with(".grib2.gz")
+                && key_time(key).is_some_and(|time| time <= at)
+        }));
+        if keys.len() >= count { break; }
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    anyhow::ensure!(!keys.is_empty(), "no MRMS frames found before {} for {product}", at.to_rfc3339());
+    Ok(keys.into_iter().rev().take(count).collect::<Vec<_>>().into_iter().rev().collect())
+}
+
 /// Fetch one object selected from [`recent_keys`] through the same decoder and cache as live MRMS.
 pub async fn fetch_frame_key(
     http: &reqwest::Client,
@@ -1042,6 +1075,12 @@ fn listed_keys(xml: &str) -> Vec<String> {
         .collect()
 }
 
+fn key_time(key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let suffix = key.rsplit_once('_')?.1.strip_suffix(".grib2.gz")?;
+    chrono::NaiveDateTime::parse_from_str(suffix, "%Y%m%d-%H%M%S")
+        .ok().map(|time| time.and_utc())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1078,6 +1117,9 @@ mod tests {
         let xml = "<ListBucketResult><Contents><Key>p/20261015/a.grib2.gz</Key></Contents><Contents><Key>p/20261015/b.grib2.gz</Key></Contents></ListBucketResult>";
         assert_eq!(listed_keys(xml), ["p/20261015/a.grib2.gz", "p/20261015/b.grib2.gz"]);
         assert!(listed_keys("<ListBucketResult/>").is_empty());
+        assert_eq!(key_time("p/MRMS_x_20261015-171258.grib2.gz")
+            .unwrap().format("%Y-%m-%d %H:%M:%S").to_string(), "2026-10-15 17:12:58");
+        assert!(key_time("p/unexpected.grib2.gz").is_none());
     }
 
     #[test]
