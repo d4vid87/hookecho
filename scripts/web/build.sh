@@ -164,7 +164,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Browser PNG capture reuses the existing screenshot command and download helper but includes
 # the PNG encoder in the main bundle. Its measured size is 4,555,906 gzip bytes; allow 4,094
 # bytes of margin (under 0.1%) while keeping the lite and startup limits unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4560000}"
+# Browser GIF export adds the codec and in-memory loop capture. The optimized main bundle measured
+# 4,583,740 gzip bytes; retain about 6 KB of margin (0.13%) for this verified four-frame export.
+budget="${HOOKECHO_WASM_BUDGET:-4590000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

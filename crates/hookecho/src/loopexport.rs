@@ -2,13 +2,8 @@
 //! path (GUI-only), collects them here, and encodes a looping GIF. The encoder is the testable
 //! part; the capture state machine lives in [`crate::app`].
 
-// The GIF encoder is native-only, and so is the codec behind it: an export needs a file to write,
-// `paths::data_dir()` is `None` in a browser, and so the web build's export path already returned
-// before it ever reached here. Compiling the codec in anyway was pure bundle weight.
-#[cfg(not(target_arch = "wasm32"))]
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::RgbaImage;
-#[cfg(not(target_arch = "wasm32"))]
 use image::{Delay, Frame};
 use std::path::Path;
 
@@ -141,6 +136,39 @@ pub fn encode_gif_timed(
     delays_ms: &[u32],
     path: &Path,
 ) -> anyhow::Result<()> {
+    validate_gif_frames(frames, delays_ms)?;
+    let file = std::fs::File::create(path)?;
+    encode_gif_to(frames, delays_ms, std::io::BufWriter::new(file))
+}
+
+/// The browser collects a bounded radar loop in memory, then hands the GIF bytes to the download
+/// helper. Desktop writes to a chosen file through the same encoder.
+#[cfg(target_arch = "wasm32")]
+pub fn encode_gif_bytes(frames: &[RgbaImage], delay_ms: u16) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    encode_gif_to(frames, &vec![delay_ms as u32; frames.len()], &mut bytes)?;
+    Ok(bytes)
+}
+
+fn encode_gif_to<W: std::io::Write>(
+    frames: &[RgbaImage],
+    delays_ms: &[u32],
+    writer: W,
+) -> anyhow::Result<()> {
+    validate_gif_frames(frames, delays_ms)?;
+    // The browser encodes on its UI thread. The default quality setting (speed 1) can stall a
+    // megapixel loop for minutes; speed 30 keeps export interactive at bounded GIF resolution.
+    let speed = if cfg!(target_arch = "wasm32") { 30 } else { 1 };
+    let mut enc = GifEncoder::new_with_speed(writer, speed);
+    enc.set_repeat(Repeat::Infinite)?;
+    for (img, delay_ms) in frames.iter().zip(delays_ms) {
+        let delay = Delay::from_numer_denom_ms(*delay_ms, 1);
+        enc.encode_frame(Frame::from_parts(img.clone(), 0, 0, delay))?;
+    }
+    Ok(())
+}
+
+fn validate_gif_frames(frames: &[RgbaImage], delays_ms: &[u32]) -> anyhow::Result<()> {
     if frames.is_empty() {
         anyhow::bail!("no frames captured");
     }
@@ -148,13 +176,6 @@ pub fn encode_gif_timed(
         frames.len() == delays_ms.len(),
         "frame timing count mismatch"
     );
-    let file = std::fs::File::create(path)?;
-    let mut enc = GifEncoder::new(std::io::BufWriter::new(file));
-    enc.set_repeat(Repeat::Infinite)?;
-    for (img, delay_ms) in frames.iter().zip(delays_ms) {
-        let delay = Delay::from_numer_denom_ms(*delay_ms, 1);
-        enc.encode_frame(Frame::from_parts(img.clone(), 0, 0, delay))?;
-    }
     Ok(())
 }
 

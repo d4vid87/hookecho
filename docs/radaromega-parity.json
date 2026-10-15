@@ -1601,9 +1601,9 @@
       "status": "partial",
       "observed_scope": "Share sheet includes Screenshot, Record Video, Record Gif and Save Screenshot.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Desktop PNG screenshot, clipboard copy and archive-loop GIF/MP4 exports remain available. The browser Share panel now downloads a PNG using eframe's screenshot event and the existing in-memory Blob download helper. It closes the Share panel before capture. The optional caption card stays visible through the renderer's delayed screenshot frame and names site, product, valid time and NOAA/NWS attribution beneath the header.",
+      "hookecho_implementation": "Desktop PNG screenshot, clipboard copy and archive-loop GIF/MP4 exports remain available. The browser Share panel downloads a PNG using eframe's screenshot event and an in-memory Blob helper, closing the panel before capture. The optional caption card names site, product, valid time and NOAA/NWS attribution beneath the header. Browser Share also exports the loaded live-window or archive timeline as a 960-pixel-wide animated GIF; it waits for each requested radar volume, skips unavailable public archive scans, and restores the previous playback state afterward.",
       "remaining_gaps": [
-        "Browser GIF/MP4 capture is still absent. Codec output, legend composition, full-screen and multipane layouts, error recovery and the vendor sharing workflow need broader verification."
+        "Browser MP4 capture, captions in GIF frames, legend composition, full-screen and multipane layouts, and the vendor sharing workflow remain open. GIF export skips unavailable public archive scans rather than capturing stale imagery."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
@@ -1616,7 +1616,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN06",
       "acceptance": "Export includes correct map/data/time/attribution and reports capture errors.",
-      "runtime_verification": "2026-10-15: Web library check and optimized build passed (4,555,890 gzipped bytes under a deliberately raised 4,560,000-byte main-WASM budget; lite 74,707/80,000). In a local browser, Share > Download screenshot produced a 1280×720 PNG. The first capture exposed the Share panel; the final build closes it before capture. With Caption shared images enabled, the downloaded PNG visibly includes a readable site/product/time/NOAA-NWS card beneath the header and clear of the transport bar. Browser GIF/video and other layouts remain unverified."
+      "runtime_verification": "2026-10-15: In a local browser, Share > Download screenshot produced a 1280×720 PNG with the optional site/product/time/NOAA-NWS caption card. The final browser build passed its 4,590,000-byte main-WASM budget at 4,584,053 gzipped bytes (lite 74,707/80,000). Share > Download loop (GIF) produced an actual 960×540, 758,833-byte file from KTLX. ImageMagick identified three distinct frames timed at 250 ms each; adjacent-frame pixel differences were 12,610 and 13,017. The fourth public archive scan was unavailable, was logged as skipped, and no stale image was captured in its place. The viewer returned to live. Browser MP4 and other layouts remain unverified."
     },
     {
       "id": "LOC01",

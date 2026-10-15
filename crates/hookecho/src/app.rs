@@ -2500,11 +2500,16 @@ enum ShotDest {
 struct LoopExport {
     dest: std::path::PathBuf,
     format: crate::loopexport::LoopFormat,
+    return_live: bool,
+    resume_playing: bool,
+    prior_playhead: usize,
     frames: Vec<image::RgbaImage>,
     /// Slots still to capture (counts down as frames are grabbed).
     remaining: usize,
+    requested_count: usize,
     /// Frames to let the newly-stepped radar settle/load before grabbing.
     settle: u8,
+    wait_started: wxdata::clock::Instant,
     /// A screenshot has been requested; waiting for its event.
     capturing: bool,
     /// Playback speed the scrubber was set to when the export started — the exported clip plays
@@ -19136,6 +19141,14 @@ impl HookEchoApp {
                         self.panel_open = false;
                         self.request_capture(ui.ctx(), ShotDest::Download);
                     }
+                    if ui
+                        .add_enabled(self.loop_export.is_none(), egui::Button::new("Download loop (GIF)"))
+                        .on_hover_text("Capture the loaded radar timeline as an animated GIF")
+                        .clicked()
+                    {
+                        self.panel_open = false;
+                        self.start_loop_export(crate::loopexport::LoopFormat::Gif);
+                    }
                     toggle(ui, &mut self.settings.share_card, "Caption shared images")
                         .on_hover_text("Stamp the site, product, valid time and source onto the downloaded image");
                 }
@@ -19866,11 +19879,18 @@ impl HookEchoApp {
             LoopFormat::Gif => ("hookecho-loop.gif", "gif"),
             LoopFormat::Mp4 => ("hookecho-loop.mp4", "mp4"),
         };
-        let Some(path) = crate::dialog::save_path(name, ext) else {
-            return;
-        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let Some(path) = crate::dialog::save_path(name, ext) else { return; };
+        #[cfg(target_arch = "wasm32")]
+        let path = std::path::PathBuf::from(name);
+        #[cfg(target_arch = "wasm32")]
+        let _ = ext;
         let v = &mut self.views[self.active];
-        let slots = v.timeline.frames.len(); // observed frames only (skip forecast tail)
+        let slots = if v.timeline.following {
+            v.timeline.frames.len().min(v.timeline.live_window.max(1))
+        } else {
+            v.timeline.frames.len()
+        };
         if slots == 0 {
             log::warn!("loop export: no timeline frames");
             self.toast(
@@ -19880,19 +19900,29 @@ impl HookEchoApp {
             return;
         }
         let speed = v.timeline.speed;
+        let return_live = v.timeline.following;
+        let resume_playing = v.timeline.playing;
+        let prior_playhead = v.timeline.playhead;
         let (lon, lat) =
             crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
         if v.timeline.cut_playback {
             v.timeline.enable_cut_playback(false);
             v.cut_selection = None;
         }
+        let first = if v.timeline.following { v.timeline.frames.len() - slots } else { 0 };
         v.timeline.go_begin();
+        v.timeline.playhead = first;
         self.loop_export = Some(LoopExport {
             dest: path,
             format,
+            return_live,
+            resume_playing,
+            prior_playhead,
             frames: Vec::with_capacity(slots),
             remaining: slots,
+            requested_count: slots,
             settle: LOOP_SETTLE_FRAMES,
+            wait_started: wxdata::clock::Instant::now(),
             capturing: false,
             fps: speed,
             site: v.site.clone(),
@@ -19915,6 +19945,29 @@ impl HookEchoApp {
         };
         if le.capturing {
             return; // waiting for the screenshot event
+        }
+        let view = &self.views[self.active];
+        let requested = view.timeline.current().map(|frame| frame.name());
+        let ready = requested.is_some_and(|name| {
+            view.volume.as_ref().is_some_and(|volume| volume.name == name)
+        });
+        if !ready {
+            let unavailable = requested.is_some_and(|name| view.failed_frame.as_deref() == Some(name));
+            if unavailable || le.wait_started.elapsed() > std::time::Duration::from_secs(30) {
+                log::warn!("loop export skipped unavailable radar frame: {}", requested.unwrap_or("unknown"));
+                le.remaining -= 1;
+                if le.remaining > 0 {
+                    self.views[self.active].timeline.step(1);
+                    le.settle = LOOP_SETTLE_FRAMES;
+                    le.wait_started = wxdata::clock::Instant::now();
+                    ctx.request_repaint();
+                } else {
+                    self.finish_loop_export();
+                }
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
+            return;
         }
         if le.settle > 0 {
             le.settle -= 1;
@@ -19941,6 +19994,13 @@ impl HookEchoApp {
             buf.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
         }
         if let Some(img) = image::RgbaImage::from_raw(w, h, buf) {
+            #[cfg(target_arch = "wasm32")]
+            let img = if w > 960 {
+                let scaled_h = ((h as f64 * 960.0 / w as f64).round() as u32).max(1);
+                image::imageops::resize(&img, 960, scaled_h, image::imageops::FilterType::Triangle)
+            } else {
+                img
+            };
             le.frames.push(img);
             if let Some(source) = source {
                 le.sources.push(source);
@@ -19952,57 +20012,87 @@ impl HookEchoApp {
             self.views[self.active].timeline.step(1);
             if let Some(le) = &mut self.loop_export {
                 le.settle = LOOP_SETTLE_FRAMES;
+                le.wait_started = wxdata::clock::Instant::now();
             }
         } else {
-            let le = self.loop_export.take().unwrap();
-            use crate::loopexport::LoopFormat;
-            let res = match le.format {
-                #[cfg(not(target_arch = "wasm32"))]
-                LoopFormat::Gif => crate::loopexport::encode_gif(
-                    &le.frames,
-                    (1000.0 / le.fps.max(0.1)) as u16,
-                    &le.dest,
-                ),
-                // Unreachable on the web: an export needs a destination path and there is none in
-                // a browser, so `start_loop_export` returns before a capture ever begins.
-                #[cfg(target_arch = "wasm32")]
-                LoopFormat::Gif => Err(anyhow::anyhow!("GIF export needs a filesystem")),
-                // The scrubber's slider is 1..=15 fps, which is also what the encoder accepts.
-                LoopFormat::Mp4 => crate::loopexport::encode_mp4(
-                    &le.frames,
-                    le.fps.round().clamp(1.0, 15.0) as u32,
-                    &le.dest,
-                ),
+            self.finish_loop_export();
+        }
+    }
+
+    fn finish_loop_export(&mut self) {
+        let le = self.loop_export.take().unwrap();
+        if le.return_live {
+            self.views[self.active].timeline.go_head();
+            if le.resume_playing { self.views[self.active].timeline.toggle_play(); }
+        } else {
+            let timeline = &mut self.views[self.active].timeline;
+            timeline.playhead = le.prior_playhead.min(timeline.frames.len().saturating_sub(1));
+            timeline.playing = le.resume_playing;
+        }
+        if le.frames.is_empty() {
+            self.toast(ToastKind::Error, "Loop export failed: no radar frames were available");
+            return;
+        }
+        use crate::loopexport::LoopFormat;
+        let res = match le.format {
+            #[cfg(not(target_arch = "wasm32"))]
+            LoopFormat::Gif => crate::loopexport::encode_gif(
+                &le.frames,
+                (1000.0 / le.fps.max(0.1)) as u16,
+                &le.dest,
+            ),
+            #[cfg(target_arch = "wasm32")]
+            LoopFormat::Gif => crate::loopexport::encode_gif_bytes(
+                &le.frames,
+                (1000.0 / le.fps.max(0.1)) as u16,
+            )
+            .and_then(|bytes| match crate::dialog::save_bytes("hookecho-loop.gif", "gif", &bytes) {
+                crate::dialog::Saved::Where(_) => Ok(()),
+                crate::dialog::Saved::Failed(e) => Err(anyhow::anyhow!(e)),
+                crate::dialog::Saved::Cancelled => Err(anyhow::anyhow!("download cancelled")),
+            }),
+            // The scrubber's slider is 1..=15 fps, which is also what the encoder accepts.
+            LoopFormat::Mp4 => crate::loopexport::encode_mp4(
+                &le.frames,
+                le.fps.round().clamp(1.0, 15.0) as u32,
+                &le.dest,
+            ),
+        }
+        .and_then(|()| {
+            #[cfg(target_arch = "wasm32")]
+            { return Ok(()); }
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::loopexport::write_manifest(
+                &le.dest,
+                &crate::loopexport::Manifest {
+                    site: le.site.as_deref(),
+                    product: &le.product,
+                    units: le.units,
+                    tilt: le.tilt,
+                    fps: le.fps,
+                    center: le.center,
+                    zoom: le.zoom,
+                },
+                &le.sources,
+            )
+        });
+        match res {
+            Ok(()) => {
+                log::info!(
+                    "loop saved: {} ({} frames)",
+                    le.dest.display(),
+                    le.frames.len()
+                );
+                let msg = if le.frames.len() == le.requested_count {
+                    format!("Loop saved ({} frames)", le.frames.len())
+                } else {
+                    format!("Loop saved ({} of {} frames; unavailable scans skipped)", le.frames.len(), le.requested_count)
+                };
+                self.toast(ToastKind::Success, msg);
             }
-            .and_then(|()| {
-                crate::loopexport::write_manifest(
-                    &le.dest,
-                    &crate::loopexport::Manifest {
-                        site: le.site.as_deref(),
-                        product: &le.product,
-                        units: le.units,
-                        tilt: le.tilt,
-                        fps: le.fps,
-                        center: le.center,
-                        zoom: le.zoom,
-                    },
-                    &le.sources,
-                )
-            });
-            match res {
-                Ok(()) => {
-                    log::info!(
-                        "loop saved: {} ({} frames)",
-                        le.dest.display(),
-                        le.frames.len()
-                    );
-                    let msg = format!("Loop saved ({} frames)", le.frames.len());
-                    self.toast(ToastKind::Success, msg);
-                }
-                Err(e) => {
-                    log::warn!("loop encode failed: {e}");
-                    self.toast(ToastKind::Error, format!("Loop export failed: {e}"));
-                }
+            Err(e) => {
+                log::warn!("loop encode failed: {e}");
+                self.toast(ToastKind::Error, format!("Loop export failed: {e}"));
             }
         }
     }
