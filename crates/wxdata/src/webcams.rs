@@ -207,6 +207,13 @@ fn flag(v: &serde_json::Value, k: &str, default: bool) -> bool {
 
 /// Fetch the camera sites inside a lon/lat box. The server does the filtering, so a continental
 /// view costs the same one request a county view does.
+fn faa_service_envelope_intersects(min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> bool {
+    max_lat >= 17.0
+        && min_lat <= 72.0
+        && ((min_lon <= -50.0 && max_lon >= -180.0)
+            || (min_lon <= 180.0 && max_lon >= 170.0))
+}
+
 pub async fn fetch_bbox(
     client: &reqwest::Client,
     min_lon: f64,
@@ -214,6 +221,12 @@ pub async fn fetch_bbox(
     max_lon: f64,
     max_lat: f64,
 ) -> anyhow::Result<Vec<CamSite>> {
+    // Avoid an FAA request for viewports wholly outside its North American service area. A
+    // coarse envelope retains Alaska (including the Aleutians), Hawaii, Canada and US sites;
+    // the provider still does the precise site filtering within it.
+    if !faa_service_envelope_intersects(min_lon, min_lat, max_lon, max_lat) {
+        return Ok(Vec::new());
+    }
     // The API wants "south,west|north,east" and rejects a zoom outside its own table; 10 is the
     // value its map uses for a regional view and it does not affect which sites come back.
     let bounds = format!("{min_lat},{min_lon}|{max_lat},{max_lon}");
@@ -292,6 +305,16 @@ pub async fn latest_image(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn faa_queries_skip_distant_viewports_without_losing_us_regions() {
+        use super::faa_service_envelope_intersects as intersects;
+        assert!(!intersects(140.0, -39.0, 162.0, -28.0)); // Sydney
+        assert!(!intersects(5.0, 47.0, 16.0, 55.0)); // Germany
+        assert!(intersects(-159.0, 18.0, -154.0, 23.0)); // Hawaii
+        assert!(intersects(-154.0, 58.0, -145.0, 66.0)); // Alaska
+        assert!(intersects(174.0, 50.0, 179.0, 55.0)); // Western Aleutians
+        assert!(intersects(-98.0, 29.0, -94.0, 34.0)); // Texas
+    }
     use super::*;
 
     /// Trimmed from a live `/api/sites` response (Kenai, PAEN) plus two sites that must be
