@@ -527,6 +527,7 @@ impl HookEchoApp {
                         .clicked()
                     {
                         fly_to = Some(query.trim().to_string());
+                        hide = true;
                     }
                 }
                 if !split_library {
@@ -673,19 +674,22 @@ impl HookEchoApp {
             self.apply_palette(a, ctx);
         }
         if let Some(site) = picked_site {
+            self.geocode_nav = None;
             self.views[self.active].site = Some(site);
             self.layers_query.clear();
         }
         if let Some(place) = fly_to {
-            if sheets_layout { self.layers_query.clear(); }
-            self.geocode_nav = true;
+            self.layers_query.clear();
+            self.geocode_request_next = self.geocode_request_next.wrapping_add(1);
+            let request_id = self.geocode_request_next;
+            self.geocode_nav = Some(request_id);
             self.save_offer = None; // a new search retires the previous offer
             self.place_status = Some(("Searching…".to_string(), Instant::now()));
             let http = self.http.clone();
             let tx = self.geocode_tx.clone();
             let ctx2 = ctx.clone();
             self.spawner.spawn(async move {
-                let _ = tx.send(wxdata::geocode::search(&http, &place).await);
+                let _ = tx.send((request_id, wxdata::geocode::search(&http, &place).await));
                 ctx2.request_repaint();
             });
         }

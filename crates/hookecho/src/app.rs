@@ -3191,15 +3191,15 @@ pub struct HookEchoApp {
     update_chip_hidden: bool,
     update_tx: Sender<ui::about_window::UpdateState>,
     update_rx: Receiver<ui::about_window::UpdateState>,
-    geocode_tx: Sender<Result<(String, f64, f64), String>>,
-    geocode_rx: Receiver<Result<(String, f64, f64), String>>,
+    geocode_tx: Sender<(u64, Result<(String, f64, f64), String>)>,
+    geocode_rx: Receiver<(u64, Result<(String, f64, f64), String>)>,
     marker_geocode_tx: Sender<MarkerGeocodeResult>,
     marker_geocode_rx: Receiver<MarkerGeocodeResult>,
-    /// `(lon, lat)` from the hosting edge's own geo-IP (browser build only), used once at boot to
-    /// open on the nearest radar. Never fed on native, where the saved view is the answer.
+    /// Edge geo-IP and the camera/site at request time. Apply only while the user still has
+    /// that initial view; never fed on native, where the saved view is the answer.
     #[cfg(target_arch = "wasm32")]
-    ipgeo_tx: Sender<(f64, f64)>,
-    ipgeo_rx: Receiver<(f64, f64)>,
+    ipgeo_tx: Sender<((f64, f64), (f64, f64), f64, Option<String>)>,
+    ipgeo_rx: Receiver<((f64, f64), (f64, f64), f64, Option<String>)>,
     /// In-progress offline chase-pack tile download (basemap pre-cache for the current view).
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
@@ -3744,9 +3744,9 @@ pub struct HookEchoApp {
     /// After a search flies somewhere, the offer to keep it: `(name, lat, lon, when)`. Searching is
     /// how you look around, so dropping a pin every time would litter the map — this asks first.
     save_offer: Option<(String, f64, f64, Instant)>,
-    /// True while the in-flight geocode came from the search pill (navigate only) rather than
-    /// the marker window (which adds a marker).
-    geocode_nav: bool,
+    /// The newest pending place-navigation lookup. Older replies must never move the map.
+    geocode_nav: Option<u64>,
+    geocode_request_next: u64,
     /// Layer manager window (per-placefile enable/order/opacity).
     layer_window_open: bool,
     /// Placefile icon-sheet textures by URL. `None` = fetch in flight or failed (negative-cached
@@ -4287,7 +4287,7 @@ impl HookEchoApp {
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let (marker_geocode_tx, marker_geocode_rx) = std::sync::mpsc::channel();
-        let (ipgeo_tx, ipgeo_rx) = std::sync::mpsc::channel::<(f64, f64)>();
+        let (ipgeo_tx, ipgeo_rx) = std::sync::mpsc::channel();
         #[cfg(not(target_arch = "wasm32"))]
         drop(ipgeo_tx); // native never asks; the receiver just stays empty
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
@@ -4700,7 +4700,8 @@ impl HookEchoApp {
             place_query: String::new(),
             place_status: None,
             save_offer: None,
-            geocode_nav: false,
+            geocode_nav: None,
+            geocode_request_next: 0,
             layer_window_open: false,
             pf_icon_tex: std::collections::HashMap::new(),
             pf_icon_rx,
@@ -5026,6 +5027,8 @@ impl HookEchoApp {
         let http = self.http.clone();
         let tx = self.ipgeo_tx.clone();
         let ctx = ctx.clone();
+        let initial_camera = self.views[self.active].camera;
+        let initial_site = self.views[self.active].site.clone();
         self.spawner.spawn(async move {
             // index.html starts this fetch before the wasm has even downloaded, so by now it has
             // almost always landed: the opening site costs no round trip. Falling back to our own
@@ -5043,7 +5046,7 @@ impl HookEchoApp {
                 }
             };
             if let Ok(Some(pos)) = serde_json::from_str::<Option<(f64, f64)>>(&body) {
-                let _ = tx.send(pos);
+                let _ = tx.send((pos, initial_camera.center, initial_camera.zoom, initial_site));
                 ctx.request_repaint();
             }
         });
@@ -22319,8 +22322,13 @@ impl eframe::App for HookEchoApp {
         }
         // The edge's geo-IP fix, if it beat the user to it: move the default view to the radar
         // that covers them. Skipped once they have panned or picked a site themselves.
-        while let Ok((lon, lat)) = self.ipgeo_rx.try_recv() {
-            if self.geocode_nav || self.views.len() > 1 {
+        while let Ok(((lon, lat), initial_center, initial_zoom, initial_site)) = self.ipgeo_rx.try_recv() {
+            let view = &self.views[self.active];
+            if self.geocode_nav.is_some() || self.views.len() > 1
+                || view.site != initial_site
+                || view.camera.center != initial_center
+                || view.camera.zoom != initial_zoom
+            {
                 continue;
             }
             if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
@@ -22328,25 +22336,26 @@ impl eframe::App for HookEchoApp {
             }
         }
         // Drain search-pill geocoding results.
-        while let Ok(res) = self.geocode_rx.try_recv() {
-            if std::mem::take(&mut self.geocode_nav) {
-                match res {
-                    Ok((name, lat, lon)) => {
-                        let cam = &mut self.views[self.active].camera;
-                        cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
-                        cam.zoom = cam.zoom.max(9.0);
-                        self.save_offer = Some((
-                            short_place_name(&name).to_string(),
-                            lat,
-                            lon,
-                            Instant::now(),
-                        ));
-                        self.place_status = Some((name, Instant::now()));
-                        self.place_query.clear();
-                    }
-                    Err(e) => self.place_status = Some((e, Instant::now())),
-                }
+        while let Ok((request_id, res)) = self.geocode_rx.try_recv() {
+            if self.geocode_nav != Some(request_id) {
                 continue;
+            }
+            self.geocode_nav = None;
+            match res {
+                Ok((name, lat, lon)) => {
+                    let cam = &mut self.views[self.active].camera;
+                    cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
+                    cam.zoom = cam.zoom.max(9.0);
+                    self.save_offer = Some((
+                        short_place_name(&name).to_string(),
+                        lat,
+                        lon,
+                        Instant::now(),
+                    ));
+                    self.place_status = Some((name, Instant::now()));
+                    self.place_query.clear();
+                }
+                Err(e) => self.place_status = Some((e, Instant::now())),
             }
         }
         while let Ok(res) = self.marker_geocode_rx.try_recv() {
