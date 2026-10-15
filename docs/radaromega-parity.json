@@ -816,7 +816,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME02",
       "acceptance": "Play/pause, step and scrub maintain matching timestamp/data; live/archive state is clear.",
-      "runtime_verification": "Optimized local browser: DWD WN Play advanced from 1:50 AM CEST through later five-minute frames, wrapped within the recent loop, and Pause held 2:05 AM for six seconds. An earlier unbounded 48-frame attempt crossed the archive boundary and reset the catalog; the bounded loop eliminated that observed failure. The optimized local browser later verified ECCC rain Play from 7:54 PM EDT through later six-minute frames and Pause holding 8:30 PM; a saved DWD manual time no longer leaves ECCC blank after source migration. Radar scrubber and GOES imagery loops remain separately unverified."
+      "runtime_verification": "Optimized local browser: DWD WN Play advanced from 1:50 AM CEST through later five-minute frames, wrapped within the recent loop, and Pause held 2:05 AM for six seconds. An earlier unbounded 48-frame attempt crossed the archive boundary and reset the catalog; the bounded loop eliminated that observed failure. The optimized local browser later verified ECCC rain Play from 7:54 PM EDT through later six-minute frames and Pause holding 8:30 PM; a saved DWD manual time no longer leaves ECCC blank after source migration. The optimized browser also verified GOES-East infrared Play moving through distinct ten-minute frames, wrapping in its recent loop, and Pause holding 6:20 PM CDT for five seconds. Radar scrubber equivalence and other imagery products remain unverified."
     },
     {
       "id": "TIME03",
@@ -997,7 +997,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA03",
       "acceptance": "Satellite, sector and product choice preserve correct geolocation, units, scan time and animation.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "Optimized local browser over north Texas: GOES-East Band 13 infrared imagery displayed with radar and alert overlays, Play traversed distinct ten-minute frames and wrapped in the recent window, and Pause held 6:20 PM CDT for five seconds. Other bands, sectors, archive ranges, native ABI scenes and geolocation remain unverified."
     },
     {
       "id": "DATA04",
