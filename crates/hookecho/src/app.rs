@@ -4974,14 +4974,6 @@ impl HookEchoApp {
             app.rebuild_overlays();
         }
         app.palettes.reload(&app.settings.palette_paths());
-        app.apply_goto_env();
-        app.drain_goto_file();
-        #[cfg(target_arch = "wasm32")]
-        app.apply_goto_hash();
-        #[cfg(target_arch = "wasm32")]
-        if opened_on_default {
-            app.locate_by_ip(&cc.egui_ctx.clone());
-        }
         crate::platform::set_background_alerts(app.settings.background_alerts);
         crate::platform::set_battery_saver(app.settings.battery_saver);
         // The broker is publish-only and reconnects on its own, so it starts here and is never
@@ -4991,11 +4983,6 @@ impl HookEchoApp {
         // Point the speech path at Piper before anything can speak.
         #[cfg(not(target_arch = "wasm32"))]
         crate::speech::set_piper(&app.settings.piper_path, &app.settings.piper_voice);
-        // Not on the web: this is a burst of six fetches, and on the one thread a browser gives
-        // us they queue ahead of the radar the visitor actually came for. The periodic refresh in
-        // `update` picks them up a moment later, once there is radar on screen.
-        #[cfg(not(target_arch = "wasm32"))]
-        app.fetch_overlays(&cc.egui_ctx.clone());
         // The receiver on the dash does not need a click every morning.
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         if app.settings.gps_autoconnect {
@@ -5006,11 +4993,15 @@ impl HookEchoApp {
             .is_some_and(|search| search.trim_start_matches('?').split('&').any(|part| part.split('=').next() == Some("relaunched")));
         #[cfg(not(target_arch = "wasm32"))]
         let graphics_relaunch = false;
+        #[cfg(target_arch = "wasm32")]
+        let mut recovered_session = false;
         if !app.embed && (app.settings.start_view.is_none() || graphics_relaunch) {
             if let Some(json) = crate::recovery::load() {
                 if let Ok(snapshot) = serde_json::from_str::<RecoverySnapshot>(&json) {
                     if snapshot.valid() {
                         app.restore_mode_session(snapshot.session, &cc.egui_ctx);
+                        #[cfg(target_arch = "wasm32")]
+                        { recovered_session = true; }
                         app.analyst_open = snapshot.analyst;
                         for (i, view) in app.views.iter_mut().enumerate() {
                             view.timeline.playing = snapshot.playing.get(i).copied().unwrap_or(false);
@@ -5022,6 +5013,22 @@ impl HookEchoApp {
                 }
             }
         }
+        // Recovery is only a fallback. A user-directed link or pending notification must win
+        // over the saved session; otherwise its camera is restored after the link is applied and
+        // the permalink writer promptly replaces the requested URL with that stale view.
+        app.apply_goto_env();
+        app.drain_goto_file();
+        #[cfg(target_arch = "wasm32")]
+        app.apply_goto_hash();
+        #[cfg(target_arch = "wasm32")]
+        if opened_on_default && !recovered_session {
+            app.locate_by_ip(&cc.egui_ctx.clone());
+        }
+        // Not on the web: this is a burst of six fetches, and on the one thread a browser gives
+        // us they queue ahead of the radar the visitor actually came for. The periodic refresh in
+        // `update` picks them up a moment later, once there is radar on screen.
+        #[cfg(not(target_arch = "wasm32"))]
+        app.fetch_overlays(&cc.egui_ctx.clone());
         app
     }
 
