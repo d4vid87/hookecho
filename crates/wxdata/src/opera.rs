@@ -21,6 +21,8 @@
 //!   reflectivity only. Norway's 4-byte-address volumes and delayed velocity are supported below.
 //! * France publishes `SCAN/` cuts at consecutive minutes within a five-minute cycle, unlike the
 //!   Nordic, Swiss, Estonian and Lithuanian SCAN publishers' equal-timestamp cuts.
+//! * Spain alternates two- and three-cut PVOL strategies; the newest two-cut strategy carries both
+//!   reflectivity and velocity. Slovakia publishes one PVOL object per moment at each timestamp.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
@@ -72,6 +74,15 @@ pub const SITES: &[SiteEntry] = &[
     site("DKSTE", "Stevns", "DK", 55.3262, 12.4493, 53),
     site("EEHAR", "Harku", "EE", 59.3971, 24.6021, 70),
     site("EESUR", "Sürgavere", "EE", 58.4823, 25.5187, 157),
+    site("ESAHR", "Alhaurín el Grande", "ES", 36.6134, -4.6593, 1159),
+    site("ESATN", "Artenara", "ES", 28.0188, -15.6145, 1777),
+    site("ESGLD", "Gelida", "ES", 41.4082, 1.8849, 662),
+    site("ESLID", "Autilla del Pino", "ES", 41.9956, -4.6028, 887),
+    site("ESNJR", "Níjar", "ES", 36.8324, -2.0821, 499),
+    site("ESPDG", "Perdiguera", "ES", 41.7340, -0.5459, 835),
+    site("ESSFT", "Sierra de Fuentes", "ES", 39.4288, -6.2853, 667),
+    site("ESSSE", "Bakio", "ES", 43.4033, -2.8419, 625),
+    site("ESTJV", "Torrejón de Velasco", "ES", 40.1759, -3.7137, 717),
     site("FRABB", "Abbeville", "FR", 50.1360, 1.8347, 84),
     site("FRAJA", "Ajaccio", "FR", 41.9531, 8.7005, 784),
     site("FRALE", "Aléria", "FR", 42.1297, 9.4964, 63),
@@ -163,6 +174,10 @@ pub const SITES: &[SiteEntry] = &[
     site("SELLA", "Luleå (Rosvik)", "SE", 65.4309, 21.8650, 69),
     site("SEOER", "Örnsköldsvik", "SE", 63.6395, 18.4019, 522),
     site("SEOSD", "Östersund", "SE", 63.2951, 14.7591, 466),
+    site("SKJAV", "Malý Javorník", "SK", 48.2556, 17.1524, 600),
+    site("SKKOJ", "Kojšovská hoľa", "SK", 48.7827, 20.9873, 1256),
+    site("SKKUB", "Kubínska hoľa", "SK", 49.2717, 19.2493, 1425),
+    site("SKLAZ", "Španí laz", "SK", 48.2404, 19.2573, 661),
 ];
 
 /// The OPERA radar with this id, if any (case-insensitive).
@@ -314,6 +329,39 @@ fn newest_french_scan_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     Vec::new()
 }
 
+/// Spanish PVOL alternates a three-cut DBZH/TH-only strategy with a two-cut DBZH/VRADH strategy.
+/// Choose the latest dual-moment volume so the velocity picker does not silently lose its data
+/// every ten minutes when a reflectivity-only object arrives.
+fn newest_spanish_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    keys(xml)
+        .into_iter()
+        .rev()
+        .find(|key| key.rsplit('/').next().is_some_and(|name| {
+            name.starts_with(&format!("{nod}@")) && name.ends_with("@DBZH_VRADH.h5")
+        }))
+        .into_iter()
+        .collect()
+}
+
+/// Slovak reflectivity, TH and velocity arrive as separate objects. Wait for velocity instead of
+/// replacing a complete volume with a momentarily newer reflectivity-only one.
+fn newest_slovak_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    let all = keys(xml);
+    for base in all.iter().rev().copied().filter(|key| {
+        key.rsplit('/').next().is_some_and(|name| name.starts_with(&format!("{nod}@"))
+            && name.ends_with("@DBZH.h5"))
+    }) {
+        let Some((prefix, _)) = base.rsplit_once('@') else { continue };
+        let velocity_name = format!("{prefix}@VRAD.h5");
+        if !all.contains(&velocity_name.as_str()) { continue; }
+        let mut group = vec![base];
+        group.extend(all.iter().copied().filter(|key| *key != base
+            && key.rsplit_once('@').is_some_and(|(p, _)| p == prefix)));
+        return group;
+    }
+    Vec::new()
+}
+
 /// The newest volume for `id`, assembled from the objects EUMETNET published for it.
 pub async fn fetch_volume(
     http: &reqwest::Client,
@@ -352,6 +400,10 @@ pub async fn fetch_volume(
         .unwrap_or_default();
         group = (if meta.state == "FR" {
             newest_french_scan_group(&index, &nod)
+        } else if meta.state == "ES" {
+            newest_spanish_group(&index, &nod)
+        } else if meta.state == "SK" {
+            newest_slovak_group(&index, &nod)
         } else if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
             newest_scan_group(&index, &nod, if meta.state == "CH" { 2 } else { 5 })
         } else if meta.state == "NO" {
@@ -594,6 +646,33 @@ mod tests {
     }
 
     #[test]
+    fn spanish_volume_prefers_recent_dual_moment_strategy() {
+        let entry = |stamp: &str, angles: &str, moments: &str| format!(
+            "<Key>2026/10/15/ES/eslid/PVOL/eslid@{stamp}@{angles}@{moments}.h5</Key>"
+        );
+        let xml = format!("{}{}{}", entry("20261015T0856", "0.5_1.4", "DBZH_VRADH"),
+            entry("20261015T0900", "0.5_1.4_2.3", "DBZH_TH"),
+            entry("20261015T0906", "0.5_1.4", "DBZH_VRADH"));
+        let picked = newest_spanish_group(&xml, "eslid");
+        assert_eq!(picked.len(), 1);
+        assert!(picked[0].contains("T0906"));
+        assert!(newest_spanish_group(&xml, "other").is_empty());
+    }
+
+    #[test]
+    fn slovak_group_waits_for_velocity_object() {
+        let entry = |stamp: &str, moment: &str| format!(
+            "<Key>2026/10/15/SK/skjav/PVOL/skjav@{stamp}@0.0_0.5_1.0@{moment}.h5</Key>"
+        );
+        let xml = format!("{}{}{}{}", entry("20261015T0850", "DBZH"),
+            entry("20261015T0850", "VRAD"), entry("20261015T0855", "DBZH"),
+            entry("20261015T0855", "TH"));
+        let picked = newest_slovak_group(&xml, "skjav");
+        assert_eq!(picked.len(), 2);
+        assert!(picked.iter().all(|key| key.contains("T0850")));
+    }
+
+    #[test]
     fn norwegian_group_waits_for_matching_delayed_velocity() {
         let row = |time: &str, angles: &str, moment: &str| format!(
             "<Key>2026/10/15/NO/noand/PVOL/noand@{time}@{angles}@{moment}.h5</Key>"
@@ -748,6 +827,26 @@ mod tests {
                 .await.unwrap_or_else(|e| panic!("{id}: {e}"))
                 .expect("fresh volume");
             assert!(scan.sweeps().len() >= 5, "{id}");
+            for tilt in 0..scan.sweeps().len() {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_spanish_and_slovak_volumes_assemble_every_elevation() {
+        let http = reqwest::Client::new();
+        for site in SITES.iter().filter(|site| matches!(site.state, "ES" | "SK")) {
+            let id = site.id;
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            let minimum = if site.state == "ES" { 2 } else { 12 };
+            assert!(scan.sweeps().len() >= minimum, "{id}");
             for tilt in 0..scan.sweeps().len() {
                 crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
                     .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
