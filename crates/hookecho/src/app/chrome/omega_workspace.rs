@@ -252,6 +252,8 @@ impl HookEchoApp {
         let mut action = None;
         let mut display = false;
         let mut spotter_settings = false;
+        let mut return_to_radar = false;
+        let mut compare_panes = None;
         let entries = self.palette_entries();
         let top = egui::Area::new("omega_workspace_top".into())
             .order(egui::Order::Foreground)
@@ -542,6 +544,27 @@ impl HookEchoApp {
                             egui::ScrollArea::vertical()
                                 .max_height((bounds.height() - 105.0).max(60.0))
                                 .show(ui, |ui| {
+                                    section(ui, "VIEWS");
+                                    if menu_row(ui, "Radar", !self.analyst_open).clicked() {
+                                        return_to_radar = true;
+                                    }
+                                    if menu_row(ui, "Compare radar products", self.analyst_open).clicked() {
+                                        compare_panes = Some(if self.analyst_open { self.views.len() } else { 2 });
+                                    }
+                                    if self.analyst_open {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Panes");
+                                            for count in [2, 4] {
+                                                if ui.selectable_label(self.views.len() == count, count.to_string()).clicked() {
+                                                    compare_panes = Some(count);
+                                                }
+                                            }
+                                        });
+                                        ui.checkbox(&mut self.link_cameras, "Link map positions");
+                                        ui.checkbox(&mut self.link_times, "Link timelines");
+                                        ui.checkbox(&mut self.analyst_inspector_open, "Show inspector");
+                                        ui.separator();
+                                    }
                                     section(ui, "GENERAL");
                                     if menu_row(ui, "Weather Alerts", self.show_alert_panel)
                                         .clicked()
@@ -682,7 +705,16 @@ impl HookEchoApp {
                 });
             self.mobile_occlusion.push(side.response.rect);
         }
-        if menu_was_open && !menu_open && action.is_none() && !display && !spotter_settings {
+        if return_to_radar {
+            menu_open = false;
+            self.return_to_radar(ctx);
+        } else if let Some(count) = compare_panes {
+            menu_open = false;
+            self.switch_mode(ViewMode::Analyst, ctx);
+            self.set_pane_count(count);
+        }
+        if menu_was_open && !menu_open && action.is_none() && !display && !spotter_settings
+            && !return_to_radar && compare_panes.is_none() {
             if let Some((panel, drawer)) = ctx.data_mut(|d| {
                 d.get_temp::<(bool, bool)>(egui::Id::new("omega_menu_previous_surface"))
             }) {
