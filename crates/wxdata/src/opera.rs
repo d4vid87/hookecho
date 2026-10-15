@@ -23,6 +23,8 @@
 //!   Nordic, Swiss, Estonian and Lithuanian SCAN publishers' equal-timestamp cuts.
 //! * Spain alternates two- and three-cut PVOL strategies; the newest two-cut strategy carries both
 //!   reflectivity and velocity. Slovakia publishes one PVOL object per moment at each timestamp.
+//! * Dublin publishes eight reflectivity SCAN cuts over three minutes but velocity as a separate
+//!   fifteen-minute PVOL strategy. Mixing those ages would label old velocity as fresh radar.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
@@ -124,6 +126,7 @@ pub const SITES: &[SiteEntry] = &[
     site("HRPUN", "Puntijarka", "HR", 45.9078, 15.9684, 1030),
     site("HRULJ", "Uljenje", "HR", 42.8944, 17.4783, 463),
     site("IESHA", "Shannon", "IE", 52.6928, -8.9200, 29),
+    site("IEDUB", "Dublin", "IE", 53.4299, -6.2443, 99),
     site("ISBJO", "Bjolfur", "IS", 65.2659, -14.0618, 1090),
     site("ISKEF", "Keflavik", "IS", 64.0257, -22.6354, 48),
     site("ISSKA", "Skagi", "IS", 66.0557, -20.2680, 164),
@@ -197,7 +200,7 @@ fn index_url(country: &str, nod: &str, hour: DateTime<Utc>) -> String {
     format!(
         "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/{}/{nod}@{}",
         hour.format("%Y/%m/%d"),
-        if matches!(country, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") { "SCAN" } else { "PVOL" },
+        if matches!(country, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") || nod == "iedub" { "SCAN" } else { "PVOL" },
         hour.format("%Y%m%dT%H")
     )
 }
@@ -362,6 +365,36 @@ fn newest_slovak_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     Vec::new()
 }
 
+/// Dublin's eight reflectivity cuts occupy minutes 0–2 of each five-minute cycle. Require the
+/// final 10° cut, so an in-progress scan never replaces a full one. TH siblings are not needed
+/// for the reflectivity image and would double the downloads.
+fn newest_dublin_scan_group<'a>(xml: &'a str) -> Vec<&'a str> {
+    let mut cycles: std::collections::BTreeMap<(&str, u8), Vec<(u8, &'a str)>> =
+        std::collections::BTreeMap::new();
+    for key in keys(xml) {
+        let Some(name) = key.rsplit('/').next() else { continue };
+        let mut fields = name.split('@');
+        if fields.next() != Some("iedub") { continue; }
+        let (Some(stamp), Some(_angle), Some(moment)) =
+            (fields.next(), fields.next(), fields.next()) else { continue };
+        if moment != "DBZH.h5" || stamp.len() != 13 { continue; }
+        let Some(minute) = stamp.get(11..13).and_then(|s| s.parse::<u8>().ok()) else { continue };
+        if minute >= 60 { continue; }
+        cycles.entry((&stamp[..11], minute / 5)).or_default().push((minute % 5, key));
+    }
+    for (_, cuts) in cycles.into_iter().rev() {
+        if cuts.len() < 8 || !(0..3).all(|slot| cuts.iter().any(|(minute, _)| *minute == slot)) {
+            continue;
+        }
+        let mut group: Vec<&str> = cuts.into_iter().map(|(_, key)| key).collect();
+        group.sort_unstable();
+        let base = group.pop().expect("a complete Dublin cycle has a final cut");
+        group.insert(0, base);
+        return group;
+    }
+    Vec::new()
+}
+
 /// The newest volume for `id`, assembled from the objects EUMETNET published for it.
 pub async fn fetch_volume(
     http: &reqwest::Client,
@@ -398,7 +431,9 @@ pub async fn fetch_volume(
         ))
         .await
         .unwrap_or_default();
-        group = (if meta.state == "FR" {
+        group = (if id.eq_ignore_ascii_case("IEDUB") {
+            newest_dublin_scan_group(&index)
+        } else if meta.state == "FR" {
             newest_french_scan_group(&index, &nod)
         } else if meta.state == "ES" {
             newest_spanish_group(&index, &nod)
@@ -463,7 +498,7 @@ pub async fn fetch_volume(
 
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
     let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
-    if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") {
+    if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") || id.eq_ignore_ascii_case("IEDUB") {
         let parts: Vec<(f32, Sweep)> = std::iter::once(&base)
             .chain(files.iter())
             .filter_map(|scan| {
@@ -474,7 +509,7 @@ pub async fn fetch_volume(
             })
             .filter(|(angle, _)| angle.is_finite())
             .collect();
-        anyhow::ensure!(parts.len() >= if meta.state == "CH" { 2 } else { 5 }, "incomplete SCAN volume for {id}");
+        anyhow::ensure!(parts.len() >= if id.eq_ignore_ascii_case("IEDUB") { 8 } else if meta.state == "CH" { 2 } else { 5 }, "incomplete SCAN volume for {id}");
         return Ok(Some((
             volume_name(id, time),
             time,
@@ -673,6 +708,29 @@ mod tests {
     }
 
     #[test]
+    fn dublin_scan_waits_for_its_eighth_cut() {
+        let entry = |minute: u8, angle: &str| format!(
+            "<Key>2026/10/15/IE/iedub/SCAN/iedub@20261015T09{minute:02}@{angle}@DBZH.h5</Key>"
+        );
+        let mut xml = String::new();
+        for (minute, angle) in [(10, "0.5"), (10, "1.1"), (10, "1.9"),
+            (11, "2.9"), (11, "4.0"), (11, "5.4"), (11, "7.2"), (12, "10.0")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        for (minute, angle) in [(15, "0.5"), (15, "1.1"), (15, "1.9"),
+            (16, "2.9"), (16, "4.0"), (16, "5.4"), (16, "7.2")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        let picked = newest_dublin_scan_group(&xml);
+        assert_eq!(picked.len(), 8);
+        assert!(picked[0].contains("T0912@10.0"));
+        xml.push_str(&entry(17, "10.0"));
+        let picked = newest_dublin_scan_group(&xml);
+        assert_eq!(picked.len(), 8);
+        assert!(picked[0].contains("T0917@10.0"));
+    }
+
+    #[test]
     fn norwegian_group_waits_for_matching_delayed_velocity() {
         let row = |time: &str, angles: &str, moment: &str| format!(
             "<Key>2026/10/15/NO/noand/PVOL/noand@{time}@{angles}@{moment}.h5</Key>"
@@ -854,6 +912,20 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
             }
         }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_dublin_scan_assembles_eight_reflectivity_cuts() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "IEDUB", None)
+            .await.expect("volume").expect("fresh volume");
+        assert_eq!(scan.sweeps().len(), 8);
+        for tilt in 0..8 {
+            crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                .unwrap_or_else(|e| panic!("IEDUB tilt {tilt} reflectivity: {e}"));
+        }
+        assert!(!crate::level2::available_moments(&scan)[crate::level2::Moment::Velocity.index()]);
     }
 
     #[tokio::test]
