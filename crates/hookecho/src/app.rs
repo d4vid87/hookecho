@@ -15263,12 +15263,12 @@ impl HookEchoApp {
         ui.painter()
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
         // Captions must follow the opaque GPU callback in paint order.
-        if let Some(previous) = self.views[idx].retained_station.as_deref() {
+        if let Some(previous) = self.views[idx].retained_station.as_deref().filter(|_| self.views[idx].show_radar) {
             let requested = self.views[idx].site.as_deref().unwrap_or("station");
             let time = self.views[idx].displayed_time().map_or_else(|| "unknown time".into(), |time| time.format("%H:%M:%SZ").to_string());
             let state = if self.views[idx].error.is_some() { "Unavailable" } else { "Loading" };
             let painter = ui.painter().with_clip_rect(prect);
-            let text = painter.layout(format!("{state} {requested} · showing {previous} scan {time}"),
+            let text = painter.layout(format!("{state} {requested} · last {previous} scan {time}"),
                 egui::FontId::proportional(12.0), egui::Color32::from_rgb(255, 218, 140), (prect.width() - 64.0).max(100.0));
             let position = egui::pos2((prect.right() - 30.0 - text.size().x).max(prect.left() + 12.0), prect.top() + 68.0);
             painter.rect_filled(egui::Rect::from_min_size(position - egui::vec2(4.0, 3.0), text.size() + egui::vec2(8.0, 6.0)), 3.0, egui::Color32::from_black_alpha(210));
