@@ -2633,6 +2633,9 @@ fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) 
 /// Upper bound for browser live replay. The actual limit is based on the current decoded scan's
 /// gate payload size, with room for the displayed head and an in-flight volume.
 const WEB_LOOP_WINDOW: usize = 12;
+/// Desktop's largest selectable loop, plus two slots below for the head and an in-flight scan.
+/// The separate encoded-payload budget still evicts large scans before this count is reached.
+const NATIVE_LOOP_WINDOW: usize = 250;
 
 fn web_loop_window_for_bytes(scan_bytes: usize, budget: usize) -> usize {
     if scan_bytes == 0 { return 4; } // no measured scan yet
@@ -4359,7 +4362,7 @@ impl HookEchoApp {
         } else if cfg!(target_arch = "wasm32") {
             WEB_LOOP_WINDOW + 4
         } else {
-            30
+            NATIVE_LOOP_WINDOW + 2
         };
         // The alert overlay from the last run, minus anything that has expired since. Also seeds
         // the known-warning ids, so a restart during an event doesn't re-banner and re-speak
@@ -12548,7 +12551,7 @@ impl HookEchoApp {
     /// memory budget on small volumes, while a fixed larger ceiling can thrash on large ones.
     pub(crate) fn live_loop_limit(&mut self, idx: usize) -> usize {
         if cfg!(target_os = "android") { return ANDROID_LOOP_WINDOW; }
-        if !cfg!(target_arch = "wasm32") { return 250; }
+        if !cfg!(target_arch = "wasm32") { return NATIVE_LOOP_WINDOW; }
         let bytes = self.views.get(idx).and_then(|view| view.volume.as_ref())
             .map(|volume| self.radar_memory.scan_bytes(&volume.scan)).unwrap_or(0);
         web_loop_window_for_bytes(bytes, radar_payload_budget())
