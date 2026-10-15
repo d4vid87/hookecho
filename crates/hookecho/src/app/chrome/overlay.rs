@@ -7,6 +7,38 @@
 use super::*;
 use crate::ui::a11y::Named as _;
 
+fn matching_sites(query: &str, limit: usize) -> Vec<&'static wxdata::sites::SiteEntry> {
+    let needle = query.trim().to_ascii_lowercase();
+    if needle.is_empty() { return Vec::new(); }
+    let mut sites: Vec<_> = wxdata::sites::all().filter_map(|site| {
+        let id = site.id.to_ascii_lowercase();
+        let city = site.city.to_ascii_lowercase();
+        let state = site.state.to_ascii_lowercase();
+        let rank = if id == needle { 0 }
+            else if id.starts_with(&needle) { 1 }
+            else if city.starts_with(&needle) { 2 }
+            else if id.contains(&needle) { 3 }
+            else if city.contains(&needle) { 4 }
+            else if state == needle { 5 }
+            else { return None; };
+        Some((rank, site))
+    }).collect();
+    sites.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(b.1.id)));
+    sites.into_iter().take(limit).map(|(_, site)| site).collect()
+}
+
+#[cfg(test)]
+mod site_search_tests {
+    use super::matching_sites;
+
+    #[test]
+    fn exact_site_id_leads_mixed_network_search() {
+        assert_eq!(matching_sites("tdfw", 3)[0].id, "TDFW");
+        assert_eq!(matching_sites("KEAX", 3)[0].id, "KEAX");
+        assert!(matching_sites("Kansas City", 6).iter().any(|site| site.id == "KEAX"));
+    }
+}
+
 /// The floating panel's geometry: left margin, top offset, width.
 const PANEL_X: f32 = 10.0;
 // Keep the menu/search pill visible above the panel so there is always a way back.
@@ -179,14 +211,7 @@ impl HookEchoApp {
                     if query.trim().is_empty() {
                         ui.weak("Type a place, radar site, product, or tool");
                     } else {
-                        let needle = query.trim().to_ascii_lowercase();
-                        let sites: Vec<_> = wxdata::sites::all()
-                            .filter(|site| {
-                                site.id.to_ascii_lowercase().contains(&needle)
-                                    || site.city.to_ascii_lowercase().contains(&needle)
-                            })
-                            .take(6)
-                            .collect();
+                        let sites = matching_sites(&query, 6);
                         if !sites.is_empty() { ui.label("Radar sites"); }
                         for site in sites {
                             if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}, {}", site.id, site.city, site.state))).clicked() {
@@ -416,6 +441,9 @@ impl HookEchoApp {
                 }
                 // A drag rewrites the order in place, so persist it when it moves.
                 let order_was = self.settings.layer_order.clone();
+                let site_query_before = query.clone();
+                let site_hits = if split_library { matching_sites(&query, 3) } else { Vec::new() };
+                let site_hits_present = !site_hits.is_empty();
                 let optional_action = ui::layers_panel::body(
                     ui,
                     &entries,
@@ -425,7 +453,12 @@ impl HookEchoApp {
                     // height. In the sheet there is no height to read yet — it scrolls — so
                     // the tree takes half the screen and the rest scrolls past it.
                     if split_library {
-                        (ctx.content_rect().height() - 330.0).clamp(280.0, 600.0)
+                        let available = ctx.content_rect().height() - 330.0;
+                        if !site_hits_present {
+                            available.clamp(280.0, 600.0)
+                        } else {
+                            (available - 100.0).clamp(180.0, 500.0)
+                        }
                     } else if sheets_layout {
                         chrome.height() * 0.5
                     } else {
@@ -509,6 +542,16 @@ impl HookEchoApp {
                 // matches rank first, and this row is the explicit "I meant a place" answer.
                 if !query.trim().is_empty() {
                     ui.add_space(4.0);
+                    if split_library {
+                        let sites = if query == site_query_before { site_hits } else { matching_sites(&query, 3) };
+                        if !sites.is_empty() { ui.label("Radar sites"); }
+                        for site in sites {
+                            if ui.add_sized([ui.available_width(), 34.0], egui::Button::new(format!("{} · {}, {}", site.id, site.city, site.state))).clicked() {
+                                picked_site = Some(site.id.to_string());
+                                hide = true;
+                            }
+                        }
+                    }
                     let w = ui.available_width();
                     if ui
                         .add(
@@ -675,7 +718,10 @@ impl HookEchoApp {
         }
         if let Some(site) = picked_site {
             self.geocode_nav = None;
-            self.views[self.active].site = Some(site);
+            if let Some(entry) = wxdata::sites::site_by_id(&site) {
+                let zoom = self.views[self.active].camera.zoom.max(8.0);
+                self.goto_view(&site, entry.longitude as f64, entry.latitude as f64, zoom, None);
+            }
             self.layers_query.clear();
         }
         if let Some(place) = fly_to {

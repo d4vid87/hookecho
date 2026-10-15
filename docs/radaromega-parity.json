@@ -223,9 +223,9 @@
       "status": "implemented-related",
       "observed_scope": "Search control is exposed beside mode selector; Location Settings entry is exposed in display settings.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "Site/place search and location workflows are available. Place lookups now carry request IDs so a late older result cannot displace the latest selection, and selecting a radar site cancels pending place navigation. A delayed default geo-IP fix only applies if the camera and site are still at their startup values. Choosing Fly to clears the search and closes the wide controls panel to reveal the destination.",
+      "hookecho_implementation": "Site/place search and location workflows are available. Place lookups now carry request IDs so a late older result cannot displace the latest selection, and selecting a radar site cancels pending place navigation. A delayed default geo-IP fix only applies if the camera and site are still at their startup values. Choosing Fly to clears the search and closes the wide controls panel to reveal the destination. Both compact and wide search now rank radar-site IDs and city matches and selecting a site centers that radar while keeping the current map orientation.",
       "remaining_gaps": [
-        "Search result ordering, geocoder coverage, radar-site selection, GPS/follow transitions and an out-of-order lookup race have not been compared end to end."
+        "Search-result ranking versus the reference, geocoder coverage, GPS/follow transitions and an out-of-order lookup race have not been compared end to end."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
@@ -240,7 +240,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI04",
       "acceptance": "Search place/site, navigate map and configure location following.",
-      "runtime_verification": "2026-10-14: The final native library suite passed with 657 tests and 30 ignored; cargo check passed after the lookup-ID and geo-IP guards. The final optimized web build passed at 4,537,718 gzipped bytes (4,540,000 budget). In the local browser, a Norman place search moved the map, and after the refinement a Tulsa search closed the panel and moved the map to Tulsa. Out-of-order response delivery and GPS hardware transitions remain unverified."
+      "runtime_verification": "2026-10-14: The final native library suite passed with 657 tests and 30 ignored; cargo check passed after the lookup-ID and geo-IP guards. The final optimized web build passed at 4,537,718 gzipped bytes (4,540,000 budget). In the local browser, a Norman place search moved the map, and after the refinement a Tulsa search closed the panel and moved the map to Tulsa. A focused site-ranking test passed for NEXRAD and TDWR IDs. The final optimized browser build passed at 4,538,850 gzipped bytes (4,540,000 budget). In the wide search panel, entering KTLX exposed the Oklahoma City station row; selecting it closed the panel, selected KTLX and centered its radar marker. Out-of-order response delivery and GPS hardware transitions remain unverified."
     },
     {
       "id": "UI05",
