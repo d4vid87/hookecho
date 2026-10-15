@@ -728,7 +728,7 @@ pub struct Settings {
     pub map_quality: MapQuality,
     #[serde(default)]
     pub appearance_presets: BTreeMap<String, crate::radar_appearance::AppearancePreset>,
-    #[serde(default)]
+    #[serde(default = "default_linked_time_limit_seconds")]
     pub linked_time_limit_seconds: Option<u32>,
     #[serde(default)]
     pub link_satellite_times: bool,
@@ -837,6 +837,10 @@ fn default_storm_warning_sound() -> AlertSound {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_linked_time_limit_seconds() -> Option<u32> {
+    Some(120)
 }
 
 fn default_etop_dbz() -> f32 {
@@ -1360,7 +1364,7 @@ impl Default for Settings {
             tile_disk_cache_mb: 0,
             map_quality: MapQuality::Auto,
             appearance_presets: BTreeMap::new(),
-            linked_time_limit_seconds: None,
+            linked_time_limit_seconds: default_linked_time_limit_seconds(),
             link_satellite_times: false,
             share_card: true,
             broadcast_safe_margin: default_broadcast_margin(),
@@ -2267,6 +2271,17 @@ mod tests {
         old.as_object_mut().unwrap().remove("full_coverage_radar");
         let restored: Settings = serde_json::from_value(old).unwrap();
         assert!(restored.full_coverage_radar);
+    }
+
+    #[test]
+    fn linked_radar_alignment_is_limited_by_default_but_can_be_disabled() {
+        assert_eq!(Settings::default().linked_time_limit_seconds, Some(120));
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        assert_eq!(old.linked_time_limit_seconds, Some(120));
+        let disabled: Settings = serde_json::from_str(
+            r#"{"linked_time_limit_seconds":null}"#,
+        ).unwrap();
+        assert_eq!(disabled.linked_time_limit_seconds, None);
     }
 
     #[test]
