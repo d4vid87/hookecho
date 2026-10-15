@@ -2858,8 +2858,18 @@ fn parse_goto(v: &str) -> Option<Goto> {
         ) else {
             return None;
         };
+        let requested_site = site.to_ascii_uppercase();
+        let site = if requested_site.is_empty()
+            || wxdata::sites::site_by_id(&requested_site).is_some()
+        {
+            requested_site
+        } else {
+            let nearest = crate::geo::nearest_site_id(lon, lat).unwrap_or_default();
+            log::warn!("goto: unknown radar site {requested_site:?}; using nearest {nearest:?}");
+            nearest
+        };
         Goto {
-            site: site.to_string(),
+            site,
             lon,
             lat,
             zoom,
@@ -24921,6 +24931,11 @@ mod tests {
         );
         // AlertService writes a site-less notification link; that must keep working.
         assert_eq!(parse_goto(",-97.3,35.3,9").unwrap().site, "");
+        // Coordinates can come from a weather alert or shared place whose ID is an airport,
+        // not a radar. Keep the camera but select an actual station before fetching volumes.
+        let alaska = parse_goto("PANC,-149.9,61.2,6").unwrap();
+        assert_eq!(alaska.site, "PAHG");
+        assert_eq!((alaska.lon, alaska.lat, alaska.zoom), (-149.9, 61.2, 6.0));
         // Archive links carry a time.
         let g = parse_goto("KTLX,-97.3,35.3,9,2013-05-20T20:00:00Z").unwrap();
         assert_eq!(g.time.unwrap().to_rfc3339(), "2013-05-20T20:00:00+00:00");
