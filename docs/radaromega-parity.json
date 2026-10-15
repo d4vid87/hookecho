@@ -340,7 +340,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP02",
       "acceptance": "Boundary visibility, color and thickness update and persist.",
-      "runtime_verification": "2026-10-15 local browser confirmed the Display Settings visibility switches are reachable and can be toggled on Blue Map at KTLX zoom 8. The live radar and warnings obscured the relevant line geometry, so a clean before/after boundary comparison is still pending."
+      "runtime_verification": "2026-10-15 local browser at KBIS Blue Map zoom 8 isolated the North Dakota/South Dakota border with city/road detail, counties and weather alerts hidden. The state toggle removed/restored the border. Raw OpenFreeMap z8/y91 tiles contain continuous admin_level 4 line geometry across adjacent tiles; a 0.8 px stroke appeared segmented, while a 2.0 px stroke was continuous. Blue Map now defaults administrative strokes to at least 1.0 px. A fresh local browser session displayed the 1.00 px default and a visible border with warnings hidden. Custom width overrides remain available, and exact vendor rendering remains unverified."
     },
     {
       "id": "MAP03",
@@ -367,7 +367,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP03",
       "acceptance": "County controls are independent of state controls.",
-      "runtime_verification": "2026-10-15 local browser confirmed the Display Settings visibility switches are reachable and can be toggled on Blue Map at KTLX zoom 8. The live radar and warnings obscured the relevant line geometry, so a clean before/after boundary comparison is still pending."
+      "runtime_verification": "2026-10-15 local browser at KBIS Blue Map zoom 8 confirmed the county toggle is independent of the state toggle and that the fresh-session default width is 1.00 px after the Blue Map minimum-width change. County-line continuity across tile boundaries and vendor equivalence remain unverified."
     },
     {
       "id": "MAP04",

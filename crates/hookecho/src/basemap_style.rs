@@ -538,6 +538,10 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
         }
     } else if p == Palette::Blue && layer == "transportation" {
         w * 0.75
+    } else if p == Palette::Blue && layer == "boundary" && matches!(class, "3" | "4" | "6") {
+        // Subpixel admin strokes visibly break into segments on the blue map at
+        // regional zooms, even when the underlying tile geometry is continuous.
+        (w as f32).max(1.0)
     } else {
         w
     };
@@ -586,6 +590,20 @@ mod tests {
             let boundary = BoundaryAppearance { width: input, ..Default::default() };
             assert_eq!(boundary.normalized().width, expected);
         }
+    }
+
+    #[test]
+    fn blue_administrative_lines_are_at_least_one_screen_pixel() {
+        for class in ["3", "4", "6"] {
+            assert!(stroke(Palette::Blue, "boundary", class).unwrap().1 >= 1.0);
+        }
+        assert_eq!(stroke(Palette::Dark, "boundary", "4").unwrap().1, 0.8);
+        assert_eq!(stroke(Palette::Dark, "boundary", "6").unwrap().1, 0.5);
+        let custom = MapDetailStyle {
+            states: BoundaryAppearance { width: Some(0.5), ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(stroke_with_details(Palette::Blue, "boundary", "4", custom).unwrap().1, 0.5);
     }
 
     #[test]
