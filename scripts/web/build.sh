@@ -176,7 +176,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # NOAA's exact raster-point readout adds 5,248 gzip bytes to the previous 4,632,160-byte build.
 # Allow 2,592 bytes of margin for the completed forecast inspection path; lite/startup stay put.
 # Alaska/Hawaii NDFD regions measured 4,639,631 gzip bytes; retain 4,369 bytes of margin.
-budget="${HOOKECHO_WASM_BUDGET:-4644000}"
+# Six-frame regional MRMS replay measured 4,650,476 gzip bytes with binaryen 130. Allow 4,524
+# bytes of headroom for the new source-backed transport; lite and startup budgets stay unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4655000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

@@ -298,6 +298,7 @@ enum OverlayMsg {
         wxdata::field::FieldFrame,
         Option<wxdata::mrms::MrmsField>,
     ),
+    MrmsHistory(crate::render::FieldLayer, Vec<wxdata::field::FieldFrame>),
     /// A registry-backed grid owned by one pane (satellite or single-site radar).
     PaneField(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
     PaneRgb(usize, crate::render::FieldLayer, wxdata::abi::RgbImage),
@@ -407,6 +408,7 @@ enum OverlaySource {
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
+    MrmsHistory(crate::render::FieldLayer, String),
     /// Native GOES ABI imagery for a registered band.
     GoesAbi(
         usize,
@@ -708,6 +710,7 @@ impl OverlaySource {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Plugin(key, ..) => RequestLane::Placefile(key.clone()),
             Self::Field(layer, ..)
+            | Self::MrmsHistory(layer, ..)
             | Self::Env(layer, ..)
             | Self::HrrrLayer(layer, ..)
             | Self::Global(layer, ..)
@@ -845,6 +848,19 @@ impl OverlaySource {
                 } else {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
+            }
+            OverlaySource::MrmsHistory(layer, product) => {
+                let keys = wxdata::mrms::recent_keys(http, &product, 6).await?;
+                let mut frames = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let frame = wxdata::mrms::fetch_frame_key(http, &product, &key).await?;
+                    // Keep six display-sized grids, rather than six full regional source grids.
+                    let display = frame.field().clone().decimated(2_048);
+                    frames.push(wxdata::field::FieldFrame::new(
+                        frame.descriptor, display, frame.stamp.clone(),
+                    ));
+                }
+                OverlayMsg::MrmsHistory(layer, frames)
             }
             OverlaySource::GoesAbi(pane, layer, band, scene, at) => {
                 let received = Utc::now();
@@ -2458,6 +2474,14 @@ pub(crate) struct FieldState {
     pub off_since: Option<Instant>,
 }
 
+struct MrmsLoop {
+    layer: crate::render::FieldLayer,
+    frames: Vec<wxdata::field::FieldFrame>,
+    index: usize,
+    playing: bool,
+    last_step: Instant,
+}
+
 impl FieldState {
     fn select_site(&mut self, site: Option<&str>) {
         if self.requested_site.as_deref() == site { return; }
@@ -3728,6 +3752,7 @@ pub struct HookEchoApp {
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
     /// its own toggle + pending GPU upload + refresh throttle. Keyed by [`crate::render::FieldLayer`].
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
+    mrms_loop: Option<MrmsLoop>,
     pane_fields: std::collections::HashMap<(usize, crate::render::FieldLayer), FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
@@ -4759,6 +4784,7 @@ impl HookEchoApp {
             fields: crate::render::FieldLayer::draw_order()
                 .map(|l| (l, FieldState::default()))
                 .collect(),
+            mrms_loop: None,
             rotation_minutes: 30,
             reflectivity_trail: wxdata::trail::ExtremaTrail::new(
                 30,
@@ -10098,6 +10124,14 @@ impl HookEchoApp {
         let set = &mut self.views[self.active].fields_on;
         if on {
             set.insert(layer);
+            if let crate::render::FieldLayer::MrmsCatalog(index) = layer {
+                if wxdata::mrms::CATALOG.get(index as usize).is_some_and(|entry| {
+                    matches!(entry.product.split_once('/').map(|(region, _)| region),
+                        Some("ALASKA" | "HAWAII" | "GUAM" | "CARIB"))
+                }) {
+                    self.fields.entry(layer).or_default().last_fetch = None;
+                }
+            }
         } else {
             set.remove(&layer);
         }
@@ -10486,6 +10520,7 @@ impl HookEchoApp {
                         Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneField(_, _, frame, _)) => {
                             Some(frame.stamp.valid_time)
                         }
+                        Ok(OverlayMsg::MrmsHistory(_, frames)) => frames.last().map(|frame| frame.stamp.valid_time),
                         _ => None,
                     };
                     let current = self
@@ -10690,6 +10725,20 @@ impl HookEchoApp {
                         s.metadata = Some((frame.grid.clone(), frame.stamp.clone()));
                         s.frame = Some(frame);
                     }
+                }
+                OverlayMsg::MrmsHistory(layer, frames) => {
+                    if frames.is_empty() || self.views[self.active].show_radar
+                        || !self.views[self.active].fields_on.contains(&layer) { continue; }
+                    let prior = self.mrms_loop.as_ref().filter(|old| old.layer == layer);
+                    let prior_time = prior.and_then(|old| old.frames.get(old.index)).map(|frame| frame.stamp.valid_time);
+                    let was_live = prior.is_none_or(|old| old.index + 1 == old.frames.len());
+                    let playing = prior.is_some_and(|old| old.playing);
+                    let index = if was_live { frames.len() - 1 } else {
+                        prior_time.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time == time))
+                            .unwrap_or(0)
+                    };
+                    self.mrms_loop = Some(MrmsLoop { layer, frames, index, playing, last_step: Instant::now() });
+                    self.show_mrms_loop_frame();
                 }
                 OverlayMsg::PaneField(pane, layer, frame, display) => {
                     if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
@@ -18342,6 +18391,27 @@ impl HookEchoApp {
             .is_none_or(|(_, _, _, aligned)| aligned)
     }
 
+    fn show_mrms_loop_frame(&mut self) {
+        let Some((layer, frame)) = self.mrms_loop.as_ref().and_then(|loop_state| {
+            loop_state.frames.get(loop_state.index).map(|frame| (loop_state.layer, frame.clone()))
+        }) else { return; };
+        let upload = self.field_upload(layer, frame.field());
+        if let Some(state) = self.fields.get_mut(&layer) {
+            state.pending = Some(upload);
+            state.metadata = Some((frame.grid.clone(), frame.stamp.clone()));
+            state.frame = Some(frame);
+        }
+    }
+
+    fn step_mrms_loop(&mut self, delta: isize) {
+        let Some(loop_state) = self.mrms_loop.as_mut() else { return; };
+        let len = loop_state.frames.len();
+        if len == 0 { return; }
+        loop_state.index = (loop_state.index as isize + delta).rem_euclid(len as isize) as usize;
+        loop_state.last_step = Instant::now();
+        self.show_mrms_loop_frame();
+    }
+
     /// The field's source time, selected analysis time, tolerance, and alignment result.
     fn field_time_status(
         &self,
@@ -18357,6 +18427,11 @@ impl HookEchoApp {
             .field_state(pane, layer)
             .and_then(|state| state.metadata.as_ref())
             .map(|(_, stamp)| stamp)?;
+        if pane == self.active && !self.views[pane].show_radar
+            && self.mrms_loop.as_ref().is_some_and(|loop_state| loop_state.layer == layer) {
+            let tolerance = field_time_tolerance(layer);
+            return Some((stamp.valid_time, stamp.valid_time, tolerance, true));
+        }
         let selected_time = if layer.is_native_abi() {
             let view = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
             if view.satellite.follow_radar { view.displayed_time().or(view.timeline.selected_time()) } else { view.satellite.time }
@@ -22077,7 +22152,15 @@ impl eframe::App for HookEchoApp {
                 });
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
-                self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
+                let regional_loop = !self.views[self.active].show_radar
+                    && self.views[self.active].fields_on.contains(&layer)
+                    && matches!(product.split_once('/').map(|(region, _)| region),
+                        Some("ALASKA" | "HAWAII" | "GUAM" | "CARIB"));
+                if regional_loop {
+                    self.spawn_overlay(ctx, OverlaySource::MrmsHistory(layer, product));
+                } else {
+                    self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
+                }
             }
         }
         // Each pane owns ABI scene, requested instant and request generations.

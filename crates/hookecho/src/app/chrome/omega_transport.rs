@@ -6,6 +6,19 @@ impl HookEchoApp {
     pub(super) fn omega_transport(&mut self, ctx: &egui::Context) {
         use egui_phosphor::regular as ph;
         let idx = self.active;
+        let mrms_interval = std::time::Duration::from_secs_f32(
+            1.0 / crate::settings::SourceAnimationSpeeds::sanitize(self.views[idx].timeline.speed),
+        );
+        let advance_mrms = self.mrms_loop.as_ref().is_some_and(|loop_state| {
+            loop_state.playing && loop_state.frames.len() > 1
+                && !self.views[idx].show_radar
+                && self.views[idx].fields_on.contains(&loop_state.layer)
+                && loop_state.last_step.elapsed() >= mrms_interval
+        });
+        if advance_mrms { self.step_mrms_loop(1); }
+        if self.mrms_loop.as_ref().is_some_and(|loop_state| loop_state.playing) {
+            ctx.request_repaint_after(mrms_interval.min(std::time::Duration::from_millis(100)));
+        }
         let before = (
             self.views[idx].timeline.playhead,
             self.views[idx].timeline.playing,
@@ -20,6 +33,9 @@ impl HookEchoApp {
         let field = crate::render::FieldLayer::draw_order()
             .rev()
             .find(|field| v.fields_on.contains(field));
+        let mrms_loop = self.mrms_loop.as_ref()
+            .filter(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+            .map(|loop_state| (loop_state.frames.len(), loop_state.index, loop_state.playing));
         let field_name = field
             .and_then(|field| field.descriptor())
             .map_or("Radar controls", |d| d.display_name);
@@ -74,6 +90,9 @@ impl HookEchoApp {
         });
         let mut action = None;
         let mut show_layers = false;
+        let mut mrms_step = 0isize;
+        let mut mrms_seek = None;
+        let mut mrms_toggle = false;
         #[cfg(target_arch = "wasm32")]
         let (packs, pack_status) = (self.packs(), self.pack_status());
         #[cfg(target_arch = "wasm32")]
@@ -205,7 +224,8 @@ impl HookEchoApp {
                         let t = &mut self.views[idx].timeline;
                         if !radar_visible {
                             ui.weak(if field.is_some() {
-                                "Latest field only · mosaic history is not available"
+                                if mrms_loop.is_some() { "Public MRMS mosaic history" }
+                                else { "Latest field only · mosaic history is not available" }
                             } else if imagery_map {
                                 "Radar timeline · imagery has separate time controls"
                             } else {
@@ -215,6 +235,13 @@ impl HookEchoApp {
                         if radar_visible && t.slot_count() > 0 {
                             let window = t.live_window;
                             super::scrubber::track(ui, t, tz, accent, window, false, &statuses);
+                        }
+                        if let Some((len, index, _)) = mrms_loop.filter(|(len, _, _)| *len > 1) {
+                            let mut selected = index;
+                            if ui.add(egui::Slider::new(&mut selected, 0..=len - 1).show_value(false))
+                                .on_hover_text("Scrub public MRMS mosaic frames").changed() {
+                                mrms_seek = Some(selected);
+                            }
                         }
                         if radar_visible && t.following && t.playing && listed_loop > 0 && cached_loop < listed_loop {
                             ui.weak(format!("Loop: {cached_loop}/{listed_loop} recent frames ready"));
@@ -227,6 +254,14 @@ impl HookEchoApp {
                             if omega_button(ui, ph::SKIP_FORWARD, "Next frame", false).clicked() { self.views[idx].timeline.step_cut(1); }
                             if omega_button(ui, ph::BROADCAST, "Return to live", self.views[idx].timeline.following).clicked() { action = Some(PaletteAction::GoLive); }
                             ui.separator();
+                            }
+                            if let Some((len, _, playing)) = mrms_loop.filter(|(len, _, _)| *len > 1) {
+                                if omega_button(ui, ph::SKIP_BACK, "Previous mosaic", false).clicked() { mrms_step = -1; }
+                                if omega_button(ui, if playing { ph::PAUSE } else { ph::PLAY },
+                                    if playing { "Pause mosaic" } else { "Play mosaic" }, playing).clicked() { mrms_toggle = true; }
+                                if omega_button(ui, ph::SKIP_FORWARD, "Next mosaic", false).clicked() { mrms_step = 1; }
+                                ui.weak(format!("{len} frames"));
+                                ui.separator();
                             }
                             if omega_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
                             if omega_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
@@ -251,6 +286,22 @@ impl HookEchoApp {
                         }
                     });
             });
+        if let Some(index) = mrms_seek {
+            if let Some(loop_state) = self.mrms_loop.as_mut() {
+                loop_state.index = index;
+                loop_state.playing = false;
+            }
+            self.show_mrms_loop_frame();
+        } else if mrms_step != 0 {
+            if let Some(loop_state) = self.mrms_loop.as_mut() { loop_state.playing = false; }
+            self.step_mrms_loop(mrms_step);
+        }
+        if mrms_toggle {
+            if let Some(loop_state) = self.mrms_loop.as_mut() {
+                loop_state.playing = !loop_state.playing;
+                loop_state.last_step = Instant::now();
+            }
+        }
         self.settings.live_loop_frames = loop_frames;
         if was_cut_playback && !self.views[idx].timeline.cut_playback {
             self.views[idx].cut_selection = None;
