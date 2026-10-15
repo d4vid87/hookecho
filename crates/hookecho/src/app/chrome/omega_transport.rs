@@ -16,9 +16,28 @@ impl HookEchoApp {
         let advance_mrms = self.mrms_loops.iter().find(|loop_state| Some(loop_state.layer) == active_mrms)
             .is_some_and(|loop_state| {
             loop_state.playing && loop_state.frames.len() > 1
+                && !loop_state.loading && loop_state.error.is_none()
                 && loop_state.last_step.elapsed() >= mrms_interval
         });
-        if advance_mrms { if let Some(layer) = active_mrms { self.step_mrms_loop(layer, 1); } }
+        if advance_mrms { if let Some(layer) = active_mrms {
+            let next_window = self.mrms_loops.iter().find(|state| state.layer == layer)
+                .filter(|state| state.follow_through_archive && state.requested_at.is_some()
+                    && state.index + 1 == state.frames.len())
+                .and_then(|state| state.frames.last().map(|frame| frame.stamp.valid_time));
+            if let Some(last_time) = next_window {
+                if let Some(state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
+                    if last_time >= Utc::now() - chrono::Duration::minutes(3) {
+                        state.playing = false;
+                    } else {
+                        state.requested_at = Some((last_time + chrono::Duration::minutes(13)).min(Utc::now()));
+                        state.follow_from = Some(last_time);
+                        state.loading = true;
+                        state.last_step = Instant::now();
+                        self.fields.entry(layer).or_default().last_fetch = None;
+                    }
+                }
+            } else { self.step_mrms_loop(layer, 1); }
+        } }
         if self.mrms_loops.iter().any(|loop_state| Some(loop_state.layer) == active_mrms && loop_state.playing) {
             ctx.request_repaint_after(mrms_interval.min(std::time::Duration::from_millis(100)));
         }
@@ -40,6 +59,9 @@ impl HookEchoApp {
         let mrms_archive_at = self.mrms_loops.iter()
             .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .and_then(|loop_state| loop_state.requested_at);
+        let mrms_follow_archive = self.mrms_loops.iter()
+            .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+            .is_some_and(|loop_state| loop_state.follow_through_archive);
         let mrms_last_time = self.mrms_loops.iter()
             .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .and_then(|loop_state| loop_state.frames.last().map(|frame| frame.stamp.valid_time));
@@ -109,6 +131,7 @@ impl HookEchoApp {
         let mut mrms_seek = None;
         let mut mrms_toggle = false;
         let mut mrms_archive_request = None;
+        let mut mrms_follow_change = None;
         #[cfg(target_arch = "wasm32")]
         let (packs, pack_status) = (self.packs(), self.pack_status());
         #[cfg(target_arch = "wasm32")]
@@ -184,9 +207,13 @@ impl HookEchoApp {
                                         ui.weak("Seek anywhere in a UTC day; each position loads six mosaics.");
                                         let default_at = mrms_archive_at.or(mrms_last_time).unwrap_or_else(Utc::now);
                                         let id = egui::Id::new(("mrms-archive-window", layer.stable_id()));
-                                        let mut draft: (String, u32) = ui.data_mut(|d| d.get_temp(id))
+                                        let mut draft: (String, u32, Option<chrono::DateTime<Utc>>) = ui.data_mut(|d| d.get_temp(id))
                                             .unwrap_or_else(|| (default_at.format("%Y-%m-%d").to_string(),
-                                                default_at.hour() * 60 + default_at.minute()));
+                                                default_at.hour() * 60 + default_at.minute(), mrms_archive_at));
+                                        if draft.2 != mrms_archive_at {
+                                            draft = (default_at.format("%Y-%m-%d").to_string(),
+                                                default_at.hour() * 60 + default_at.minute(), mrms_archive_at);
+                                        }
                                         ui.horizontal(|ui| {
                                             ui.label("Date");
                                             ui.add(egui::TextEdit::singleline(&mut draft.0).desired_width(100.0))
@@ -220,7 +247,7 @@ impl HookEchoApp {
                                                 mrms_archive_request = mrms_first_time.map(|time|
                                                     Some(time - chrono::Duration::seconds(1)));
                                                 if let Some(Some(at)) = mrms_archive_request {
-                                                    draft = (at.format("%Y-%m-%d").to_string(), at.hour() * 60 + at.minute());
+                                                    draft = (at.format("%Y-%m-%d").to_string(), at.hour() * 60 + at.minute(), Some(at));
                                                 }
                                                 ui.close();
                                             }
@@ -233,7 +260,7 @@ impl HookEchoApp {
                                                 mrms_archive_request = mrms_last_time.map(|time|
                                                     Some((time + chrono::Duration::minutes(13)).min(Utc::now())));
                                                 if let Some(Some(at)) = mrms_archive_request {
-                                                    draft = (at.format("%Y-%m-%d").to_string(), at.hour() * 60 + at.minute());
+                                                    draft = (at.format("%Y-%m-%d").to_string(), at.hour() * 60 + at.minute(), Some(at));
                                                 }
                                                 ui.close();
                                             }
@@ -242,8 +269,14 @@ impl HookEchoApp {
                                         if ui.button("Return to latest").clicked() {
                                             mrms_archive_request = Some(None);
                                             let now = Utc::now();
-                                            draft = (now.format("%Y-%m-%d").to_string(), now.hour() * 60 + now.minute());
+                                            draft = (now.format("%Y-%m-%d").to_string(), now.hour() * 60 + now.minute(), None);
                                             ui.close();
+                                        }
+                                        if mrms_archive_at.is_some() {
+                                            let mut follow = mrms_follow_archive;
+                                            if ui.checkbox(&mut follow, "Continue playback into later windows").changed() {
+                                                mrms_follow_change = Some(follow);
+                                            }
                                         }
                                         if let Some(error) = mrms_error.as_deref() {
                                             let message = if error.contains("no MRMS frames found before") {
@@ -411,9 +444,16 @@ impl HookEchoApp {
                 loop_state.last_step = Instant::now();
             }
         }
+        if let (Some(layer), Some(follow)) = (active_mrms, mrms_follow_change) {
+            if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
+                loop_state.follow_through_archive = follow;
+            }
+        }
         if let (Some(layer), Some(at)) = (active_mrms, mrms_archive_request) {
             if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
                 loop_state.requested_at = at;
+                loop_state.follow_from = None;
+                if at.is_none() { loop_state.follow_through_archive = false; }
                 loop_state.index = loop_state.frames.len().saturating_sub(1);
                 loop_state.playing = false;
                 loop_state.error = None;

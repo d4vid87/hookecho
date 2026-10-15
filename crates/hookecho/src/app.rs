@@ -2485,6 +2485,8 @@ struct MrmsLoop {
     playing: bool,
     last_step: Instant,
     requested_at: Option<DateTime<Utc>>,
+    follow_through_archive: bool,
+    follow_from: Option<DateTime<Utc>>,
     error: Option<String>,
     loading: bool,
 }
@@ -10554,6 +10556,7 @@ impl HookEchoApp {
                                 if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == *layer) {
                                     loop_state.error = Some(err.clone());
                                     loop_state.loading = false;
+                                    if loop_state.follow_from.take().is_some() { loop_state.playing = false; }
                                 }
                             }
                             note_feed_error(lane.label(), err);
@@ -10750,11 +10753,19 @@ impl HookEchoApp {
                     let prior_time = prior.and_then(|old| old.frames.get(old.index)).map(|frame| frame.stamp.valid_time);
                     let was_live = prior.is_none_or(|old| old.index + 1 == old.frames.len());
                     let playing = prior.is_some_and(|old| old.playing);
-                    let index = if was_live { frames.len() - 1 } else {
+                    let follow_from = prior.and_then(|old| old.follow_from);
+                    let first_newer = follow_from.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time > time));
+                    let exhausted = follow_from.is_some() && first_newer.is_none();
+                    let index = if let Some(index) = first_newer { index } else if was_live { frames.len() - 1 } else {
                         prior_time.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time == time))
                             .unwrap_or(0)
                     };
-                    let loop_state = MrmsLoop { layer, frames, index, playing, last_step: Instant::now(), requested_at: at, error: None, loading: false };
+                    let loop_state = MrmsLoop { layer, frames, index, playing: playing && !exhausted,
+                        last_step: Instant::now(), requested_at: at,
+                        follow_through_archive: prior.is_some_and(|old| old.follow_through_archive),
+                        follow_from: None,
+                        error: exhausted.then(|| "No newer mosaic in this window. Choose a later time or return to latest.".to_owned()),
+                        loading: false };
                     if let Some(slot) = self.mrms_loops.iter_mut().find(|old| old.layer == layer) {
                         *slot = loop_state;
                     } else {
