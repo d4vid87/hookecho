@@ -687,6 +687,20 @@ impl CrsTransform {
         {
             return Ok(Self::Wgs84);
         }
+        // WPC's ERO archive declares a spherical EMEP geographic CRS. Its Shapefile coordinates
+        // are longitude/latitude degrees, so the angular positions need no projection here.
+        if upper.starts_with("GEOGCS[\"GCS_SPHERE_EMEP\"")
+            && upper.contains("SPHEROID[\"SPHERE_EMEP\",6371200.0,0.0]")
+        {
+            return Ok(Self::Wgs84);
+        }
+        // Some WPC Day-2 files switch to geographic NAD83. Their coordinate values are already
+        // angular degrees; treating NAD83 as WGS84 here incurs only its metre-scale datum offset.
+        if upper.starts_with("GEOGCS[\"GCS_NORTH_AMERICAN_1983\"")
+            && upper.contains("SPHEROID[\"GRS_1980\"")
+        {
+            return Ok(Self::Wgs84);
+        }
         anyhow::ensure!(
             upper.contains("WGS_1984")
                 || upper.contains("WGS 84")

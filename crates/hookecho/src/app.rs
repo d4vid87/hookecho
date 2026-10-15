@@ -191,6 +191,8 @@ pub struct OverlayFilters {
     pub winter_ice_day: u8,
     /// WPC Excessive Rainfall Outlook day (0 = off, else 1–5).
     pub ero_day: u8,
+    /// A published WPC archive filename, or None for the current outlook.
+    pub ero_archive: Option<String>,
     /// Fill opacity for WPC excessive-rainfall outlook polygons, 0–100 percent.
     pub ero_opacity_pct: u8,
     /// Screen-space width of WPC excessive-rainfall outlook outlines.
@@ -231,6 +233,7 @@ impl Default for OverlayFilters {
             winter_snow_day: 0,
             winter_ice_day: 0,
             ero_day: 0,
+            ero_archive: None,
             ero_opacity_pct: 100,
             ero_border_px: 1.6,
 
@@ -274,7 +277,8 @@ enum OverlayMsg {
     Wssi(u8, Vec<GeoFeature>),
     WinterProb(u8, wxdata::winter_prob::Kind, Vec<GeoFeature>),
     /// WPC Excessive Rainfall Outlook polygons for a day.
-    Ero(u8, Vec<GeoFeature>),
+    Ero(u8, Option<String>, Vec<GeoFeature>),
+    EroIssues(Vec<wxdata::ero::ArchiveIssue>),
     /// mPING crowd precipitation-type reports.
     Mping(Vec<wxdata::mping::Report>),
     /// Pilot reports within the fetched bbox.
@@ -386,8 +390,9 @@ enum OverlaySource {
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
     WinterProb(u8, wxdata::winter_prob::Kind),
-    /// Excessive Rainfall Outlook for a day (1-3).
-    Ero(u8),
+    /// Current or archived Excessive Rainfall Outlook for a day (1–5).
+    Ero(u8, Option<String>),
+    EroIssues,
     /// mPING crowd reports from the last hour, with the user's API key.
     Mping(String),
     /// Pilot reports within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
@@ -683,6 +688,7 @@ impl OverlaySource {
             Self::WinterProb(_, wxdata::winter_prob::Kind::Snow) => RequestLane::Feed("Winter snow probability"),
             Self::WinterProb(_, wxdata::winter_prob::Kind::Ice) => RequestLane::Feed("Winter ice probability"),
             Self::Ero(..) => RequestLane::Feed("Excessive rainfall outlook"),
+            Self::EroIssues => RequestLane::Feed("Rainfall outlook archive"),
             Self::Mping(..) => RequestLane::Feed("mPING reports"),
             Self::Pireps(..) => RequestLane::Feed("Pilot reports"),
             Self::Recon => RequestLane::Feed("Hurricane reconnaissance"),
@@ -786,7 +792,14 @@ impl OverlaySource {
             OverlaySource::Pireps(lat0, lon0, lat1, lon1) => OverlayMsg::Pireps(
                 wxdata::aviation::fetch_pireps(http, lat0, lon0, lat1, lon1).await?,
             ),
-            OverlaySource::Ero(day) => OverlayMsg::Ero(day, wxdata::ero::fetch(http, day).await?),
+            OverlaySource::Ero(day, key) => {
+                let features = match key.as_deref() {
+                    Some(key) => wxdata::ero::fetch_archive(http, day, key).await?,
+                    None => wxdata::ero::fetch(http, day).await?,
+                };
+                OverlayMsg::Ero(day, key, features)
+            }
+            OverlaySource::EroIssues => OverlayMsg::EroIssues(wxdata::ero::fetch_archive_index(http).await?),
             OverlaySource::Recon => OverlayMsg::Recon(wxdata::recon::fetch(http, 6).await?),
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
@@ -3414,6 +3427,8 @@ pub struct HookEchoApp {
     winter_ice_features: Vec<GeoFeature>,
     /// Excessive Rainfall Outlook polygons for the selected day.
     ero_features: Vec<GeoFeature>,
+    ero_loaded: Option<(u8, Option<String>)>,
+    ero_issues: Vec<wxdata::ero::ArchiveIssue>,
     /// Crowd precipitation-type reports (mPING), and their fetch clock.
     show_mping: bool,
     mping_reports: Vec<wxdata::mping::Report>,
@@ -4543,6 +4558,8 @@ impl HookEchoApp {
             winter_snow_features: Vec::new(),
             winter_ice_features: Vec::new(),
             ero_features: Vec::new(),
+            ero_loaded: None,
+            ero_issues: Vec::new(),
             show_mping: false,
             mping_reports: Vec::new(),
             mping_last_fetch: None,
@@ -5558,7 +5575,9 @@ impl HookEchoApp {
             if (1..=3).contains(&day) { self.spawn_overlay(ctx, OverlaySource::WinterProb(day, kind)); }
         }
         if (1..=5).contains(&self.filters.ero_day) {
-            self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
+            if self.filters.ero_archive.is_none() {
+                self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day, None));
+            }
         }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=8).contains(&self.filters.outlook_day) {
@@ -9166,10 +9185,18 @@ impl HookEchoApp {
         }
         if actions.ero_day_changed {
             self.ero_features.clear();
+            self.ero_loaded = None;
             if (1..=5).contains(&self.filters.ero_day) {
-                self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
+                self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day, self.filters.ero_archive.clone()));
+                if self.ero_issues.is_empty() {
+                    self.spawn_overlay(ctx, OverlaySource::EroIssues);
+                }
             }
-            if self.ero_discussion.open { self.fetch_ero_discussion(); }
+            if self.filters.ero_archive.is_some() {
+                self.ero_discussion.open = false;
+            } else if self.ero_discussion.open {
+                self.fetch_ero_discussion();
+            }
         }
         if actions.ero_discussion {
             self.ero_discussion.open = true;
@@ -10408,11 +10435,13 @@ impl HookEchoApp {
                 OverlayMsg::Mping(r) => self.mping_reports = r,
                 OverlayMsg::Pireps(p) => self.pireps = p,
                 OverlayMsg::Recon(o) => self.recon = o,
-                OverlayMsg::Ero(day, f) => {
-                    if day == self.filters.ero_day {
+                OverlayMsg::Ero(day, key, f) => {
+                    if day == self.filters.ero_day && key == self.filters.ero_archive {
+                        self.ero_loaded = Some((day, key));
                         self.ero_features = f;
                     }
                 }
+                OverlayMsg::EroIssues(issues) => self.ero_issues = issues,
                 OverlayMsg::Wssi(day, f) => {
                     // A day change in flight must not overwrite the day now selected.
                     if day == self.filters.wssi_day {

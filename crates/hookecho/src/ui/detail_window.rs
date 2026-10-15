@@ -134,7 +134,7 @@ pub fn show(
                     egui::Label::new(if mesoscale { text } else { text.monospace() }).wrap(),
                 );
             });
-            if detail.title.starts_with("ERO D")
+            if detail.title.starts_with("ERO D") && !detail.body.starts_with("Archived")
                 && ui.button("Read NOAA rainfall discussion").clicked() {
                 *open_ero_discussion = true;
             }

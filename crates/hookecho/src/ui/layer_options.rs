@@ -76,6 +76,8 @@ fn stp_source(model: wxdata::hrrr::Model) -> bool {
 pub(crate) fn show(
     ui: &mut egui::Ui,
     filters: &mut OverlayFilters,
+    ero_issues: &[wxdata::ero::ArchiveIssue],
+    ero_archive_empty: bool,
     track_rules: &mut crate::settings::PriorityRules,
     fields: &mut std::collections::HashMap<crate::render::FieldLayer, crate::app::FieldState>,
     // Which layers the active pane draws. Visibility is per-pane now; the map above is the shared
@@ -801,6 +803,7 @@ pub(crate) fn show(
                         .selectable_value(&mut filters.ero_day, day, label)
                         .changed()
                     {
+                        filters.ero_archive = None;
                         actions.ero_day_changed = true;
                         changed = true;
                     }
@@ -808,6 +811,27 @@ pub(crate) fn show(
             });
 
         if filters.ero_day != 0 {
+            ui.label("Forecast issue");
+            egui::ComboBox::from_id_salt("ero_archive_issue")
+                .width(ui.available_width() - 8.0)
+                .selected_text(filters.ero_archive.as_ref().map_or_else(
+                    || "Current forecast".to_string(),
+                    |key| ero_issues.iter().find(|issue| &issue.key == key)
+                        .map_or_else(|| "Archived issue".to_string(), |issue| format!("Archive {}", issue.cycle.format("%b %d %HZ"))),
+                ))
+                .show_ui(ui, |ui| {
+                    ui.set_max_height(280.0);
+                    if ui.selectable_value(&mut filters.ero_archive, None, "Current forecast").changed() {
+                        actions.ero_day_changed = true; changed = true;
+                    }
+                    for issue in ero_issues.iter().filter(|issue| issue.day == filters.ero_day) {
+                        if ui.selectable_value(&mut filters.ero_archive, Some(issue.key.clone()),
+                            issue.cycle.format("%Y-%m-%d %HZ").to_string()).changed() {
+                            actions.ero_day_changed = true; changed = true;
+                        }
+                    }
+                    if ero_issues.is_empty() { ui.weak("Loading published WPC archive issues…"); }
+                });
             ui.horizontal(|ui| {
                 ui.label("Fill opacity");
                 if ui.add(egui::Slider::new(&mut filters.ero_opacity_pct, 0..=100).suffix("%"))
@@ -819,8 +843,15 @@ pub(crate) fn show(
                     .step_by(0.2).suffix(" px"))
                     .changed() { actions.overlays_changed = true; changed = true; }
             });
-            if ui.button("Read NOAA forecast discussion").clicked() {
-                actions.ero_discussion = true;
+            if filters.ero_archive.is_none() {
+                if ui.button("Read NOAA forecast discussion").clicked() {
+                    actions.ero_discussion = true;
+                }
+            } else {
+                ui.weak("Archive polygons use their stored issue and valid times. Current discussion hidden.");
+                if ero_archive_empty {
+                    ui.weak("No risk areas in this archived issue.");
+                }
             }
         }
 

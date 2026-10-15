@@ -361,9 +361,15 @@ impl HookEchoApp {
                             || self.views[self.active]
                                 .fields_on
                                 .contains(&crate::render::FieldLayer::GlmFed);
+                        let ero_archive_empty = self.filters.ero_archive.is_some()
+                            && self.ero_loaded.as_ref()
+                                == Some(&(self.filters.ero_day, self.filters.ero_archive.clone()))
+                            && self.ero_features.is_empty();
                         crate::ui::layer_options::show(
                             ui,
                             &mut self.filters,
+                            &self.ero_issues,
+                            ero_archive_empty,
                             &mut self.settings.priority_rules,
                             &mut self.fields,
                             &self.views[self.active].fields_on.clone(),
@@ -493,9 +499,15 @@ impl HookEchoApp {
                                     || self.views[self.active]
                                         .fields_on
                                         .contains(&crate::render::FieldLayer::GlmFed);
+                                let ero_archive_empty = self.filters.ero_archive.is_some()
+                                    && self.ero_loaded.as_ref()
+                                        == Some(&(self.filters.ero_day, self.filters.ero_archive.clone()))
+                                    && self.ero_features.is_empty();
                                 crate::ui::layer_options::show(
                                     ui,
                                     &mut self.filters,
+                                    &self.ero_issues,
+                                    ero_archive_empty,
                                     &mut self.settings.priority_rules,
                                     &mut self.fields,
                                     &self.views[self.active].fields_on.clone(),

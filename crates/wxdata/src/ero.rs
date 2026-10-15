@@ -6,9 +6,95 @@
 
 use crate::alerts::USER_AGENT;
 use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
+use crate::placefile::PlaceKind;
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 const SERVICE: &str =
     "https://mapservices.weather.noaa.gov/vector/rest/services/hazards/wpc_precip_hazards/MapServer";
+const ARCHIVE: &str = "https://ftp-wpc.ncep.noaa.gov/shapefiles/qpf/excessive/";
+
+/// A dated WPC archive file. The filename stamp is its archive cycle, not the polygon validity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveIssue {
+    pub day: u8,
+    pub key: String,
+    pub cycle: DateTime<Utc>,
+}
+
+fn archive_day(prefix: &str) -> Option<u8> {
+    match prefix {
+        "94e" => Some(1), "98e" => Some(2), "99e" => Some(3),
+        "d4" => Some(4), "d5" => Some(5), _ => None,
+    }
+}
+
+fn archive_issue(key: &str) -> Option<ArchiveIssue> {
+    let (prefix, stamp) = key.strip_suffix(".zip")?.split_once('_')?;
+    let day = archive_day(prefix)?;
+    if stamp.len() != 10 || !stamp.bytes().all(|b| b.is_ascii_digit()) { return None; }
+    let cycle = NaiveDateTime::parse_from_str(&format!("{stamp}00"), "%Y%m%d%H%M").ok()?.and_utc();
+    Some(ArchiveIssue { day, key: key.into(), cycle })
+}
+
+pub fn parse_archive_index(html: &str) -> Vec<ArchiveIssue> {
+    let mut issues: Vec<_> = html.split("href=\"").skip(1)
+        .filter_map(|part| part.split_once('"').and_then(|(key, _)| archive_issue(key)))
+        .collect();
+    issues.sort_unstable_by(|a, b| b.cycle.cmp(&a.cycle).then(a.day.cmp(&b.day)));
+    issues.dedup_by(|a, b| a.key == b.key);
+    issues
+}
+
+pub async fn fetch_archive_index(client: &reqwest::Client) -> anyhow::Result<Vec<ArchiveIssue>> {
+    let body = client.get(crate::net::fetch_url(ARCHIVE))
+        .timeout(crate::net::FEED_TIMEOUT).header("User-Agent", USER_AGENT)
+        .send().await?.error_for_status()?.text().await?;
+    anyhow::ensure!(body.len() <= 512 * 1024, "WPC archive index exceeds 512 KB");
+    let issues = parse_archive_index(&body);
+    anyhow::ensure!(!issues.is_empty(), "WPC archive index has no dated outlooks");
+    Ok(issues)
+}
+
+pub fn parse_archive_zip(bytes: &[u8], issue: &ArchiveIssue) -> anyhow::Result<Vec<GeoFeature>> {
+    anyhow::ensure!(bytes.len() <= 10 * 1024 * 1024, "WPC archive exceeds 10 MB");
+    let file = crate::gis::archive_with_options(
+        &issue.key, bytes,
+        crate::gis::GisImportOptions { label_field: Some("OUTLOOK"), ..Default::default() },
+    )?.0;
+    let mut out = Vec::new();
+    let mut none_expected = false;
+    for item in file.items {
+        let Some(props) = item.properties else { continue };
+        let field = |key: &str| props.get(key).and_then(|value| value.as_str()).unwrap_or("");
+        let outlook = field("OUTLOOK");
+        if outlook.eq_ignore_ascii_case("None Expected") {
+            none_expected = true;
+            continue;
+        }
+        let PlaceKind::Polygon { rings, .. } = item.kind else { continue };
+        if outlook.is_empty() { continue; }
+        let rgb = risk_color(outlook);
+        out.push(GeoFeature {
+            rings, fill: [rgb[0], rgb[1], rgb[2], 60],
+            stroke: [rgb[0], rgb[1], rgb[2], 220], kind: FeatureKind::Outlook,
+            title: format!("ERO D{} {}", issue.day, risk_short(outlook)),
+            detail: format!("Archived Excessive Rainfall Outlook — Day {}\nRisk: {outlook}\nValid: {}\nIssued: {}\nArchive cycle: {}",
+                issue.day, field("VALID_TIME"), field("ISSUE_TIME"), issue.cycle.format("%Y-%m-%d %HZ")),
+            alert: None,
+        });
+    }
+    anyhow::ensure!(!out.is_empty() || none_expected, "WPC archive has no risk polygons");
+    Ok(out)
+}
+
+pub async fn fetch_archive(client: &reqwest::Client, day: u8, key: &str) -> anyhow::Result<Vec<GeoFeature>> {
+    let issue = archive_issue(key).ok_or_else(|| anyhow::anyhow!("invalid WPC archive key"))?;
+    anyhow::ensure!(issue.day == day, "WPC archive day mismatch");
+    let bytes = client.get(crate::net::fetch_url(&format!("{ARCHIVE}{key}")))
+        .timeout(crate::net::FEED_TIMEOUT).header("User-Agent", USER_AGENT)
+        .send().await?.error_for_status()?.bytes().await?;
+    parse_archive_zip(&bytes, &issue)
+}
 
 #[derive(Debug, Clone)]
 pub struct Discussion {
@@ -120,6 +206,52 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dated_archive_index_only_lists_supported_days_and_valid_cycles() {
+        let html = r#"<a href="94e_2026101409.zip">day one</a>
+            <a href="d5_2026101321.zip">day five</a>
+            <a href="94eU_2026101401.zip">expired until-12Z</a>
+            <a href="94e_2026101409.tar">duplicate format</a>
+            <a href="../bad.zip">invalid</a>"#;
+        let issues = parse_archive_index(html);
+        assert_eq!(issues.iter().map(|issue| (issue.day, issue.key.as_str())).collect::<Vec<_>>(),
+            vec![(1, "94e_2026101409.zip"), (5, "d5_2026101321.zip")]);
+    }
+
+    #[test]
+    fn real_wpc_archive_preserves_risk_and_validity() {
+        let issue = archive_issue("94e_2026101409.zip").unwrap();
+        let features = parse_archive_zip(include_bytes!("../tests/data/wpc-ero-day1-2026101409.zip"), &issue).unwrap();
+        assert!(!features.is_empty());
+        assert!(features.iter().all(|feature| feature.title.starts_with("ERO D1 ")));
+        assert!(features.iter().all(|feature| feature.detail.contains("Archived")
+            && feature.detail.contains("Valid:") && feature.detail.contains("Issued:")));
+    }
+
+    #[test]
+    fn real_wpc_no_risk_archive_is_an_empty_forecast() {
+        let issue = archive_issue("98e_2026101509.zip").unwrap();
+        let features = parse_archive_zip(include_bytes!("../tests/data/wpc-ero-day2-empty-2026101509.zip"), &issue).unwrap();
+        assert!(features.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_wpc_archive_lists_and_decodes_recent_issues() {
+        let client = reqwest::Client::new();
+        let issues = fetch_archive_index(&client).await.unwrap();
+        assert!(issues.len() >= 5);
+        let mut with_risk = 0;
+        for day in 1..=5 {
+            let issue = issues.iter().find(|issue| issue.day == day).unwrap();
+            let features = fetch_archive(&client, day, &issue.key).await
+                .unwrap_or_else(|error| panic!("day {day} {}: {error}", issue.key));
+            with_risk += usize::from(!features.is_empty());
+            assert!(features.iter().all(|feature| feature.detail.contains("Archived")));
+        }
+        assert!(with_risk > 0, "every sampled WPC issue was empty");
+    }
 
     #[test]
     fn discussion_selects_public_product_by_day() {
