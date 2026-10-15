@@ -17938,7 +17938,7 @@ impl HookEchoApp {
             // categorical classifications were unlabeled color.
             if let Some(top) = crate::render::FieldLayer::draw_order()
                 .rev()
-                .find(|l| view.fields_on.contains(l))
+                .find(|l| view.fields_on.contains(l) && self.field_aligned(idx, *l))
             {
                 y += if top == crate::render::FieldLayer::ModelDiff {
                     ui::legend::draw_diff(&painter, prect, self.diff_field, y)
