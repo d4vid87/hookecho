@@ -75,6 +75,8 @@ pub enum BasemapStyle {
     None,
     /// A plain white canvas for radar, annotations and weather overlays; no map tiles.
     BlankWhite,
+    /// Keyless blue OpenMapTiles palette, independent of provider style assets.
+    BlueMap,
     /// NOAA GOES-East GeoColor via NASA GIBS (near-real-time satellite).
     GoesEast,
     /// NOAA GOES-West GeoColor via NASA GIBS.
@@ -165,7 +167,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 61] = [
+    pub const ALL: [BasemapStyle; 62] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -228,6 +230,7 @@ impl BasemapStyle {
         BasemapStyle::Presentation,
         // Append to retain the existing per-style cache keys.
         BasemapStyle::BlankWhite,
+        BasemapStyle::BlueMap,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -274,6 +277,7 @@ impl BasemapStyle {
             BasemapStyle::Satellite => "USGS Imagery",
             BasemapStyle::None => "None",
             BasemapStyle::BlankWhite => "Blank White",
+            BasemapStyle::BlueMap => "Blue Map",
             BasemapStyle::GoesEast => "GOES-East (GeoColor)",
             BasemapStyle::GoesWest => "GOES-West (GeoColor)",
             BasemapStyle::GoesEastIR => "GOES-East (infrared)",
@@ -341,6 +345,7 @@ impl BasemapStyle {
             BasemapStyle::Satellite => "satellite",
             BasemapStyle::None => "none",
             BasemapStyle::BlankWhite => "blank-white",
+            BasemapStyle::BlueMap => "blue-map",
             BasemapStyle::GoesEast => "goes-east",
             BasemapStyle::GoesWest => "goes-west",
             BasemapStyle::GoesEastIR => "goes-east-ir",
@@ -533,6 +538,7 @@ impl BasemapStyle {
                 | BasemapStyle::Light
                 | BasemapStyle::None
                 | BasemapStyle::BlankWhite
+                | BasemapStyle::BlueMap
                 | BasemapStyle::Auto
                 | BasemapStyle::VectorLiberty
                 | BasemapStyle::VectorBright
@@ -655,6 +661,7 @@ impl BasemapStyle {
             | BasemapStyle::VectorPositron
             | BasemapStyle::VectorMidnight
             | BasemapStyle::Presentation => Category::Vector,
+            BasemapStyle::BlueMap => Category::Vector,
             BasemapStyle::Satellite
             | BasemapStyle::EsriImagery
             | BasemapStyle::HybridSatellite
@@ -704,6 +711,7 @@ impl BasemapStyle {
             BasemapStyle::VectorPositron => Some(crate::basemap_style::Palette::Positron),
             BasemapStyle::VectorMidnight => Some(crate::basemap_style::Palette::Midnight),
             BasemapStyle::Presentation => Some(crate::basemap_style::Palette::Presentation),
+            BasemapStyle::BlueMap => Some(crate::basemap_style::Palette::Blue),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
@@ -2694,7 +2702,17 @@ mod tests {
         assert!(!style.is_raster());
         assert!(style.vector_palette().is_none());
         assert!(style.thumb_url("", "", "").is_none());
-        assert_eq!(style.key() as usize, BasemapStyle::ALL.len() - 1);
+        assert_eq!(style.key(), 60);
+    }
+
+    #[test]
+    fn blue_map_is_a_keyless_vector_style() {
+        let style = BasemapStyle::BlueMap;
+        assert_eq!(BasemapStyle::from_slug("blue-map"), style);
+        assert_eq!(style.category(), Category::Vector);
+        assert!(!style.is_raster());
+        assert_eq!(style.vector_palette(), Some(crate::basemap_style::Palette::Blue));
+        assert_eq!(style.key(), 61);
     }
 
     /// The picker draws one section per category. A style in no section is invisible, and a

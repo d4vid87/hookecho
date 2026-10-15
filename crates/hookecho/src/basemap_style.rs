@@ -32,11 +32,13 @@ pub enum Palette {
     Midnight,
     /// Black land, neutral geography and bright labels for weather presentations.
     Presentation,
+    /// Independently authored blue canvas with readable geography under radar.
+    Blue,
 }
 
 impl Palette {
     /// Every selectable vector look, in menu order.
-    pub const ALL: [Palette; 7] = [
+    pub const ALL: [Palette; 8] = [
         Palette::Dark,
         Palette::Light,
         Palette::Liberty,
@@ -44,6 +46,7 @@ impl Palette {
         Palette::Positron,
         Palette::Midnight,
         Palette::Presentation,
+        Palette::Blue,
     ];
 }
 
@@ -294,6 +297,23 @@ const C_PRESENTATION: Colors = Colors {
     casing: 0x000000,
 };
 
+const C_BLUE: Colors = Colors {
+    water: 0x071d37,
+    wood: 0x153957,
+    park: 0x194262,
+    residential: 0x123452,
+    building: 0x214565,
+    motorway: 0x8cbbd6,
+    primary: 0x75a7c8,
+    secondary: 0x5e91b6,
+    minor: 0x416f95,
+    rail: 0x365f81,
+    admin2: 0xa3c6d9,
+    admin4: 0x6698ba,
+    county: 0x45759b,
+    casing: 0x0b2743,
+};
+
 fn colors(p: Palette) -> &'static Colors {
     match p {
         Palette::Dark => &C_DARK,
@@ -303,6 +323,7 @@ fn colors(p: Palette) -> &'static Colors {
         Palette::Positron => &C_POSITRON,
         Palette::Midnight => &C_MIDNIGHT,
         Palette::Presentation => &C_PRESENTATION,
+        Palette::Blue => &C_BLUE,
         // Never asked for: `fill` and `stroke` handle the overlay before they get here.
         Palette::HybridOverlay => &C_DARK,
     }
@@ -366,6 +387,12 @@ const PRESENTATION: VecStyle = VecStyle {
     label_halo: rgb(0x000000),
 };
 
+const BLUE: VecStyle = VecStyle {
+    background: Some(rgb(0x10304e)),
+    label: rgb(0xeaf7ff),
+    label_halo: rgb(0x08233d),
+};
+
 pub fn style(p: Palette) -> &'static VecStyle {
     match p {
         Palette::Dark => &DARK,
@@ -376,6 +403,7 @@ pub fn style(p: Palette) -> &'static VecStyle {
         Palette::Positron => &POSITRON,
         Palette::Midnight => &MIDNIGHT,
         Palette::Presentation => &PRESENTATION,
+        Palette::Blue => &BLUE,
     }
 }
 

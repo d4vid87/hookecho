@@ -293,9 +293,9 @@
       "status": "partial",
       "observed_scope": "Observed choices begin Dark Presentation, Grey Presentation, Green Presentation, Blank White, Satellite, Basic, Blue Map, Road Network, Dark Roadmap; extracted control string truncates after Te.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "Independent vector and public raster styles include a Presentation palette with black land and restrained geography. A separate Blank White choice is a tile-free white canvas under radar, station markers, and weather overlays; it suppresses geographic map labels and retains the existing Blank Dark/None behavior.",
+      "hookecho_implementation": "Independent vector and public raster styles include a Presentation palette with black land and restrained geography. A separate Blank White choice is a tile-free white canvas under radar, station markers, and weather overlays; it suppresses geographic map labels and retains the existing Blank Dark/None behavior. Blue Map is a keyless, independently authored vector palette with blue land/water, light roads and high-contrast labels.",
       "remaining_gaps": [
-        "No vendor style, font/sprite asset or tile content reuse; full style catalog, imagery and label placement differ."
+        "No vendor style, font/sprite asset or tile content reuse; full style catalog, imagery and label placement differ. The Blue Map palette has not been visually matched to the RadarOmega option."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/basemap_style.rs",
@@ -308,7 +308,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP01",
       "acceptance": "Selectable styles preserve map position, data overlays and readable labels.",
-      "runtime_verification": "Native style test confirmed the Blank White slug, picker category, and absence of raster/vector tile sources; 650 app tests passed. The optimized browser build remained within budget. In the local browser the white picker swatch selected a white map with KTLX radar, station pins, and alert polygons visible; reloading kept the white basemap. Exact reference styling and other named styles remain unverified."
+      "runtime_verification": "Native style tests confirmed Blank White's stable key and Blue Map's slug, picker category, keyless vector palette and stable key; 651 app tests passed. The optimized browser bundle measured 4,533,742 bytes at gzip -9, within the 4,540,000-byte budget. In the local browser the white picker swatch selected a white map with KTLX radar, station pins, and alert polygons visible; reloading kept the white basemap. Blue Map was selected from Display Settings and visibly changed the live KDAX map to blue geography and light roads while radar remained drawn. Exact reference styling remains unverified."
     },
     {
       "id": "MAP02",
