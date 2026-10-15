@@ -251,7 +251,13 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   try {
     // Only a validated model byte range is forwarded; all other client headers stay private.
     upstream = await fetch(target, {
-      headers: { "user-agent": USER_AGENT, ...(range ? { range } : {}) },
+      headers: {
+        "user-agent": USER_AGENT,
+        // The public FAA WeatherCams API checks its own site Referer. Never forward the
+        // viewer's Referer; use a fixed value for this one allowlisted host only.
+        ...(host === "weathercams.faa.gov" ? { referer: "https://weathercams.faa.gov/" } : {}),
+        ...(range ? { range } : {}),
+      },
       ...fetchInit(host, url.search, !!range),
       // An allowed upstream must not redirect this proxy to a host outside the allowlist.
       redirect: "manual",

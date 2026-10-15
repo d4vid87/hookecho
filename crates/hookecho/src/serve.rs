@@ -1772,11 +1772,15 @@ async fn fetch_capped(
     url: &str,
     limit: usize,
 ) -> anyhow::Result<(&'static str, Vec<u8>)> {
-    let mut resp = http
+    let mut req = http
         .get(url)
-        .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT)
-        .send()
-        .await?;
+        .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT);
+    // The public FAA WeatherCams API checks its own site's Referer. The browser's header is
+    // deliberately not forwarded; this fixed value is only for our allowlisted FAA host.
+    if url.starts_with("https://weathercams.faa.gov/") {
+        req = req.header(reqwest::header::REFERER, "https://weathercams.faa.gov/");
+    }
+    let mut resp = req.send().await?;
     anyhow::ensure!(resp.status().is_success(), "upstream returned {}", resp.status());
     let ctype = proxy_content_type(
         resp.headers()
