@@ -1591,7 +1591,9 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
     if !ALLOWED_HOSTS.contains(&host) {
         return forbidden("host not in allowlist");
     }
-    if let Some(range) = range {
+    // Browsers may attach a Range header while resuming a small cached object. For ordinary
+    // feeds, strip it and serve the capped whole object; only model GRIB hosts need byte ranges.
+    if let Some(range) = range.filter(|_| model_range_host(host)) {
         if !valid_model_range(host, range) {
             return forbidden("invalid model byte range");
         }
@@ -1668,7 +1670,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
     }
 }
 
-fn valid_model_range(host: &str, range: &str) -> bool {
+fn model_range_host(host: &str) -> bool {
     const HOSTS: &[&str] = &[
         "noaa-gfs-bdp-pds.s3.amazonaws.com",
         "noaa-hrrr-bdp-pds.s3.amazonaws.com",
@@ -1677,6 +1679,10 @@ fn valid_model_range(host: &str, range: &str) -> bool {
         "noaa-nbm-grib2-pds.s3.amazonaws.com",
         "nomads.ncep.noaa.gov",
     ];
+    HOSTS.contains(&host)
+}
+
+fn valid_model_range(host: &str, range: &str) -> bool {
     let Some((start, end)) = range.strip_prefix("bytes=").and_then(|s| s.split_once('-')) else {
         return false;
     };
@@ -1691,7 +1697,7 @@ fn valid_model_range(host: &str, range: &str) -> bool {
             Err(_) => return false,
         }
     };
-    HOSTS.contains(&host)
+    model_range_host(host)
         && end.is_none_or(|end| end >= start && end - start < PROXY_MAX_BYTES as u64)
 }
 
@@ -2260,6 +2266,7 @@ mod tests {
 
     #[test]
     fn model_ranges_are_bounded_and_host_scoped() {
+        assert!(!model_range_host("unidata-nexrad-level3.s3.amazonaws.com"));
         assert!(valid_model_range("noaa-gfs-bdp-pds.s3.amazonaws.com", "bytes=0-1023"));
         assert!(valid_model_range("nomads.ncep.noaa.gov", "bytes=1024-"));
         assert!(!valid_model_range("api.weather.gov", "bytes=0-1023"));

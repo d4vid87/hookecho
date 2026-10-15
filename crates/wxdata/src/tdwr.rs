@@ -145,16 +145,6 @@ async fn keys_for_prefix(http: &reqwest::Client, prefix: &str) -> anyhow::Result
     }).collect())
 }
 
-async fn keys_near_hour(http: &reqwest::Client, prefix: &str, hour: DateTime<Utc>) -> Vec<String> {
-    let hours = [hour - chrono::Duration::hours(1), hour];
-    let listings = futures_util::future::join_all(hours.into_iter().map(|at| {
-        let http = http.clone();
-        let prefix = format!("{prefix}_{}", at.format("%Y_%m_%d_%H"));
-        async move { keys_for_prefix(&http, &prefix).await.unwrap_or_default() }
-    })).await;
-    listings.into_iter().flatten().collect()
-}
-
 fn latest_key_at_or_before(keys: Vec<String>, anchor: DateTime<Utc>) -> Option<String> {
     keys.into_iter()
         .filter_map(|key| key_time(&key).map(|time| (key, time)))
@@ -337,13 +327,22 @@ pub async fn fetch_volume_at(http: &reqwest::Client, id: &Identifier) -> anyhow:
     let anchor = id.date_time().ok_or_else(|| anyhow::anyhow!("TDWR frame has no valid time"))?;
     anyhow::ensure!(id.name() == frame_name(meta.id, anchor), "TDWR frame name malformed");
     let short = &meta.id[1..];
-    let keys = futures_util::future::join_all(PRODUCTS.iter().map(|(product, _)| {
+    // This frame name came from an actual TZ0 bucket key. Its key is deterministic, so do not
+    // re-list it for every playback fetch: concurrent long-loop backfill can otherwise turn a
+    // transient listing failure into a false "low tilt unavailable" error.
+    let low = format!("{short}_TZ0_{}", anchor.format("%Y_%m_%d_%H_%M_%S"));
+    let other = futures_util::future::join_all(PRODUCTS.iter().skip(1).map(|(product, _)| {
         let (http, prefix) = (http.clone(), format!("{short}_{product}"));
         async move {
-            latest_key_at_or_before(keys_near_hour(&http, &prefix, anchor).await, anchor)
+            let current = format!("{prefix}_{}", anchor.format("%Y_%m_%d_%H"));
+            if let Some(key) = latest_key_at_or_before(
+                keys_for_prefix(&http, &current).await.unwrap_or_default(), anchor
+            ) { return Some(key); }
+            let previous = format!("{prefix}_{}", (anchor - chrono::Duration::hours(1)).format("%Y_%m_%d_%H"));
+            latest_key_at_or_before(keys_for_prefix(&http, &previous).await.unwrap_or_default(), anchor)
         }
     })).await;
-    anyhow::ensure!(keys.first().and_then(|key| key.as_deref()).is_some(), "TDWR frame's low tilt unavailable");
+    let keys = std::iter::once(Some(low)).chain(other).collect();
     assemble_volume(http, meta, keys, anchor).await
 }
 

@@ -102,7 +102,9 @@ const RANGE_HOSTS = new Set([
 function modelRange(request, host) {
   const value = request.headers.get("range");
   if (!value) return null;
-  if (!RANGE_HOSTS.has(host)) return false;
+  // A browser may resume a small cached object with Range. Ordinary feeds do not need partial
+  // responses: strip that header and fetch the capped whole object, as the local proxy does.
+  if (!RANGE_HOSTS.has(host)) return null;
   const match = /^bytes=(\d+)-(\d*)$/.exec(value);
   if (!match) return false;
   const start = Number(match[1]);

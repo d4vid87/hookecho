@@ -126,6 +126,13 @@ test("model byte ranges reach the upstream and remain partial responses", async 
   assert.deepEqual(calls[0].init.headers, { "user-agent": calls[0].init.headers["user-agent"], range: "bytes=0-3" });
 });
 
+test("ordinary radar objects ignore browser resume ranges", async () => {
+  const calls = stubFetch(upstream({}, "TDWR"));
+  const res = await proxy(ask("unidata-nexrad-level3.s3.amazonaws.com/DFW_TZ1_2026_10_15_18_26_23", { range: "bytes=0-100" }));
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].init.headers.range, undefined);
+});
+
 test("RTMA host is permitted, but malformed or oversized ranges are refused", async () => {
   const calls = stubFetch(new Response("idx"));
   assert.equal((await proxy(ask("nomads.ncep.noaa.gov/pub/data/file.idx"))).status, 200);
