@@ -36,6 +36,8 @@ pub struct UiActions {
     pub winter_prob_changed: bool,
     /// The Excessive Rainfall Outlook day changed; the app must clear + refetch it.
     pub ero_day_changed: bool,
+    /// Open the public WPC forecaster reasoning for the selected rainfall outlook.
+    pub ero_discussion: bool,
     /// Start an offline chase-pack download of the current view's basemap.
     pub download_chasepack: bool,
     /// Cancel the in-progress chase-pack download.
@@ -803,6 +805,10 @@ pub(crate) fn show(
                     }
                 }
             });
+
+        if filters.ero_day != 0 && ui.button("Read NOAA forecast discussion").clicked() {
+            actions.ero_discussion = true;
+        }
 
         ui.label("Winter precipitation probability");
         ui.weak("NOAA WPC · probability of at least 4 in snow or 0.25 in ice in 24 hours");

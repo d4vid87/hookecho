@@ -3709,6 +3709,8 @@ pub struct HookEchoApp {
     cpc_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::cpc::Discussion, String>>>,
     fire_weather_discussion: ui::fire_weather_discussion_window::FireWeatherDiscussionWindow,
     fire_weather_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::fire_weather::Discussion, String>>>,
+    ero_discussion: ui::ero_discussion_window::EroDiscussionWindow,
+    ero_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::ero::Discussion, String>>>,
     /// NHC public advisory / forecast discussion reader.
     tropical_window: ui::tropical_window::TropicalWindow,
     tropical_text_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
@@ -4691,6 +4693,8 @@ impl HookEchoApp {
             cpc_discussion_rx: None,
             fire_weather_discussion: ui::fire_weather_discussion_window::FireWeatherDiscussionWindow::default(),
             fire_weather_discussion_rx: None,
+            ero_discussion: ui::ero_discussion_window::EroDiscussionWindow::default(),
+            ero_discussion_rx: None,
             tropical_window: ui::tropical_window::TropicalWindow::default(),
             tropical_text_rx: None,
             show_range_rings: false,
@@ -9074,6 +9078,11 @@ impl HookEchoApp {
             if (1..=5).contains(&self.filters.ero_day) {
                 self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
             }
+            if self.ero_discussion.open { self.fetch_ero_discussion(); }
+        }
+        if actions.ero_discussion {
+            self.ero_discussion.open = true;
+            self.fetch_ero_discussion();
         }
         if actions.wssi_day_changed {
             // Day switched: the shown polygons belong to the old day until the new ones land.
@@ -10925,6 +10934,26 @@ impl HookEchoApp {
         let http = self.http.clone();
         self.spawner.spawn(async move {
             let result = wxdata::fire_weather::fetch_discussion(&http, day).await.map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+    }
+
+    fn fetch_ero_discussion(&mut self) {
+        let day = self.filters.ero_day;
+        self.ero_discussion.day = day;
+        self.ero_discussion.discussion = None;
+        self.ero_discussion.error = None;
+        if !(1..=5).contains(&day) {
+            self.ero_discussion.busy = false;
+            self.ero_discussion.error = Some("Select a rainfall outlook day first.".to_owned());
+            return;
+        }
+        self.ero_discussion.busy = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ero_discussion_rx = Some(rx);
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::ero::fetch_discussion(&http, day).await.map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
     }
@@ -22597,6 +22626,19 @@ impl eframe::App for HookEchoApp {
         }
         if self.fire_weather_discussion.open && self.fire_weather_discussion.show(ctx, &mut self.drawer) {
             self.fetch_fire_weather_discussion();
+        }
+        if let Some(rx) = &self.ero_discussion_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.ero_discussion_rx = None;
+                self.ero_discussion.busy = false;
+                match result {
+                    Ok(discussion) => self.ero_discussion.discussion = Some(discussion),
+                    Err(error) => self.ero_discussion.error = Some(error),
+                }
+            }
+        }
+        if self.ero_discussion.open && self.ero_discussion.show(ctx, &mut self.drawer) {
+            self.fetch_ero_discussion();
         }
         if let Some(rx) = &self.cpc_discussion_rx {
             if let Ok(result) = rx.try_recv() {

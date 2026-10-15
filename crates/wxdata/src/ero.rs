@@ -10,6 +10,41 @@ use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};
 const SERVICE: &str =
     "https://mapservices.weather.noaa.gov/vector/rest/services/hazards/wpc_precip_hazards/MapServer";
 
+#[derive(Debug, Clone)]
+pub struct Discussion {
+    pub day: u8,
+    pub text: String,
+    pub source_url: &'static str,
+}
+
+pub fn discussion_url(day: u8) -> Option<&'static str> {
+    match day {
+        1..=3 => Some("https://www.wpc.ncep.noaa.gov/discussions/hpcdiscussions.php?disc=qpferd&fmt=print"),
+        4..=5 => Some("https://www.wpc.ncep.noaa.gov/discussions/hpcdiscussions.php?disc=pmdepd&fmt=print"),
+        _ => None,
+    }
+}
+
+pub fn parse_discussion(body: &str, day: u8) -> anyhow::Result<Discussion> {
+    let source_url = discussion_url(day).ok_or_else(|| anyhow::anyhow!("rainfall outlook day out of range"))?;
+    anyhow::ensure!(body.len() <= 1024 * 1024, "WPC discussion exceeds 1 MB");
+    let lower = body.to_ascii_lowercase();
+    let start = lower.find("<pre").ok_or_else(|| anyhow::anyhow!("WPC discussion body missing"))?;
+    let text_start = start + lower[start..].find('>').ok_or_else(|| anyhow::anyhow!("WPC discussion body malformed"))? + 1;
+    let end = text_start + lower[text_start..].find("</pre>").ok_or_else(|| anyhow::anyhow!("WPC discussion body incomplete"))?;
+    let text = crate::cpc::plain_text(&body[text_start..end]);
+    let expected = if day <= 3 { "Excessive Rainfall Discussion" } else { "Extended Forecast Discussion" };
+    anyhow::ensure!(text.contains(expected) && text.len() > 100, "WPC discussion text unavailable");
+    Ok(Discussion { day, text, source_url })
+}
+
+pub async fn fetch_discussion(client: &reqwest::Client, day: u8) -> anyhow::Result<Discussion> {
+    let url = discussion_url(day).ok_or_else(|| anyhow::anyhow!("rainfall outlook day out of range"))?;
+    let body = client.get(crate::net::fetch_url(url)).timeout(crate::net::FEED_TIMEOUT)
+        .header("User-Agent", USER_AGENT).send().await?.error_for_status()?.text().await?;
+    parse_discussion(&body, day)
+}
+
 /// Fill for a risk level. Mirrors [`crate::spc::risk_color`] so a "moderate" reads the same
 /// whichever outlook drew it.
 fn risk_color(outlook: &str) -> [u8; 3] {
@@ -85,6 +120,30 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discussion_selects_public_product_by_day() {
+        for day in 1..=5 {
+            let title = if day <= 3 { "Excessive Rainfall Discussion" } else { "Extended Forecast Discussion" };
+            let html = format!("<html><pre><font>{title}\nNWS Weather Prediction Center\n{}</font></pre></html>", "Forecast details. ".repeat(10));
+            let parsed = parse_discussion(&html, day).unwrap();
+            assert!(parsed.text.contains(title));
+            assert_eq!(parsed.day, day);
+        }
+        assert!(discussion_url(0).is_none());
+        assert!(discussion_url(6).is_none());
+        assert!(parse_discussion("<html>no discussion</html>", 1).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn fetches_public_discussion_products() {
+        let client = reqwest::Client::new();
+        for day in [1, 4] {
+            let discussion = fetch_discussion(&client, day).await.unwrap();
+            assert!(discussion.text.len() > 100);
+        }
+    }
 
     const SAMPLE: &str = r#"{"type":"FeatureCollection","features":[
       {"type":"Feature","properties":{"outlook":"Marginal (At Least 5%)","valid_time":"16Z 08/01/26 - 12Z 08/02/26"},
