@@ -1116,6 +1116,22 @@ impl HookEchoApp {
             Some(self.filters.cpc_period.is_some()),
         );
         push(
+            "Winter snow probability",
+            "Severe",
+            "NOAA WPC Day 1–3 chance of at least 4 inches of snow in 24 hours",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.winter_snow_day != 0),
+        );
+        push(
+            "Winter ice probability",
+            "Severe",
+            "NOAA WPC Day 1–3 chance of at least 0.25 inches of ice in 24 hours",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.winter_ice_day != 0),
+        );
+        push(
             "Map settings",
             "Reference",
             "Active pane palettes, display smoothing, precision and globe projection",

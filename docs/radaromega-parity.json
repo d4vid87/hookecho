@@ -1213,24 +1213,27 @@
       "title": "Winter weather",
       "priority": 1,
       "status": "partial",
-      "observed_scope": "Sidebar destination observed: Winter Weather.",
-      "observation_type": "runtime-controls",
-      "hookecho_implementation": "WPC winter severity and snowfall analysis provide related layers.",
+      "observed_scope": "The retained RadarOmega client exposes separate Day 1–3 probability selectors for at least 4 inches of snow in 24 hours and at least 0.25 inches of ice in 24 hours, with slight/moderate/high polygon categories, plus WSSI Day 1, Day 2, Day 3, and combined Days 1–3 impact layers.",
+      "observation_type": "captured-client-code-and-runtime-controls",
+      "hookecho_implementation": "Public NOAA WPC probabilistic winter precipitation MapServer layers now provide independent Day 1–3 snow ≥4 in and ice ≥0.25 in selections, slight/moderate/high colors, polygon details with issue/valid/source metadata, and on-demand refresh. WSSI now includes the combined Days 1–3 overall-impact layer in addition to individual days. Snowfall analysis remains available separately. Snow and ice have independent request lanes and source-health messages, so both can be displayed together without one reply invalidating the other.",
       "remaining_gaps": [
-        "Full winter outlook suite, periods and probabilities are not established as equivalent."
+        "RadarOmega polygon opacity/border-width settings, popup hierarchy and source-specific timing behavior are not fully matched.",
+        "Winter probability ice polygons were not present in the live public response at ≥10% during browser verification; the selector and parser are implemented, but an actual ice-polygon click remains unverified. Failure and stale-source messaging is implemented but still needs live failure/stale browser verification."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/notify.rs",
-        "crates/hookecho/src/spoken_alerts.rs",
-        "crates/hookecho/src/ui/alert_panel.rs",
-        "crates/hookecho/src/ui/warning_window.rs"
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/app/chrome/registry.rs",
+        "crates/wxdata/src/winter_prob.rs",
+        "crates/wxdata/src/wssi.rs"
       ],
       "observation_evidence_ids": [
-        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771",
+        "ev_5ac47b0bf904707a7507f15130801c84061c85d0a249a1b0214f91ad5c4acf91"
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV07",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-14: The official NOAA WPC service metadata exposed Day 1–3 snow ≥4 in layers 1/6/11, ice ≥0.25 in layers 4/9/14, and WSSI combined Days 1–3 layer 4. A live Day 1 snow GeoJSON query returned seven records including slight-risk polygons with issue and valid times; combined WSSI returned five polygons. Focused winter probability and WSSI unit tests plus integrated cargo check passed. The optimized web build passed at 4,543,874/4,550,000 main WASM and 74,707/80,000 Lite gzip bytes. In the local browser, the separate winter selectors and combined WSSI choice appeared; Day 1 snow polygons rendered over the central Rockies, and a click opened the WPC category/issue/valid/source detail. The ice layers currently contain only a below-10% category and yielded no colored polygons to inspect. REA analyzed the captured renderer directory (SHA-256 634eb919f478896f7851821fb70f2bae22ffbfe18a138b93d16f2347948d3058); analysis coverage was partial, so the source inspection and live browser checks carry the specific feature conclusions. A concurrent browser check exposed and then verified a request-generation fix: separate snow and ice lanes now show snow polygons and a green “outlook loaded” state alongside ice’s yellow “no ≥10% area forecast” state. The focused independent-lane regression test passed. Final optimized web build passed at 4,544,913/4,550,000 main and 74,707/80,000 Lite gzip bytes."
     },
     {
       "id": "OV08",

@@ -135,6 +135,16 @@ impl HookEchoApp {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .health(&RequestLane::Feed("SPC fire weather"));
         let fire_weather_feature_count = self.fire_weather_features.len();
+        let winter_snow_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("Winter snow probability"));
+        let winter_ice_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("Winter ice probability"));
+        let winter_snow_feature_count = self.winter_snow_features.len();
+        let winter_ice_feature_count = self.winter_ice_features.len();
         let analysis_point = crate::render::mercator::world_to_lonlat(
             self.views[self.active].camera.center.0,
             self.views[self.active].camera.center.1,
@@ -401,6 +411,10 @@ impl HookEchoApp {
                             cpc_feature_count,
                             &fire_weather_health,
                             fire_weather_feature_count,
+                            &winter_snow_health,
+                            &winter_ice_health,
+                            winter_snow_feature_count,
+                            winter_ice_feature_count,
                             &mut opts,
                         );
                     } else {
@@ -528,6 +542,10 @@ impl HookEchoApp {
                                     cpc_feature_count,
                                     &fire_weather_health,
                                     fire_weather_feature_count,
+                                    &winter_snow_health,
+                                    &winter_ice_health,
+                                    winter_snow_feature_count,
+                                    winter_ice_feature_count,
                                     &mut opts,
                                 );
                             });

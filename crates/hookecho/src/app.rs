@@ -183,8 +183,12 @@ pub struct OverlayFilters {
     pub show_mds: bool,
     /// SPC tornado and severe thunderstorm watches in effect.
     pub show_watches: bool,
-    /// WPC Winter Storm Severity Index day (0 = off, else 1-3).
+    /// WPC Winter Storm Severity Index day (0 = off, 1–3 = single day, 4 = combined).
     pub wssi_day: u8,
+    /// WPC probability of at least 4 inches of snow in 24 hours (0 = off).
+    pub winter_snow_day: u8,
+    /// WPC probability of at least 0.25 inches of ice in 24 hours (0 = off).
+    pub winter_ice_day: u8,
     /// WPC Excessive Rainfall Outlook day (0 = off, else 1-3).
     pub ero_day: u8,
     /// Level 3 storm cells (clickable dots: storm tracking, hail, mesocyclone).
@@ -220,6 +224,8 @@ impl Default for OverlayFilters {
             cpc_variable: wxdata::cpc::Variable::Temperature,
             cpc_opacity_pct: 100,
             wssi_day: 0, // off by default, like the SPC outlook
+            winter_snow_day: 0,
+            winter_ice_day: 0,
             ero_day: 0,
 
             show_mds: true,
@@ -260,6 +266,7 @@ enum OverlayMsg {
     Watches(Vec<GeoFeature>),
     /// WPC Winter Storm Severity Index polygons for a day.
     Wssi(u8, Vec<GeoFeature>),
+    WinterProb(u8, wxdata::winter_prob::Kind, Vec<GeoFeature>),
     /// WPC Excessive Rainfall Outlook polygons for a day.
     Ero(u8, Vec<GeoFeature>),
     /// mPING crowd precipitation-type reports.
@@ -372,6 +379,7 @@ enum OverlaySource {
     Watches,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
+    WinterProb(u8, wxdata::winter_prob::Kind),
     /// Excessive Rainfall Outlook for a day (1-3).
     Ero(u8),
     /// mPING crowd reports from the last hour, with the user's API key.
@@ -666,6 +674,8 @@ impl OverlaySource {
             Self::Mds => RequestLane::Feed("Mesoscale discussions"),
             Self::Watches => RequestLane::Feed("Watch boxes"),
             Self::Wssi(..) => RequestLane::Feed("Winter storm severity"),
+            Self::WinterProb(_, wxdata::winter_prob::Kind::Snow) => RequestLane::Feed("Winter snow probability"),
+            Self::WinterProb(_, wxdata::winter_prob::Kind::Ice) => RequestLane::Feed("Winter ice probability"),
             Self::Ero(..) => RequestLane::Feed("Excessive rainfall outlook"),
             Self::Mping(..) => RequestLane::Feed("mPING reports"),
             Self::Pireps(..) => RequestLane::Feed("Pilot reports"),
@@ -760,6 +770,9 @@ impl OverlaySource {
             OverlaySource::Watches => OverlayMsg::Watches(wxdata::spc::fetch_watches(http).await?),
             OverlaySource::Wssi(day) => {
                 OverlayMsg::Wssi(day, wxdata::wssi::fetch(http, day).await?)
+            }
+            OverlaySource::WinterProb(day, kind) => {
+                OverlayMsg::WinterProb(day, kind, wxdata::winter_prob::fetch(http, day, kind).await?)
             }
             OverlaySource::Mping(key) => {
                 OverlayMsg::Mping(wxdata::mping::fetch(http, &key, 60).await?)
@@ -3319,6 +3332,8 @@ pub struct HookEchoApp {
     watch_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
+    winter_snow_features: Vec<GeoFeature>,
+    winter_ice_features: Vec<GeoFeature>,
     /// Excessive Rainfall Outlook polygons for the selected day.
     ero_features: Vec<GeoFeature>,
     /// Crowd precipitation-type reports (mPING), and their fetch clock.
@@ -4441,6 +4456,8 @@ impl HookEchoApp {
             md_features: Vec::new(),
             watch_features: Vec::new(),
             wssi_features: Vec::new(),
+            winter_snow_features: Vec::new(),
+            winter_ice_features: Vec::new(),
             ero_features: Vec::new(),
             show_mping: false,
             mping_reports: Vec::new(),
@@ -5436,8 +5453,14 @@ impl HookEchoApp {
         self.fetch_alerts(ctx);
         self.spawn_overlay(ctx, OverlaySource::Mds);
         self.spawn_overlay(ctx, OverlaySource::Watches);
-        if (1..=3).contains(&self.filters.wssi_day) {
+        if (1..=4).contains(&self.filters.wssi_day) {
             self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
+        }
+        for (day, kind) in [
+            (self.filters.winter_snow_day, wxdata::winter_prob::Kind::Snow),
+            (self.filters.winter_ice_day, wxdata::winter_prob::Kind::Ice),
+        ] {
+            if (1..=3).contains(&day) { self.spawn_overlay(ctx, OverlaySource::WinterProb(day, kind)); }
         }
         if (1..=3).contains(&self.filters.ero_day) {
             self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
@@ -9055,8 +9078,18 @@ impl HookEchoApp {
         if actions.wssi_day_changed {
             // Day switched: the shown polygons belong to the old day until the new ones land.
             self.wssi_features.clear();
-            if (1..=3).contains(&self.filters.wssi_day) {
+            if (1..=4).contains(&self.filters.wssi_day) {
                 self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
+            }
+        }
+        if actions.winter_prob_changed {
+            self.winter_snow_features.clear();
+            self.winter_ice_features.clear();
+            for (day, kind) in [
+                (self.filters.winter_snow_day, wxdata::winter_prob::Kind::Snow),
+                (self.filters.winter_ice_day, wxdata::winter_prob::Kind::Ice),
+            ] {
+                if (1..=3).contains(&day) { self.spawn_overlay(ctx, OverlaySource::WinterProb(day, kind)); }
             }
         }
         if actions.overlays_changed {
@@ -10269,6 +10302,13 @@ impl HookEchoApp {
                     // A day change in flight must not overwrite the day now selected.
                     if day == self.filters.wssi_day {
                         self.wssi_features = f;
+                    }
+                }
+                OverlayMsg::WinterProb(day, kind, features) => {
+                    match kind {
+                        wxdata::winter_prob::Kind::Snow if day == self.filters.winter_snow_day => self.winter_snow_features = features,
+                        wxdata::winter_prob::Kind::Ice if day == self.filters.winter_ice_day => self.winter_ice_features = features,
+                        _ => {},
                     }
                 }
                 OverlayMsg::Outlook(day, f) => {
@@ -11757,8 +11797,14 @@ impl HookEchoApp {
         if self.filters.show_watches {
             v.extend(self.watch_features.iter().cloned());
         }
-        if (1..=3).contains(&self.filters.wssi_day) {
+        if (1..=4).contains(&self.filters.wssi_day) {
             v.extend(self.wssi_features.iter().cloned());
+        }
+        if (1..=3).contains(&self.filters.winter_snow_day) {
+            v.extend(self.winter_snow_features.iter().cloned());
+        }
+        if (1..=3).contains(&self.filters.winter_ice_day) {
+            v.extend(self.winter_ice_features.iter().cloned());
         }
         if (1..=3).contains(&self.filters.ero_day) {
             v.extend(self.ero_features.iter().cloned());
@@ -24700,6 +24746,19 @@ mod request_book_tests {
         assert!(!book.finish(&a, old_a, None, None));
         assert!(book.finish(&b, current_b, None, None));
         assert!(book.is_current(&a, current_a));
+    }
+
+    #[test]
+    fn snow_and_ice_forecasts_finish_independently() {
+        use wxdata::winter_prob::Kind;
+        let snow = super::OverlaySource::WinterProb(1, Kind::Snow).lane();
+        let ice = super::OverlaySource::WinterProb(1, Kind::Ice).lane();
+        assert_ne!(snow, ice);
+        let mut book = RequestBook::default();
+        let snow_generation = book.start(snow.clone(), 1).unwrap();
+        let ice_generation = book.start(ice.clone(), 2).unwrap();
+        assert!(book.finish(&ice, ice_generation, None, None));
+        assert!(book.finish(&snow, snow_generation, None, None));
     }
 
     #[test]

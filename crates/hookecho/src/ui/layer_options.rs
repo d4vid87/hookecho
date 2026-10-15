@@ -32,6 +32,8 @@ pub struct UiActions {
     pub cpc_discussion: bool,
     /// The WSSI day changed; the app must clear + refetch it.
     pub wssi_day_changed: bool,
+    /// Snow or ice probability day changed; refresh the public WPC polygons.
+    pub winter_prob_changed: bool,
     /// The Excessive Rainfall Outlook day changed; the app must clear + refetch it.
     pub ero_day_changed: bool,
     /// Start an offline chase-pack download of the current view's basemap.
@@ -129,6 +131,10 @@ pub(crate) fn show(
     cpc_feature_count: usize,
     fire_weather_health: &crate::app::SourceHealth,
     fire_weather_feature_count: usize,
+    winter_snow_health: &crate::app::SourceHealth,
+    winter_ice_health: &crate::app::SourceHealth,
+    winter_snow_feature_count: usize,
+    winter_ice_feature_count: usize,
     actions: &mut UiActions,
 ) {
     use crate::render::FieldLayer as FL;
@@ -798,6 +804,44 @@ pub(crate) fn show(
                 }
             });
 
+        ui.label("Winter precipitation probability");
+        ui.weak("NOAA WPC · probability of at least 4 in snow or 0.25 in ice in 24 hours");
+        for (id, label, day) in [
+            ("winter_snow_day", "Snow ≥4 in", &mut filters.winter_snow_day),
+            ("winter_ice_day", "Ice ≥0.25 in", &mut filters.winter_ice_day),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                egui::ComboBox::from_id_salt(id)
+                    .selected_text(if *day == 0 { "Off".to_owned() } else { format!("Day {}", *day) })
+                    .show_ui(ui, |ui| {
+                        for choice in 0..=3 {
+                            let text = if choice == 0 { "Off".to_owned() } else { format!("Day {choice}") };
+                            if ui.selectable_value(day, choice, text).changed() {
+                                actions.winter_prob_changed = true;
+                                changed = true;
+                            }
+                        }
+                    });
+            });
+        }
+        for (day, name, health, count) in [
+            (filters.winter_snow_day, "Snow", winter_snow_health, winter_snow_feature_count),
+            (filters.winter_ice_day, "Ice", winter_ice_health, winter_ice_feature_count),
+        ] {
+            if day == 0 { continue; }
+            let (status, color) = match health.state() {
+                crate::app::HealthState::Fetching => ("loading", egui::Color32::LIGHT_BLUE),
+                crate::app::HealthState::Failed if count > 0 => ("refresh failed; showing older areas", egui::Color32::YELLOW),
+                crate::app::HealthState::Failed => ("NOAA WPC unavailable; try changing the day", egui::Color32::YELLOW),
+                crate::app::HealthState::Stale => ("source refresh overdue", egui::Color32::YELLOW),
+                crate::app::HealthState::Fresh if count == 0 => ("no ≥10% area forecast", egui::Color32::YELLOW),
+                crate::app::HealthState::Waiting => ("waiting for NOAA WPC data", egui::Color32::LIGHT_BLUE),
+                crate::app::HealthState::Fresh => ("outlook loaded", egui::Color32::LIGHT_GREEN),
+            };
+            ui.colored_label(color, egui::RichText::new(format!("{name}: {status}")).small());
+        }
+
         // Winter Storm Severity Index: same off-plus-three-days shape as the outlook selector.
         ui.label("Winter impacts");
         egui::ComboBox::from_id_salt("wssi_day")
@@ -805,12 +849,14 @@ pub(crate) fn show(
             .selected_text(if filters.wssi_day == 0 {
                 "Off".to_string()
             } else {
-                format!("Day {}", filters.wssi_day)
+                if filters.wssi_day == 4 { "Days 1–3".to_owned() } else { format!("Day {}", filters.wssi_day) }
             })
             .show_ui(ui, |ui| {
-                for day in 0u8..=3 {
+                for day in 0u8..=4 {
                     let label = if day == 0 {
                         "Off".to_string()
+                    } else if day == 4 {
+                        "Days 1–3".to_owned()
                     } else {
                         format!("Day {day}")
                     };
