@@ -26,6 +26,10 @@ pub const CORS_OK: &[&str] = &[
     "api.open-meteo.com",
     "api.mapbox.com",
     "api.maptiler.com",
+    // RainViewer publishes CORS for both its frame catalog and immutable PNG tiles; fetching
+    // directly keeps the public API's per-IP request budget with the viewer, not our shared edge.
+    "api.rainviewer.com",
+    "tilecache.rainviewer.com",
     // Same reason as the tile providers: the request carries the user's Synoptic token, and the
     // proxy is a shared cache. Synoptic sends `Access-Control-Allow-Origin: *`, so this works.
     "api.synopticdata.com",
@@ -254,6 +258,13 @@ mod tests {
                 super::CORS_OK.contains(&host),
                 "{host} must stay direct — proxying it would cache a user's API key"
             );
+        }
+    }
+
+    #[test]
+    fn rainviewer_catalog_and_tiles_stay_on_cors_hosts() {
+        for host in ["api.rainviewer.com", "tilecache.rainviewer.com"] {
+            assert!(super::CORS_OK.contains(&host));
         }
     }
 

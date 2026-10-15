@@ -6,7 +6,7 @@
 
 use crate::render::{mercator::Camera, PendingTile, TileId, VisibleTile};
 use lru::LruCache;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -112,6 +112,8 @@ pub enum BasemapStyle {
     EcccRadarRain,
     /// ECCC's North American 1-km radar composite, snow field.
     EcccRadarSnow,
+    /// RainViewer's public worldwide precipitation composite, including Australia.
+    RainViewerGlobal,
     MapboxStreets,
     MapboxSatellite,
     MapboxSatelliteStreets,
@@ -167,7 +169,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 62] = [
+    pub const ALL: [BasemapStyle; 63] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -231,6 +233,7 @@ impl BasemapStyle {
         // Append to retain the existing per-style cache keys.
         BasemapStyle::BlankWhite,
         BasemapStyle::BlueMap,
+        BasemapStyle::RainViewerGlobal,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -296,6 +299,7 @@ impl BasemapStyle {
             BasemapStyle::DwdRadarWN => "DWD radar (analysis)",
             BasemapStyle::EcccRadarRain => "ECCC radar (rain)",
             BasemapStyle::EcccRadarSnow => "ECCC radar (snow)",
+            BasemapStyle::RainViewerGlobal => "Global rain radar (RainViewer)",
             BasemapStyle::MapboxStreets => "Mapbox Streets",
             BasemapStyle::MapboxSatellite => "Mapbox Satellite",
             BasemapStyle::MapboxSatelliteStreets => "Mapbox Satellite Streets",
@@ -364,6 +368,7 @@ impl BasemapStyle {
             BasemapStyle::DwdRadarWN => "dwd-radar-wn",
             BasemapStyle::EcccRadarRain => "eccc-radar-rain",
             BasemapStyle::EcccRadarSnow => "eccc-radar-snow",
+            BasemapStyle::RainViewerGlobal => "rainviewer-global",
             BasemapStyle::MapboxStreets => "mapbox-streets",
             BasemapStyle::MapboxSatellite => "mapbox-satellite",
             BasemapStyle::MapboxSatelliteStreets => "mapbox-satellite-streets",
@@ -467,6 +472,7 @@ impl BasemapStyle {
                 BasemapStyle::EcccRadarRain | BasemapStyle::EcccRadarSnow => {
                     "Radar data © Environment and Climate Change Canada (Open Government Licence – Canada)"
                 }
+                BasemapStyle::RainViewerGlobal => "Weather data by RainViewer ↗",
                 BasemapStyle::HimawariIR
                 | BasemapStyle::HimawariAirMass
                 | BasemapStyle::HimawariVisible => "NASA GIBS · JMA Himawari",
@@ -526,7 +532,7 @@ impl BasemapStyle {
 
     /// Does this style have a time dimension the frame bar can step through?
     pub fn timed(self) -> bool {
-        self.goes_layer().is_some() || self.wms_layer().is_some()
+        self.goes_layer().is_some() || self.wms_layer().is_some() || self == BasemapStyle::RainViewerGlobal
     }
 
     /// Is this style a raster-tile source (as opposed to the vector MVT basemap or None)?
@@ -557,6 +563,9 @@ impl BasemapStyle {
     /// leaves a hole until an ancestor tile happens to be resident, which is what made the USGS
     /// satellite basemap blank out on close zoom: it served nothing past 16 but was asked for 18.
     fn max_raster_z(self) -> u8 {
+        if self == BasemapStyle::RainViewerGlobal {
+            return 7;
+        }
         if let Some((_, level)) = self.goes_layer() {
             return level;
         }
@@ -643,7 +652,7 @@ impl BasemapStyle {
     pub fn category(self) -> Category {
         // Satellite-derived, but what it shows is precipitation, so it belongs next to the radar
         // composites in the picker rather than next to the imagery.
-        if self == BasemapStyle::ImergRate {
+        if matches!(self, BasemapStyle::ImergRate | BasemapStyle::RainViewerGlobal) {
             return Category::Weather;
         }
         if self.goes_layer().is_some() {
@@ -713,6 +722,7 @@ impl BasemapStyle {
             BasemapStyle::Presentation => Some(crate::basemap_style::Palette::Presentation),
             BasemapStyle::BlueMap => Some(crate::basemap_style::Palette::Blue),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
+            BasemapStyle::RainViewerGlobal => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
     }
@@ -823,6 +833,7 @@ impl BasemapStyle {
                 )),
                 BasemapStyle::CustomXyz => valid_xyz_template(custom)
                     .then(|| crate::vector_tiles::fill_template(custom, z, x, y)),
+                BasemapStyle::RainViewerGlobal => rainviewer_tile_url(None, z, x, y),
                 // Standard XYZ `{z}/{x}/{y}.png` slippy tiles. Single subdomain shard where the
                 // provider uses them (ponytail: rotate a-c only if throttled).
                 BasemapStyle::OsmStandard => {
@@ -1195,6 +1206,57 @@ fn wms_advertised_frame_times(
     out
 }
 
+#[derive(serde::Deserialize)]
+struct RainviewerIndex {
+    host: String,
+    radar: RainviewerRadar,
+}
+
+#[derive(serde::Deserialize)]
+struct RainviewerRadar {
+    past: Vec<RainviewerFrame>,
+}
+
+#[derive(serde::Deserialize)]
+struct RainviewerFrame {
+    time: i64,
+    path: String,
+}
+
+/// The catalog contains opaque per-frame paths rather than timestamps in tile URLs. Keep only
+/// the short advertised window; an arbitrary host or path from remote JSON never becomes a URL.
+fn rainviewer_frames() -> &'static Mutex<Vec<(i64, String)>> {
+    static FRAMES: std::sync::OnceLock<Mutex<Vec<(i64, String)>>> = std::sync::OnceLock::new();
+    FRAMES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn parse_rainviewer_index(bytes: &[u8]) -> Option<Vec<(i64, String)>> {
+    let index: RainviewerIndex = serde_json::from_slice(bytes).ok()?;
+    if index.host != "https://tilecache.rainviewer.com" {
+        return None;
+    }
+    let mut frames = index.radar.past.into_iter().filter_map(|frame| {
+        let suffix = frame.path.strip_prefix("/v2/radar/")?;
+        if suffix.is_empty() || suffix.len() > 64 || !suffix.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        chrono::DateTime::from_timestamp(frame.time, 0)?;
+        Some((frame.time, frame.path))
+    }).collect::<Vec<_>>();
+    frames.sort_unstable_by_key(|(time, _)| *time);
+    frames.dedup_by_key(|(time, _)| *time);
+    Some(frames)
+}
+
+fn rainviewer_tile_url(time: Option<chrono::DateTime<chrono::Utc>>, z: u8, x: u32, y: u32) -> Option<String> {
+    let guard = rainviewer_frames().lock().ok()?;
+    let (_, path) = match time {
+        Some(time) => guard.iter().find(|(stamp, _)| *stamp == time.timestamp())?,
+        None => guard.last()?,
+    };
+    Some(format!("https://tilecache.rainviewer.com{path}/256/{z}/{x}/{y}/2/1_1.png"))
+}
+
 /// Fetch imagery frame times for `style` between `from` and `to` (best-effort; empty on failure).
 /// GIBS uses DescribeDomains; ECCC and DWD use their WMS availability documents.
 ///
@@ -1208,6 +1270,35 @@ pub async fn fetch_frame_times(
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
+    if style == BasemapStyle::RainViewerGlobal {
+        let response = client
+            .get(wxdata::net::fetch_url("https://api.rainviewer.com/public/weather-maps.json"))
+            .header("User-Agent", USER_AGENT)
+            .timeout(wxdata::net::FEED_TIMEOUT)
+            .send()
+            .await;
+        let Ok(response) = response.and_then(reqwest::Response::error_for_status) else {
+            return Vec::new();
+        };
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(chunk) if bytes.len() + chunk.len() <= 64 * 1024 => bytes.extend_from_slice(&chunk),
+                _ => return Vec::new(),
+            }
+        }
+        let Some(frames) = parse_rainviewer_index(&bytes) else {
+            return Vec::new();
+        };
+        let times = frames.iter().filter_map(|(time, _)| {
+            let instant = chrono::DateTime::from_timestamp(*time, 0)?;
+            (instant >= from && instant <= to).then_some(instant)
+        }).rev().take(limit).collect::<Vec<_>>();
+        *rainviewer_frames().lock().unwrap() = frames;
+        return times.into_iter().rev().collect();
+    }
     if let Some((endpoint, layer, _, _)) = style.wms_layer() {
         // GeoMet returns a ~21 KB layer-filtered document. DWD currently ignores LAYERS for
         // GetCapabilities and returns ~1 MB; both are capped before text parsing.
@@ -1290,6 +1381,9 @@ type TileResult = Result<FetchedTile, crate::render::TileKey>;
 /// itself, so a provider that stalls does not just stop the basemap — it stops the radar too.
 /// Four leaves room for the things the visitor actually came for.
 const MAX_INFLIGHT: usize = if cfg!(target_arch = "wasm32") { 4 } else { 6 };
+/// Leave room below RainViewer's published 100-requests/IP/minute ceiling for its catalog,
+/// thumbnails and other clients on the same network.
+const RAINVIEWER_TILE_REQUESTS_PER_MINUTE: usize = 80;
 
 /// How long one tile fetch may take before its slot is taken back.
 const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -1321,6 +1415,7 @@ pub struct TileManager {
     /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
     failed: std::collections::HashMap<crate::render::TileKey, wxdata::clock::Instant>,
     requested: HashSet<crate::render::TileKey>,
+    rainviewer_started: VecDeque<wxdata::clock::Instant>,
     /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
     /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
     /// two can never disagree about whether a tile still exists.
@@ -1369,6 +1464,7 @@ impl TileManager {
             inflight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             failed: std::collections::HashMap::new(),
             requested: HashSet::new(),
+            rainviewer_started: VecDeque::new(),
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
             frame_visible: 0,
@@ -1576,15 +1672,12 @@ impl TileManager {
                 break;
             }
             let (z, x, y) = v.id;
-            let Some(mut url) = style.url(
-                z,
-                x,
-                y,
-                self.retina,
-                &self.mapbox_key,
-                &self.maptiler_key,
-                &self.custom_template,
-            ) else {
+            let source_url = if style == BasemapStyle::RainViewerGlobal {
+                rainviewer_tile_url(self.goes_time, z, x, y)
+            } else {
+                style.url(z, x, y, self.retina, &self.mapbox_key, &self.maptiler_key, &self.custom_template)
+            };
+            let Some(mut url) = source_url else {
                 continue;
             };
             // GOES frame time: rewrite the `default` time slot in the GIBS URL and tag the cache
@@ -1592,7 +1685,9 @@ impl TileManager {
             let time_tag = match self.goes_time {
                 Some(t) if style.timed() => {
                     let iso = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                    if style.wms_layer().is_some() {
+                    if style == BasemapStyle::RainViewerGlobal {
+                        // Its opaque path already names the selected immutable frame.
+                    } else if style.wms_layer().is_some() {
                         url.push_str(&format!("&TIME={iso}"));
                     } else {
                         url = url.replace(
@@ -1604,6 +1699,16 @@ impl TileManager {
                 }
                 _ => "default".to_string(),
             };
+            if style == BasemapStyle::RainViewerGlobal {
+                self.rainviewer_started.retain(|started| started.elapsed() < std::time::Duration::from_secs(60));
+                if self.rainviewer_started.len() >= RAINVIEWER_TILE_REQUESTS_PER_MINUTE {
+                    if let Some(ctx) = &self.ctx {
+                        ctx.request_repaint_after(std::time::Duration::from_secs(5));
+                    }
+                    break;
+                }
+                self.rainviewer_started.push_back(wxdata::clock::Instant::now());
+            }
             self.requested.insert((skey, v.id));
             let path = self.cache_root.as_ref().map(|d| {
                 d.join(style.provider(self.retina, &self.custom_template))
@@ -2614,15 +2719,15 @@ mod tests {
         }
     }
 
-    /// Hybrid satellite is the one style that is raster *and* draws vector geometry.
+    /// These raster sources draw transparent weather/imagery tiles over a vector reference map.
     #[test]
-    fn only_hybrid_is_both_raster_and_vector() {
+    fn hybrid_sources_draw_raster_and_vector() {
         for s in BasemapStyle::ALL {
             let both = s.is_raster() && s.vector_palette().is_some();
             assert_eq!(
                 both,
-                s == BasemapStyle::HybridSatellite,
-                "{s:?} raster+vector should only be hybrid"
+                matches!(s, BasemapStyle::HybridSatellite | BasemapStyle::RainViewerGlobal),
+                "{s:?} raster+vector should be an intentional hybrid"
             );
         }
         assert_eq!(
@@ -2691,6 +2796,20 @@ mod tests {
         assert!(!style.is_raster());
         assert_eq!(style.vector_palette(), Some(crate::basemap_style::Palette::Blue));
         assert_eq!(style.key(), 61);
+    }
+
+    #[test]
+    fn rainviewer_catalog_uses_only_advertised_safe_paths() {
+        let body = br#"{"host":"https://tilecache.rainviewer.com","radar":{"past":[{"time":1792044000,"path":"/v2/radar/2675d40cc6ca"},{"time":1792044600,"path":"/v2/radar/next123"},{"time":1792045200,"path":"/v2/radar/../../private"}]}}"#;
+        let frames = parse_rainviewer_index(body).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].0, 1792044000);
+        assert_eq!(frames[1].1, "/v2/radar/next123");
+        assert!(parse_rainviewer_index(br#"{"host":"https://evil.example","radar":{"past":[]}}"#).is_none());
+        assert_eq!(BasemapStyle::RainViewerGlobal.category(), Category::Weather);
+        assert_eq!(BasemapStyle::RainViewerGlobal.max_raster_z(), 7);
+        assert!(BasemapStyle::RainViewerGlobal.timed());
+        assert_eq!(BasemapStyle::RainViewerGlobal.key(), 62);
     }
 
     /// The picker draws one section per category. A style in no section is invisible, and a

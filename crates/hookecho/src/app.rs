@@ -15554,19 +15554,33 @@ impl HookEchoApp {
         // Raster basemap attribution (provider styles + USGS satellite).
         if pane_style.is_raster() {
             let col = egui::Color32::from_gray(200).gamma_multiply(0.6);
-            painter.text(
-                egui::pos2(prect.left() + 6.0, prect.bottom() - 4.0),
-                egui::Align2::LEFT_BOTTOM,
-                if pane_style == BasemapStyle::CustomXyz
-                    && !self.settings.custom_tile_attribution.is_empty()
-                {
-                    self.settings.custom_tile_attribution.as_str()
-                } else {
-                    pane_style.attribution()
-                },
-                egui::FontId::proportional(10.0),
-                col,
-            );
+            if pane_style == BasemapStyle::RainViewerGlobal {
+                let credit = ui.put(
+                    egui::Rect::from_min_size(
+                        egui::pos2(prect.left() + 6.0, prect.bottom() - 18.0),
+                        egui::vec2(185.0, 14.0),
+                    ),
+                    egui::Label::new(egui::RichText::new(pane_style.attribution()).size(10.0).color(col))
+                        .sense(egui::Sense::click()),
+                ).on_hover_text("Open RainViewer source attribution");
+                if credit.clicked() {
+                    ctx.open_url(egui::OpenUrl::new_tab("https://www.rainviewer.com/"));
+                }
+            } else {
+                painter.text(
+                    egui::pos2(prect.left() + 6.0, prect.bottom() - 4.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    if pane_style == BasemapStyle::CustomXyz
+                        && !self.settings.custom_tile_attribution.is_empty()
+                    {
+                        self.settings.custom_tile_attribution.as_str()
+                    } else {
+                        pane_style.attribution()
+                    },
+                    egui::FontId::proportional(10.0),
+                    col,
+                );
+            }
         }
 
         // Radar-data attribution, opposite the basemap credit so neither has to know the other's
