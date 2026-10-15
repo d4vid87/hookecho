@@ -40,6 +40,10 @@ impl HookEchoApp {
         {
             self.apply_palette(PaletteAction::OpenWindow(AppWindow::Site), ui.ctx());
         }
+        if self.views[idx].basemap.ndfd_layer().is_some() && !self.views[idx].show_radar {
+            self.ndfd_forecast_controls(ui);
+            return;
+        }
         self.radar_product_controls(ui, false);
         if self.analyst_open {
             ui.weak(if self.link_cameras && self.views.len() == 4 {
@@ -52,6 +56,30 @@ impl HookEchoApp {
             ui.weak(format!(
                 "Showing prior scan from {previous} while {site} loads"
             ));
+        }
+    }
+    /// The NDFD map is a forecast source, so a radar moment/elevation picker would be misleading.
+    fn ndfd_forecast_controls(&mut self, ui: &mut egui::Ui) {
+        let idx = self.active;
+        let current = self.views[idx].basemap;
+        let mut pick = None;
+        ui.menu_button(format!("{} {}", current.label(), egui_phosphor::regular::CARET_DOWN), |ui| {
+            ui.set_min_width(220.0);
+            ui.spacing_mut().interact_size.y = 44.0;
+            for style in [
+                crate::tiles::BasemapStyle::NdfdRainChance,
+                crate::tiles::BasemapStyle::NdfdMaxTemp,
+                crate::tiles::BasemapStyle::NdfdMinTemp,
+            ] {
+                if ui.selectable_label(style == current, style.label()).clicked() {
+                    pick = Some(style);
+                    ui.close();
+                }
+            }
+        }).response.named("Choose NDFD forecast product");
+        if let Some(style) = pick {
+            self.views[idx].show_radar = false;
+            self.set_basemap(style);
         }
     }
     /// Shared product/elevation chooser for the compact header and radar workspace transport.

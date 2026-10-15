@@ -7255,7 +7255,10 @@ impl HookEchoApp {
             else { self.views[idx].satellite.selected(&times, radar) };
         let tz = self.active_tz();
         let workspace = self.settings.radar_workspace && !chrome::compact(ctx);
-        let bottom_offset = if workspace {
+        let forecast_only = forecast && !self.views[idx].show_radar && self.views[idx].fields_on.is_empty();
+        let bottom_offset = if forecast_only {
+            if chrome::compact(ctx) { 78.0 } else { 24.0 }
+        } else if workspace {
             ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("corner_scrubber_rect")))
                 .map_or(240.0, |rect| (self.chrome_rect.bottom() - rect.top() + 8.0).max(120.0))
         } else {
@@ -18003,10 +18006,12 @@ impl HookEchoApp {
             }
         }
 
-        // The boxed legend is desktop-only; Android draws a full-width color scale in the mobile
-        // chrome (see `app::mobile`), so drawing both would be redundant.
+        // Android draws radar and field scales in its mobile chrome, but the NOAA forecast scale
+        // is a separate source image and still needs its own readable card on every platform.
         let workspace_chrome = self.settings.radar_workspace && !chrome::compact(ctx);
         let mut field_status_y = if workspace_chrome { 84.0 } else { 12.0 };
+        // The phone header's station and source rows occupy the first ~150 px of the map.
+        let mut y = if chrome::compact(ctx) { 160.0 } else if workspace_chrome { 84.0 } else { 48.0 };
         if view.show_legend && !cfg!(target_os = "android") {
             // The moment's scale floats over this pane's right edge (no panel, no card) so the map
             // keeps the pixels; the field/wind ramps still need their cards.
@@ -18028,7 +18033,6 @@ impl HookEchoApp {
             // Every pane ducks by the same amount rather than only the top row: in a 2x2 grid the
             // lower cards then sit a little further from their pane's edge, which nobody notices,
             // and the alternative is a rect comparison that has to know about window insets.
-            let mut y = if self.settings.radar_workspace && !chrome::compact(ctx) { 84.0 } else { 48.0 };
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
             // categorical classifications were unlabeled color.
@@ -18047,11 +18051,11 @@ impl HookEchoApp {
             if self.show_wind && self.wind.is_some() {
                 y += ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
             }
-            if view.basemap.ndfd_layer().is_some() {
-                y += self.ndfd_legends.draw(&painter, prect, view.basemap, y);
-            }
-            if workspace_chrome { field_status_y = y + 20.0; }
         }
+        if view.show_legend && view.basemap.ndfd_layer().is_some() && satellite_time.is_some() {
+            y += self.ndfd_legends.draw(&painter, prect, view.basemap, y);
+        }
+        if workspace_chrome { field_status_y = y + 20.0; }
 
         if let Some((layer, valid, selected, tolerance, aligned)) =
             crate::render::FieldLayer::draw_order().rev().find_map(|layer| {

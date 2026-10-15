@@ -1053,9 +1053,9 @@
       "status": "partial",
       "observed_scope": "National Digital Forecast Database and HAZCAST Severe Outlook entries.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Public NOAA/NWS NDFD WMS rain-chance (12-hour), daytime-high-temperature, and overnight-low-temperature forecast maps are selectable in Forecasts and the map picker. The app reads each layer's advertised valid times, requests those times through the allowlisted proxy, provides forecast animation controls and valid-time labels, and attributes NOAA/NWS. Desktop map legends fetch NOAA's matching labeled PNG scales on demand through the public wxmap_legendImage endpoint. NWS/Open-Meteo forecasts and public model products provide related guidance.",
+      "hookecho_implementation": "Public NOAA/NWS NDFD WMS rain-chance (12-hour), daytime-high-temperature, and overnight-low-temperature forecast maps are selectable in Forecasts and the map picker. The app reads each layer's advertised valid times, requests those times through the allowlisted proxy, provides forecast animation controls and valid-time labels, and attributes NOAA/NWS. Desktop and compact/phone map legends fetch NOAA's matching labeled PNG scales on demand through the public wxmap_legendImage endpoint. The compact header switches forecast products and displays forecast validity wording, while forecast-only views hide the radar transport. NWS/Open-Meteo forecasts and public model products provide related guidance.",
       "remaining_gaps": [
-        "NDFD has additional products, point values, issue-time context, and a mobile legend that are not yet exposed in this viewer.",
+        "NDFD has additional products, point values, and issue-time context that are not yet exposed in this viewer. The phone-width web layout was browser-verified; a native Android build was not available in this environment.",
         "HAZCAST's backend/model contract is unavailable; provider-specific severe forecasts require an independently authorized service or a clearly labeled public-data alternative."
       ],
       "hookecho_sources": [
@@ -1064,6 +1064,9 @@
         "crates/hookecho/src/satellite_time.rs",
         "crates/hookecho/src/app.rs",
         "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/app/mobile/navigation.rs",
         "crates/hookecho/src/fielddiff.rs",
         "crates/hookecho/src/render/mod.rs",
         "crates/hookecho/src/ui/sounding_window.rs",
@@ -1072,7 +1075,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA05",
       "acceptance": "Independently available forecast products display valid time and attribution; add issue time when the public service supplies it.",
-      "runtime_verification": "2026-10-15: NOAA's live NDFD WMS capabilities advertised current/future valid times for the three selected products; direct GetMap probes returned PNG imagery. Local browser verification showed rain chance, high temperature, and low temperature rendering over the map with NOAA/NWS attribution and valid-time controls; rain-chance animation advanced the forecast. The NOAA viewer's wxmap_legendImage endpoint returned labeled PNG scales for all three products, including through HookEcho's local proxy. A browser-safe clock fix followed an initial WebAssembly panic; the corrected browser build rendered all three legends without that crash. The final optimized build also rendered the high-temperature scale and map. HookEcho's 671 passing library tests, worker proxy tests, and the optimized web build passed; main WASM measured 4,630,626 bytes gzip against a 4,633,000-byte cap. HAZCAST, the wider NDFD catalog, mobile legend and point values remain unimplemented."
+      "runtime_verification": "2026-10-15: NOAA's live NDFD WMS capabilities advertised current/future valid times for the three selected products; direct GetMap probes returned PNG imagery. Local browser verification showed rain chance, high temperature, and low temperature rendering over the map with NOAA/NWS attribution and valid-time controls; rain-chance animation advanced the forecast. The NOAA viewer's wxmap_legendImage endpoint returned labeled PNG scales for all three products, including through HookEcho's local proxy. A browser-safe clock fix followed an initial WebAssembly panic; the corrected browser build rendered all three legends without that crash. The final optimized build rendered the high-temperature scale and map at desktop and 390×844 phone width. The compact browser header selected NDFD rain chance, presented NOAA validity wording, and placed the legend below the controls; forecast-only mode removed the radar transport and moved forecast controls above bottom navigation. Native Android runtime was not available for this check. HookEcho's 671 passing library tests, worker proxy tests, and the optimized web build passed; main WASM measured 4,632,979 bytes gzip against a 4,636,000-byte cap. HAZCAST, the wider NDFD catalog and point values remain unimplemented."
     },
     {
       "id": "OV01",
