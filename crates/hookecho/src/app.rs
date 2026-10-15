@@ -9532,6 +9532,9 @@ impl HookEchoApp {
             .as_ref()
             .map(|v| v.elevations.clone())
             .unwrap_or_default();
+        let available_tilts = self.views[self.active].volume.as_ref()
+            .map(|v| v.available_tilts(moment))
+            .unwrap_or_default();
         let site = self.views[self.active]
             .site
             .clone()
@@ -9658,6 +9661,7 @@ impl HookEchoApp {
                         .width(78.0)
                         .show_ui(ui, |ui| {
                             for (i, angle) in elevations.iter().enumerate() {
+                                if !available_tilts.contains(&i) { continue; }
                                 if ui
                                     .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
                                     .clicked()
@@ -10033,6 +10037,7 @@ impl HookEchoApp {
                 let v = &mut self.views[self.active];
                 v.moment = m;
                 v.custom_product = None;
+                v.clamp_tilt_to_moment();
                 if m == Moment::Velocity {
                     v.srv = srv;
                 }

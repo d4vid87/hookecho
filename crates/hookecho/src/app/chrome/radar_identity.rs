@@ -66,6 +66,9 @@ impl HookEchoApp {
             .as_ref()
             .map(|v| v.elevations.clone())
             .unwrap_or_default();
+        let available_tilts = self.views[idx].volume.as_ref()
+            .map(|v| v.available_tilts(self.views[idx].moment))
+            .unwrap_or_default();
         let tilt = self.views[idx].tilt;
         ui.horizontal(|ui| {
             let mut pick = None;
@@ -178,6 +181,7 @@ impl HookEchoApp {
                 .show_ui(ui, |ui| {
                     ui.spacing_mut().interact_size.y = 44.0;
                     for (i, a) in elevations.iter().enumerate() {
+                        if !available_tilts.contains(&i) { continue; }
                         if ui.selectable_label(i == tilt, format!("{a:.1}°")).clicked() {
                             self.views[idx].tilt = i;
                             self.views[idx].follow_low_cut = false;

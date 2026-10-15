@@ -550,9 +550,13 @@ pub async fn fetch_volume(
         let mut delivered_name = base_name;
         if let Some(key) = dublin_velocity {
             if let Some((_, velocity)) = fetch(key).await {
-                if let Some(low) = velocity.sweeps().iter().find(|sweep| (angle(sweep) - 0.5).abs() < 0.15
-                    && sweep.radials().iter().any(|radial| radial.velocity().is_some())) {
-                    parts.push((angle(low), low.clone()));
+                let velocity_cuts: Vec<_> = velocity.sweeps().iter()
+                    .filter(|sweep| angle(sweep).is_finite()
+                        && sweep.radials().iter().any(|radial| radial.velocity().is_some()))
+                    .map(|sweep| (angle(sweep), sweep.clone()))
+                    .collect();
+                if velocity_cuts.iter().any(|(angle, _)| (*angle - 0.5).abs() < 0.15) {
+                    parts.extend(velocity_cuts);
                     delivered_name = candidate_name;
                 }
             }
@@ -971,18 +975,31 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
-    async fn live_dublin_scan_assembles_reflectivity_and_low_velocity() {
+    async fn live_dublin_scan_assembles_reflectivity_and_all_velocity() {
         let http = reqwest::Client::new();
         let (_, _, scan) = fetch_volume(&http, "IEDUB", None)
             .await.expect("volume").expect("fresh volume");
-        assert!(scan.sweeps().len() >= 8);
-        for tilt in 0..8 {
+        assert!(scan.sweeps().len() >= 18);
+        let angles = crate::level2::elevation_angles(&scan);
+        let reflectivity: Vec<_> = angles.iter().enumerate().filter(|(_, angle)| {
+            scan.sweeps().iter().any(|sweep| (super::angle(sweep) - **angle).abs() < 0.15
+                && sweep.radials().iter().any(|radial| radial.reflectivity().is_some()))
+        }).map(|(index, _)| index).collect();
+        assert_eq!(reflectivity.len(), 8);
+        for tilt in reflectivity {
             crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
                 .unwrap_or_else(|e| panic!("IEDUB tilt {tilt} reflectivity: {e}"));
         }
-        let vel = crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, 0)
-            .expect("Dublin low velocity");
-        assert!(vel.data.iter().any(|&gate| gate >= 2));
+        let velocity: Vec<_> = angles.iter().enumerate().filter(|(_, angle)| {
+            scan.sweeps().iter().any(|sweep| (super::angle(sweep) - **angle).abs() < 0.15
+                && sweep.radials().iter().any(|radial| radial.velocity().is_some()))
+        }).map(|(index, _)| index).collect();
+        assert_eq!(velocity.len(), 10, "all public Dublin velocity elevations should load");
+        for tilt in velocity {
+            let vel = crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                .unwrap_or_else(|e| panic!("IEDUB tilt {tilt} velocity: {e}"));
+            if tilt == 0 { assert!(vel.data.iter().any(|&gate| gate >= 2)); }
+        }
     }
 
     #[tokio::test]

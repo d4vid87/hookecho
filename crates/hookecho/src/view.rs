@@ -87,6 +87,15 @@ pub struct Volume {
 }
 
 impl Volume {
+    pub fn available_tilts(&self, moment: Moment) -> Vec<usize> {
+        self.elevations.iter().enumerate()
+            .filter(|(_, angle)| self.cuts.iter().any(|cut|
+                (*angle - cut.elevation_deg).abs() < 0.15
+                    && level2::cut_has_moment(&self.scan, *cut, moment)))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     fn binned_bytes(&self) -> usize {
         self.binned.iter().map(|(_, s)| s.data.len() + s.data16.as_ref().map_or(0, |v| v.len() * 2)).sum()
     }
@@ -670,6 +679,19 @@ impl MapView {
         }
     }
 
+    /// Keep the beam near its previous height when switching between products with different
+    /// elevation sets (for example Dublin's separate reflectivity and velocity scans).
+    pub fn clamp_tilt_to_moment(&mut self) {
+        let Some(volume) = &self.volume else { return };
+        let available = volume.available_tilts(self.moment);
+        if available.is_empty() || available.contains(&self.tilt) { return; }
+        let previous = volume.elevations.get(self.tilt).copied().unwrap_or(0.5);
+        self.tilt = *available.iter().min_by(|a, b| {
+            (volume.elevations[**a] - previous).abs()
+                .total_cmp(&(volume.elevations[**b] - previous).abs())
+        }).unwrap();
+    }
+
     /// What this site's radar sends: the union over every volume seen since the site was
     /// selected, or "everything" before the first one lands.
     pub fn moments(&self) -> [bool; Moment::ALL.len()] {
@@ -693,6 +715,7 @@ impl MapView {
                 self.moment = m;
             }
         }
+        self.clamp_tilt_to_moment();
     }
 
     /// Number of tilts in this pane's own loaded volume (0 if none).
@@ -899,6 +922,36 @@ mod tests {
         assert_eq!(view.displayed_time().unwrap().timestamp_millis(), 10_000);
         view.moment = Moment::Velocity;
         assert_eq!(view.displayed_time().unwrap().timestamp_millis(), 5_000);
+    }
+
+    #[test]
+    fn dublin_product_switch_uses_only_its_available_tilts() {
+        let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![106]);
+        let make = |number, angle, reflectivity, velocity| Radial::new(
+            number as i64 * 1_000, 0, 0.0, 1.0, RadialStatus::ScanStart, number, angle,
+            reflectivity, velocity, None, None, None, None, None,
+        );
+        let vcp = scan_at(&[0.5]).coverage_pattern().clone();
+        let site = nexrad_model::meta::Site::new(*b"IEDU", 53.43, -6.24, 99, 0);
+        let scan = Arc::new(Scan::with_site(site, vcp, vec![
+            Sweep::new(1, vec![make(1, 0.5, Some(data.clone()), None)]),
+            Sweep::new(2, vec![make(2, 1.1, Some(data.clone()), None)]),
+            Sweep::new(3, vec![make(3, 0.5, None, Some(data.clone()))]),
+            Sweep::new(4, vec![make(4, 2.2, None, Some(data))]),
+        ]));
+        let mut view = MapView::new(Some("IEDUB".into()), Camera::at_lonlat(-6.24, 53.43, 7.0));
+        view.volume = Some(Volume::new(scan, "IEDUB-ref~vel".into(), Utc::now()));
+        let volume = view.volume.as_ref().unwrap();
+        assert_eq!(volume.elevations, vec![0.5, 1.1, 2.2]);
+        assert_eq!(volume.available_tilts(Moment::Reflectivity), vec![0, 1]);
+        assert_eq!(volume.available_tilts(Moment::Velocity), vec![0, 2]);
+        view.tilt = 2;
+        view.moment = Moment::Reflectivity;
+        view.clamp_tilt_to_moment();
+        assert_eq!(view.tilt, 1);
+        view.moment = Moment::Velocity;
+        view.clamp_tilt_to_moment();
+        assert_eq!(view.tilt, 0);
     }
 
     #[test]
