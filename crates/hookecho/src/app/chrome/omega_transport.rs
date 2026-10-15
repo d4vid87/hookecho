@@ -68,6 +68,10 @@ impl HookEchoApp {
         let mut loop_frames = self.settings.live_loop_frames;
         let max_loop = super::scrubber::live_loop_limit();
         let effective_loop = loop_frames.clamp(1, max_loop);
+        let listed_loop = effective_loop.min(v.timeline.frames.len());
+        let cached_loop = cached_loop_tail(&v.timeline.frames, listed_loop, |name| {
+            self.scan_cache.contains(&name.to_string())
+        });
         let mut action = None;
         let mut show_layers = false;
         #[cfg(target_arch = "wasm32")]
@@ -205,6 +209,9 @@ impl HookEchoApp {
                         if t.slot_count() > 0 {
                             let window = t.live_window;
                             super::scrubber::track(ui, t, tz, accent, window, false, &statuses);
+                        }
+                        if radar_visible && t.following && t.playing && listed_loop > 0 && cached_loop < listed_loop {
+                            ui.weak(format!("Loop: {cached_loop}/{listed_loop} recent frames ready"));
                         }
                         ui.horizontal(|ui| {
                             if omega_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }

@@ -774,7 +774,7 @@
       "status": "partial",
       "observed_scope": "7,14,21,30,50,75,100,150,200,250 frame choices in captured selector.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "Workspace native frame choices are 7/14/21/30/50/75/100/150/200/250; browser offers its effective 2–4-frame live-loop choices.",
+      "hookecho_implementation": "Workspace native frame choices are 7/14/21/30/50/75/100/150/200/250; browser offers its effective 2–4-frame live-loop choices. The transport reports how many consecutive recent frames are currently decoded when fewer than the requested loop length are ready.",
       "remaining_gaps": [
         "Web live loop remains capped at four; 250-frame native memory/latency not measured. Counts are requested loop limits, not guaranteed loaded frames."
       ],
@@ -789,7 +789,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME01",
       "acceptance": "Configured frame count maps to available frames with explicit loading/missing states.",
-      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14; other station networks and larger native loop counts remain unverified. Evidence: outputs/ro-parity/tdwr-time/archive-1530.png and archive-1531.png."
+      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14; other station networks and larger native loop counts remain unverified. Source review confirms the native selector allows 250 frames while its decoded LRU holds 30 scans, so a requested count is not a fully cached count. Evidence: outputs/ro-parity/tdwr-time/archive-1530.png and archive-1531.png."
     },
     {
       "id": "TIME02",
