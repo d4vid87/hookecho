@@ -135,7 +135,7 @@ impl HookEchoApp {
                 T::ProbSevere => RequestLane::Feed("ProbSevere"),
                 T::Aviation => RequestLane::Feed("Aviation advisories"),
                 T::Tfr => RequestLane::Feed("Temporary flight restrictions"),
-                T::Sensors => RequestLane::Feed("Radar observations"),
+                T::Sensors => RequestLane::Feed("Nearest station observations"),
                 T::Hodo => RequestLane::Feed("VAD profile"),
                 T::Cells | T::Tracks | T::ArrivalCones => RequestLane::Feed("Storm cells"),
                 T::Mds => RequestLane::Feed("Mesoscale discussions"),

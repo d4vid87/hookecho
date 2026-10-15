@@ -133,9 +133,9 @@ pub fn show(
             ui.weak("Loading nearest station…");
         }
         Some(Err(e)) => {
-            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "No nearby station");
-            ui.weak(e);
+            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "Station observations unavailable");
             ui.weak("Retrying automatically in one minute, or refresh now.");
+            ui.collapsing("Error details", |ui| { ui.weak(e); });
         }
         Some(Ok(station)) => dashboard(ui, station, history, tz),
         }

@@ -565,7 +565,7 @@ impl RequestLane {
                 "mPING reports" | "Power outages" | "River gauges" | "Electric field"
                 | "VAD profile" | "Archived warnings" => 300,
                 "Webcams" => 480,
-                "Hurricane reconnaissance" | "Aviation advisories" | "Radar observations"
+                "Hurricane reconnaissance" | "Aviation advisories" | "Nearest station observations"
                 | "HRRR station temperature" => 600,
                 "RTMA station temperature" => 3600,
                 "Tropical cyclones" | "Wildfires" | "Air quality"
@@ -656,6 +656,13 @@ enum OverlayDelivery {
     },
 }
 
+fn overlay_result_error(result: &Result<OverlayMsg, String>) -> Option<&str> {
+    match result {
+        Err(error) | Ok(OverlayMsg::Obs(_, Err(error))) => Some(error),
+        _ => None,
+    }
+}
+
 fn registered_display_field(
     frame: &wxdata::field::FieldFrame,
     max_dim: usize,
@@ -722,7 +729,7 @@ impl OverlaySource {
             Self::GoesRgb(pane, ..) => RequestLane::PaneField(*pane, crate::render::FieldLayer::GoesTrueColor),
             Self::L3Grid(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
-            Self::Obs { .. } => RequestLane::Feed("Radar observations"),
+            Self::Obs { .. } => RequestLane::Feed("Nearest station observations"),
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
             Self::SensorRtma { .. } => RequestLane::Feed("RTMA station temperature"),
             Self::SensorGfs { .. } => RequestLane::Feed("GFS station temperature"),
@@ -10475,7 +10482,7 @@ impl HookEchoApp {
                         .finish(
                             &lane,
                             generation,
-                            result.as_ref().err().map(|e| e.as_str()),
+                            overlay_result_error(&result),
                             data_time,
                         );
                     if !current {
@@ -25436,10 +25443,27 @@ mod nowcast_tests {
 #[cfg(test)]
 mod request_book_tests {
     use super::{
-        field_refresh_secs, registered_display_field, retry_once, HealthState, RequestBook,
-        RequestLane, SourceHealth,
+        field_refresh_secs, overlay_result_error, registered_display_field, retry_once,
+        HealthState, OverlayMsg, RequestBook, RequestLane, SourceHealth,
     };
     use crate::render::FieldLayer;
+
+    #[test]
+    fn failed_sensor_payload_counts_as_feed_failure() {
+        let result = Ok(OverlayMsg::Obs("KTLX".into(), Err("station unavailable".into())));
+        assert_eq!(overlay_result_error(&result), Some("station unavailable"));
+        assert_eq!(overlay_result_error(&Err("network down".into())), Some("network down"));
+        assert_eq!(overlay_result_error(&Ok(OverlayMsg::Spotters(Vec::new()))), None);
+
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Feed("Nearest station observations");
+        let generation = book.start(lane.clone(), 1).unwrap();
+        assert!(book.finish(&lane, generation, overlay_result_error(&result), None));
+        let health = book.health(&lane);
+        assert_eq!(health.state(), HealthState::Failed);
+        assert_eq!(health.failures, 1);
+        assert_eq!(health.successes, 0);
+    }
 
     #[test]
     fn late_frame_completion_and_phase_updates_follow_the_current_selection() {
