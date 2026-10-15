@@ -298,20 +298,20 @@ const C_PRESENTATION: Colors = Colors {
 };
 
 const C_BLUE: Colors = Colors {
-    water: 0x071d37,
-    wood: 0x153957,
-    park: 0x194262,
-    residential: 0x123452,
-    building: 0x214565,
-    motorway: 0x8cbbd6,
-    primary: 0x75a7c8,
-    secondary: 0x5e91b6,
-    minor: 0x416f95,
-    rail: 0x365f81,
-    admin2: 0xa3c6d9,
-    admin4: 0x6698ba,
-    county: 0x45759b,
-    casing: 0x0b2743,
+    water: 0x091820,
+    wood: 0x1a2e31,
+    park: 0x1a2a30,
+    residential: 0x1a2533,
+    building: 0x1b2835,
+    motorway: 0x536171,
+    primary: 0x4b5969,
+    secondary: 0x435161,
+    minor: 0x334353,
+    rail: 0x30404e,
+    admin2: 0x65707d,
+    admin4: 0x505c69,
+    county: 0x364350,
+    casing: 0x15202e,
 };
 
 fn colors(p: Palette) -> &'static Colors {
@@ -388,9 +388,9 @@ const PRESENTATION: VecStyle = VecStyle {
 };
 
 const BLUE: VecStyle = VecStyle {
-    background: Some(rgb(0x10304e)),
-    label: rgb(0xeaf7ff),
-    label_halo: rgb(0x08233d),
+    background: Some(rgb(0x172333)),
+    label: rgb(0xd4d9df),
+    label_halo: rgb(0x111b28),
 };
 
 pub fn style(p: Palette) -> &'static VecStyle {
@@ -437,7 +437,7 @@ pub fn casing(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
         rgb(colors(p).casing)
     };
     let (_, w) = stroke(p, layer, class)?;
-    Some((c, w + widen))
+    Some((c, w + if p == Palette::Blue { widen * 0.7 } else { widen }))
 }
 
 /// Fill color for a polygon feature, or `None` to skip it.
@@ -536,6 +536,8 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
             "transportation" => w * 0.6,
             _ => w * 0.7,
         }
+    } else if p == Palette::Blue && layer == "transportation" {
+        w * 0.75
     } else {
         w
     };
