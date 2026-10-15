@@ -17,9 +17,8 @@
 //! ponytail: a curated table of the sites that verify live, not the whole 129-radar feed. Three
 //! things disqualify a country, and all three were measured rather than assumed:
 //!
-//! * Norway (12 sites) uses 4-byte HDF5 file addresses, which `hdf5lite` now reads, but its
-//!   live volume shape and gate metadata still need validation. Malta writes big-endian
-//!   datatypes, which `hdf5lite` does not yet read.
+//! * Malta writes big-endian datatypes, which `hdf5lite` does not yet read. Norway's
+//!   4-byte-address volumes and delayed velocity objects are supported below.
 //! * Switzerland, Finland, France, Estonia and Lithuania publish `SCAN/`, one file per
 //!   elevation; their publishing cadence and file shape still need validation. Sweden's
 //!   nine-elevation `SCAN/` volumes are supported below.
@@ -81,6 +80,18 @@ pub const SITES: &[SiteEntry] = &[
     site("ISX2", "Mobile 2", "IS", 63.8696, -20.2023, 42),
     site("NLDHL", "Den Helder", "NL", 52.9528, 4.7906, 55),
     site("NLHRW", "Herwijnen", "NL", 51.8369, 5.1381, 25),
+    site("NOAND", "Andøya", "NO", 69.2414, 16.0030, 441),
+    site("NOBER", "Berlevåg", "NO", 70.5107, 29.0184, 474),
+    site("NOBML", "Bømlo", "NO", 59.8540, 5.0900, 102),
+    site("NOHAS", "Hasvik", "NO", 70.6052, 22.4430, 446),
+    site("NOHFJ", "Hafjell", "NO", 61.2318, 10.5273, 1080),
+    site("NOHGB", "Hægebostad", "NO", 58.3601, 7.1648, 631),
+    site("NOHUR", "Hurum", "NO", 59.6271, 10.5645, 363),
+    site("NORSA", "Rissa", "NO", 63.6900, 10.2040, 616),
+    site("NORSG", "Rassegalvarri", "NO", 69.2186, 23.4398, 604),
+    site("NORST", "Røst", "NO", 67.5307, 12.0986, 17),
+    site("NOSMN", "Sømna", "NO", 65.2199, 11.9926, 315),
+    site("NOSTA", "Stad", "NO", 62.1871, 5.1275, 508),
     site("PLBRZ", "Brzuchania", "PL", 50.3942, 20.0832, 434),
     site("PLGDY", "Gdynia", "PL", 54.5009, 18.2718, 261),
     site("PLGSA", "Gora Sw Anny", "PL", 50.4639, 18.1532, 433),
@@ -181,6 +192,34 @@ fn newest_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     group
 }
 
+/// Most Norwegian sites publish DBZH/TH at a five-minute mark, with VRADH about one minute later
+/// on every other strategy. That velocity volume omits the 0.5° reflectivity cut. Rissa publishes
+/// VRADH with the same timestamp and elevations. Prefer the latest complete pair over a newer
+/// reflectivity-only scan, so both moments share matching tilts.
+fn newest_norwegian_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    let all = keys(xml);
+    for base in all.iter().rev().copied().filter(|key| key.ends_with("@DBZH.h5")) {
+        let Some(name) = base.rsplit('/').next() else { continue };
+        let mut fields = name.split('@');
+        if fields.next() != Some(nod) { continue; }
+        let (Some(stamp), Some(angles)) = (fields.next(), fields.next()) else { continue };
+        // These scans start at :00/:05/…/:55, so the delayed file is always in this hour.
+        let Some(minute) = stamp.get(11..13).and_then(|s| s.parse::<u8>().ok()).filter(|m| *m < 59) else { continue };
+        let velocity_angles = angles.strip_prefix("0.5_").unwrap_or(angles);
+        let next_stamp = format!("{}{:02}", &stamp[..11], minute + 1);
+        let velocity_name = format!("{nod}@{next_stamp}@{velocity_angles}@VRADH.h5");
+        let same_time_name = format!("{nod}@{stamp}@{angles}@VRADH.h5");
+        let Some(velocity) = all.iter().copied().find(|key| key.rsplit('/').next() == Some(same_time_name.as_str()))
+            .or_else(|| all.iter().copied().find(|key| key.rsplit('/').next() == Some(velocity_name.as_str()))) else { continue };
+        let prefix = base.rsplit_once('@').map(|(p, _)| p).unwrap_or(base);
+        let mut group = vec![base];
+        group.extend(all.iter().copied().filter(|key| *key != base && key.rsplit_once('@').is_some_and(|(p, _)| p == prefix)));
+        if !group.contains(&velocity) { group.push(velocity); }
+        return group;
+    }
+    Vec::new()
+}
+
 /// Pick the latest *complete enough* Swedish scan. Individual elevations arrive separately;
 /// choosing a timestamp after only its base tilt lands would repeatedly replace a full volume
 /// with a one-tilt one. Five of the nine published elevations is the minimum for display.
@@ -242,6 +281,8 @@ pub async fn fetch_volume(
         .unwrap_or_default();
         group = (if meta.state == "SE" {
             newest_scan_group(&index, &nod)
+        } else if meta.state == "NO" {
+            newest_norwegian_group(&index, &nod)
         } else {
             newest_group(&index, &nod)
         })
@@ -321,8 +362,8 @@ pub async fn fetch_volume(
     let extras: Vec<Scan> = files
         .into_iter()
         .filter(|s| {
-            s.sweeps().len() == base.sweeps().len()
-                && std::iter::zip(s.sweeps(), base.sweeps()).all(|(a, b)| angle(a) == angle(b))
+            meta.state == "NO" || (s.sweeps().len() == base.sweeps().len()
+                && std::iter::zip(s.sweeps(), base.sweeps()).all(|(a, b)| angle(a) == angle(b)))
         })
         .collect();
     let merged: Vec<Sweep> = base
@@ -332,7 +373,12 @@ pub async fn fetch_volume(
         .map(|(i, sweep)| {
             let siblings: Vec<Sweep> = extras
                 .iter()
-                .filter_map(|s| s.sweeps().get(i).cloned())
+                .filter_map(|s| {
+                    if meta.state == "NO" {
+                        s.sweeps().iter().find(|candidate| angle(candidate) == angle(sweep)
+                            && candidate.radials().len() == sweep.radials().len()).cloned()
+                    } else { s.sweeps().get(i).cloned() }
+                })
                 .collect();
             crate::dwd::merge(sweep, &siblings)
         })
@@ -450,6 +496,27 @@ mod tests {
         assert!(picked.iter().all(|key| key.contains("T0735")));
     }
 
+    #[test]
+    fn norwegian_group_waits_for_matching_delayed_velocity() {
+        let row = |time: &str, angles: &str, moment: &str| format!(
+            "<Key>2026/10/15/NO/noand/PVOL/noand@{time}@{angles}@{moment}.h5</Key>"
+        );
+        let full = "0.5_1.0_2.6_5.2_8.6_13.0_18.6_25.8_35.0_90.0";
+        let short = "1.0_2.6_5.2_8.6_13.0_18.6_25.8_35.0_90.0";
+        let xml = format!("{}{}{}{}", row("20261015T0755", full, "DBZH"),
+            row("20261015T0755", full, "TH"), row("20261015T0756", short, "VRADH"),
+            row("20261015T0800", full, "DBZH"));
+        let group = newest_norwegian_group(&xml, "noand");
+        assert_eq!(group.len(), 3);
+        assert!(group[0].contains("T0755"));
+        assert!(group[2].contains("T0756") && group[2].contains("VRADH"));
+        let rissa = format!("{}{}", row("20261015T0800", full, "DBZH"),
+            row("20261015T0800", full, "VRADH")).replace("/noand/", "/norsa/").replace("noand@", "norsa@");
+        let paired = newest_norwegian_group(&rissa, "norsa");
+        assert_eq!(paired.len(), 2);
+        assert!(paired[1].contains("T0800") && paired[1].contains("VRADH"));
+    }
+
     /// One digit out in the prefix and the listing comes back empty.
     #[test]
     fn the_index_url_names_one_hour_of_one_site() {
@@ -515,5 +582,18 @@ mod tests {
         let base = &scan.sweeps()[0].radials()[0];
         assert!(base.reflectivity().is_some());
         assert!(base.velocity().is_some());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_norwegian_volume_assembles_reflectivity_and_velocity() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "NOAND", None)
+            .await.expect("volume").expect("fresh volume");
+        assert!(scan.sweeps().len() >= 5);
+        let base = &scan.sweeps()[0].radials()[0];
+        assert!(base.reflectivity().is_some());
+        // Norway's separate velocity scan starts at 1.0°, not the 0.5° base cut.
+        assert!(scan.sweeps().iter().any(|s| s.radials()[0].velocity().is_some()));
     }
 }

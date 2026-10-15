@@ -181,6 +181,7 @@ impl HookEchoApp {
                         if ui.selectable_label(i == tilt, format!("{a:.1}°")).clicked() {
                             self.views[idx].tilt = i;
                             self.views[idx].follow_low_cut = false;
+                            self.views[idx].error = None;
                         }
                     }
                     if elevations.is_empty() {

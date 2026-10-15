@@ -9760,6 +9760,7 @@ impl HookEchoApp {
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
             self.views[self.active].follow_low_cut = false;
+            self.views[self.active].error = None;
         }
         if self.settings.precip_tint != precip_tint {
             self.settings.precip_tint = precip_tint;

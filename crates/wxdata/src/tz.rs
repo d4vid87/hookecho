@@ -130,6 +130,7 @@ pub fn site_tz(id: &str) -> Option<Tz> {
             "IE" => Europe__Dublin,
             "IS" => Atlantic__Reykjavik,
             "NL" => Europe__Amsterdam,
+            "NO" => Europe__Oslo,
             "PL" => Europe__Warsaw,
             "RO" => Europe__Bucharest,
             "SI" => Europe__Ljubljana,
