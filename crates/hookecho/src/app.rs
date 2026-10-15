@@ -3018,6 +3018,27 @@ impl RecoverySnapshot {
 
 type MarkerGeocodeResult = Result<Vec<(String, String, f64, f64)>, String>;
 
+/// A place lookup may take seconds. Apply its answer only to the pane and map state that
+/// requested it; a later pane switch, pan, zoom or site change is a newer navigation intent.
+struct GeocodeNavigation {
+    request_id: u64,
+    view_index: usize,
+    camera: crate::render::mercator::Camera,
+    site: Option<String>,
+}
+
+impl GeocodeNavigation {
+    fn still_current(&self, active: usize, view: &crate::view::MapView) -> bool {
+        self.view_index == active
+            && self.camera.center == view.camera.center
+            && self.camera.zoom == view.camera.zoom
+            && self.camera.globe == view.camera.globe
+            && self.camera.pitch_deg == view.camera.pitch_deg
+            && self.camera.bearing_deg == view.camera.bearing_deg
+            && self.site == view.site
+    }
+}
+
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct PaneSession {
     thresholds: [Option<f32>; Moment::ALL.len()],
@@ -3767,7 +3788,7 @@ pub struct HookEchoApp {
     /// how you look around, so dropping a pin every time would litter the map — this asks first.
     save_offer: Option<(String, f64, f64, Instant)>,
     /// The newest pending place-navigation lookup. Older replies must never move the map.
-    geocode_nav: Option<u64>,
+    geocode_nav: Option<GeocodeNavigation>,
     geocode_request_next: u64,
     /// Layer manager window (per-placefile enable/order/opacity).
     layer_window_open: bool,
@@ -22445,10 +22466,14 @@ impl eframe::App for HookEchoApp {
         }
         // Drain search-pill geocoding results.
         while let Ok((request_id, res)) = self.geocode_rx.try_recv() {
-            if self.geocode_nav != Some(request_id) {
+            if self.geocode_nav.as_ref().is_none_or(|nav| nav.request_id != request_id) {
                 continue;
             }
-            self.geocode_nav = None;
+            let nav = self.geocode_nav.take().unwrap();
+            if !nav.still_current(self.active, &self.views[self.active]) {
+                self.place_status = None;
+                continue;
+            }
             match res {
                 Ok((name, lat, lon)) => {
                     let cam = &mut self.views[self.active].camera;
@@ -23875,6 +23900,31 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn place_lookup_does_not_override_a_later_map_navigation() {
+        let camera = crate::render::mercator::Camera::at_lonlat(-97.44, 35.22, 8.0);
+        let mut view = crate::view::MapView::new(Some("KTLX".to_owned()), camera);
+        let pending = super::GeocodeNavigation {
+            request_id: 7,
+            view_index: 0,
+            camera,
+            site: view.site.clone(),
+        };
+        assert!(pending.still_current(0, &view));
+        assert!(!pending.still_current(1, &view), "switching panes supersedes the lookup");
+        view.camera.center = crate::render::mercator::lonlat_to_world(-96.0, 36.0);
+        assert!(!pending.still_current(0, &view), "panning supersedes the lookup");
+        view.camera.center = camera.center;
+        view.camera.zoom += 1.0;
+        assert!(!pending.still_current(0, &view), "zooming supersedes the lookup");
+        view.camera.zoom = camera.zoom;
+        view.camera.bearing_deg = 15.0;
+        assert!(!pending.still_current(0, &view), "rotating supersedes the lookup");
+        view.camera.bearing_deg = camera.bearing_deg;
+        view.site = Some("KFWS".to_owned());
+        assert!(!pending.still_current(0, &view), "changing radar supersedes the lookup");
+    }
+
     #[test]
     fn hail_swath_size_filters_use_native_mesh_millimetres() {
         let field = wxdata::mrms::MrmsField {

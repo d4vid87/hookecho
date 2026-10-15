@@ -736,6 +736,7 @@ impl HookEchoApp {
         }
         if let Some(site) = picked_site {
             self.geocode_nav = None;
+            self.place_status = None;
             if let Some(entry) = wxdata::sites::site_by_id(&site) {
                 let zoom = self.views[self.active].camera.zoom.max(8.0);
                 self.goto_view(&site, entry.longitude as f64, entry.latitude as f64, zoom, None);
@@ -746,7 +747,13 @@ impl HookEchoApp {
             self.layers_query.clear();
             self.geocode_request_next = self.geocode_request_next.wrapping_add(1);
             let request_id = self.geocode_request_next;
-            self.geocode_nav = Some(request_id);
+            let view = &self.views[self.active];
+            self.geocode_nav = Some(super::GeocodeNavigation {
+                request_id,
+                view_index: self.active,
+                camera: view.camera,
+                site: view.site.clone(),
+            });
             self.save_offer = None; // a new search retires the previous offer
             self.place_status = Some(("Searching…".to_string(), Instant::now()));
             let http = self.http.clone();
