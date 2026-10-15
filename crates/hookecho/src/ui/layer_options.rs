@@ -617,6 +617,15 @@ pub(crate) fn show(
     }
 
     if section == "Outlooks" {
+        let focus_id = egui::Id::new("outlook_menu_focus");
+        let outlook_focus = ui.ctx().data_mut(|d| {
+            let focus = d.get_temp::<&'static str>(focus_id);
+            d.remove::<&'static str>(focus_id);
+            focus
+        });
+        if outlook_focus == Some("severe") {
+            ui.scroll_to_rect(ui.cursor(), Some(egui::Align::Min));
+        }
         let accent = ui.visuals().selection.stroke.color;
         egui::Frame::new()
             .fill(ui.visuals().faint_bg_color)
@@ -696,7 +705,10 @@ pub(crate) fn show(
             });
 
         ui.separator();
-        ui.label(egui::RichText::new("Climate outlook · NOAA CPC").strong());
+        let climate_heading = ui.label(egui::RichText::new("Climate outlook · NOAA CPC").strong());
+        if outlook_focus == Some("climate") {
+            ui.scroll_to_rect(climate_heading.rect, Some(egui::Align::Center));
+        }
         ui.weak("Temperature or precipitation probability compared with normal.");
         egui::ComboBox::from_id_salt("cpc_period")
             .width(ui.available_width() - 8.0)
@@ -742,7 +754,10 @@ pub(crate) fn show(
         }
 
         ui.add_space(8.0);
-        ui.label(egui::RichText::new("SPC Fire Weather Outlook").strong());
+        let fire_heading = ui.label(egui::RichText::new("SPC Fire Weather Outlook").strong());
+        if outlook_focus == Some("fire") {
+            ui.scroll_to_rect(fire_heading.rect, Some(egui::Align::Center));
+        }
         ui.weak("NOAA public outlook · tap a polygon for its source and valid time");
         let mut fire_changed = false;
         egui::ComboBox::from_id_salt("fire_weather_day")
@@ -784,7 +799,10 @@ pub(crate) fn show(
         }
 
         // Excessive Rainfall Outlook: the flood half of the day, directly under the severe half.
-        ui.label("Rainfall outlook");
+        let rainfall_heading = ui.label("Rainfall outlook");
+        if outlook_focus == Some("rainfall") {
+            ui.scroll_to_rect(rainfall_heading.rect, Some(egui::Align::Center));
+        }
         egui::ComboBox::from_id_salt("ero_day")
             .width(ui.available_width() - 8.0)
             .selected_text(if filters.ero_day == 0 {
@@ -855,7 +873,10 @@ pub(crate) fn show(
             }
         }
 
-        ui.label("Winter precipitation probability");
+        let winter_heading = ui.label("Winter precipitation probability");
+        if outlook_focus == Some("winter") {
+            ui.scroll_to_rect(winter_heading.rect, Some(egui::Align::Center));
+        }
         ui.weak("NOAA WPC · probability of at least 4 in snow or 0.25 in ice in 24 hours");
         for (id, label, day) in [
             ("winter_snow_day", "Snow ≥4 in", &mut filters.winter_snow_day),

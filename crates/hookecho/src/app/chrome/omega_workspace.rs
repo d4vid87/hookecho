@@ -271,6 +271,7 @@ impl HookEchoApp {
         let mut choose_source = None;
         let mut choose_ndfd_style = None;
         let mut action = None;
+        let mut outlook_focus = None;
         let mut display = false;
         let mut spotter_settings = false;
         let mut notification_settings = false;
@@ -687,6 +688,15 @@ impl HookEchoApp {
                                                     .unwrap_or(false);
                                                 if menu_row(ui, label, on).clicked() {
                                                     action = Some(mapped);
+                                                    if mapped == PaletteAction::OpenOutlooks {
+                                                        outlook_focus = Some(match label {
+                                                            "Hydrological outlooks" => "rainfall",
+                                                            "Fire weather outlooks" => "fire",
+                                                            "Winter weather outlooks" => "winter",
+                                                            "Climate outlooks" => "climate",
+                                                            _ => "severe",
+                                                        });
+                                                    }
                                                 }
                                             }
                                         });
@@ -912,6 +922,9 @@ impl HookEchoApp {
         }
         if let Some(action) = action {
             menu_open = false;
+            if let Some(focus) = outlook_focus {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("outlook_menu_focus"), focus));
+            }
             if matches!(action, PaletteAction::OpenWindow(_)) {
                 self.panel_open = false;
                 self.show_alert_panel = false;
