@@ -340,7 +340,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP02",
       "acceptance": "Boundary visibility, color and thickness update and persist.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-15 local browser confirmed the Display Settings visibility switches are reachable and can be toggled on Blue Map at KTLX zoom 8. The live radar and warnings obscured the relevant line geometry, so a clean before/after boundary comparison is still pending."
     },
     {
       "id": "MAP03",
@@ -367,7 +367,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP03",
       "acceptance": "County controls are independent of state controls.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-15 local browser confirmed the Display Settings visibility switches are reachable and can be toggled on Blue Map at KTLX zoom 8. The live radar and warnings obscured the relevant line geometry, so a clean before/after boundary comparison is still pending."
     },
     {
       "id": "MAP04",
@@ -379,7 +379,7 @@
       "observation_type": "runtime-controls",
       "hookecho_implementation": "Vector display settings add always/when radar stations hidden/hidden city-and-road modes. All transportation strokes and casings now render once above the radar layer, while labels remain in the later egui pass.",
       "remaining_gaps": [
-        "Independent label collision and road placement differ; interaction verification remains pending."
+        "Independent label collision, road placement and exact vendor zoom transitions still differ. The local browser verified visibility modes at one regional zoom; other zooms, raster basemaps, comparison panes and long-session transition smoothness remain unverified."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/omega_display.rs",
@@ -394,7 +394,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP04",
       "acceptance": "All three label behaviors work without disabling radar data.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-15 optimized local browser at KTLX Blue Map zoom 8: Always showed city names and roads; Hidden removed them while preserving radar, warnings and administrative basemap geometry. With When radar stations are hidden selected, the map stayed stripped while station markers were on and restored city/road detail immediately when radar station markers were turned off. These checks verify the control behavior in one pane and one zoom, not vendor label-placement parity."
     },
     {
       "id": "MAP05",
