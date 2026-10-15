@@ -1,0 +1,50 @@
+[
+  {
+    "finite_values": 485421,
+    "lat_north": 71.99499999999999,
+    "lat_south": 50.00499999999999,
+    "lon_east": -126.005,
+    "lon_west": -175.995,
+    "nx": 5000,
+    "ny": 2200,
+    "product": "ALASKA/MergedReflectivityQCComposite_00.50",
+    "region": "ALASKA",
+    "time": "2026-10-15T16:32:58Z"
+  },
+  {
+    "finite_values": 8245,
+    "lat_north": 25.9975,
+    "lat_south": 15.002499999999998,
+    "lon_east": -151.0025,
+    "lon_west": -163.9975,
+    "nx": 2600,
+    "ny": 2200,
+    "product": "HAWAII/MergedReflectivityQCComposite_00.50",
+    "region": "HAWAII",
+    "time": "2026-10-15T16:32:55Z"
+  },
+  {
+    "finite_values": 7530,
+    "lat_north": 17.9975,
+    "lat_south": 9.002499999999998,
+    "lon_east": 149.9975,
+    "lon_west": 140.0025,
+    "nx": 2000,
+    "ny": 1800,
+    "product": "GUAM/MergedReflectivityQCComposite_00.50",
+    "region": "GUAM",
+    "time": "2026-10-15T16:32:57Z"
+  },
+  {
+    "finite_values": 3940,
+    "lat_north": 24.994999999999997,
+    "lat_south": 10.004999999999997,
+    "lon_east": -60.004999999999995,
+    "lon_west": -89.995,
+    "nx": 3000,
+    "ny": 1500,
+    "product": "CARIB/MergedReflectivityQCComposite_00.50",
+    "region": "CARIB",
+    "time": "2026-10-15T16:32:57Z"
+  }
+]

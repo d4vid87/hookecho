@@ -125,6 +125,10 @@ descriptor!(REFLECTIVITY_06_00_KM_DESCRIPTOR, "mrms.reflectivity-6-km", "Reflect
 descriptor!(REFLECTIVITY_06_50_KM_DESCRIPTOR, "mrms.reflectivity-6-5-km", "Reflectivity at 6.5 km MSL", "Reflectivity 6.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
 descriptor!(REFLECTIVITY_07_00_KM_DESCRIPTOR, "mrms.reflectivity-7-km", "Reflectivity at 7.0 km MSL", "Reflectivity 7.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
 descriptor!(REFLECTIVITY_07_50_KM_DESCRIPTOR, "mrms.reflectivity-7-5-km", "Reflectivity at 7.5 km MSL", "Reflectivity 7.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(ALASKA_REFLECTIVITY_DESCRIPTOR, "mrms.alaska-composite-reflectivity", "Alaska composite reflectivity", "Alaska MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["alaska", "ak", "mosaic"]);
+descriptor!(HAWAII_REFLECTIVITY_DESCRIPTOR, "mrms.hawaii-composite-reflectivity", "Hawaii composite reflectivity", "Hawaii MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hawaii", "hi", "mosaic"]);
+descriptor!(GUAM_REFLECTIVITY_DESCRIPTOR, "mrms.guam-composite-reflectivity", "Guam composite reflectivity", "Guam MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["guam", "gu", "mosaic"]);
+descriptor!(CARIB_REFLECTIVITY_DESCRIPTOR, "mrms.caribbean-composite-reflectivity", "Caribbean composite reflectivity", "Caribbean MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["caribbean", "puerto rico", "pr", "mosaic"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -143,7 +147,7 @@ impl CatalogProduct {
     }
 }
 
-pub static CATALOG: [CatalogProduct; 63] = [
+pub static CATALOG: [CatalogProduct; 67] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -207,6 +211,11 @@ pub static CATALOG: [CatalogProduct; 63] = [
     CatalogProduct { descriptor: &REFLECTIVITY_06_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_06.50", slug: "mrms-reflectivity-6-5-km", description: "Quality-controlled reflectivity at 6.5 km MSL" },
     CatalogProduct { descriptor: &REFLECTIVITY_07_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.00", slug: "mrms-reflectivity-7-km", description: "Quality-controlled reflectivity at 7.0 km MSL" },
     CatalogProduct { descriptor: &REFLECTIVITY_07_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.50", slug: "mrms-reflectivity-7-5-km", description: "Quality-controlled reflectivity at 7.5 km MSL" },
+    // Append regional entries to preserve existing MrmsCatalog indices in saved workspaces.
+    CatalogProduct { descriptor: &ALASKA_REFLECTIVITY_DESCRIPTOR, product: "ALASKA/MergedReflectivityQCComposite_00.50", slug: "mrms-alaska-reflectivity", description: "NOAA MRMS composite reflectivity over Alaska" },
+    CatalogProduct { descriptor: &HAWAII_REFLECTIVITY_DESCRIPTOR, product: "HAWAII/MergedReflectivityQCComposite_00.50", slug: "mrms-hawaii-reflectivity", description: "NOAA MRMS composite reflectivity over Hawaii" },
+    CatalogProduct { descriptor: &GUAM_REFLECTIVITY_DESCRIPTOR, product: "GUAM/MergedReflectivityQCComposite_00.50", slug: "mrms-guam-reflectivity", description: "NOAA MRMS composite reflectivity over Guam" },
+    CatalogProduct { descriptor: &CARIB_REFLECTIVITY_DESCRIPTOR, product: "CARIB/MergedReflectivityQCComposite_00.50", slug: "mrms-caribbean-reflectivity", description: "NOAA MRMS composite reflectivity over the Caribbean" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -220,7 +229,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 82] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 86] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -303,6 +312,10 @@ pub static DESCRIPTORS: [&FieldDescriptor; 82] = [
     &PRECIP_RATE_DESCRIPTOR,
     &PRECIP_TYPE_DESCRIPTOR,
     &FLASH_ARI30_DESCRIPTOR,
+    &ALASKA_REFLECTIVITY_DESCRIPTOR,
+    &HAWAII_REFLECTIVITY_DESCRIPTOR,
+    &GUAM_REFLECTIVITY_DESCRIPTOR,
+    &CARIB_REFLECTIVITY_DESCRIPTOR,
 ];
 
 /// Source object path for a registered MRMS field.
@@ -1124,6 +1137,16 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), DESCRIPTORS.len());
+    }
+
+    #[test]
+    fn regional_products_preserve_saved_catalog_indices() {
+        assert_eq!(CATALOG[62].slug, "mrms-reflectivity-7-5-km");
+        for (index, region) in ["ALASKA", "HAWAII", "GUAM", "CARIB"].iter().enumerate() {
+            let entry = &CATALOG[63 + index];
+            assert!(entry.product.starts_with(&format!("{region}/")));
+            assert_eq!(product_for_id(entry.descriptor.id.0, 30, 60, 120), Some(entry.product));
+        }
     }
 
     #[test]
