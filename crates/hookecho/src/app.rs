@@ -2485,6 +2485,8 @@ enum SyncMsg {
 /// captured as one frame of a loop-GIF export.
 enum ShotDest {
     File(std::path::PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    Download,
     Clipboard,
     Loop,
     /// Pushed to the user's ntfy topic as an attachment, captioned with this title.
@@ -3640,6 +3642,9 @@ pub struct HookEchoApp {
     /// A capture waiting on the share-card footer to be on screen: the destination, and how many
     /// more frames to draw the footer before asking for the image (see `share_card_footer`).
     share_card: Option<(ShotDest, u8)>,
+    /// The web renderer fulfills screenshot commands one frame later; retain the footer until
+    /// the Screenshot event arrives rather than removing it in the command frame.
+    share_card_capture_frames: u8,
     loop_export: Option<LoopExport>,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
@@ -4664,6 +4669,7 @@ impl HookEchoApp {
             was_quiet: false,
             screenshot_pending: None,
             share_card: None,
+            share_card_capture_frames: 0,
             loop_export: None,
             link_cameras: false,
             link_times: false,
@@ -19124,6 +19130,15 @@ impl HookEchoApp {
                 if ui.button("Export field verification…").clicked() {
                     self.export_forecast_verification();
                 }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if ui.button("Download screenshot (PNG)").clicked() {
+                        self.panel_open = false;
+                        self.request_capture(ui.ctx(), ShotDest::Download);
+                    }
+                    toggle(ui, &mut self.settings.share_card, "Caption shared images")
+                        .on_hover_text("Stamp the site, product, valid time and source onto the downloaded image");
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     if ui.button("Save screenshot…").clicked() {
@@ -20172,15 +20187,20 @@ impl HookEchoApp {
         }
     }
 
-    /// The share card: a caption band across the bottom of the map naming what the picture shows,
+    /// The share card: a caption beneath the header naming what the picture shows,
     /// drawn only on the frames a capture is waiting for. A radar screenshot with no site, product
     /// or time on it is a pretty picture; this is the difference between that and a report.
     fn share_card_footer(&mut self, ctx: &egui::Context) {
-        let Some((_, frames)) = &mut self.share_card else {
+        if self.share_card.is_none() && self.share_card_capture_frames == 0 {
             return;
+        }
+        self.share_card_capture_frames = self.share_card_capture_frames.saturating_sub(1);
+        let fire = if let Some((_, frames)) = &mut self.share_card {
+            *frames = frames.saturating_sub(1);
+            *frames == 0
+        } else {
+            false
         };
-        *frames -= 1;
-        let fire = *frames == 0;
 
         let v = &self.views[self.active];
         let site = v.site.clone().unwrap_or_else(|| "no site".to_string());
@@ -20195,7 +20215,7 @@ impl HookEchoApp {
         egui::Area::new(egui::Id::new("share_card"))
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -10.0))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 88.0))
             .show(ctx, |ui| {
                 crate::ui::style::glass(ui, 245).show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -20228,8 +20248,9 @@ impl HookEchoApp {
             });
 
         if fire {
-            // The band is on screen: take the picture, and keep the caption for this one frame.
+            // Keep drawing the footer until the backend returns the captured frame.
             let (dest, _) = self.share_card.take().expect("checked above");
+            self.share_card_capture_frames = 5;
             self.screenshot_pending = Some(dest);
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
@@ -20249,7 +20270,28 @@ impl HookEchoApp {
         });
         if let Some(image) = image {
             let dest = self.screenshot_pending.take().unwrap();
+            self.share_card_capture_frames = 0;
             match dest {
+                #[cfg(target_arch = "wasm32")]
+                ShotDest::Download => {
+                    use image::ImageEncoder;
+                    let (w, h) = (image.size[0] as u32, image.size[1] as u32);
+                    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+                    for px in &image.pixels {
+                        rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
+                    }
+                    let mut png = Vec::new();
+                    let result = image::codecs::png::PngEncoder::new(&mut png)
+                        .write_image(&rgba, w, h, image::ExtendedColorType::Rgba8);
+                    match result {
+                        Ok(()) => match crate::dialog::save_bytes("hookecho-view.png", "png", &png) {
+                            crate::dialog::Saved::Where(_) => self.toast(ToastKind::Success, "Screenshot downloaded"),
+                            crate::dialog::Saved::Failed(e) => self.toast(ToastKind::Error, format!("Screenshot download failed: {e}")),
+                            crate::dialog::Saved::Cancelled => {}
+                        },
+                        Err(e) => self.toast(ToastKind::Error, format!("Screenshot encode failed: {e}")),
+                    }
+                }
                 ShotDest::File(path) => {
                     let (w, h) = (image.size[0] as u32, image.size[1] as u32);
                     let mut rgba = Vec::with_capacity((w * h * 4) as usize);

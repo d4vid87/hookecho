@@ -161,7 +161,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # NOAA SPC fire-weather discussion adds 1,305 gzip bytes to the measured 4,539,943-byte
 # main WASM. Keep a narrow 8,752-byte margin for this public-data parity feature.
 # The manual storm-track controls add a few kilobytes to the interactive map bundle.
-budget="${HOOKECHO_WASM_BUDGET:-4552000}"
+# Browser PNG capture reuses the existing screenshot command and download helper but includes
+# the PNG encoder in the main bundle. Its measured size is 4,555,906 gzip bytes; allow 4,094
+# bytes of margin (under 0.1%) while keeping the lite and startup limits unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4560000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

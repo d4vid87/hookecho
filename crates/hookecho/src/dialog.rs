@@ -22,9 +22,8 @@ pub enum Saved {
 /// Save `bytes` under `default_name`. The whole-file form: the caller has the content in hand, so
 /// the browser can hand it to the user as a download and no call site needs a path at all.
 ///
-/// ponytail: byte-sized exports only. A screenshot or a loop export picks its destination before
-/// it has any content to write and streams into it, which is why those still go through
-/// [`save_path`] and stay native-only.
+/// Browser screenshots can be PNG-encoded in memory and use this download path; native loop
+/// exports still choose a destination before capture and write through [`save_path`].
 pub fn save_bytes(default_name: &str, ext: &str, bytes: &[u8]) -> Saved {
     #[cfg(target_arch = "wasm32")]
     {

@@ -1601,11 +1601,14 @@
       "status": "partial",
       "observed_scope": "Share sheet includes Screenshot, Record Video, Record Gif and Save Screenshot.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Existing screenshot and loop export capabilities provide related output.",
+      "hookecho_implementation": "Desktop PNG screenshot, clipboard copy and archive-loop GIF/MP4 exports remain available. The browser Share panel now downloads a PNG using eframe's screenshot event and the existing in-memory Blob download helper. It closes the Share panel before capture. The optional caption card stays visible through the renderer's delayed screenshot frame and names site, product, valid time and NOAA/NWS attribution beneath the header.",
       "remaining_gaps": [
-        "All video/GIF codecs, browser capture paths, legend composition and vendor sharing workflow not verified."
+        "Browser GIF/MP4 capture is still absent. Codec output, legend composition, full-screen and multipane layouts, error recovery and the vendor sharing workflow need broader verification."
       ],
       "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/dialog.rs",
+        "crates/hookecho/src/loopexport.rs",
         "crates/hookecho/src/app/chrome/clearview.rs",
         "crates/hookecho/src/app/chrome/overlay.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs"
@@ -1613,7 +1616,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN06",
       "acceptance": "Export includes correct map/data/time/attribution and reports capture errors.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-15: Web library check and optimized build passed (4,555,890 gzipped bytes under a deliberately raised 4,560,000-byte main-WASM budget; lite 74,707/80,000). In a local browser, Share > Download screenshot produced a 1280×720 PNG. The first capture exposed the Share panel; the final build closes it before capture. With Caption shared images enabled, the downloaded PNG visibly includes a readable site/product/time/NOAA-NWS card beneath the header and clear of the transport bar. Browser GIF/video and other layouts remain unverified."
     },
     {
       "id": "LOC01",
