@@ -268,6 +268,7 @@ impl HookEchoApp {
         // sentence of instructions as the only sign anything changed.
         let (glyph, name, hint) = match self.tool {
             MapTool::Measure => (ph::RULER, "Measure", "click two points"),
+            MapTool::StormTrack => (ph::PATH, "Storm track", "click storm center, then projected endpoint"),
             MapTool::RegionStats => (ph::SELECTION, "Area statistics", "click two corners"),
             MapTool::Marker => (ph::MAP_PIN, "Drop marker", "click the map"),
             MapTool::CrossSection => (ph::CHART_LINE, "Cross-section", "click two points"),
@@ -305,7 +306,7 @@ impl HookEchoApp {
             )
             // The draw tool's chip carries buttons; the rest are read-only hints that must never
             // swallow a click meant for the map underneath.
-            .interactable(self.tool == MapTool::Draw)
+            .interactable(matches!(self.tool, MapTool::Draw | MapTool::StormTrack))
             .show(ctx, |ui| {
                 style::glass(ui, 238).show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -390,6 +391,38 @@ impl HookEchoApp {
                             self.export_annotations();
                         }
                     });
+                    if self.tool == MapTool::StormTrack {
+                        ui.separator();
+                        ui.label("User-defined motion · click twice to place or replace the track");
+                        ui.horizontal(|ui| {
+                            ui.label("Direction");
+                            ui.add(egui::DragValue::new(&mut self.manual_storm_track.bearing_deg).range(0.0..=359.0).suffix("°"));
+                            ui.label("Horizon");
+                            ui.add(egui::Slider::new(&mut self.manual_storm_track.horizon_min, 15..=120).step_by(15.0).suffix(" min"));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Speed");
+                            let (factor, suffix) = match self.manual_storm_track.speed_unit {
+                                1 => (1.150_779, " mph"),
+                                2 => (1.852, " km/h"),
+                                _ => (1.0, " kt"),
+                            };
+                            let mut speed = self.manual_storm_track.speed_kt * factor;
+                            if ui.add(egui::DragValue::new(&mut speed).range(0.0..=150.0 * factor).suffix(suffix)).changed() {
+                                self.manual_storm_track.speed_kt = speed / factor;
+                            }
+                            egui::ComboBox::from_id_salt("storm_track_speed_unit")
+                                .selected_text(match self.manual_storm_track.speed_unit { 1 => "mph", 2 => "km/h", _ => "kt" })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 0, "kt");
+                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 1, "mph");
+                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 2, "km/h");
+                                });
+                            ui.label("Cone ±");
+                            ui.add(egui::DragValue::new(&mut self.manual_storm_track.cone_half_angle_deg).range(0.0..=45.0).suffix("°"));
+                            if ui.button("Clear").clicked() { self.manual_storm_track.origin = None; self.manual_storm_track.endpoint_set = false; }
+                        });
+                    }
                 });
             });
     }

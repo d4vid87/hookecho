@@ -1479,12 +1479,16 @@
       "status": "partial",
       "observed_scope": "Initial point, track line, track cone, time points; speed units mph/kph/knots.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Existing storm attributes/SCIT tracks and chase tools provide related analysis.",
+      "hookecho_implementation": "Automatic SCIT tracks remain available. A separate manual storm-track tool now lets the user click a storm center and a projected endpoint, deriving bearing and speed for the selected horizon. The map draws a user-defined track, 15-minute forecast points and an editable angular cone; direction, speed, horizon, cone angle and kt/mph/km/h units are adjustable in the tool chip. The tool is available in the transport and searchable controls.",
       "remaining_gaps": [
-        "Manual track cone, time-point editing, units and vendor projection algorithm are not fully matched."
+        "RadarOmega's custom/cellular cone geometry, time-point editing, saved tracks, ETA city overlays and vendor projection algorithm are not matched. The HookEcho cone is an explicitly user-defined angular estimate, not an official storm forecast."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/chips.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/registry.rs",
+        "crates/hookecho/src/app/mobile/mod.rs",
         "crates/hookecho/src/ui/cell_window.rs",
         "crates/hookecho/src/ui/cells_window.rs",
         "crates/wxdata/src/level3.rs"
@@ -1492,7 +1496,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN01",
       "acceptance": "Create/inspect track with speed, direction, forecast time and configurable geometry.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-14: The manual-track geometry test and full native library suite passed (661 tests, 30 ignored). Optimized web build passed at 4,550,475 gzipped bytes under the deliberate 4,552,000-byte limit. In a fresh local browser tab, the toolbar armed the tool; two map clicks drew the path, 15-minute points and cone in both linked panes. Switching speed units from kt to mph changed the displayed value without moving the path. A follow-up build/browser check showed staggered time labels on a short path. Saved-track and reference algorithm parity remain unverified."
     },
     {
       "id": "AN02",

@@ -160,7 +160,8 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # The measured optimized main WASM is 4,531,260 bytes gzip; retain under 0.2% headroom.
 # NOAA SPC fire-weather discussion adds 1,305 gzip bytes to the measured 4,539,943-byte
 # main WASM. Keep a narrow 8,752-byte margin for this public-data parity feature.
-budget="${HOOKECHO_WASM_BUDGET:-4550000}"
+# The manual storm-track controls add a few kilobytes to the interactive map bundle.
+budget="${HOOKECHO_WASM_BUDGET:-4552000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

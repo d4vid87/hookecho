@@ -1675,6 +1675,8 @@ pub(crate) enum MapTool {
     Interrogate,
     /// Measure great-circle distance/bearing between two clicks.
     Measure,
+    /// Place a storm center, then a forecast endpoint; edit motion and cone in the tool chip.
+    StormTrack,
     /// Select opposite corners and calculate exact native-value area statistics.
     RegionStats,
     /// Drop a location marker at the clicked point.
@@ -1695,6 +1697,48 @@ pub(crate) enum MapTool {
     Draw,
     /// Click out a watch zone vertex by vertex; double-click (or Enter) closes and names it.
     AlertZone,
+}
+
+/// User-drawn motion estimate, independent of the provider's automatic cell tracks.
+struct ManualStormTrack {
+    origin: Option<[f64; 2]>,
+    endpoint_set: bool,
+    bearing_deg: f64,
+    speed_kt: f64,
+    horizon_min: u16,
+    cone_half_angle_deg: f64,
+    /// 0 = kt, 1 = mph, 2 = km/h.
+    speed_unit: u8,
+}
+
+impl Default for ManualStormTrack {
+    fn default() -> Self {
+        Self { origin: None, endpoint_set: false, bearing_deg: 0.0, speed_kt: 30.0, horizon_min: 60, cone_half_angle_deg: 15.0, speed_unit: 0 }
+    }
+}
+
+impl ManualStormTrack {
+    fn click(&mut self, point: [f64; 2]) {
+        let Some(origin) = self.origin else {
+            self.origin = Some(point);
+            self.endpoint_set = false;
+            return;
+        };
+        if self.endpoint_set {
+            self.origin = Some(point);
+            self.endpoint_set = false;
+            return;
+        }
+        let (distance_km, bearing) = crate::geo::great_circle(origin, point);
+        self.bearing_deg = bearing;
+        self.speed_kt = (distance_km / (self.horizon_min as f64 / 60.0) / 1.852).clamp(0.0, 150.0);
+        self.endpoint_set = true;
+    }
+
+    fn point_at(&self, minutes: u16) -> Option<[f64; 2]> {
+        let origin = self.origin?;
+        Some(crate::geo::destination_point(origin, self.bearing_deg, self.speed_kt * 1.852 * minutes as f64 / 60.0))
+    }
 }
 
 /// HRRR model field drawn as contour lines over the radar (surface `f00`). SB-CAPE / 0-3 km SRH
@@ -3480,6 +3524,7 @@ pub struct HookEchoApp {
     tool: MapTool,
     /// Measure-tool clicked endpoints in `[lon, lat]` (max 2).
     measure: Vec<[f64; 2]>,
+    manual_storm_track: ManualStormTrack,
     /// Opposite corners and cached native-value statistics for the selected registered field.
     region_points: Vec<[f64; 2]>,
     region_analysis: Option<RegionAnalysis>,
@@ -4551,6 +4596,7 @@ impl HookEchoApp {
             last_viewport: (1000.0, 800.0),
             tool: MapTool::default(),
             measure: Vec::new(),
+            manual_storm_track: ManualStormTrack::default(),
             region_points: Vec::new(),
             region_analysis: None,
             radar_scatter: None,
@@ -14362,6 +14408,9 @@ impl HookEchoApp {
                     return;
                 }
                 match tool {
+                    MapTool::StormTrack => {
+                        self.manual_storm_track.click([lon, lat]);
+                    }
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
                     _ if marker_hit.is_some() => {
@@ -17569,6 +17618,44 @@ impl HookEchoApp {
                         egui::FontId::proportional(11.0),
                         egui::Color32::WHITE,
                     );
+                }
+            }
+        }
+
+        // User-defined storm motion. This is a geometric estimate, not an official forecast.
+        if let Some(origin) = self.manual_storm_track.origin {
+            let track = &self.manual_storm_track;
+            let col = egui::Color32::from_rgb(78, 198, 245);
+            let screen = |ll: [f64; 2]| {
+                let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                let (x, y) = cam.world_to_screen(world, vp);
+                egui::pos2(prect.left() + x, prect.top() + y)
+            };
+            painter.circle_filled(screen(origin), 5.0, col);
+            if track.endpoint_set {
+                let horizon = track.horizon_min;
+                let end = track.point_at(horizon).unwrap();
+                let distance_km = track.speed_kt * 1.852 * horizon as f64 / 60.0;
+                let left = crate::geo::destination_point(origin, track.bearing_deg - track.cone_half_angle_deg, distance_km);
+                let right = crate::geo::destination_point(origin, track.bearing_deg + track.cone_half_angle_deg, distance_km);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![screen(origin), screen(left), screen(right)],
+                    col.gamma_multiply(0.12),
+                    egui::Stroke::new(1.25, col.gamma_multiply(0.75)),
+                ));
+                crate::geo::paint_path(&painter, &cam, prect, &[origin, end], egui::Stroke::new(2.0, col));
+                for minute in (15..=horizon).step_by(15) {
+                    if let Some(point) = track.point_at(minute) {
+                        let p = screen(point);
+                        painter.circle_filled(p, 3.5, col);
+                        let (offset, align) = if minute / 15 % 2 == 0 {
+                            (egui::vec2(5.0, 5.0), egui::Align2::LEFT_TOP)
+                        } else {
+                            (egui::vec2(5.0, -4.0), egui::Align2::LEFT_BOTTOM)
+                        };
+                        painter.text(p + offset, align,
+                            format!("+{minute}m"), egui::FontId::proportional(11.0), col);
+                    }
                 }
             }
         }
@@ -23900,6 +23987,28 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manual_storm_track_uses_clicked_horizon_and_edited_motion() {
+        let mut track = super::ManualStormTrack::default();
+        let origin = [-97.0, 35.0];
+        let expected_end = crate::geo::destination_point(origin, 90.0, 30.0 * 1.852);
+        track.click(origin);
+        assert!(!track.endpoint_set);
+        track.click(expected_end);
+        assert!(track.endpoint_set);
+        assert!((track.speed_kt - 30.0).abs() < 0.1);
+        assert!((track.bearing_deg - 90.0).abs() < 0.1);
+        let halfway = track.point_at(30).unwrap();
+        let (km, _) = crate::geo::great_circle(origin, halfway);
+        assert!((km - 15.0 * 1.852).abs() < 0.1);
+        track.speed_kt = 40.0;
+        let (km, _) = crate::geo::great_circle(origin, track.point_at(60).unwrap());
+        assert!((km - 40.0 * 1.852).abs() < 0.1);
+        track.click([-98.0, 36.0]);
+        assert!(!track.endpoint_set);
+        assert_eq!(track.origin, Some([-98.0, 36.0]));
+    }
+
     #[test]
     fn place_lookup_does_not_override_a_later_map_navigation() {
         let camera = crate::render::mercator::Camera::at_lonlat(-97.44, 35.22, 8.0);

@@ -1267,6 +1267,12 @@ impl HookEchoApp {
                 true,
             ),
             (
+                MapTool::StormTrack,
+                "Tool: Manual storm track",
+                "Place a storm center and projected endpoint, then edit motion and cone",
+                true,
+            ),
+            (
                 MapTool::RegionStats,
                 "Tool: Area statistics",
                 "Select two corners for native-value statistics and a histogram",
