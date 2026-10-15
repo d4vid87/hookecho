@@ -42,6 +42,9 @@ impl HookEchoApp {
         let mrms_last_time = self.mrms_loops.iter()
             .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .and_then(|loop_state| loop_state.frames.last().map(|frame| frame.stamp.valid_time));
+        let mrms_first_time = self.mrms_loops.iter()
+            .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
+            .and_then(|loop_state| loop_state.frames.first().map(|frame| frame.stamp.valid_time));
         let mrms_error = self.mrms_loops.iter()
             .find(|loop_state| !radar_visible && Some(loop_state.layer) == field)
             .and_then(|loop_state| loop_state.error.clone());
@@ -197,6 +200,26 @@ impl HookEchoApp {
                                                 ui.close();
                                             }
                                         }
+                                        ui.horizontal(|ui| {
+                                            if ui.add_enabled(mrms_first_time.is_some() && !mrms_loading && mrms_error.is_none(),
+                                                egui::Button::new("← Earlier six"))
+                                                .on_hover_text("Load the six mosaics before this window")
+                                                .clicked() {
+                                                mrms_archive_request = mrms_first_time.map(|time|
+                                                    Some(time - chrono::Duration::seconds(1)));
+                                                ui.close();
+                                            }
+                                            if ui.add_enabled(mrms_archive_at.is_some() && mrms_last_time.is_some()
+                                                && !mrms_loading && mrms_error.is_none()
+                                                && mrms_last_time.is_some_and(|time| time < Utc::now() - chrono::Duration::minutes(12)),
+                                                egui::Button::new("Later six →"))
+                                                .on_hover_text("Load the next six mosaics toward live")
+                                                .clicked() {
+                                                mrms_archive_request = mrms_last_time.map(|time|
+                                                    Some((time + chrono::Duration::minutes(12)).min(Utc::now())));
+                                                ui.close();
+                                            }
+                                        });
                                         if parsed.is_none() { ui.weak("Enter a complete YYYY-MM-DD date."); }
                                         if ui.button("Return to latest").clicked() {
                                             mrms_archive_request = Some(None);
