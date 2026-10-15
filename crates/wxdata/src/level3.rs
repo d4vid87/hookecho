@@ -1036,12 +1036,16 @@ async fn fetch_tgftp_with_metadata(
     ds: &str,
 ) -> Option<(Level3Product, String, chrono::DateTime<chrono::Utc>)> {
     let url = format!("{TGFTP}/DS.{ds}/SI.k{}/sn.last", site.to_lowercase());
+    // NOAA redirects a missing sn.last to a directory URL. The browser proxy rejects that
+    // redirect; native clients may follow it to an HTML error. Neither is radar data.
     let bytes = http
         .get(crate::net::fetch_url(&url))
         .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await
+        .ok()?
+        .error_for_status()
         .ok()?
         .bytes()
         .await
