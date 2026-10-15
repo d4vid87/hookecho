@@ -828,6 +828,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
             "echo-tops" => Some(&MRMS_ECHO_TOPS),
             "height-msl" => Some(&MRMS_HEIGHT_MSL),
             "vil-density" => Some(&VIL_DENSITY),
+            "precip-rate" => Some(&PRECIP_RATE),
             "qpe-1h" => Some(&QPE_1H),
             "qpe-24h" => Some(&QPE_24H),
             "flash-flood" => Some(&FLASH_FLOOD),

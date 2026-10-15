@@ -1003,12 +1003,13 @@ mod source_tests {
             ("GUAM", 145.0),
             ("CARIB", -75.0),
         ] {
-            let index = wxdata::mrms::CATALOG.iter().position(|entry|
-                entry.product.starts_with(region)).unwrap();
-            let camera = regional_mrms_camera(PaletteAction::ToggleField(F::MrmsCatalog(index as u8))).unwrap();
-            let (lon, _) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
-            assert!((lon - expected_lon).abs() < 0.01);
-            assert!(camera.zoom > 4.0);
+            for (index, _) in wxdata::mrms::CATALOG.iter().enumerate().filter(|(_, entry)|
+                entry.product.starts_with(region)) {
+                let camera = regional_mrms_camera(PaletteAction::ToggleField(F::MrmsCatalog(index as u8))).unwrap();
+                let (lon, _) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+                assert!((lon - expected_lon).abs() < 0.01);
+                assert!(camera.zoom > 4.0);
+            }
         }
         assert!(regional_mrms_camera(PaletteAction::ToggleField(F::Mrms)).is_none());
     }

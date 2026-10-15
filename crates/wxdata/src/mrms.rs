@@ -129,6 +129,14 @@ descriptor!(ALASKA_REFLECTIVITY_DESCRIPTOR, "mrms.alaska-composite-reflectivity"
 descriptor!(HAWAII_REFLECTIVITY_DESCRIPTOR, "mrms.hawaii-composite-reflectivity", "Hawaii composite reflectivity", "Hawaii MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hawaii", "hi", "mosaic"]);
 descriptor!(GUAM_REFLECTIVITY_DESCRIPTOR, "mrms.guam-composite-reflectivity", "Guam composite reflectivity", "Guam MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["guam", "gu", "mosaic"]);
 descriptor!(CARIB_REFLECTIVITY_DESCRIPTOR, "mrms.caribbean-composite-reflectivity", "Caribbean composite reflectivity", "Caribbean MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["caribbean", "puerto rico", "pr", "mosaic"]);
+descriptor!(ALASKA_PRECIP_RATE_DESCRIPTOR, "mrms.alaska-precip-rate", "Alaska precipitation rate", "Alaska Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["alaska", "rain rate"]);
+descriptor!(HAWAII_PRECIP_RATE_DESCRIPTOR, "mrms.hawaii-precip-rate", "Hawaii precipitation rate", "Hawaii Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["hawaii", "rain rate"]);
+descriptor!(GUAM_PRECIP_RATE_DESCRIPTOR, "mrms.guam-precip-rate", "Guam precipitation rate", "Guam Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["guam", "rain rate"]);
+descriptor!(CARIB_PRECIP_RATE_DESCRIPTOR, "mrms.caribbean-precip-rate", "Caribbean precipitation rate", "Caribbean Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["caribbean", "puerto rico", "rain rate"]);
+descriptor!(ALASKA_RADAR_QPE_01H_DESCRIPTOR, "mrms.alaska-radar-qpe-1h", "Alaska radar-only one-hour precipitation", "Alaska Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["alaska", "rainfall", "radar only"]);
+descriptor!(HAWAII_RADAR_QPE_01H_DESCRIPTOR, "mrms.hawaii-radar-qpe-1h", "Hawaii radar-only one-hour precipitation", "Hawaii Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["hawaii", "rainfall", "radar only"]);
+descriptor!(GUAM_RADAR_QPE_01H_DESCRIPTOR, "mrms.guam-radar-qpe-1h", "Guam radar-only one-hour precipitation", "Guam Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["guam", "rainfall", "radar only"]);
+descriptor!(CARIB_RADAR_QPE_01H_DESCRIPTOR, "mrms.caribbean-radar-qpe-1h", "Caribbean radar-only one-hour precipitation", "Caribbean Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["caribbean", "puerto rico", "rainfall", "radar only"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -147,7 +155,7 @@ impl CatalogProduct {
     }
 }
 
-pub static CATALOG: [CatalogProduct; 67] = [
+pub static CATALOG: [CatalogProduct; 75] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -216,6 +224,14 @@ pub static CATALOG: [CatalogProduct; 67] = [
     CatalogProduct { descriptor: &HAWAII_REFLECTIVITY_DESCRIPTOR, product: "HAWAII/MergedReflectivityQCComposite_00.50", slug: "mrms-hawaii-reflectivity", description: "NOAA MRMS composite reflectivity over Hawaii" },
     CatalogProduct { descriptor: &GUAM_REFLECTIVITY_DESCRIPTOR, product: "GUAM/MergedReflectivityQCComposite_00.50", slug: "mrms-guam-reflectivity", description: "NOAA MRMS composite reflectivity over Guam" },
     CatalogProduct { descriptor: &CARIB_REFLECTIVITY_DESCRIPTOR, product: "CARIB/MergedReflectivityQCComposite_00.50", slug: "mrms-caribbean-reflectivity", description: "NOAA MRMS composite reflectivity over the Caribbean" },
+    CatalogProduct { descriptor: &ALASKA_PRECIP_RATE_DESCRIPTOR, product: "ALASKA/PrecipRate_00.00", slug: "mrms-alaska-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over Alaska" },
+    CatalogProduct { descriptor: &HAWAII_PRECIP_RATE_DESCRIPTOR, product: "HAWAII/PrecipRate_00.00", slug: "mrms-hawaii-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over Hawaii" },
+    CatalogProduct { descriptor: &GUAM_PRECIP_RATE_DESCRIPTOR, product: "GUAM/PrecipRate_00.00", slug: "mrms-guam-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over Guam" },
+    CatalogProduct { descriptor: &CARIB_PRECIP_RATE_DESCRIPTOR, product: "CARIB/PrecipRate_00.00", slug: "mrms-caribbean-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over the Caribbean" },
+    CatalogProduct { descriptor: &ALASKA_RADAR_QPE_01H_DESCRIPTOR, product: "ALASKA/RadarOnly_QPE_01H_00.00", slug: "mrms-alaska-radar-qpe-1h", description: "One-hour radar-only precipitation over Alaska" },
+    CatalogProduct { descriptor: &HAWAII_RADAR_QPE_01H_DESCRIPTOR, product: "HAWAII/RadarOnly_QPE_01H_00.00", slug: "mrms-hawaii-radar-qpe-1h", description: "One-hour radar-only precipitation over Hawaii" },
+    CatalogProduct { descriptor: &GUAM_RADAR_QPE_01H_DESCRIPTOR, product: "GUAM/RadarOnly_QPE_01H_00.00", slug: "mrms-guam-radar-qpe-1h", description: "One-hour radar-only precipitation over Guam" },
+    CatalogProduct { descriptor: &CARIB_RADAR_QPE_01H_DESCRIPTOR, product: "CARIB/RadarOnly_QPE_01H_00.00", slug: "mrms-caribbean-radar-qpe-1h", description: "One-hour radar-only precipitation over the Caribbean" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -229,7 +245,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 86] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 94] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -316,6 +332,14 @@ pub static DESCRIPTORS: [&FieldDescriptor; 86] = [
     &HAWAII_REFLECTIVITY_DESCRIPTOR,
     &GUAM_REFLECTIVITY_DESCRIPTOR,
     &CARIB_REFLECTIVITY_DESCRIPTOR,
+    &ALASKA_PRECIP_RATE_DESCRIPTOR,
+    &HAWAII_PRECIP_RATE_DESCRIPTOR,
+    &GUAM_PRECIP_RATE_DESCRIPTOR,
+    &CARIB_PRECIP_RATE_DESCRIPTOR,
+    &ALASKA_RADAR_QPE_01H_DESCRIPTOR,
+    &HAWAII_RADAR_QPE_01H_DESCRIPTOR,
+    &GUAM_RADAR_QPE_01H_DESCRIPTOR,
+    &CARIB_RADAR_QPE_01H_DESCRIPTOR,
 ];
 
 /// Source object path for a registered MRMS field.
@@ -1271,6 +1295,14 @@ mod tests {
             let entry = &CATALOG[63 + index];
             assert!(entry.product.starts_with(&format!("{region}/")));
             assert_eq!(product_for_id(entry.descriptor.id.0, 30, 60, 120), Some(entry.product));
+        }
+        for (offset, suffix) in [(0, "PrecipRate_00.00"), (4, "RadarOnly_QPE_01H_00.00")] {
+            for (index, region) in ["ALASKA", "HAWAII", "GUAM", "CARIB"].iter().enumerate() {
+                let entry = &CATALOG[67 + offset + index];
+                assert_eq!(entry.product, format!("{region}/{suffix}"));
+                assert_eq!(product_for_id(entry.descriptor.id.0, 30, 60, 120), Some(entry.product));
+                assert_eq!(descriptor_for_product(entry.product).map(|descriptor| descriptor.id), Some(entry.descriptor.id));
+            }
         }
     }
 
