@@ -13,6 +13,15 @@ const AMBER: egui::Color32 = egui::Color32::from_rgb(255, 209, 120);
 
 const KMH_TO_MPH: f32 = 0.621_371;
 
+/// Back off failed requests, but do not leave a loading spinner stranded for ten minutes.
+pub(crate) fn retry_after_secs(data: Option<&Result<StationObs, String>>) -> u64 {
+    match data {
+        Some(Err(_)) => 60,
+        None => 30,
+        Some(Ok(_)) => 600,
+    }
+}
+
 /// Native-value samples accumulated as distinct frames are viewed at one observation station.
 #[derive(Default)]
 pub struct PointHistory {
@@ -98,15 +107,16 @@ fn record_native(series: &mut Vec<Reading>, stamp: &wxdata::field::DataStamp, te
 }
 
 /// Show the sensor window. `data` is `Ok(station)`, `Err(message)`, or `None` (loading).
-/// Returns `false` when it should close.
+/// Returns `(open, refresh_requested)`.
 pub fn show(
     ctx: &egui::Context,
     data: Option<&Result<StationObs, String>>,
     history: Option<&PointHistory>,
     tz: Option<wxdata::tz::Tz>,
     drawer: &mut crate::ui::drawer::Drawer,
-) -> bool {
+) -> (bool, bool) {
     let mut open = true;
+    let mut refresh = false;
     let Some(window) = drawer.page_sized_fixed(
         ctx,
         "Sensors",
@@ -114,19 +124,23 @@ pub fn show(
         820.0,
         egui::Window::new("Sensors"),
     ) else {
-        return open;
+        return (open, refresh);
     };
-    window.show(ctx, |ui| match data {
+    window.show(ctx, |ui| {
+        refresh = ui.button("↻ Refresh observations").clicked();
+        match data {
         None => {
             ui.weak("Loading nearest station…");
         }
         Some(Err(e)) => {
             ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "No nearby station");
             ui.weak(e);
+            ui.weak("Retrying automatically in one minute, or refresh now.");
         }
         Some(Ok(station)) => dashboard(ui, station, history, tz),
+        }
     });
-    open
+    (open, refresh)
 }
 
 fn dashboard(
@@ -168,6 +182,10 @@ fn dashboard(
                         (Some(time), Some(age)) => format!("Observed {} · {age} min ago", crate::timefmt::fmt_clock(time, tz, false)),
                         _ => "Observation time unavailable".into(),
                     }).size(11.0).color(MUTED));
+                    if age.is_some_and(|minutes| minutes >= 120) {
+                        ui.label(egui::RichText::new("Stale observation · check the timestamp before use")
+                            .size(11.0).strong().color(AMBER));
+                    }
                     ui.label(egui::RichText::new(format!("Humidity {} · {}",
                         opt(cur.rh, "%", 0), wind_label(cur))).size(11.0).color(MUTED));
                 });
@@ -440,6 +458,15 @@ pub(crate) fn compass(deg: f32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sensor_fetch_retries_loading_and_errors_before_healthy_data() {
+        assert_eq!(super::retry_after_secs(None), 30);
+        assert_eq!(super::retry_after_secs(Some(&Err("offline".into()))), 60);
+        let station = wxdata::obs::StationObs {
+            station_id: "KAAA".into(), name: "Test".into(), location: None, obs: Vec::new(),
+        };
+        assert_eq!(super::retry_after_secs(Some(&Ok(station))), 600);
+    }
     use super::*;
     use wxdata::field::{DataClass, DataStamp, FieldFrame, QualitySummary};
 

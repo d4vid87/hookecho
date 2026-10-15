@@ -22391,15 +22391,18 @@ impl eframe::App for HookEchoApp {
         // Sensors: fetch when the window is open and the site changed or the 10-min clock elapsed.
         if self.show_sensors {
             if let Some(site) = self.views[self.active].site.clone() {
-                let stale = self
-                    .sensor_last_fetch
-                    .is_none_or(|t| t.elapsed().as_secs() >= 600);
+                let retry_after = ui::sensor_window::retry_after_secs(self.sensor_data.as_ref());
+                let stale = self.sensor_last_fetch
+                    .is_none_or(|t| t.elapsed().as_secs() >= retry_after);
                 let site_changed = self.sensor_site.as_deref() != Some(site.as_str());
                 if stale || site_changed {
                     if let Some(s) = wxdata::sites::site_by_id(&site) {
                         if site_changed {
                             self.sensor_data = None; // show "loading" until the new site returns
                         }
+                        // Record the requested site now, not only when its response arrives.
+                        // Otherwise every frame queues another request during a station switch.
+                        self.sensor_site = Some(site.clone());
                         self.sensor_last_fetch = Some(Instant::now());
                         self.spawn_overlay(
                             ctx,
@@ -23500,13 +23503,17 @@ impl eframe::App for HookEchoApp {
                 frame(crate::render::FieldLayer::GlobalTemp2m),
             );
         }
-        if self.show_sensors
-            && !ui::sensor_window::show(
+        if self.show_sensors {
+            let (open, refresh) = ui::sensor_window::show(
                 ctx, self.sensor_data.as_ref(),
                 Some(&self.sensor_history), tz, &mut self.drawer,
-            )
-        {
-            self.show_sensors = false;
+            );
+            self.show_sensors = open;
+            if refresh {
+                self.sensor_last_fetch = None;
+                self.sensor_data = None;
+                ctx.request_repaint();
+            }
         }
         if self.show_hodo
             && !ui::hodograph_window::show(
