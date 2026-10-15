@@ -7291,7 +7291,7 @@ impl HookEchoApp {
                         ui.label(format!("{} {state}:", self.views[idx].basemap.label()));
                         let selection = &mut self.views[idx].satellite;
                         if ui
-                            .selectable_label(selection.follow_radar, if forecast { "Next forecast" } else { "Follow radar" })
+                            .selectable_label(selection.follow_radar, if forecast { "Auto-follow" } else { "Follow radar" })
                             .clicked()
                         {
                             self.goes[idx].playing = false;
@@ -7354,7 +7354,7 @@ impl HookEchoApp {
                             selection.follow_radar = false;
                             selection.time = cur.map(|i| times[i + 1]);
                         }
-                        if ui.button(if forecast { "Next valid" } else { "Latest" }).clicked() {
+                        if ui.button(if forecast { "Jump to next" } else { "Latest" }).clicked() {
                             self.goes[idx].playing = false;
                             selection.follow_radar = forecast;
                             selection.time = None;
