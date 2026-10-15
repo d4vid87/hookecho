@@ -53,6 +53,18 @@ const STROKE_LAYERS: &[(&str, &str, StrokePass)] = &[
     ("boundary", "admin_level", StrokePass::Road),
 ];
 
+// The Blue Map is primarily a radar canvas at regional scales. Keep its local-road and
+// built-up-area detail for closer views, where it is useful for storm spotting.
+fn blue_regional_detail_visible(layer: &str, class: &str, zoom: f64) -> bool {
+    match (layer, class) {
+        ("landuse", "residential" | "suburb" | "neighbourhood" | "commercial" | "industrial") => zoom >= 9.0,
+        ("transportation", "primary") => zoom >= 7.5,
+        ("transportation", "secondary") => zoom >= 9.0,
+        ("transportation", "tertiary") => zoom >= 11.0,
+        _ => true,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StrokePass {
     Casing,
@@ -369,6 +381,11 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                 continue;
             }
             let cls = prop(&f.properties, key);
+            if palette == basemap_style::Palette::Blue
+                && !blue_regional_detail_visible(layer, &cls, tess_zoom)
+            {
+                continue;
+            }
             let Some(c) = basemap_style::fill(palette, layer, &cls) else {
                 continue;
             };
@@ -443,6 +460,11 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                 continue;
             }
             let cls = prop(&f.properties, key);
+            if palette == basemap_style::Palette::Blue
+                && !blue_regional_detail_visible(layer, &cls, tess_zoom)
+            {
+                continue;
+            }
             if *layer == "transportation" {
                 let min_zoom = match cls.as_str() {
                     "service" | "track" => 14.0,
@@ -1496,6 +1518,18 @@ impl VectorTileManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blue_map_hides_regional_clutter_and_restores_detail_on_zoom() {
+        assert!(!blue_regional_detail_visible("landuse", "residential", 7.0));
+        assert!(blue_regional_detail_visible("landuse", "residential", 9.0));
+        assert!(!blue_regional_detail_visible("transportation", "primary", 7.0));
+        assert!(blue_regional_detail_visible("transportation", "primary", 7.5));
+        assert!(!blue_regional_detail_visible("transportation", "secondary", 8.0));
+        assert!(blue_regional_detail_visible("transportation", "secondary", 9.0));
+        assert!(blue_regional_detail_visible("transportation", "motorway", 7.0));
+        assert!(blue_regional_detail_visible("water", "", 7.0));
+    }
 
     /// A single square building with OpenMapTiles render-height fields. Keep the source bytes
     /// independent of the vector decoder and the geometry builder exercised below.

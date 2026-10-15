@@ -297,12 +297,13 @@
       "status": "partial",
       "observed_scope": "Observed choices begin Dark Presentation, Grey Presentation, Green Presentation, Blank White, Satellite, Basic, Blue Map, Road Network, Dark Roadmap; extracted control string truncates after Te.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "Independent vector and public raster styles include a Presentation palette with black land and restrained geography. A separate Blank White choice is a tile-free white canvas under radar, station markers, and weather overlays; it suppresses geographic map labels and retains the existing Blank Dark/None behavior. Blue Map is a keyless, independently authored vector palette. Its land, water, vegetation, road, boundary and label colors were tuned against a live RadarOmega Blue Map session; Blue Map roads and casings were also narrowed without changing other palettes.",
+      "hookecho_implementation": "Independent vector and public raster styles include a Presentation palette with black land and restrained geography. A separate Blank White choice is a tile-free white canvas under radar, station markers, and weather overlays; it suppresses geographic map labels and retains the existing Blank Dark/None behavior. Blue Map is a keyless, independently authored vector palette. Its land, water, vegetation, road, boundary and label colors were tuned against a live RadarOmega Blue Map session. Its roads and casings are narrowed, and the regional view suppresses built-up land-use fill and delays smaller road classes until closer zoom levels without changing other palettes.",
       "remaining_gaps": [
-        "No vendor style, font/sprite asset or tile content reuse; full style catalog, tile schema, imagery and label placement differ. In comparable Oklahoma views, HookEcho still draws a denser road network, broader land-cover patches and different map labels than the reference."
+        "No vendor style, font/sprite asset or tile content reuse; full style catalog, tile schema, imagery and label placement differ. The regional Blue Map density adjustment needs a fresh matched-view browser comparison; remaining land-cover and label differences are not yet measured."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/basemap_style.rs",
+        "crates/hookecho/src/vector_tiles.rs",
         "crates/hookecho/src/tiles.rs",
         "crates/hookecho/src/ui/basemap_picker.rs",
         "crates/hookecho/src/app.rs"
@@ -312,7 +313,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP01",
       "acceptance": "Selectable styles preserve map position, data overlays and readable labels.",
-      "runtime_verification": "Native style tests confirmed Blank White's stable key and Blue Map's slug, picker category, keyless vector palette and stable key; 651 app tests passed. A live RadarOmega Blue Map session was captured at 920x600 over Oklahoma after its style loaded. Its background was hsl(216,38%,14%), water hsl(197,48%,6%) and road-simple colors hsl(211,17%,37-40%); these measurements informed HookEcho's independent palette. HookEcho's Blue Map was browser-captured before and after at the same 920x600 viewport, and the final screenshot shows darker navy land, near-black water, muted slate roads and legible labels with warning overlays present. Seven basemap style tests passed; the optimized browser bundle measured 4,639,997 bytes at gzip -9, within the 4,644,000-byte budget. Reference and HookEcho screenshots are in outputs/ro-parity/basemap-blue/."
+      "runtime_verification": "Native style tests confirmed Blank White's stable key and Blue Map's slug, picker category, keyless vector palette and stable key. A live RadarOmega Blue Map session was captured at 920x600 over Oklahoma after its style loaded. Its background was hsl(216,38%,14%), water hsl(197,48%,6%) and road-simple colors hsl(211,17%,37-40%); these measurements informed HookEcho's independent palette. HookEcho's Blue Map was browser-captured before and after at the same 920x600 viewport. A later regional-detail pass was checked in the local browser with the app proxy: the map rendered roads, land cover, labels, warnings and station markers, with fewer primary roads and residential fills at zoom 7. All 679 active library tests passed, including the new zoom gate test; the optimized browser bundle measured 4,653,983 bytes at gzip -9, within the 4,662,000-byte budget. Earlier reference and HookEcho screenshots are in outputs/ro-parity/basemap-blue/."
     },
     {
       "id": "MAP02",
