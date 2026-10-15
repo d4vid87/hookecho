@@ -807,8 +807,15 @@ pub(crate) fn show(
                 }
             });
 
-        if filters.ero_day != 0 && ui.button("Read NOAA forecast discussion").clicked() {
-            actions.ero_discussion = true;
+        if filters.ero_day != 0 {
+            ui.horizontal(|ui| {
+                ui.label("Fill opacity");
+                if ui.add(egui::Slider::new(&mut filters.ero_opacity_pct, 0..=100).suffix("%"))
+                    .changed() { actions.overlays_changed = true; changed = true; }
+            });
+            if ui.button("Read NOAA forecast discussion").clicked() {
+                actions.ero_discussion = true;
+            }
         }
 
         ui.label("Winter precipitation probability");

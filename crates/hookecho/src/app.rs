@@ -189,8 +189,10 @@ pub struct OverlayFilters {
     pub winter_snow_day: u8,
     /// WPC probability of at least 0.25 inches of ice in 24 hours (0 = off).
     pub winter_ice_day: u8,
-    /// WPC Excessive Rainfall Outlook day (0 = off, else 1-3).
+    /// WPC Excessive Rainfall Outlook day (0 = off, else 1–5).
     pub ero_day: u8,
+    /// Fill opacity for WPC excessive-rainfall outlook polygons, 0–100 percent.
+    pub ero_opacity_pct: u8,
     /// Level 3 storm cells (clickable dots: storm tracking, hail, mesocyclone).
     pub show_cells: bool,
     /// SCIT forecast tracks (painter-only; no overlay rebuild).
@@ -227,6 +229,7 @@ impl Default for OverlayFilters {
             winter_snow_day: 0,
             winter_ice_day: 0,
             ero_day: 0,
+            ero_opacity_pct: 100,
 
             show_mds: true,
             show_watches: true,
@@ -11936,7 +11939,10 @@ impl HookEchoApp {
             v.extend(self.winter_ice_features.iter().cloned());
         }
         if (1..=5).contains(&self.filters.ero_day) {
-            v.extend(self.ero_features.iter().cloned());
+            for mut feature in self.ero_features.iter().cloned() {
+                feature.fill[3] = ((feature.fill[3] as u16 * self.filters.ero_opacity_pct as u16) / 100) as u8;
+                v.push(feature);
+            }
         }
         if self.show_outages {
             v.extend(self.outage_features.iter().cloned());
@@ -23237,9 +23243,14 @@ impl eframe::App for HookEchoApp {
                 .and_then(|k| self.pf_icon_tex.get(k))
                 .and_then(|t| t.as_ref());
             let mut play_stream = None;
-            let open = ui::detail_window::show(ctx, detail, tex, &mut self.popovers, &mut play_stream);
+            let mut open_ero_discussion = false;
+            let open = ui::detail_window::show(ctx, detail, tex, &mut self.popovers, &mut play_stream, &mut open_ero_discussion);
             if let Some(url) = play_stream {
                 self.watch_stream(detail.title.clone(), url);
+            }
+            if open_ero_discussion {
+                self.ero_discussion.open = true;
+                self.fetch_ero_discussion();
             }
             if !open {
                 self.detail = None;

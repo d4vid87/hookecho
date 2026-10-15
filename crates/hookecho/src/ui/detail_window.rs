@@ -23,6 +23,7 @@ pub fn show(
     image: Option<&egui::TextureHandle>,
     popovers: &mut crate::ui::popover::Popovers,
     play_stream: &mut Option<String>,
+    open_ero_discussion: &mut bool,
 ) -> bool {
     let mut open = true;
     let mut close = false;
@@ -133,6 +134,10 @@ pub fn show(
                     egui::Label::new(if mesoscale { text } else { text.monospace() }).wrap(),
                 );
             });
+            if detail.title.starts_with("ERO D")
+                && ui.button("Read NOAA rainfall discussion").clicked() {
+                *open_ero_discussion = true;
+            }
             if let Some(url) = &detail.stream {
                 ui.add_space(6.0);
                 let label = if cfg!(target_os = "android") {
