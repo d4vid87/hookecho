@@ -131,7 +131,7 @@ fn packed_integers_carry_their_scale_and_offset() {
 /// metadata that is mostly strings. None of that overlaps with the netCDF-4 path above.
 #[test]
 fn the_odim_volumes_match_h5py_structure_and_all() {
-    for stem in ["bewid", "seang"] {
+    for stem in ["bewid", "seang", "chalb"] {
     let dir = data_dir();
     let bytes = std::fs::read(dir.join(format!("{stem}.h5"))).expect("ODIM fixture");
     let golden: Value =

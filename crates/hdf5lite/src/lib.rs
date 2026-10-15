@@ -20,7 +20,7 @@
 //! - Object header versions 1 and 2 (`OHDR`), both with continuation blocks.
 //! - Groups whose links live in a fractal heap (`FRHP`/`FHIB`/`FHDB`), and old-style symbol-table
 //!   groups (`TREE`/`SNOD` plus a `HEAP` of names). Nested paths resolve through either.
-//! - Dataspace v1–v2, datatype v1 (fixed-point and floating-point), fill value, filter pipeline.
+//! - Dataspace v1–v2, datatype v1 (little- or big-endian fixed-point and floating-point), fill value, filter pipeline.
 //! - Data layout v3: contiguous, and chunked indexed by a version-1 B-tree, of any rank.
 //! - The `shuffle` and `deflate` filters.
 //! - Attributes on datasets *and* groups — numeric, fixed-length string, and variable-length
@@ -28,7 +28,7 @@
 //!   attributes, so groups matter as much as datasets here.
 //!
 //! Not supported, and erroring rather than guessed at: compact layout, huge or tiny fractal-heap
-//! objects, filtered heaps, compound/enum datatypes, big-endian numbers, and soft or external
+//! objects, filtered heaps, compound/enum datatypes, and soft or external
 //! links.
 
 mod btree;

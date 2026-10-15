@@ -1,0 +1,121 @@
+{
+ "names": [
+  "dataset1",
+  "how",
+  "what",
+  "where"
+ ],
+ "attrs": {
+  "": {
+   "Conventions": "ODIM_H5/V2_3"
+  },
+  "dataset1/how": {
+   "NI": 8.220000267028809,
+   "startazA": 0.027466239407658577,
+   "stopazA": 1.005264401435852
+  },
+  "dataset1/what": {
+   "enddate": "20261015",
+   "endtime": "084101",
+   "product": "SCAN",
+   "startdate": "20261015",
+   "starttime": "084041"
+  },
+  "dataset1/where": {
+   "a1gate": 0.0,
+   "elangle": 1.0,
+   "nbins": 492.0,
+   "nrays": 360.0,
+   "rscale": 500.0,
+   "rstart": 0.0
+  },
+  "how": {
+   "RXbandwidth": 2520.0,
+   "RXlossH": 2.41,
+   "RXlossV": 2.3,
+   "TXlossH": 3.15,
+   "TXlossV": 3.2,
+   "antgainH": 44.7,
+   "antgainV": 44.5,
+   "antspeed": 17.946,
+   "beamwH": 1.0,
+   "beamwV": 1.0,
+   "beamwidth": 1.0,
+   "frequency": 5470665272.93,
+   "highprf": 600.0,
+   "lowprf": 600.0,
+   "malfunc": "False",
+   "pulsewidth": 0.5,
+   "radconstH": 73.67,
+   "radconstV": 74.01,
+   "radomelossH": 0.4,
+   "radomelossV": 0.4,
+   "rpm": 2.991,
+   "scan_count": 20.0,
+   "scan_index": 3.0,
+   "simulated": "False",
+   "system": "GEMA600",
+   "wavelength": 5.48
+  },
+  "how/MeteoSwiss": {
+   "enchdf5_version": "3.0.1.11g Oct 12 2026",
+   "source": "copyright MeteoSwiss"
+  },
+  "what": {
+   "date": "20261015",
+   "object": "SCAN",
+   "source": "WMO:06661,NOD:chalb",
+   "time": "084041",
+   "version": "H5rad 2.3"
+  },
+  "where": {
+   "height": 938.0,
+   "lat": 47.284332275390625,
+   "lon": 8.51200008392334
+  },
+  "dataset1/data1/what": {
+   "gain": 0.5,
+   "nodata": 0.0,
+   "offset": -32.0,
+   "quantity": "DBZH",
+   "undetect": 1.0
+  }
+ },
+ "datasets": {
+  "dataset1/data1/data": {
+   "len": 177120,
+   "first": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "last": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "n_finite": 177120,
+   "min": 0.0,
+   "max": 105.0,
+   "sum": 167422.0
+  }
+ },
+ "children": {
+  "dataset1": [
+   "data1",
+   "data2",
+   "data3",
+   "how",
+   "what",
+   "where"
+  ],
+  "dataset1/data1": [
+   "data",
+   "what"
+  ]
+ }
+}

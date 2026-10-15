@@ -168,9 +168,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # 4,583,740 gzip bytes; retain about 6 KB of margin (0.13%) for this verified four-frame export.
 # Public global-radar tiles and frame discovery measure 4,590,891 bytes gzip with binaryen 130.
 # Keep roughly 5 KB of regression headroom while leaving the lite and startup caps unchanged.
-# Eleven Finnish radars, Helsinki time, and correct higher-tilt metadata add 2,688 gzip bytes
-# to the measured 4,595,848-byte bundle. Keep 464 bytes over the 4,598,536-byte result.
-budget="${HOOKECHO_WASM_BUDGET:-4599000}"
+# Finnish, Swiss, Baltic and Maltese radar feeds plus the HDF5 endian/tilt fixes measure
+# 4,599,824 gzip bytes. Keep 676 bytes of headroom without changing the lite or startup caps.
+budget="${HOOKECHO_WASM_BUDGET:-4600500}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

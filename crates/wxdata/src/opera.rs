@@ -17,10 +17,10 @@
 //! ponytail: a curated table of the sites that verify live, not the whole 129-radar feed. Three
 //! things disqualify a country, and all three were measured rather than assumed:
 //!
-//! * Malta writes big-endian datatypes, which `hdf5lite` does not yet read. Norway's
-//!   4-byte-address volumes and delayed velocity objects are supported below.
-//! * Switzerland, France, Estonia and Lithuania publish `SCAN/`, one file per elevation; their
-//!   publishing cadence and file shape still need validation. Sweden and Finland are supported.
+//! * Malta writes big-endian numeric metadata, now read by `hdf5lite`, but currently publishes
+//!   reflectivity only. Norway's 4-byte-address volumes and delayed velocity are supported below.
+//! * France also publishes `SCAN/`, one file per elevation; its file shape still needs validation.
+//!   The Nordic, Swiss, Estonian and Lithuanian SCAN publishers are supported below.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
@@ -61,11 +61,17 @@ pub const SITES: &[SiteEntry] = &[
     site("BEWID", "Wideumont", "BE", 49.9136, 5.5044, 585),
     site("CZBRD", "Brdy", "CZ", 49.6583, 13.8178, 916),
     site("CZSKA", "Skalky", "CZ", 49.5011, 16.7885, 767),
+    site("CHALB", "Albis", "CH", 47.2843, 8.5120, 938),
+    site("CHDOL", "La Dole", "CH", 46.4251, 6.0994, 1682),
+    site("CHPPM", "Plaine Morte", "CH", 46.3706, 7.4866, 2937),
+    site("CHWEI", "Weissfluhgipfel", "CH", 46.8350, 9.7945, 2850),
     site("DKBOR", "Bornholm", "DK", 55.1127, 14.8875, 171),
     site("DKROM", "Romo", "DK", 55.1731, 8.5520, 15),
     site("DKSAM", "Samso", "DK", 55.8119, 10.5853, 48),
     site("DKSIN", "Sindal", "DK", 57.4893, 10.1365, 109),
     site("DKSTE", "Stevns", "DK", 55.3262, 12.4493, 53),
+    site("EEHAR", "Harku", "EE", 59.3971, 24.6021, 70),
+    site("EESUR", "Sürgavere", "EE", 58.4823, 25.5187, 157),
     site("FIKAN", "Kankaanpää", "FI", 61.8108, 22.5020, 175),
     site("FIKAU", "Kaunispää", "FI", 68.4344, 27.4440, 463),
     site("FIKES", "Kesälahti", "FI", 61.9070, 29.7977, 174),
@@ -88,6 +94,9 @@ pub const SITES: &[SiteEntry] = &[
     site("ISKEF", "Keflavik", "IS", 64.0257, -22.6354, 48),
     site("ISSKA", "Skagi", "IS", 66.0557, -20.2680, 164),
     site("ISX2", "Mobile 2", "IS", 63.8696, -20.2023, 42),
+    site("LTLAU", "Laukuva", "LT", 55.6090, 22.2395, 200),
+    site("LTVIL", "Vilnius", "LT", 54.6262, 25.1068, 193),
+    site("MTGUD", "Gudja", "MT", 35.8528, 14.4747, 100),
     site("NLDHL", "Den Helder", "NL", 52.9528, 4.7906, 55),
     site("NLHRW", "Herwijnen", "NL", 51.8369, 5.1381, 25),
     site("NOAND", "Andøya", "NO", 69.2414, 16.0030, 441),
@@ -150,7 +159,7 @@ fn index_url(country: &str, nod: &str, hour: DateTime<Utc>) -> String {
     format!(
         "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/{}/{nod}@{}",
         hour.format("%Y/%m/%d"),
-        if matches!(country, "SE" | "FI") { "SCAN" } else { "PVOL" },
+        if matches!(country, "SE" | "FI" | "CH" | "EE" | "LT") { "SCAN" } else { "PVOL" },
         hour.format("%Y%m%dT%H")
     )
 }
@@ -230,10 +239,10 @@ fn newest_norwegian_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     Vec::new()
 }
 
-/// Pick the latest *complete enough* Nordic scan. Individual elevations arrive separately;
+/// Pick the latest *complete enough* SCAN volume. Individual elevations arrive separately;
 /// choosing a timestamp after only its base tilt lands would repeatedly replace a full volume
-/// with a one-tilt one. Five elevations is the minimum for display.
-fn newest_scan_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+/// with a one-tilt one. Swiss scans publish two cuts; other supported sites publish at least five.
+fn newest_scan_group<'a>(xml: &'a str, nod: &str, minimum: usize) -> Vec<&'a str> {
     let all = keys(xml);
     let mut stamps: Vec<&str> = all.iter().filter_map(|key| {
         let mut parts = key.rsplit('/').next()?.split('@');
@@ -246,7 +255,7 @@ fn newest_scan_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
         let group: Vec<&str> = all.iter().copied().filter(|key| {
             key.rsplit('/').next().is_some_and(|name| name.starts_with(&prefix) && name.contains("DBZH"))
         }).collect();
-        if group.len() >= 5 {
+        if group.len() >= minimum {
             return group;
         }
     }
@@ -289,8 +298,8 @@ pub async fn fetch_volume(
         ))
         .await
         .unwrap_or_default();
-        group = (if matches!(meta.state, "SE" | "FI") {
-            newest_scan_group(&index, &nod)
+        group = (if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
+            newest_scan_group(&index, &nod, if meta.state == "CH" { 2 } else { 5 })
         } else if meta.state == "NO" {
             newest_norwegian_group(&index, &nod)
         } else {
@@ -348,7 +357,7 @@ pub async fn fetch_volume(
 
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
     let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
-    if matches!(meta.state, "SE" | "FI") {
+    if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
         let parts: Vec<(f32, Sweep)> = std::iter::once(&base)
             .chain(files.iter())
             .filter_map(|scan| {
@@ -359,7 +368,7 @@ pub async fn fetch_volume(
             })
             .filter(|(angle, _)| angle.is_finite())
             .collect();
-        anyhow::ensure!(parts.len() >= 5, "incomplete SCAN volume for {id}");
+        anyhow::ensure!(parts.len() >= if meta.state == "CH" { 2 } else { 5 }, "incomplete SCAN volume for {id}");
         return Ok(Some((
             volume_name(id, time),
             time,
@@ -497,11 +506,11 @@ mod tests {
             xml.push_str(&entry("20261015T0730", angle));
         }
         xml.push_str(&entry("20261015T0735", "0.5"));
-        assert_eq!(newest_scan_group(&xml, "seang").len(), 6);
+        assert_eq!(newest_scan_group(&xml, "seang", 5).len(), 6);
         for angle in ["1.0", "1.5", "2.0", "2.5"] {
             xml.push_str(&entry("20261015T0735", angle));
         }
-        let picked = newest_scan_group(&xml, "seang");
+        let picked = newest_scan_group(&xml, "seang", 5);
         assert_eq!(picked.len(), 5);
         assert!(picked.iter().all(|key| key.contains("T0735")));
     }
@@ -619,6 +628,36 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
             }
         }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_swiss_baltic_scans_assemble_every_elevation() {
+        let http = reqwest::Client::new();
+        for id in ["CHALB", "CHDOL", "CHPPM", "CHWEI", "EEHAR", "EESUR", "LTLAU", "LTVIL"] {
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            let minimum = if id.starts_with("CH") { 2 } else { 5 };
+            assert!(scan.sweeps().len() >= minimum, "{id}");
+            for tilt in 0..scan.sweeps().len() {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_maltese_volume_has_reflectivity_only() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "MTGUD", None)
+            .await.expect("volume").expect("fresh volume");
+        assert!(scan.sweeps().len() >= 5);
+        crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, 0).expect("reflectivity");
+        assert!(!crate::level2::available_moments(&scan)[crate::level2::Moment::Velocity.index()]);
     }
 
     #[tokio::test]
