@@ -39,6 +39,39 @@ fn color(rgba: [u8; 4]) -> [f32; 4] {
     ]
 }
 
+#[cfg(test)]
+mod rainfall_border_tests {
+    use super::*;
+    use wxdata::overlay::FeatureKind;
+
+    fn square(title: &str) -> GeoFeature {
+        GeoFeature {
+            rings: vec![vec![[-98.0, 38.0], [-97.0, 38.0], [-97.0, 39.0], [-98.0, 39.0], [-98.0, 38.0]]],
+            fill: [100, 180, 90, 60],
+            stroke: [100, 180, 90, 220],
+            kind: FeatureKind::Outlook,
+            title: title.into(),
+            detail: String::new(),
+            alert: None,
+        }
+    }
+
+    #[test]
+    fn rainfall_border_control_does_not_change_other_outlooks() {
+        let theme = crate::settings::Theme::Dark;
+        let ero = square("ERO D1 MRGL");
+        let off = build_map_with_theme(&[ero.clone()], 6.0, theme, 0.0);
+        let wide = build_map_with_theme(&[ero], 6.0, theme, 6.0);
+        assert!(wide.indices.len() > off.indices.len());
+
+        let spc = square("SPC D1 MRGL");
+        let normal = build_map_with_theme(&[spc.clone()], 6.0, theme, 0.0);
+        let unchanged = build_map_with_theme(&[spc], 6.0, theme, 6.0);
+        assert_eq!(normal.indices, unchanged.indices);
+        assert_eq!(normal.vertices.len(), unchanged.vertices.len());
+    }
+}
+
 /// Build tessellated fills + outlines for `features` at `zoom` (normal theme).
 pub fn build(features: &[GeoFeature], zoom: f64) -> OverlayGeom {
     build_with_theme(features, zoom, crate::settings::Theme::Dark)
@@ -54,16 +87,16 @@ pub fn build_with_theme(
     zoom: f64,
     theme: crate::settings::Theme,
 ) -> OverlayGeom {
-    build_polygons(features, zoom, theme, false)
+    build_polygons(features, zoom, theme, false, None)
 }
 
 /// Interactive map boundaries are painted in screen space by Field Atlas.
 /// Headless exports retain their existing complete GPU outlines.
-pub fn build_map_with_theme(features: &[GeoFeature], zoom: f64, theme: crate::settings::Theme) -> OverlayGeom {
-    build_polygons(features, zoom, theme, true)
+pub fn build_map_with_theme(features: &[GeoFeature], zoom: f64, theme: crate::settings::Theme, ero_border_px: f32) -> OverlayGeom {
+    build_polygons(features, zoom, theme, true, Some(ero_border_px))
 }
 
-fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Theme, atlas: bool) -> OverlayGeom {
+fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Theme, atlas: bool, ero_border_px: Option<f32>) -> OverlayGeom {
     let mut geom = OverlayGeom::default();
     let mut fill_tess = FillTessellator::new();
     let mut stroke_tess = StrokeTessellator::new();
@@ -71,10 +104,6 @@ fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Th
     // ~1.6 px outline in world units at this zoom, scaled for high contrast.
     let stroke_w = (1.6 * scale as f64 / (256.0 * 2f64.powf(zoom))) as f32;
     let fill_opts = FillOptions::default().with_tolerance(stroke_w * 0.5);
-    let stroke_opts = StrokeOptions::default()
-        .with_line_width(stroke_w)
-        .with_tolerance(stroke_w * 0.5);
-
     for f in features {
         let path = feature_path(f);
         let atlas_style = atlas.then(|| crate::field_atlas::style(f)).flatten();
@@ -94,15 +123,23 @@ fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Th
             }),
         );
         if atlas_style.is_none() {
-            let _ = stroke_tess.tessellate_path(
-                &path,
-                &stroke_opts,
-                &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
-                    offset: [0.0; 3],
-                    world: [v.position().x, v.position().y],
-                    color: stroke,
-                }),
-            );
+            let ero = f.kind == wxdata::overlay::FeatureKind::Outlook && f.title.starts_with("ERO D");
+            let border_px = if ero { ero_border_px.unwrap_or(1.6) } else { 1.6 };
+            if border_px > 0.0 {
+                let width = (border_px * scale / (256.0 * 2f64.powf(zoom)) as f32).max(f32::EPSILON);
+                let opts = StrokeOptions::default()
+                    .with_line_width(width)
+                    .with_tolerance(width * 0.5);
+                let _ = stroke_tess.tessellate_path(
+                    &path,
+                    &opts,
+                    &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
+                        offset: [0.0; 3],
+                        world: [v.position().x, v.position().y],
+                        color: stroke,
+                    }),
+                );
+            }
         }
         append(&mut geom, buf);
     }

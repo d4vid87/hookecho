@@ -193,6 +193,8 @@ pub struct OverlayFilters {
     pub ero_day: u8,
     /// Fill opacity for WPC excessive-rainfall outlook polygons, 0–100 percent.
     pub ero_opacity_pct: u8,
+    /// Screen-space width of WPC excessive-rainfall outlook outlines.
+    pub ero_border_px: f32,
     /// Level 3 storm cells (clickable dots: storm tracking, hail, mesocyclone).
     pub show_cells: bool,
     /// SCIT forecast tracks (painter-only; no overlay rebuild).
@@ -230,6 +232,7 @@ impl Default for OverlayFilters {
             winter_ice_day: 0,
             ero_day: 0,
             ero_opacity_pct: 100,
+            ero_border_px: 1.6,
 
             show_mds: true,
             show_watches: true,
@@ -12220,8 +12223,9 @@ impl HookEchoApp {
             self.overlay_gen != self.built_gen || theme_changed,
             bucket != self.built_zoom_bucket || theme_changed,
         ) {
-            let mut geom =
-                overlay_build::build_map_with_theme(&self.overlays, zoom, self.settings.theme);
+            let mut geom = overlay_build::build_map_with_theme(
+                &self.overlays, zoom, self.settings.theme, self.filters.ero_border_px,
+            );
             let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> = self
                 .visible_placefile_iter()
                 .map(|(it, op, _)| (it, op))

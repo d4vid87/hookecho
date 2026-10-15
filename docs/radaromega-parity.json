@@ -1176,14 +1176,15 @@
       "status": "partial",
       "observed_scope": "Captured RadarOmega renderer supports Hydrological Outlook Day selection, risk polygons (marginal, slight, moderate, high), configurable fill opacity and line width, feature popup, and forecast discussion.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "NOAA WPC Excessive Rainfall Outlook Days 1–5 render as selectable risk polygons with a searchable control entry. A day-aware NOAA discussion reader uses the Excessive Rainfall Discussion for Days 1–3 and the broader Extended Forecast Discussion for Days 4–5. Rainfall polygon fill opacity can be adjusted without changing the outlines, and selecting a polygon offers a direct action to open its discussion. River-gauge layers provide related hydrology context.",
+      "hookecho_implementation": "NOAA WPC Excessive Rainfall Outlook Days 1–5 render as selectable risk polygons with a searchable control entry. A day-aware NOAA discussion reader uses the Excessive Rainfall Discussion for Days 1–3 and the broader Extended Forecast Discussion for Days 4–5. Rainfall polygon fill opacity and border width can be adjusted independently, and selecting a polygon offers a direct action to open its discussion. River-gauge layers provide related hydrology context.",
       "remaining_gaps": [
-        "The optimized local browser showed Day 1 ERO polygons, 0% fill opacity with outlines retained, and a selected marginal-risk polygon opening the current NOAA Excessive Rainfall Discussion. RadarOmega border-width controls and historical outlook selection remain unimplemented; popup layout still differs.",
+        "The optimized local browser showed Day 1 ERO polygons, 0% fill opacity with outlines retained, 0 px border width hiding only the ERO outline, and 6 px producing a wider outline. A selected marginal-risk polygon opened the current NOAA Excessive Rainfall Discussion. Historical outlook selection remains unimplemented; popup layout and exact vendor width choices still differ.",
         "RadarOmega component request format and historical coverage were not available in the captured renderer; exact service parity remains unverified."
       ],
       "hookecho_sources": [
         "crates/wxdata/src/ero.rs",
         "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/overlay_build.rs",
         "crates/hookecho/src/ui/layer_options.rs",
         "crates/hookecho/src/app/chrome/registry.rs",
         "crates/hookecho/src/ui/ero_discussion_window.rs",

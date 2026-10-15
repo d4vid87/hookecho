@@ -813,6 +813,12 @@ pub(crate) fn show(
                 if ui.add(egui::Slider::new(&mut filters.ero_opacity_pct, 0..=100).suffix("%"))
                     .changed() { actions.overlays_changed = true; changed = true; }
             });
+            ui.horizontal(|ui| {
+                ui.label("Border width");
+                if ui.add(egui::Slider::new(&mut filters.ero_border_px, 0.0..=6.0)
+                    .step_by(0.2).suffix(" px"))
+                    .changed() { actions.overlays_changed = true; changed = true; }
+            });
             if ui.button("Read NOAA forecast discussion").clicked() {
                 actions.ero_discussion = true;
             }
