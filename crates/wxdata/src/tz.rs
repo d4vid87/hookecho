@@ -126,6 +126,7 @@ pub fn site_tz(id: &str) -> Option<Tz> {
             "BE" => Europe__Brussels,
             "CZ" => Europe__Prague,
             "DK" => Europe__Copenhagen,
+            "FI" => Europe__Helsinki,
             "HR" => Europe__Zagreb,
             "IE" => Europe__Dublin,
             "IS" => Atlantic__Reykjavik,

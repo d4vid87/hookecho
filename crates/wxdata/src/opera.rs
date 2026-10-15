@@ -3,7 +3,7 @@
 //!
 //! ORD is an OGC EDR API on `api.meteogate.eu`, but the API only serves CoverageJSON: the ODIM
 //! files themselves live in a public S3 bucket, `openradar-24h`, one object per volume per moment,
-//! keyed `YYYY/MM/DD/CC/nod/PVOL/nod@YYYYMMDDThhmm@<elevations>@<moments>.h5`. Swedish sites
+//! keyed `YYYY/MM/DD/CC/nod/PVOL/nod@YYYYMMDDThhmm@<elevations>@<moments>.h5`. Nordic sites
 //! instead publish one `SCAN` object per elevation. Anonymous, no key,
 //! no registration, CC BY 4.0, and the bucket lists with a prefix — so finding the newest volume
 //! is one ~5 KB listing of the current hour rather than the megabyte of HTML DWD charges for the
@@ -19,9 +19,8 @@
 //!
 //! * Malta writes big-endian datatypes, which `hdf5lite` does not yet read. Norway's
 //!   4-byte-address volumes and delayed velocity objects are supported below.
-//! * Switzerland, Finland, France, Estonia and Lithuania publish `SCAN/`, one file per
-//!   elevation; their publishing cadence and file shape still need validation. Sweden's
-//!   nine-elevation `SCAN/` volumes are supported below.
+//! * Switzerland, France, Estonia and Lithuania publish `SCAN/`, one file per elevation; their
+//!   publishing cadence and file shape still need validation. Sweden and Finland are supported.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
@@ -67,6 +66,17 @@ pub const SITES: &[SiteEntry] = &[
     site("DKSAM", "Samso", "DK", 55.8119, 10.5853, 48),
     site("DKSIN", "Sindal", "DK", 57.4893, 10.1365, 109),
     site("DKSTE", "Stevns", "DK", 55.3262, 12.4493, 53),
+    site("FIKAN", "Kankaanpää", "FI", 61.8108, 22.5020, 175),
+    site("FIKAU", "Kaunispää", "FI", 68.4344, 27.4440, 463),
+    site("FIKES", "Kesälahti", "FI", 61.9070, 29.7977, 174),
+    site("FIKOR", "Korpo", "FI", 60.1285, 21.6434, 61),
+    site("FIKUO", "Kuopio", "FI", 62.8626, 27.3815, 268),
+    site("FILUO", "Luosto", "FI", 67.1391, 26.8969, 533),
+    site("FINUR", "Nurmes", "FI", 63.8379, 29.4489, 323),
+    site("FIPET", "Petäjävesi", "FI", 62.3045, 25.4401, 271),
+    site("FIUTA", "Utajärvi", "FI", 64.7749, 26.3189, 118),
+    site("FIVIH", "Vihti", "FI", 60.5562, 24.4956, 181),
+    site("FIVIM", "Vimpeli", "FI", 63.1048, 23.8209, 200),
     site("HRBIL", "Bilogora", "HR", 45.8835, 17.2005, 280),
     site("HRDEB", "Debeljak", "HR", 44.0452, 15.3764, 208),
     site("HRGOL", "Goli", "HR", 45.0205, 14.1223, 553),
@@ -140,7 +150,7 @@ fn index_url(country: &str, nod: &str, hour: DateTime<Utc>) -> String {
     format!(
         "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/{}/{nod}@{}",
         hour.format("%Y/%m/%d"),
-        if country == "SE" { "SCAN" } else { "PVOL" },
+        if matches!(country, "SE" | "FI") { "SCAN" } else { "PVOL" },
         hour.format("%Y%m%dT%H")
     )
 }
@@ -220,9 +230,9 @@ fn newest_norwegian_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     Vec::new()
 }
 
-/// Pick the latest *complete enough* Swedish scan. Individual elevations arrive separately;
+/// Pick the latest *complete enough* Nordic scan. Individual elevations arrive separately;
 /// choosing a timestamp after only its base tilt lands would repeatedly replace a full volume
-/// with a one-tilt one. Five of the nine published elevations is the minimum for display.
+/// with a one-tilt one. Five elevations is the minimum for display.
 fn newest_scan_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     let all = keys(xml);
     let mut stamps: Vec<&str> = all.iter().filter_map(|key| {
@@ -279,7 +289,7 @@ pub async fn fetch_volume(
         ))
         .await
         .unwrap_or_default();
-        group = (if meta.state == "SE" {
+        group = (if matches!(meta.state, "SE" | "FI") {
             newest_scan_group(&index, &nod)
         } else if meta.state == "NO" {
             newest_norwegian_group(&index, &nod)
@@ -338,7 +348,7 @@ pub async fn fetch_volume(
 
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
     let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
-    if meta.state == "SE" {
+    if matches!(meta.state, "SE" | "FI") {
         let parts: Vec<(f32, Sweep)> = std::iter::once(&base)
             .chain(files.iter())
             .filter_map(|scan| {
@@ -349,7 +359,7 @@ pub async fn fetch_volume(
             })
             .filter(|(angle, _)| angle.is_finite())
             .collect();
-        anyhow::ensure!(parts.len() >= 5, "incomplete Swedish scan for {id}");
+        anyhow::ensure!(parts.len() >= 5, "incomplete SCAN volume for {id}");
         return Ok(Some((
             volume_name(id, time),
             time,
@@ -582,6 +592,33 @@ mod tests {
         let base = &scan.sweeps()[0].radials()[0];
         assert!(base.reflectivity().is_some());
         assert!(base.velocity().is_some());
+        for tilt in 0..scan.sweeps().len() {
+            crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                .unwrap_or_else(|e| panic!("SEANG tilt {tilt} reflectivity: {e}"));
+            crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                .unwrap_or_else(|e| panic!("SEANG tilt {tilt} velocity: {e}"));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_finnish_scan_assembles_reflectivity_and_velocity() {
+        let http = reqwest::Client::new();
+        for id in ["FIKAN", "FIKAU", "FIKES", "FIKOR", "FIKUO", "FILUO", "FINUR", "FIPET", "FIUTA", "FIVIH", "FIVIM"] {
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            assert!(scan.sweeps().len() >= 5, "{id}");
+            let base = &scan.sweeps()[0].radials()[0];
+            assert!(base.reflectivity().is_some(), "{id}: reflectivity");
+            assert!(base.velocity().is_some(), "{id}: velocity");
+            for tilt in 0..5 {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
     }
 
     #[tokio::test]
