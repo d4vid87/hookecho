@@ -6,16 +6,28 @@ use chrono::{DateTime, Utc};
 pub struct Selection {
     pub follow_radar: bool,
     pub time: Option<DateTime<Utc>>,
+    /// Stable basemap slug that supplied `time`; older saved selections have no source.
+    pub source_slug: Option<String>,
 }
 impl Default for Selection {
     fn default() -> Self {
         Self {
             follow_radar: true,
             time: None,
+            source_slug: None,
         }
     }
 }
 impl Selection {
+    /// A manual time from another product's cadence is not a valid selection here. Reset once
+    /// for older saved selections with no source identity as well.
+    pub fn bind_source(&mut self, slug: &str) {
+        if self.source_slug.as_deref() == Some(slug) { return; }
+        self.follow_radar = true;
+        self.time = None;
+        self.source_slug = Some(slug.to_owned());
+    }
+
     pub fn selected(
         &self,
         frames: &[DateTime<Utc>],
@@ -40,11 +52,15 @@ impl Selection {
 
 /// Reject imagery more than thirty minutes from the loaded radar scan.
 pub fn nearest(frames: &[DateTime<Utc>], radar: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    nearest_within(frames, radar, 1_800_000)
+}
+
+fn nearest_within(frames: &[DateTime<Utc>], target: DateTime<Utc>, max_offset_ms: u64) -> Option<DateTime<Utc>> {
     frames
         .iter()
         .copied()
-        .min_by_key(|frame| (*frame - radar).num_milliseconds().unsigned_abs())
-        .filter(|frame| (*frame - radar).num_milliseconds().unsigned_abs() <= 1_800_000)
+        .min_by_key(|frame| (*frame - target).num_milliseconds().unsigned_abs())
+        .filter(|frame| (*frame - target).num_milliseconds().unsigned_abs() <= max_offset_ms)
 }
 
 #[derive(Default)]
@@ -99,10 +115,12 @@ mod tests {
         let first = Selection {
             follow_radar: false,
             time: Some(frames[0]),
+            source_slug: None,
         };
         let second = Selection {
             follow_radar: false,
             time: Some(frames[1]),
+            source_slug: None,
         };
         assert_eq!(first.selected(&frames, Some(frames[1])), Some(frames[0]));
         assert_eq!(second.selected(&frames, Some(frames[0])), Some(frames[1]));
@@ -143,5 +161,36 @@ mod tests {
         let archive = loop_window(&frames, now, Some(archive_hour));
         assert_eq!(archive.len(), 8);
         assert!(archive.iter().all(|frame| frame.timestamp().div_euclid(3600) == archive_hour));
+    }
+
+    #[test]
+    fn manual_time_never_snaps_to_a_different_source_cadence() {
+        let dwd_time: DateTime<Utc> = "2026-10-15T00:05:00Z".parse().unwrap();
+        let eccc_frames = [
+            "2026-10-15T00:00:00Z".parse().unwrap(),
+            "2026-10-15T00:06:00Z".parse().unwrap(),
+        ];
+        let manual = Selection { follow_radar: false, time: Some(dwd_time), source_slug: None };
+        assert_eq!(manual.selected(&eccc_frames, None), None);
+        let expired = Selection { time: Some(dwd_time - chrono::Duration::hours(2)), ..manual };
+        assert_eq!(expired.selected(&eccc_frames, None), None);
+    }
+
+    #[test]
+    fn changing_imagery_source_discards_foreign_manual_time() {
+        let old: DateTime<Utc> = "2026-10-15T00:05:00Z".parse().unwrap();
+        let mut selection = Selection { follow_radar: false, time: Some(old), source_slug: Some("dwd-radar-wn".into()) };
+        selection.bind_source("eccc-radar-rain");
+        assert!(selection.follow_radar);
+        assert_eq!(selection.time, None);
+        assert_eq!(selection.source_slug.as_deref(), Some("eccc-radar-rain"));
+        selection.follow_radar = false;
+        selection.time = Some(old);
+        selection.bind_source("eccc-radar-rain");
+        assert_eq!(selection.time, Some(old), "same-source manual selection is preserved");
+        let mut legacy: Selection = serde_json::from_str(r#"{"follow_radar":false,"time":"2026-10-15T00:05:00Z"}"#).unwrap();
+        legacy.bind_source("eccc-radar-rain");
+        assert!(legacy.follow_radar);
+        assert_eq!(legacy.time, None);
     }
 }

@@ -7203,6 +7203,9 @@ impl HookEchoApp {
         if self.goes.len() <= idx {
             self.goes.resize_with(idx + 1, Default::default);
         }
+        // Manual frame instants belong to the source that supplied them. Persisting the slug
+        // makes this work across reloads as well as in-session basemap changes.
+        self.views[idx].satellite.bind_source(style.slug());
         let radar = self.views[idx].displayed_time();
         let selection_clock = if self.settings.link_satellite_times { self.views[self.active].displayed_time() } else { radar };
         // An explicit satellite selection must fetch its own archive window.

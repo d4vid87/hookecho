@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn independent_satellite_selections_survive_workspace_roundtrip() {
         let mut view = MapView::new(Some("KTLX".into()), crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 7.0));
-        view.satellite = crate::satellite_time::Selection { follow_radar: false, time: chrono::DateTime::from_timestamp(1_700_000_000, 0) };
+        view.satellite = crate::satellite_time::Selection { follow_radar: false, time: chrono::DateTime::from_timestamp(1_700_000_000, 0), source_slug: None };
         let snapshot = PaneSnap::capture(&view);
         let encoded = serde_json::to_string(&snapshot).unwrap();
         let decoded: PaneSnap = serde_json::from_str(&encoded).unwrap();
