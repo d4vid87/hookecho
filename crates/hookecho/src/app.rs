@@ -2723,6 +2723,10 @@ struct Goto {
     moment: Option<Moment>,
     tilt: Option<usize>,
     basemap: Option<String>,
+    /// Omitted in old links, so those preserve the recipient's current camera orientation.
+    globe: Option<bool>,
+    pitch_deg: Option<f64>,
+    bearing_deg: Option<f64>,
     /// Outer `None`: the link said nothing about the threshold, so the viewer keeps its own.
     /// Inner `None`: the link said `thr:off`, which turns the threshold off on purpose.
     threshold: Option<Option<f32>>,
@@ -2730,7 +2734,8 @@ struct Goto {
 }
 
 /// Parse `[hookecho://goto/]SITE[,lon,lat,zoom][,extra…]`, where each extra is an RFC3339 time, a
-/// moment code (`VEL`), a tilt index, a basemap (`bm:dark`), a threshold (`thr:25` / `thr:off`)
+/// moment code (`VEL`), a tilt index, a basemap (`bm:dark`), camera orientation
+/// (`proj:merc`, `pitch:42`, `brg:90`), a threshold (`thr:25` / `thr:off`)
 /// or the literal `srv` — sniffed by shape, so their order does not matter. A bare `SITE` flies to the site itself; the site may be
 /// empty when lon/lat are given.
 fn parse_goto(v: &str) -> Option<Goto> {
@@ -2753,6 +2758,9 @@ fn parse_goto(v: &str) -> Option<Goto> {
             moment: None,
             tilt: None,
             basemap: None,
+            globe: None,
+            pitch_deg: None,
+            bearing_deg: None,
             threshold: None,
             srv: false,
         }
@@ -2774,6 +2782,9 @@ fn parse_goto(v: &str) -> Option<Goto> {
             moment: None,
             tilt: None,
             basemap: None,
+            globe: None,
+            pitch_deg: None,
+            bearing_deg: None,
             threshold: None,
             srv: false,
         }
@@ -2787,6 +2798,12 @@ fn parse_goto(v: &str) -> Option<Goto> {
             g.tilt = Some(i);
         } else if let Some(slug) = s.strip_prefix("bm:") {
             g.basemap = Some(slug.to_string());
+        } else if let Some(projection) = s.strip_prefix("proj:") {
+            g.globe = match projection { "globe" => Some(true), "merc" => Some(false), _ => None };
+        } else if let Some(value) = s.strip_prefix("pitch:") {
+            g.pitch_deg = value.parse::<f64>().ok().filter(|v| v.is_finite());
+        } else if let Some(value) = s.strip_prefix("brg:") {
+            g.bearing_deg = value.parse::<f64>().ok().filter(|v| v.is_finite());
         } else if let Some(t) = s.strip_prefix("thr:") {
             // The value is in the moment's own unit, which is what the slider stores: dBZ for
             // reflectivity, m/s for velocity. Not the display unit — a link must mean the same
@@ -2836,8 +2853,11 @@ fn goto_link(g: &Goto) -> String {
         .map(|v| format!(",thr:{v}"))
         .unwrap_or_default();
     let basemap = g.basemap.as_ref().map(|s| format!(",bm:{s}")).unwrap_or_default();
+    let projection = g.globe.map(|globe| if globe { ",proj:globe" } else { ",proj:merc" }).unwrap_or("");
+    let pitch = g.pitch_deg.map(|v| format!(",pitch:{v:.1}")).unwrap_or_default();
+    let bearing = g.bearing_deg.map(|v| format!(",brg:{v:.1}")).unwrap_or_default();
     let srv = if g.srv { ",srv" } else { "" };
-    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}{thr}{basemap}{srv}");
+    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}{thr}{basemap}{projection}{pitch}{bearing}{srv}");
     #[cfg(target_arch = "wasm32")]
     {
         let origin = web_sys::window()
@@ -4942,6 +4962,13 @@ impl HookEchoApp {
         }
         if let Some(slug) = &g.basemap {
             view.basemap = crate::tiles::BasemapStyle::from_slug(slug);
+        }
+        if let Some(globe) = g.globe { view.camera.set_globe(globe); }
+        if g.pitch_deg.is_some() || g.bearing_deg.is_some() {
+            view.camera.set_orientation(
+                g.pitch_deg.unwrap_or(view.camera.pitch_deg),
+                g.bearing_deg.unwrap_or(view.camera.bearing_deg),
+            );
         }
         // After the moment, so `VEL,thr:15` thresholds velocity and not whatever was showing.
         if let Some(t) = g.threshold {
@@ -10012,6 +10039,9 @@ impl HookEchoApp {
                     moment: Some(v.moment),
                     tilt: Some(v.tilt),
                     basemap: Some(v.basemap.slug().to_string()),
+                    globe: Some(v.camera.globe),
+                    pitch_deg: Some(v.camera.pitch_deg),
+                    bearing_deg: Some(v.camera.bearing_deg),
                     threshold: v.threshold_enabled[v.moment.index()]
                         .then(|| v.thresholds[v.moment.index()]),
                     srv: v.srv,
@@ -24181,6 +24211,9 @@ mod tests {
             moment: Some(moment),
             tilt: Some(tilt),
             basemap: None,
+            globe: None,
+            pitch_deg: None,
+            bearing_deg: None,
             threshold,
             srv: false,
         };
@@ -24207,6 +24240,16 @@ mod tests {
         // A view with the threshold switched off shares as "nothing to say", not as `thr:off` —
         // overriding the recipient's own setting with a default nobody chose.
         assert!(!goto_link(&base(Moment::Reflectivity, 0, Some(None))).contains("thr:"));
+
+        let mut oriented = base(Moment::Reflectivity, 0, None);
+        oriented.globe = Some(false);
+        oriented.pitch_deg = Some(42.5);
+        oriented.bearing_deg = Some(273.0);
+        let link = goto_link(&oriented);
+        let round = parse_goto(&link).unwrap();
+        assert_eq!((round.globe, round.pitch_deg, round.bearing_deg),
+            (Some(false), Some(42.5), Some(273.0)));
+        assert_eq!(parse_goto("KFWS,-97.3,32.5,8").unwrap().pitch_deg, None);
     }
 
     #[test]

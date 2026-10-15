@@ -786,7 +786,7 @@ on the default.
 
 The address bar is a permalink: the `#goto=` fragment follows the active pane as
 you pan, zoom and scrub, so copying the URL sends someone to the frame you were
-looking at, archive time included. The share button in the control column does
+looking at, archive time and 2D/3D orientation included. The share button in the control column does
 the same thing through the platform's share sheet where there is one.
 
 **Cloudflare Pages** — `web/_worker.js/`, deployed by
@@ -821,13 +821,15 @@ hookecho://goto/,-97.28,35.33,9                        # no site: just the view
 hookecho://goto/KTLX,-97.28,35.33,9,2013-05-20T20:00:00Z   # and an instant
 hookecho://goto/KTLX,-97.28,35.33,9,VEL,1              # and a product and tilt
 hookecho://goto/KTLX,-97.28,35.33,9,thr:25             # and a threshold, in dBZ
+hookecho://goto/KTLX,-97.28,35.33,9,proj:merc,pitch:42.5,brg:273.0  # tilted map
 ```
 
 The timestamp is RFC 3339 and puts the timeline where it was, so a link can
 point at a moment in the archive rather than at "now". The trailing fields are
 recognized by shape, not position: a timestamp, a product code (`VEL`, `ZDR`,
 `CC`, …), a tilt index, a basemap (`bm:dark`), a threshold (`thr:25`, or
-`thr:off` to turn one off) and `srv` can appear in any order, and any you leave
+`thr:off` to turn one off), projection (`proj:merc` or `proj:globe`), pitch
+(`pitch:0`–`pitch:60`), bearing (`brg:0`–`brg:360`) and `srv` can appear in any order, and any you leave
 out keep whatever the person opening the link already had.
 
 The threshold is in the product's own unit — dBZ for reflectivity, m/s for
