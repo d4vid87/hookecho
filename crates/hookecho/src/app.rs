@@ -5462,7 +5462,7 @@ impl HookEchoApp {
         ] {
             if (1..=3).contains(&day) { self.spawn_overlay(ctx, OverlaySource::WinterProb(day, kind)); }
         }
-        if (1..=3).contains(&self.filters.ero_day) {
+        if (1..=5).contains(&self.filters.ero_day) {
             self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
         }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
@@ -9071,7 +9071,7 @@ impl HookEchoApp {
         }
         if actions.ero_day_changed {
             self.ero_features.clear();
-            if (1..=3).contains(&self.filters.ero_day) {
+            if (1..=5).contains(&self.filters.ero_day) {
                 self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
             }
         }
@@ -11806,7 +11806,7 @@ impl HookEchoApp {
         if (1..=3).contains(&self.filters.winter_ice_day) {
             v.extend(self.winter_ice_features.iter().cloned());
         }
-        if (1..=3).contains(&self.filters.ero_day) {
+        if (1..=5).contains(&self.filters.ero_day) {
             v.extend(self.ero_features.iter().cloned());
         }
         if self.show_outages {

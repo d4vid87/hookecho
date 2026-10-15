@@ -788,7 +788,7 @@ pub(crate) fn show(
                 format!("Day {}", filters.ero_day)
             })
             .show_ui(ui, |ui| {
-                for day in 0u8..=3 {
+                for day in 0u8..=5 {
                     let label = if day == 0 {
                         "Off".to_string()
                     } else {

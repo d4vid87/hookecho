@@ -1161,24 +1161,25 @@
       "title": "Hydrological outlooks",
       "priority": 1,
       "status": "partial",
-      "observed_scope": "Sidebar destination observed: Hydrological Outlooks.",
+      "observed_scope": "Captured RadarOmega renderer supports Hydrological Outlook Day selection, risk polygons (marginal, slight, moderate, high), configurable fill opacity and line width, feature popup, and forecast discussion.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "WPC excessive rainfall and river-gauge integrations provide related hydrology layers.",
+      "hookecho_implementation": "NOAA WPC Excessive Rainfall Outlook Days 1–5 render as selectable risk polygons with a searchable control entry; river-gauge layers provide related hydrology context.",
       "remaining_gaps": [
-        "Every hydrological outlook/product and its historical coverage is not mapped."
+        "Forecast discussion in the outlook inspector, display opacity/line-width controls, and historical outlook selection are not yet implemented.",
+        "RadarOmega component request format and historical coverage were not available in the captured renderer; exact service parity remains unverified."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/notify.rs",
-        "crates/hookecho/src/spoken_alerts.rs",
-        "crates/hookecho/src/ui/alert_panel.rs",
-        "crates/hookecho/src/ui/warning_window.rs"
+        "crates/wxdata/src/ero.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/app/chrome/registry.rs"
       ],
       "observation_evidence_ids": [
         "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV05",
       "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "NOAA public MapServer advertises Day 1–5 layers. Optimized web build and wxdata ERO tests passed; in local browser, searched Excessive rainfall outlook, opened Outlooks, and selected Day 5. Live polygon retrieval was not separately confirmed."
     },
     {
       "id": "OV06",

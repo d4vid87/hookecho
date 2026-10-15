@@ -1132,6 +1132,14 @@ impl HookEchoApp {
             Some(self.filters.winter_ice_day != 0),
         );
         push(
+            "Excessive rainfall outlook",
+            "Severe",
+            "NOAA WPC Day 1–5 flash-flood risk areas",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.ero_day != 0),
+        );
+        push(
             "Map settings",
             "Reference",
             "Active pane palettes, display smoothing, precision and globe projection",
