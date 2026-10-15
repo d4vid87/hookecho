@@ -12668,7 +12668,7 @@ impl HookEchoApp {
         self.radar_memory_highwater = self.radar_memory_highwater.max(bytes);
         let cap = radar_payload_budget();
         let binned_cap = if cfg!(target_os = "android") { 16 * 1024 * 1024 }
-            else if cfg!(target_arch = "wasm32") { 24 * 1024 * 1024 } else { 64 * 1024 * 1024 };
+            else if cfg!(target_arch = "wasm32") { 32 * 1024 * 1024 } else { 64 * 1024 * 1024 };
         for view in &mut self.views { view.trim_binned_memory(binned_cap); }
         if bytes <= cap { return; }
         // Displayed frames remain pinned. Recent display bins can be rebuilt from the shared
@@ -20065,6 +20065,9 @@ impl HookEchoApp {
                 "radar_cache_evictions":self.radar_cache_evictions,
                 "radar_payload_over_budget":encoded_scan_bytes > radar_payload_budget(),
                 "visual_quality_degraded":crate::ui::motion::degraded(),
+                "adaptive_quality_reduced":self.adaptive.reduced,
+                "ui_cpu_p95_ms":self.adaptive.p95_ms(),
+                "gesture_cadence_p95_ms":self.adaptive.cadence_p95_ms(),
                 "scope":"Map draw timing excludes uploads and wind advection. Memory excludes metadata, allocator and driver overhead and framework resources.",
             },
         }))

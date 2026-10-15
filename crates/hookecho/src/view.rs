@@ -45,19 +45,14 @@ fn tilts_only_grew(old: &[f32], new: &[f32]) -> bool {
 /// lap, forever. Keeping the volumes themselves means each (moment, tilt) is binned once per
 /// volume instead of four times a second.
 ///
-/// Sized to the loop window, because that is the working set: what a lap comes back to. The scan
-/// behind each one is an `Arc` shared with the app's decoded-volume cache, so what this actually
-/// holds is the binned sweeps that were looked at — about 1.3 MB per sweep per volume.
+/// Sized to cover a 21-frame loop. A browser run with only two retained volumes binned 417 sweeps
+/// in about two minutes while showing 21 frames: nearly every frame was binned again on each lap.
+/// The scan behind each entry is shared with the decoded-volume cache, and the separate pane
+/// binned-byte cap still evicts old sweeps when a site's bins are too large to fit.
 const RECENT_VOLUMES: usize = if cfg!(target_os = "android") {
     8
-} else if cfg!(target_arch = "wasm32") {
-    // Two, not six. These overlap the app's own scan cache by design — both hold the same
-    // `Arc<Scan>` — but the binned sweeps hanging off them are this pane's alone, and in a
-    // 32-bit heap that never shrinks, six volumes' worth of them is the difference between a
-    // tab that runs all day and one that has to be closed.
-    2
 } else {
-    12
+    24
 };
 
 type BinnedKey = (Moment, usize, bool, Option<i64>, bool);
@@ -1066,6 +1061,27 @@ mod tests {
             }
         }
         assert_eq!(retained.len(), 10, "one allocation per volume, then two free laps");
+    }
+
+    #[test]
+    fn twenty_one_frame_loop_keeps_its_display_bins_for_the_next_lap() {
+        let now = chrono::Utc::now();
+        let mut view = MapView::new(
+            Some("KTLX".into()),
+            crate::render::mercator::Camera::at_lonlat(-97.28, 35.33, 7.0),
+        );
+        let scans: Vec<_> = (0..21).map(|_| scan_at(&[0.5])).collect();
+        let mut first_bin = None;
+        for (idx, scan) in scans.iter().enumerate() {
+            view.show_volume(Arc::clone(scan), format!("frame-{idx}"), now);
+            let bin = view.volume.as_mut().unwrap()
+                .shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+            if idx == 0 { first_bin = Some(bin); }
+        }
+        view.show_volume(Arc::clone(&scans[0]), "frame-0".into(), now);
+        let reused = view.volume.as_mut().unwrap()
+            .shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+        assert!(Arc::ptr_eq(&first_bin.unwrap(), &reused));
     }
 
     #[test]
