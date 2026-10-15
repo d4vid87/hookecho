@@ -20007,7 +20007,7 @@ impl HookEchoApp {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .diagnostics();
-        let (cache, degraded, storage_error) = wxdata::object_cache::known_stats();
+        let (cache, cache_stats_ready, storage_error) = wxdata::object_cache::known_stats();
         let cache: Vec<_> = cache
             .into_iter()
             .map(|row| serde_json::json!({
@@ -20053,7 +20053,8 @@ impl HookEchoApp {
             "sources": sources,
             "cache": {
                 "families": cache,
-                "degraded": degraded,
+                "stats_ready": cache_stats_ready,
+                "degraded": storage_error.is_some(),
                 "storage_error": storage_error.map(|_| "storage unavailable"),
             },
             "performance_counters": counters,
@@ -20063,6 +20064,7 @@ impl HookEchoApp {
                 "radar_payload_highwater_bytes":self.radar_memory_highwater,
                 "radar_cache_evictions":self.radar_cache_evictions,
                 "radar_payload_over_budget":encoded_scan_bytes > radar_payload_budget(),
+                "visual_quality_degraded":crate::ui::motion::degraded(),
                 "scope":"Map draw timing excludes uploads and wind advection. Memory excludes metadata, allocator and driver overhead and framework resources.",
             },
         }))
