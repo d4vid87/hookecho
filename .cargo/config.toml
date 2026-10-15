@@ -13,4 +13,4 @@
 # fails with "cannot find value `Europe__Somewhere` in this scope" — a compile error, not a
 # wrong answer at runtime. Add it to the list and rebuild.
 [env]
-CHRONO_TZ_TIMEZONE_FILTER = "(America/(Anchorage|Boise|Chicago|Denver|Detroit|Indiana/Indianapolis|Los_Angeles|New_York|Phoenix|Puerto_Rico|Sitka)|Atlantic/Reykjavik|Europe/(Amsterdam|Berlin|Brussels|Bucharest|Copenhagen|Dublin|Helsinki|Ljubljana|Malta|Prague|Tallinn|Vilnius|Warsaw|Zagreb|Zurich)|Pacific/(Guam|Honolulu)|UTC)"
+CHRONO_TZ_TIMEZONE_FILTER = "(America/(Anchorage|Boise|Chicago|Denver|Detroit|Indiana/Indianapolis|Los_Angeles|New_York|Phoenix|Puerto_Rico|Sitka)|Atlantic/Reykjavik|Europe/(Amsterdam|Berlin|Brussels|Bucharest|Copenhagen|Dublin|Helsinki|Ljubljana|Malta|Paris|Prague|Tallinn|Vilnius|Warsaw|Zagreb|Zurich)|Pacific/(Guam|Honolulu)|UTC)"

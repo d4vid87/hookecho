@@ -14,13 +14,13 @@
 //! magnitude cheaper than a German one, which needs forty files. Publishers that split moments
 //! into one file per quantity are handled by fetching the rest of the group and folding them in.
 //!
-//! ponytail: a curated table of the sites that verify live, not the whole 129-radar feed. Three
-//! things disqualify a country, and all three were measured rather than assumed:
+//! The site table is curated from live published objects rather than every registered radar.
+//! Publisher-specific differences are handled explicitly:
 //!
 //! * Malta writes big-endian numeric metadata, now read by `hdf5lite`, but currently publishes
 //!   reflectivity only. Norway's 4-byte-address volumes and delayed velocity are supported below.
-//! * France also publishes `SCAN/`, one file per elevation; its file shape still needs validation.
-//!   The Nordic, Swiss, Estonian and Lithuanian SCAN publishers are supported below.
+//! * France publishes `SCAN/` cuts at consecutive minutes within a five-minute cycle, unlike the
+//!   Nordic, Swiss, Estonian and Lithuanian SCAN publishers' equal-timestamp cuts.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
@@ -72,6 +72,29 @@ pub const SITES: &[SiteEntry] = &[
     site("DKSTE", "Stevns", "DK", 55.3262, 12.4493, 53),
     site("EEHAR", "Harku", "EE", 59.3971, 24.6021, 70),
     site("EESUR", "Sürgavere", "EE", 58.4823, 25.5187, 157),
+    site("FRABB", "Abbeville", "FR", 50.1360, 1.8347, 84),
+    site("FRAJA", "Ajaccio", "FR", 41.9531, 8.7005, 784),
+    site("FRALE", "Aléria", "FR", 42.1297, 9.4964, 63),
+    site("FRAVE", "Avesnes", "FR", 50.1283, 3.8118, 209),
+    site("FRBLA", "Blaisy-Haut", "FR", 47.3552, 4.7759, 607),
+    site("FRBOL", "Bollène", "FR", 44.3231, 4.7622, 325),
+    site("FRBOR", "Bordeaux", "FR", 44.8315, -0.6919, 70),
+    site("FRBOU", "Bourges", "FR", 47.0586, 2.3596, 174),
+    site("FRCAE", "Falaise", "FR", 48.9272, -0.1496, 167),
+    site("FRCOL", "Collobrières", "FR", 43.2166, 6.3729, 654),
+    site("FRGRE", "Grèzes", "FR", 45.1044, 1.3697, 360),
+    site("FRMCL", "Montclar", "FR", 43.9905, 2.6096, 679),
+    site("FRMOM", "Momuy", "FR", 43.6245, -0.6094, 146),
+    site("FRMTC", "Montancy", "FR", 47.3686, 7.0190, 926),
+    site("FRNAN", "Nancy", "FR", 48.7158, 6.5816, 296),
+    site("FRNIM", "Nîmes", "FR", 43.8061, 4.5027, 78),
+    site("FRNIZ", "Saint Nizier", "FR", 46.0678, 4.4454, 920),
+    site("FROPO", "Opoul", "FR", 42.9184, 2.8650, 718),
+    site("FRPLA", "Plabennec", "FR", 48.4609, -4.4298, 111),
+    site("FRTOU", "Toulouse", "FR", 43.5743, 1.3763, 187),
+    site("FRTRA", "Trappes", "FR", 48.7746, 2.0083, 190),
+    site("FRTRE", "Treillères", "FR", 47.3374, -1.6563, 81),
+    site("FRTRO", "Arcis-sur-Aube", "FR", 48.4621, 4.3093, 165),
     site("FIKAN", "Kankaanpää", "FI", 61.8108, 22.5020, 175),
     site("FIKAU", "Kaunispää", "FI", 68.4344, 27.4440, 463),
     site("FIKES", "Kesälahti", "FI", 61.9070, 29.7977, 174),
@@ -159,7 +182,7 @@ fn index_url(country: &str, nod: &str, hour: DateTime<Utc>) -> String {
     format!(
         "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/{}/{nod}@{}",
         hour.format("%Y/%m/%d"),
-        if matches!(country, "SE" | "FI" | "CH" | "EE" | "LT") { "SCAN" } else { "PVOL" },
+        if matches!(country, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") { "SCAN" } else { "PVOL" },
         hour.format("%Y%m%dT%H")
     )
 }
@@ -262,6 +285,35 @@ fn newest_scan_group<'a>(xml: &'a str, nod: &str, minimum: usize) -> Vec<&'a str
     Vec::new()
 }
 
+/// French cuts are stamped at each minute of a five-minute cycle, not all at its start. Require
+/// all five minute slots before presenting a cycle, with the final (lowest) cut as its timestamp.
+fn newest_french_scan_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    let mut cycles: std::collections::BTreeMap<(&str, u8), Vec<(u8, &'a str)>> =
+        std::collections::BTreeMap::new();
+    for key in keys(xml) {
+        let Some(name) = key.rsplit('/').next() else { continue };
+        let mut fields = name.split('@');
+        if fields.next() != Some(nod) { continue; }
+        let (Some(stamp), Some(_angle), Some(moment)) =
+            (fields.next(), fields.next(), fields.next()) else { continue };
+        if !moment.contains("DBZH") || stamp.len() != 13 { continue; }
+        let Some(minute) = stamp.get(11..13).and_then(|s| s.parse::<u8>().ok()) else { continue };
+        if minute >= 60 { continue; }
+        cycles.entry((&stamp[..11], minute / 5)).or_default().push((minute % 5, key));
+    }
+    for (_, cuts) in cycles.into_iter().rev() {
+        if cuts.len() < 5 || !(0..5).all(|slot| cuts.iter().any(|(minute, _)| *minute == slot)) {
+            continue;
+        }
+        let mut group: Vec<&str> = cuts.into_iter().map(|(_, key)| key).collect();
+        group.sort_unstable();
+        let base = group.pop().expect("a complete cycle has a final cut");
+        group.insert(0, base);
+        return group;
+    }
+    Vec::new()
+}
+
 /// The newest volume for `id`, assembled from the objects EUMETNET published for it.
 pub async fn fetch_volume(
     http: &reqwest::Client,
@@ -298,7 +350,9 @@ pub async fn fetch_volume(
         ))
         .await
         .unwrap_or_default();
-        group = (if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
+        group = (if meta.state == "FR" {
+            newest_french_scan_group(&index, &nod)
+        } else if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
             newest_scan_group(&index, &nod, if meta.state == "CH" { 2 } else { 5 })
         } else if meta.state == "NO" {
             newest_norwegian_group(&index, &nod)
@@ -357,7 +411,7 @@ pub async fn fetch_volume(
 
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
     let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
-    if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
+    if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") {
         let parts: Vec<(f32, Sweep)> = std::iter::once(&base)
             .chain(files.iter())
             .filter_map(|scan| {
@@ -516,6 +570,30 @@ mod tests {
     }
 
     #[test]
+    fn french_scan_waits_for_the_final_minute_of_every_cycle() {
+        let entry = |minute: u8, angle: &str| format!(
+            "<Key>2026/10/15/FR/frabb/SCAN/frabb@20261015T08{minute:02}@{angle}@DBZH_TH_VRADH.h5</Key>"
+        );
+        let mut xml = String::new();
+        for (minute, angle) in [(45, "7.5"), (45, "90.0"), (46, "0.9"),
+            (47, "1.51"), (48, "4.5"), (49, "0.4")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        for (minute, angle) in [(50, "6.5"), (50, "9.5"), (51, "0.9"),
+            (52, "1.51"), (53, "3.5")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        let picked = newest_french_scan_group(&xml, "frabb");
+        assert_eq!(picked.len(), 6);
+        assert!(picked[0].contains("T0849@0.4"));
+        xml.push_str(&entry(54, "0.4"));
+        let picked = newest_french_scan_group(&xml, "frabb");
+        assert_eq!(picked.len(), 6);
+        assert!(picked[0].contains("T0854@0.4"));
+        assert!(picked.iter().all(|key| key.contains("T085")));
+    }
+
+    #[test]
     fn norwegian_group_waits_for_matching_delayed_velocity() {
         let row = |time: &str, angles: &str, moment: &str| format!(
             "<Key>2026/10/15/NO/noand/PVOL/noand@{time}@{angles}@{moment}.h5</Key>"
@@ -658,6 +736,25 @@ mod tests {
         assert!(scan.sweeps().len() >= 5);
         crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, 0).expect("reflectivity");
         assert!(!crate::level2::available_moments(&scan)[crate::level2::Moment::Velocity.index()]);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_french_cycles_assemble_every_elevation() {
+        let http = reqwest::Client::new();
+        for site in SITES.iter().filter(|site| site.state == "FR") {
+            let id = site.id;
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            assert!(scan.sweeps().len() >= 5, "{id}");
+            for tilt in 0..scan.sweeps().len() {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
     }
 
     #[tokio::test]
