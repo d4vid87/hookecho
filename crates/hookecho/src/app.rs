@@ -2487,6 +2487,7 @@ struct MrmsLoop {
     requested_at: Option<DateTime<Utc>>,
     follow_through_archive: bool,
     follow_from: Option<DateTime<Utc>>,
+    backward_from: Option<DateTime<Utc>>,
     error: Option<String>,
     loading: bool,
 }
@@ -10556,7 +10557,11 @@ impl HookEchoApp {
                                 if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == *layer) {
                                     loop_state.error = Some(err.clone());
                                     loop_state.loading = false;
-                                    if loop_state.follow_from.take().is_some() { loop_state.playing = false; }
+                                    let forward = loop_state.follow_from.take().is_some();
+                                    let backward = loop_state.backward_from.take().is_some();
+                                    if forward || backward {
+                                        loop_state.playing = false;
+                                    }
                                 }
                             }
                             note_feed_error(lane.label(), err);
@@ -10754,9 +10759,12 @@ impl HookEchoApp {
                     let was_live = prior.is_none_or(|old| old.index + 1 == old.frames.len());
                     let playing = prior.is_some_and(|old| old.playing);
                     let follow_from = prior.and_then(|old| old.follow_from);
+                    let backward_from = prior.and_then(|old| old.backward_from);
                     let first_newer = follow_from.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time > time));
-                    let exhausted = follow_from.is_some() && first_newer.is_none();
-                    let index = if let Some(index) = first_newer { index } else if was_live { frames.len() - 1 } else {
+                    let last_older = backward_from.and_then(|time| frames.iter().rposition(|frame| frame.stamp.valid_time < time));
+                    let exhausted = (follow_from.is_some() && first_newer.is_none())
+                        || (backward_from.is_some() && last_older.is_none());
+                    let index = if let Some(index) = first_newer.or(last_older) { index } else if was_live { frames.len() - 1 } else {
                         prior_time.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time == time))
                             .unwrap_or(0)
                     };
@@ -10764,7 +10772,10 @@ impl HookEchoApp {
                         last_step: Instant::now(), requested_at: at,
                         follow_through_archive: prior.is_some_and(|old| old.follow_through_archive),
                         follow_from: None,
-                        error: exhausted.then(|| "No newer mosaic in this window. Choose a later time or return to latest.".to_owned()),
+                        backward_from: None,
+                        error: exhausted.then(|| if backward_from.is_some() {
+                            "No earlier mosaic in this window. Choose another time."
+                        } else { "No newer mosaic in this window. Choose a later time or return to latest." }.to_owned()),
                         loading: false };
                     if let Some(slot) = self.mrms_loops.iter_mut().find(|old| old.layer == layer) {
                         *slot = loop_state;
@@ -18442,6 +18453,34 @@ impl HookEchoApp {
         loop_state.index = (loop_state.index as isize + delta).rem_euclid(len as isize) as usize;
         loop_state.last_step = Instant::now();
         self.show_mrms_loop_frame(layer);
+    }
+
+    /// Request the adjacent six-frame public archive window without clearing the displayed field.
+    fn request_mrms_adjacent_window(&mut self, layer: crate::render::FieldLayer, direction: isize,
+        keep_playing: bool) -> bool {
+        let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) else { return false; };
+        if loop_state.requested_at.is_none() || loop_state.loading || direction == 0 { return false; }
+        if direction > 0 {
+            let Some(last) = loop_state.frames.last().map(|frame| frame.stamp.valid_time) else { return false; };
+            if last >= Utc::now() - chrono::Duration::minutes(3) {
+                loop_state.playing = false;
+                return false;
+            }
+            loop_state.requested_at = Some((last + chrono::Duration::minutes(13)).min(Utc::now()));
+            loop_state.follow_from = Some(last);
+            loop_state.backward_from = None;
+        } else {
+            let Some(first) = loop_state.frames.first().map(|frame| frame.stamp.valid_time) else { return false; };
+            loop_state.requested_at = Some(first - chrono::Duration::seconds(1));
+            loop_state.backward_from = Some(first);
+            loop_state.follow_from = None;
+        }
+        loop_state.playing = keep_playing;
+        loop_state.loading = true;
+        loop_state.error = None;
+        loop_state.last_step = Instant::now();
+        self.fields.entry(layer).or_default().last_fetch = None;
+        true
     }
 
     /// The field's source time, selected analysis time, tolerance, and alignment result.

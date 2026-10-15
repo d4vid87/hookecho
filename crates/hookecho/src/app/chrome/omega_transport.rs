@@ -23,20 +23,9 @@ impl HookEchoApp {
             let next_window = self.mrms_loops.iter().find(|state| state.layer == layer)
                 .filter(|state| state.follow_through_archive && state.requested_at.is_some()
                     && state.index + 1 == state.frames.len())
-                .and_then(|state| state.frames.last().map(|frame| frame.stamp.valid_time));
-            if let Some(last_time) = next_window {
-                if let Some(state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
-                    if last_time >= Utc::now() - chrono::Duration::minutes(3) {
-                        state.playing = false;
-                    } else {
-                        state.requested_at = Some((last_time + chrono::Duration::minutes(13)).min(Utc::now()));
-                        state.follow_from = Some(last_time);
-                        state.loading = true;
-                        state.last_step = Instant::now();
-                        self.fields.entry(layer).or_default().last_fetch = None;
-                    }
-                }
-            } else { self.step_mrms_loop(layer, 1); }
+                .is_some();
+            if next_window { self.request_mrms_adjacent_window(layer, 1, true); }
+            else { self.step_mrms_loop(layer, 1); }
         } }
         if self.mrms_loops.iter().any(|loop_state| Some(loop_state.layer) == active_mrms && loop_state.playing) {
             ctx.request_repaint_after(mrms_interval.min(std::time::Duration::from_millis(100)));
@@ -128,6 +117,7 @@ impl HookEchoApp {
         let mut action = None;
         let mut show_layers = false;
         let mut mrms_step = 0isize;
+        let mut mrms_boundary_step = 0isize;
         let mut mrms_seek = None;
         let mut mrms_toggle = false;
         let mut mrms_archive_request = None;
@@ -395,10 +385,16 @@ impl HookEchoApp {
                             ui.separator();
                             }
                             if let Some((len, index, playing)) = mrms_loop.filter(|(len, _, _)| *len > 1) {
-                                if omega_button(ui, ph::SKIP_BACK, "Previous mosaic", false).clicked() { mrms_step = -1; }
+                                if omega_button(ui, ph::SKIP_BACK, "Previous mosaic", false).clicked() {
+                                    if mrms_archive_at.is_some() && index == 0 { mrms_boundary_step = -1; }
+                                    else { mrms_step = -1; }
+                                }
                                 if omega_button(ui, if playing { ph::PAUSE } else { ph::PLAY },
                                     if playing { "Pause mosaic" } else { "Play mosaic" }, playing).clicked() { mrms_toggle = true; }
-                                if omega_button(ui, ph::SKIP_FORWARD, "Next mosaic", false).clicked() { mrms_step = 1; }
+                                if omega_button(ui, ph::SKIP_FORWARD, "Next mosaic", false).clicked() {
+                                    if mrms_archive_at.is_some() && index + 1 == len { mrms_boundary_step = 1; }
+                                    else { mrms_step = 1; }
+                                }
                                 if omega_button(ui, ph::BROADCAST, "Latest mosaic", index + 1 == len).clicked() { mrms_seek = Some(len - 1); }
                                 ui.weak(format!("{}/{len}", index + 1));
                                 ui.separator();
@@ -438,6 +434,11 @@ impl HookEchoApp {
                 self.step_mrms_loop(layer, mrms_step);
             }
         }
+        if mrms_boundary_step != 0 {
+            if let Some(layer) = active_mrms {
+                self.request_mrms_adjacent_window(layer, mrms_boundary_step, false);
+            }
+        }
         if mrms_toggle {
             if let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| Some(loop_state.layer) == active_mrms) {
                 loop_state.playing = !loop_state.playing;
@@ -453,6 +454,7 @@ impl HookEchoApp {
             if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) {
                 loop_state.requested_at = at;
                 loop_state.follow_from = None;
+                loop_state.backward_from = None;
                 if at.is_none() { loop_state.follow_through_archive = false; }
                 loop_state.index = loop_state.frames.len().saturating_sub(1);
                 loop_state.playing = false;
