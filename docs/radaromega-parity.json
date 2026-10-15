@@ -799,7 +799,7 @@
       "status": "implemented-related",
       "observed_scope": "Visible play transport, frame/time card and scrubber variables/handlers.",
       "observation_type": "runtime-screenshot+static-client",
-      "hookecho_implementation": "New transport shares existing frame-status track and step/play/pause/GoLive semantics.",
+      "hookecho_implementation": "New radar transport shares existing frame-status track and step/play/pause/GoLive semantics. The separate timed-imagery bar now has pane-local Play/Pause, frame-ready advancement, a bounded recent/archive loop, and manual Previous/Next/Latest across the advertised catalog.",
       "remaining_gaps": [
         "Current fixture interaction verification pending; exact competitor scrubber, missing-frame and forecast-tail behavior not matched."
       ],
@@ -816,7 +816,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME02",
       "acceptance": "Play/pause, step and scrub maintain matching timestamp/data; live/archive state is clear.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "Optimized local browser: DWD WN Play advanced from 1:50 AM CEST through later five-minute frames, wrapped within the recent loop, and Pause held 2:05 AM for six seconds. An earlier unbounded 48-frame attempt crossed the archive boundary and reset the catalog; the bounded loop eliminated that observed failure. Radar scrubber and other timed-imagery feeds remain separately unverified."
     },
     {
       "id": "TIME03",

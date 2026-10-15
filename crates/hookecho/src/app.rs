@@ -7047,7 +7047,28 @@ impl HookEchoApp {
             return;
         }
         let times = self.goes[idx].times.clone();
+        let loop_times = crate::satellite_time::loop_window(&times, Utc::now(), self.goes[idx].hour);
         let radar = self.views[idx].displayed_time();
+        let frame_interval = Duration::from_secs_f32(
+            1.0 / self.settings.source_animation_speeds.get(crate::settings::AnimationSource::Satellite)
+        );
+        if self.goes[idx].playing {
+            if loop_times.len() < 2 || self.goes[idx].imagery_incomplete {
+                self.goes[idx].playing = false;
+            } else {
+                ctx.request_repaint_after(frame_interval);
+                if self.goes[idx].imagery_ready
+                    && self.goes[idx].last_advance.is_none_or(|at| at.elapsed() >= frame_interval)
+                {
+                    let selection = &mut self.views[idx].satellite;
+                    selection.time = crate::satellite_time::next_loop_frame(
+                        loop_times, selection.selected(&times, radar)
+                    );
+                    selection.follow_radar = false;
+                    self.goes[idx].last_advance = Some(Instant::now());
+                }
+            }
+        }
         let selected = self.views[idx].satellite.selected(&times, radar);
         let tz = self.active_tz();
         let workspace = self.settings.radar_workspace && !chrome::compact(ctx);
@@ -7081,15 +7102,36 @@ impl HookEchoApp {
                             .selectable_label(selection.follow_radar, "Follow radar")
                             .clicked()
                         {
+                            self.goes[idx].playing = false;
                             selection.follow_radar = !selection.follow_radar;
                             selection.time = None;
                         }
                         let cur =
                             selected.and_then(|time| times.iter().position(|frame| *frame == time));
                         if ui
+                            .add_enabled(loop_times.len() > 1, egui::Button::new(if self.goes[idx].playing { "Pause" } else { "Play" }))
+                            .clicked()
+                        {
+                            let catalog = &mut self.goes[idx];
+                            catalog.playing = !catalog.playing;
+                            catalog.last_advance = Some(Instant::now());
+                            if catalog.playing {
+                                selection.follow_radar = false;
+                                selection.time = Some(if selected == loop_times.last().copied()
+                                    || !selected.is_some_and(|time| loop_times.contains(&time))
+                                {
+                                    loop_times[0]
+                                } else {
+                                    selected.unwrap()
+                                });
+                                ctx.request_repaint_after(frame_interval);
+                            }
+                        }
+                        if ui
                             .add_enabled(cur.is_some_and(|i| i > 0), egui::Button::new("◀"))
                             .clicked()
                         {
+                            self.goes[idx].playing = false;
                             selection.follow_radar = false;
                             selection.time = cur.map(|i| times[i - 1]);
                         }
@@ -7115,10 +7157,12 @@ impl HookEchoApp {
                             )
                             .clicked()
                         {
+                            self.goes[idx].playing = false;
                             selection.follow_radar = false;
                             selection.time = cur.map(|i| times[i + 1]);
                         }
                         if ui.button("Latest").clicked() {
+                            self.goes[idx].playing = false;
                             selection.follow_radar = false;
                             selection.time = None;
                         }
@@ -7179,6 +7223,10 @@ impl HookEchoApp {
             catalog.hour = hour;
             if changed {
                 catalog.times.clear();
+                catalog.playing = false;
+                catalog.last_advance = None;
+                catalog.imagery_ready = false;
+                catalog.imagery_incomplete = false;
             }
             catalog.requested_at = Some(wxdata::clock::Instant::now());
             let (tx, rx) = std::sync::mpsc::channel();
