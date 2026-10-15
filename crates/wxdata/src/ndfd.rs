@@ -35,8 +35,10 @@ pub async fn fetch_point(
     lon: f64,
     lat: f64,
     valid: DateTime<Utc>,
+    region: &str,
     element: &str,
 ) -> anyhow::Result<Option<f64>> {
+    anyhow::ensure!(matches!(region, "conus" | "alaska" | "hawaii"), "unsupported NDFD region");
     anyhow::ensure!(matches!(element, "maxt" | "mint" | "pop12"), "unsupported NDFD element");
     anyhow::ensure!(lon.is_finite() && lat.is_finite() && (-180.0..=180.0).contains(&lon) && (-85.0..=85.0).contains(&lat), "invalid point");
     let projected_lon = 6_378_137.0 * lon.to_radians();
@@ -50,7 +52,7 @@ pub async fn fetch_point(
         .timeout(crate::net::FEED_TIMEOUT)
         .query(&[
             ("grid", "ndfd"),
-            ("region", "conus"),
+            ("region", region),
             ("lat", &format!("{projected_lat:.3}")),
             ("lon", &format!("{projected_lon:.3}")),
             ("latdeg", &format!("{lat:.4}")),

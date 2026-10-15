@@ -7877,6 +7877,7 @@ impl HookEchoApp {
     /// advertises these layers as non-queryable, so GetFeatureInfo cannot supply this value.
     fn fetch_ndfd_point(&mut self, ctx: &egui::Context, idx: usize, style: crate::tiles::BasemapStyle, lon: f64, lat: f64) {
         let Some((element, label, unit)) = style.ndfd_point() else { return; };
+        let Some(region) = style.ndfd_region() else { return; };
         let Some(valid) = self.goes.get(idx).and_then(|catalog| {
             self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
         }) else {
@@ -7896,7 +7897,7 @@ impl HookEchoApp {
         let http = self.http.clone();
         let ctx2 = ctx.clone();
         self.spawner.spawn(async move {
-            let result = wxdata::ndfd::fetch_point(&http, lon, lat, valid, element)
+            let result = wxdata::ndfd::fetch_point(&http, lon, lat, valid, region, element)
                 .await
                 .map_err(|error| error.to_string());
             let result = result.map(|value| (value, label, unit, valid, lon, lat));

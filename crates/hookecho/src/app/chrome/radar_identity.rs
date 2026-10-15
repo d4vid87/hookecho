@@ -70,6 +70,13 @@ impl HookEchoApp {
                 crate::tiles::BasemapStyle::NdfdRainChance,
                 crate::tiles::BasemapStyle::NdfdMaxTemp,
                 crate::tiles::BasemapStyle::NdfdMinTemp,
+                crate::tiles::BasemapStyle::NdfdAlaskaRainChance,
+                crate::tiles::BasemapStyle::NdfdAlaskaMaxTemp,
+                crate::tiles::BasemapStyle::NdfdAlaskaMinTemp,
+                crate::tiles::BasemapStyle::NdfdHawaiiRainChance,
+                crate::tiles::BasemapStyle::NdfdHawaiiMaxTemp,
+                crate::tiles::BasemapStyle::NdfdHawaiiMinTemp,
+
             ] {
                 if ui.selectable_label(style == current, style.label()).clicked() {
                     pick = Some(style);

@@ -21,7 +21,7 @@ struct Entry {
 }
 
 pub struct NdfdLegends {
-    entries: [Entry; 3],
+    entries: [Entry; 9],
 }
 
 impl Default for NdfdLegends {
@@ -33,17 +33,25 @@ fn slot(style: BasemapStyle) -> Option<(usize, &'static str, &'static str)> {
         BasemapStyle::NdfdRainChance => Some((0, "pop12", "Rain chance · %")),
         BasemapStyle::NdfdMaxTemp => Some((1, "maxt", "Daytime high · °F")),
         BasemapStyle::NdfdMinTemp => Some((2, "mint", "Overnight low · °F")),
+        BasemapStyle::NdfdAlaskaRainChance => Some((3, "pop12", "Alaska rain chance · %")),
+        BasemapStyle::NdfdAlaskaMaxTemp => Some((4, "maxt", "Alaska daytime high · °F")),
+        BasemapStyle::NdfdAlaskaMinTemp => Some((5, "mint", "Alaska overnight low · °F")),
+        BasemapStyle::NdfdHawaiiRainChance => Some((6, "pop12", "Hawaii rain chance · %")),
+        BasemapStyle::NdfdHawaiiMaxTemp => Some((7, "maxt", "Hawaii daytime high · °F")),
+        BasemapStyle::NdfdHawaiiMinTemp => Some((8, "mint", "Hawaii overnight low · °F")),
+
         _ => None,
     }
 }
 
-fn url(element: &str, valid: DateTime<Utc>) -> String {
-    // These map bounds only request the CONUS scale. NOAA currently returns the same scale
-    // across viewports for these three elements; valid time allows its server to choose any
-    // time-dependent palette if that changes.
+fn url(region: &str, element: &str, valid: DateTime<Utc>) -> String {
+    let bounds = match region {
+        "alaska" => "left=-19000000&bottom=6400000&right=-14000000&top=11800000",
+        "hawaii" => "left=-18000000&bottom=2000000&right=-17000000&top=3000000",
+        _ => "left=-13000000&bottom=3000000&right=-7500000&top=6200000",
+    };
     format!("https://digital.weather.gov/scripts/wxmap_legendImage.php?dataset=ndfd&element={element}\
-&region=conus&vt={}&opacity=0.8&left=-13000000&bottom=3000000&right=-7500000&top=6200000\
-&width={LEGEND_W}&ms=english", valid.format("%Y-%m-%dT%H:%M"))
+&region={region}&vt={}&opacity=0.8&{bounds}&width={LEGEND_W}&ms=english", valid.format("%Y-%m-%dT%H:%M"))
 }
 
 impl NdfdLegends {
@@ -56,7 +64,7 @@ impl NdfdLegends {
         if let Some(rx) = &entry.rx {
             match rx.try_recv() {
                 Ok(Ok(image)) => {
-                    entry.tex = Some(ctx.load_texture(format!("ndfd-legend-{element}"), image, TextureOptions::LINEAR));
+                    entry.tex = Some(ctx.load_texture(format!("ndfd-legend-{i}"), image, TextureOptions::LINEAR));
                     entry.rx = None;
                     ctx.request_repaint();
                 }
@@ -77,7 +85,7 @@ impl NdfdLegends {
         entry.requested = Some(Instant::now());
         let http = http.clone();
         let ctx = ctx.clone();
-        let source = url(element, valid);
+        let source = url(style.ndfd_region().unwrap(), element, valid);
         spawner.spawn(async move {
             let result = async {
                 let response = http.get(wxdata::net::fetch_url(&source))
@@ -132,9 +140,13 @@ mod tests {
     #[test]
     fn legend_urls_use_selected_valid_time_and_product() {
         let valid = DateTime::parse_from_rfc3339("2026-10-16T00:00:00Z").unwrap().with_timezone(&Utc);
-        assert!(url("maxt", valid).contains("element=maxt&region=conus&vt=2026-10-16T00:00"));
+        assert!(url("conus", "maxt", valid).contains("element=maxt&region=conus&vt=2026-10-16T00:00"));
+        assert!(url("alaska", "maxt", valid).contains("region=alaska"));
+        assert!(url("hawaii", "pop12", valid).contains("region=hawaii"));
         assert_eq!(slot(BasemapStyle::NdfdRainChance).unwrap().1, "pop12");
         assert_eq!(slot(BasemapStyle::NdfdMinTemp).unwrap().1, "mint");
+        assert_eq!(slot(BasemapStyle::NdfdAlaskaMaxTemp).unwrap().0, 4);
+        assert_eq!(slot(BasemapStyle::NdfdHawaiiRainChance).unwrap().0, 6);
         assert!(slot(BasemapStyle::Dark).is_none());
     }
 }

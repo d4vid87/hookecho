@@ -123,6 +123,12 @@ pub enum BasemapStyle {
     NdfdMaxTemp,
     /// NOAA's operational NDFD overnight low temperature for CONUS.
     NdfdMinTemp,
+    NdfdAlaskaRainChance,
+    NdfdAlaskaMaxTemp,
+    NdfdAlaskaMinTemp,
+    NdfdHawaiiRainChance,
+    NdfdHawaiiMaxTemp,
+    NdfdHawaiiMinTemp,
     MapboxStreets,
     MapboxSatellite,
     MapboxSatelliteStreets,
@@ -178,7 +184,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 66] = [
+    pub const ALL: [BasemapStyle; 72] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -246,6 +252,12 @@ impl BasemapStyle {
         BasemapStyle::NdfdRainChance,
         BasemapStyle::NdfdMaxTemp,
         BasemapStyle::NdfdMinTemp,
+        BasemapStyle::NdfdAlaskaRainChance,
+        BasemapStyle::NdfdAlaskaMaxTemp,
+        BasemapStyle::NdfdAlaskaMinTemp,
+        BasemapStyle::NdfdHawaiiRainChance,
+        BasemapStyle::NdfdHawaiiMaxTemp,
+        BasemapStyle::NdfdHawaiiMinTemp,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -315,6 +327,12 @@ impl BasemapStyle {
             BasemapStyle::NdfdRainChance => "NDFD rain chance (12 h)",
             BasemapStyle::NdfdMaxTemp => "NDFD high temperature",
             BasemapStyle::NdfdMinTemp => "NDFD low temperature",
+            BasemapStyle::NdfdHawaiiRainChance => "NDFD Hawaii rain chance (12 h)",
+            BasemapStyle::NdfdHawaiiMaxTemp => "NDFD Hawaii high temperature",
+            BasemapStyle::NdfdHawaiiMinTemp => "NDFD Hawaii low temperature",
+            BasemapStyle::NdfdAlaskaRainChance => "NDFD Alaska rain chance (12 h)",
+            BasemapStyle::NdfdAlaskaMaxTemp => "NDFD Alaska high temperature",
+            BasemapStyle::NdfdAlaskaMinTemp => "NDFD Alaska low temperature",
             BasemapStyle::MapboxStreets => "Mapbox Streets",
             BasemapStyle::MapboxSatellite => "Mapbox Satellite",
             BasemapStyle::MapboxSatelliteStreets => "Mapbox Satellite Streets",
@@ -387,6 +405,12 @@ impl BasemapStyle {
             BasemapStyle::NdfdRainChance => "ndfd-rain-chance",
             BasemapStyle::NdfdMaxTemp => "ndfd-high-temp",
             BasemapStyle::NdfdMinTemp => "ndfd-low-temp",
+            BasemapStyle::NdfdHawaiiRainChance => "ndfd-hawaii-rain-chance",
+            BasemapStyle::NdfdHawaiiMaxTemp => "ndfd-hawaii-high-temp",
+            BasemapStyle::NdfdHawaiiMinTemp => "ndfd-hawaii-low-temp",
+            BasemapStyle::NdfdAlaskaRainChance => "ndfd-alaska-rain-chance",
+            BasemapStyle::NdfdAlaskaMaxTemp => "ndfd-alaska-high-temp",
+            BasemapStyle::NdfdAlaskaMinTemp => "ndfd-alaska-low-temp",
             BasemapStyle::MapboxStreets => "mapbox-streets",
             BasemapStyle::MapboxSatellite => "mapbox-satellite",
             BasemapStyle::MapboxSatelliteStreets => "mapbox-satellite-streets",
@@ -491,7 +515,7 @@ impl BasemapStyle {
                     "Radar data © Environment and Climate Change Canada (Open Government Licence – Canada)"
                 }
                 BasemapStyle::RainViewerGlobal => "Weather data by RainViewer ↗",
-                BasemapStyle::NdfdRainChance | BasemapStyle::NdfdMaxTemp | BasemapStyle::NdfdMinTemp => "NOAA/NWS National Digital Forecast Database",
+                _ if self.ndfd_layer().is_some() => "NOAA/NWS National Digital Forecast Database",
                 BasemapStyle::HimawariIR
                 | BasemapStyle::HimawariAirMass
                 | BasemapStyle::HimawariVisible => "NASA GIBS · JMA Himawari",
@@ -556,8 +580,18 @@ impl BasemapStyle {
             Self::NdfdRainChance => Some("ndfd.conus.pop12"),
             Self::NdfdMaxTemp => Some("ndfd.conus.maxt"),
             Self::NdfdMinTemp => Some("ndfd.conus.mint"),
+            Self::NdfdHawaiiRainChance => Some("ndfd.hawaii.pop12"),
+            Self::NdfdHawaiiMaxTemp => Some("ndfd.hawaii.maxt"),
+            Self::NdfdHawaiiMinTemp => Some("ndfd.hawaii.mint"),
+            Self::NdfdAlaskaRainChance => Some("ndfd.alaska.pop12"),
+            Self::NdfdAlaskaMaxTemp => Some("ndfd.alaska.maxt"),
+            Self::NdfdAlaskaMinTemp => Some("ndfd.alaska.mint"),
             _ => None,
         }
+    }
+
+    pub(crate) fn ndfd_region(self) -> Option<&'static str> {
+        self.ndfd_layer().and_then(|layer| layer.split('.').nth(1))
     }
 
     /// Element, label and display unit for NOAA's raster-point lookup.
@@ -566,6 +600,12 @@ impl BasemapStyle {
             Self::NdfdRainChance => Some(("pop12", "12-hour rain chance", "%")),
             Self::NdfdMaxTemp => Some(("maxt", "Daytime high", "°F")),
             Self::NdfdMinTemp => Some(("mint", "Overnight low", "°F")),
+            Self::NdfdHawaiiMinTemp => Some(("mint", "Overnight low", "°F")),
+            Self::NdfdHawaiiMaxTemp => Some(("maxt", "Daytime high", "°F")),
+            Self::NdfdHawaiiRainChance => Some(("pop12", "12-hour rain chance", "%")),
+            Self::NdfdAlaskaMinTemp => Some(("mint", "Overnight low", "°F")),
+            Self::NdfdAlaskaMaxTemp => Some(("maxt", "Daytime high", "°F")),
+            Self::NdfdAlaskaRainChance => Some(("pop12", "12-hour rain chance", "%")),
             _ => None,
         }
     }
@@ -770,7 +810,7 @@ impl BasemapStyle {
             BasemapStyle::BlueMap => Some(crate::basemap_style::Palette::Blue),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
             BasemapStyle::RainViewerGlobal => Some(crate::basemap_style::Palette::HybridOverlay),
-            BasemapStyle::NdfdRainChance | BasemapStyle::NdfdMaxTemp | BasemapStyle::NdfdMinTemp => Some(crate::basemap_style::Palette::HybridOverlay),
+            _ if self.ndfd_layer().is_some() => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
     }
@@ -883,7 +923,7 @@ impl BasemapStyle {
                     .then(|| crate::vector_tiles::fill_template(custom, z, x, y)),
                 BasemapStyle::RainViewerGlobal => rainviewer_tile_url(None, z, x, y),
                 style if style.ndfd_layer().is_some() => Some(wms_url(
-                    "https://digital.weather.gov/ndfd.conus/wms",
+                    &format!("https://digital.weather.gov/ndfd.{}/wms", style.ndfd_region().unwrap()),
                     style.ndfd_layer().unwrap(), z, x, y, "",
                 )),
                 // Standard XYZ `{z}/{x}/{y}.png` slippy tiles. Single subdomain shard where the
@@ -1348,8 +1388,8 @@ pub async fn fetch_frame_times(
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
     if let Some(layer) = style.ndfd_layer() {
-        let url = "https://digital.weather.gov/ndfd.conus/wms?REQUEST=GetCapabilities";
-        let Ok(response) = client.get(wxdata::net::fetch_url(url))
+        let url = format!("https://digital.weather.gov/ndfd.{}/wms?REQUEST=GetCapabilities", style.ndfd_region().unwrap());
+        let Ok(response) = client.get(wxdata::net::fetch_url(&url))
             .header("User-Agent", USER_AGENT).timeout(wxdata::net::FEED_TIMEOUT)
             .send().await.and_then(reqwest::Response::error_for_status) else { return Vec::new() };
         use futures_util::StreamExt;
@@ -2823,8 +2863,8 @@ mod tests {
             let both = s.is_raster() && s.vector_palette().is_some();
             assert_eq!(
                 both,
-                matches!(s, BasemapStyle::HybridSatellite | BasemapStyle::RainViewerGlobal
-                    | BasemapStyle::NdfdRainChance | BasemapStyle::NdfdMaxTemp | BasemapStyle::NdfdMinTemp),
+                matches!(s, BasemapStyle::HybridSatellite | BasemapStyle::RainViewerGlobal)
+                    || s.ndfd_layer().is_some(),
                 "{s:?} raster+vector should be an intentional hybrid"
             );
         }
@@ -2918,12 +2958,14 @@ mod tests {
         assert_eq!(ndfd_advertised_frame_times(xml, "ndfd.conus.maxt", from, to, 2),
             vec![from + chrono::Duration::days(1), from + chrono::Duration::days(2)]);
         assert!(ndfd_advertised_frame_times(xml, "ndfd.conus.pop12", from, to, 8).is_empty());
-        for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp] {
+        for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp,
+            BasemapStyle::NdfdAlaskaRainChance, BasemapStyle::NdfdAlaskaMaxTemp, BasemapStyle::NdfdAlaskaMinTemp,
+            BasemapStyle::NdfdHawaiiRainChance, BasemapStyle::NdfdHawaiiMaxTemp, BasemapStyle::NdfdHawaiiMinTemp] {
             assert!(style.timed());
             assert_eq!(style.category(), Category::Forecast);
             assert!(style.attribution().contains("NOAA/NWS"));
             let url = style.url(5, 7, 12, false, "", "", "").unwrap();
-            assert!(url.contains("digital.weather.gov/ndfd.conus/wms"));
+            assert!(url.contains(&format!("digital.weather.gov/ndfd.{}/wms", style.ndfd_region().unwrap())));
             assert!(url.contains(style.ndfd_layer().unwrap()));
             assert!(!url.contains("&TIME="));
         }

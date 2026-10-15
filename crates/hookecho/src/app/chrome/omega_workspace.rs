@@ -308,11 +308,17 @@ impl HookEchoApp {
                                     let ndfd_rows = if mode == SourceMode::Forecasts {
                                         [crate::tiles::BasemapStyle::NdfdRainChance,
                                          crate::tiles::BasemapStyle::NdfdMaxTemp,
-                                         crate::tiles::BasemapStyle::NdfdMinTemp]
+                                         crate::tiles::BasemapStyle::NdfdMinTemp,
+                                         crate::tiles::BasemapStyle::NdfdAlaskaRainChance,
+                                         crate::tiles::BasemapStyle::NdfdAlaskaMaxTemp,
+                                         crate::tiles::BasemapStyle::NdfdAlaskaMinTemp,
+                                         crate::tiles::BasemapStyle::NdfdHawaiiRainChance,
+                                         crate::tiles::BasemapStyle::NdfdHawaiiMaxTemp,
+                                         crate::tiles::BasemapStyle::NdfdHawaiiMinTemp]
                                             .into_iter().filter(|style| style.label().to_lowercase().contains(&query.to_lowercase())).count()
                                     } else { 0 };
                                     ui.weak(format!("{} of {} products", rows.len() + ndfd_rows,
-                                        total + usize::from(mode == SourceMode::Forecasts) * 3));
+                                        total + usize::from(mode == SourceMode::Forecasts) * 9));
                                     if rows.is_empty() && ndfd_rows == 0 {
                                         ui.weak("No matching products.");
                                     }
@@ -330,6 +336,12 @@ impl HookEchoApp {
                                                     crate::tiles::BasemapStyle::NdfdRainChance,
                                                     crate::tiles::BasemapStyle::NdfdMaxTemp,
                                                     crate::tiles::BasemapStyle::NdfdMinTemp,
+                                         crate::tiles::BasemapStyle::NdfdAlaskaRainChance,
+                                         crate::tiles::BasemapStyle::NdfdAlaskaMaxTemp,
+                                         crate::tiles::BasemapStyle::NdfdAlaskaMinTemp,
+                                         crate::tiles::BasemapStyle::NdfdHawaiiRainChance,
+                                         crate::tiles::BasemapStyle::NdfdHawaiiMaxTemp,
+                                         crate::tiles::BasemapStyle::NdfdHawaiiMinTemp,
                                                 ] {
                                                     if !query.is_empty() && !style.label().to_lowercase().contains(&query.to_lowercase()) { continue; }
                                                     let selected = self.views[self.active].basemap == style;
