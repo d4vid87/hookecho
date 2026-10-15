@@ -158,15 +158,15 @@ impl HookEchoApp {
                                 .width(92.0)
                                 .selected_text(egui::RichText::new(format!("{effective_loop} Frames")).color(accent))
                                 .show_ui(ui, |ui| {
-                                    let choices: &[usize] = if cfg!(target_arch = "wasm32") {
-                                        &[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-                                    } else if max_loop < 7 { &[2, 3, 4, 6] }
+                                    let choices: &[usize] = if max_loop < 7 { &[2, 3, 4, 6] }
                                         else { &[7, 14, 21, 30, 50, 75, 100, 150, 200, 250] };
-                                    for &count in choices.iter().filter(|&&n| n <= max_loop) {
-                                        ui.selectable_value(&mut loop_frames, count, format!("{count} Frames"));
+                                    for &count in choices {
+                                        ui.add_enabled_ui(count <= max_loop, |ui| {
+                                            ui.selectable_value(&mut loop_frames, count, format!("{count} Frames"));
+                                        });
                                     }
                                     if cfg!(target_arch = "wasm32") {
-                                        ui.weak(format!("Current radar memory allows up to {max_loop} live-loop frames."));
+                                        ui.weak(format!("Measured radar payload allows up to {max_loop} live-loop frames in this browser."));
                                     } else if max_loop < 7 {
                                         ui.weak(format!("This device supports up to {max_loop} live-loop frames."));
                                     }

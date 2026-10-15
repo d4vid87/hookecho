@@ -2674,9 +2674,9 @@ fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) 
     tail.iter().rev().take_while(|id| cached(id.name())).count()
 }
 
-/// Upper bound for browser live replay. The actual limit is based on the current decoded scan's
-/// gate payload size, with room for the displayed head and an in-flight volume.
-const WEB_LOOP_WINDOW: usize = 12;
+/// Upper bound for browser live replay. The current scan's measured gate payload and the web
+/// budget still decide which choices are available; small scans can use the full frame catalog.
+const WEB_LOOP_WINDOW: usize = 250;
 /// Desktop's largest selectable loop, plus two slots below for the head and an in-flight scan.
 /// The separate encoded-payload budget still evicts large scans before this count is reached.
 pub const NATIVE_LOOP_WINDOW: usize = 250;
@@ -24994,7 +24994,8 @@ mod tests {
         let mib = 1024 * 1024;
         let budget = 192 * mib;
         assert_eq!(super::web_loop_window_for_bytes(0, budget), 4);
-        assert_eq!(super::web_loop_window_for_bytes(8 * mib, budget), 12);
+        assert_eq!(super::web_loop_window_for_bytes(8 * mib, budget), 22);
+        assert_eq!(super::web_loop_window_for_bytes(mib / 2, budget), 250);
         assert_eq!(super::web_loop_window_for_bytes(30 * mib, budget), 4);
         assert_eq!(super::web_loop_window_for_bytes(64 * mib, budget), 4);
     }
