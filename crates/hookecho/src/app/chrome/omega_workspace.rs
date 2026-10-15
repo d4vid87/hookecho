@@ -562,6 +562,19 @@ impl HookEchoApp {
                                         });
                                         ui.checkbox(&mut self.link_cameras, "Link map positions");
                                         ui.checkbox(&mut self.link_times, "Link timelines");
+                                        if self.link_times {
+                                            let mut limited = self.settings.linked_time_limit_seconds.is_some();
+                                            if ui.checkbox(&mut limited, "Limit linked radar time difference").changed() {
+                                                self.settings.linked_time_limit_seconds = limited.then_some(120);
+                                                self.settings.save();
+                                            }
+                                            if let Some(seconds) = &mut self.settings.linked_time_limit_seconds {
+                                                ui.label("Maximum difference (seconds)");
+                                                if ui.add_sized([ui.available_width().min(216.0), 22.0], egui::Slider::new(seconds, 0..=1800)).changed() {
+                                                    self.settings.save();
+                                                }
+                                            }
+                                        }
                                         ui.checkbox(&mut self.analyst_inspector_open, "Show inspector");
                                         ui.separator();
                                     }

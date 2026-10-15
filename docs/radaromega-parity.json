@@ -250,9 +250,9 @@
       "status": "implemented-related",
       "observed_scope": "Dual/quad display options, pane-local product choice and synchronized frame stepping are present.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Independent products, basemaps and timestamps; camera/time links, offsets, named panes, persistent workspaces. The RadarOmega-style sidebar now exposes Radar and comparison views, 2/4-pane selection, linked map/time switches and inspector visibility.",
+      "hookecho_implementation": "Independent products, basemaps and timestamps; camera/time links, offsets, named panes, persistent workspaces. The RadarOmega-style sidebar now exposes Radar and comparison views, 2/4-pane selection, linked map/time switches, a configurable maximum radar-time difference and inspector visibility.",
       "remaining_gaps": [
-        "The pane controls remain HookEcho-specific. Linked camera motion and frame stepping still need controlled behavioral checks; exact vendor split-view layout and interactions are not established."
+        "The pane controls remain HookEcho-specific. Linked camera motion was verified. Radar-time linking can still show a previously loaded scan while a matching scan is fetched, so exact same-frame display across providers and frame stepping need further controlled checks. Exact vendor split-view layout and interactions are not established."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/omega_workspace.rs",
@@ -264,7 +264,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI05",
       "acceptance": "Two/four panes preserve independent products and explicitly synchronize camera/time.",
-      "runtime_verification": "2026-10-14: cargo check passed and the optimized web build passed at 4,539,340 gzipped bytes (4,540,000 budget). In the local browser, Compare radar products opened four panes whose inspector listed independent VEL, spectrum-width and ZDR products. The new sidebar switched to two panes, enabled both Link map positions and Link timelines, returned to one Radar pane, and reopened comparison in two panes with both link switches retained. Actual synchronized pan and frame-step behavior remains to verify."
+      "runtime_verification": "2026-10-14: cargo check passed and the optimized web build passed at 4,539,340 gzipped bytes (4,540,000 budget). In the local browser, Compare radar products opened four panes whose inspector listed independent VEL, spectrum-width and ZDR products. The new sidebar switched to two panes, enabled both Link map positions and Link timelines, returned to one Radar pane, and reopened comparison in two panes with both link switches retained. On 2026-10-15, a drag in the left pane moved the KTLX marker roughly 40 pixels in the same direction in both panes, verifying linked camera motion. A linked archive step changed the requested time, but the inspector temporarily showed different loaded scan times (02:13 versus 02:00 UTC); this does not prove frame-step display synchronization. The existing maximum-time-difference guard is now exposed beside Link timelines, with a 120-second default when enabled. The final optimized browser build passed at 4,539,943 gzipped bytes (4,540,000 budget); the browser showed the switch and slider, and the sidebar retained its original width. The focused loaded-scan alignment-limit test passed. Matching-scan arrival and enforced hiding at an out-of-window offset remain to verify."
     },
     {
       "id": "UI06",
