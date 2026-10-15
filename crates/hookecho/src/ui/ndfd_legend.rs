@@ -21,7 +21,7 @@ struct Entry {
 }
 
 pub struct NdfdLegends {
-    entries: [Entry; 12],
+    entries: [Entry; 15],
 }
 
 impl Default for NdfdLegends {
@@ -42,6 +42,9 @@ fn slot(style: BasemapStyle) -> Option<(usize, &'static str, &'static str)> {
         BasemapStyle::NdfdWindGust => Some((9, "windgust", "Wind gust · mph")),
         BasemapStyle::NdfdAlaskaWindGust => Some((10, "windgust", "Alaska wind gust · mph")),
         BasemapStyle::NdfdHawaiiWindGust => Some((11, "windgust", "Hawaii wind gust · mph")),
+        BasemapStyle::NdfdWindSpeed => Some((12, "windspd", "Wind speed · mph")),
+        BasemapStyle::NdfdAlaskaWindSpeed => Some((13, "windspd", "Alaska wind speed · mph")),
+        BasemapStyle::NdfdHawaiiWindSpeed => Some((14, "windspd", "Hawaii wind speed · mph")),
 
         _ => None,
     }
@@ -154,6 +157,11 @@ mod tests {
             BasemapStyle::NdfdHawaiiWindGust] {
             assert_eq!(slot(style).unwrap().1, "windgust");
             assert!(url(style.ndfd_region().unwrap(), "windgust", valid).contains("element=windgust"));
+        }
+        for style in [BasemapStyle::NdfdWindSpeed, BasemapStyle::NdfdAlaskaWindSpeed,
+            BasemapStyle::NdfdHawaiiWindSpeed] {
+            assert_eq!(slot(style).unwrap().1, "windspd");
+            assert!(url(style.ndfd_region().unwrap(), "windspd", valid).contains("element=windspd"));
         }
         assert!(slot(BasemapStyle::Dark).is_none());
     }

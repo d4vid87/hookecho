@@ -132,6 +132,9 @@ pub enum BasemapStyle {
     NdfdWindGust,
     NdfdAlaskaWindGust,
     NdfdHawaiiWindGust,
+    NdfdWindSpeed,
+    NdfdAlaskaWindSpeed,
+    NdfdHawaiiWindSpeed,
     MapboxStreets,
     MapboxSatellite,
     MapboxSatelliteStreets,
@@ -187,7 +190,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 75] = [
+    pub const ALL: [BasemapStyle; 78] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -264,6 +267,9 @@ impl BasemapStyle {
         BasemapStyle::NdfdWindGust,
         BasemapStyle::NdfdAlaskaWindGust,
         BasemapStyle::NdfdHawaiiWindGust,
+        BasemapStyle::NdfdWindSpeed,
+        BasemapStyle::NdfdAlaskaWindSpeed,
+        BasemapStyle::NdfdHawaiiWindSpeed,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -334,14 +340,17 @@ impl BasemapStyle {
             BasemapStyle::NdfdMaxTemp => "NDFD high temperature",
             BasemapStyle::NdfdMinTemp => "NDFD low temperature",
             BasemapStyle::NdfdWindGust => "NDFD wind gust",
+            BasemapStyle::NdfdWindSpeed => "NDFD wind speed",
             BasemapStyle::NdfdHawaiiRainChance => "NDFD Hawaii rain chance (12 h)",
             BasemapStyle::NdfdHawaiiMaxTemp => "NDFD Hawaii high temperature",
             BasemapStyle::NdfdHawaiiMinTemp => "NDFD Hawaii low temperature",
             BasemapStyle::NdfdHawaiiWindGust => "NDFD Hawaii wind gust",
+            BasemapStyle::NdfdHawaiiWindSpeed => "NDFD Hawaii wind speed",
             BasemapStyle::NdfdAlaskaRainChance => "NDFD Alaska rain chance (12 h)",
             BasemapStyle::NdfdAlaskaMaxTemp => "NDFD Alaska high temperature",
             BasemapStyle::NdfdAlaskaMinTemp => "NDFD Alaska low temperature",
             BasemapStyle::NdfdAlaskaWindGust => "NDFD Alaska wind gust",
+            BasemapStyle::NdfdAlaskaWindSpeed => "NDFD Alaska wind speed",
             BasemapStyle::MapboxStreets => "Mapbox Streets",
             BasemapStyle::MapboxSatellite => "Mapbox Satellite",
             BasemapStyle::MapboxSatelliteStreets => "Mapbox Satellite Streets",
@@ -415,14 +424,17 @@ impl BasemapStyle {
             BasemapStyle::NdfdMaxTemp => "ndfd-high-temp",
             BasemapStyle::NdfdMinTemp => "ndfd-low-temp",
             BasemapStyle::NdfdWindGust => "ndfd-wind-gust",
+            BasemapStyle::NdfdWindSpeed => "ndfd-wind-speed",
             BasemapStyle::NdfdHawaiiRainChance => "ndfd-hawaii-rain-chance",
             BasemapStyle::NdfdHawaiiMaxTemp => "ndfd-hawaii-high-temp",
             BasemapStyle::NdfdHawaiiMinTemp => "ndfd-hawaii-low-temp",
             BasemapStyle::NdfdHawaiiWindGust => "ndfd-hawaii-wind-gust",
+            BasemapStyle::NdfdHawaiiWindSpeed => "ndfd-hawaii-wind-speed",
             BasemapStyle::NdfdAlaskaRainChance => "ndfd-alaska-rain-chance",
             BasemapStyle::NdfdAlaskaMaxTemp => "ndfd-alaska-high-temp",
             BasemapStyle::NdfdAlaskaMinTemp => "ndfd-alaska-low-temp",
             BasemapStyle::NdfdAlaskaWindGust => "ndfd-alaska-wind-gust",
+            BasemapStyle::NdfdAlaskaWindSpeed => "ndfd-alaska-wind-speed",
             BasemapStyle::MapboxStreets => "mapbox-streets",
             BasemapStyle::MapboxSatellite => "mapbox-satellite",
             BasemapStyle::MapboxSatelliteStreets => "mapbox-satellite-streets",
@@ -593,14 +605,17 @@ impl BasemapStyle {
             Self::NdfdMaxTemp => Some("ndfd.conus.maxt"),
             Self::NdfdMinTemp => Some("ndfd.conus.mint"),
             Self::NdfdWindGust => Some("ndfd.conus.windgust"),
+            Self::NdfdWindSpeed => Some("ndfd.conus.windspd"),
             Self::NdfdHawaiiRainChance => Some("ndfd.hawaii.pop12"),
             Self::NdfdHawaiiMaxTemp => Some("ndfd.hawaii.maxt"),
             Self::NdfdHawaiiMinTemp => Some("ndfd.hawaii.mint"),
             Self::NdfdHawaiiWindGust => Some("ndfd.hawaii.windgust"),
+            Self::NdfdHawaiiWindSpeed => Some("ndfd.hawaii.windspd"),
             Self::NdfdAlaskaRainChance => Some("ndfd.alaska.pop12"),
             Self::NdfdAlaskaMaxTemp => Some("ndfd.alaska.maxt"),
             Self::NdfdAlaskaMinTemp => Some("ndfd.alaska.mint"),
             Self::NdfdAlaskaWindGust => Some("ndfd.alaska.windgust"),
+            Self::NdfdAlaskaWindSpeed => Some("ndfd.alaska.windspd"),
             _ => None,
         }
     }
@@ -616,14 +631,17 @@ impl BasemapStyle {
             Self::NdfdMaxTemp => Some(("maxt", "Daytime high", "°F")),
             Self::NdfdMinTemp => Some(("mint", "Overnight low", "°F")),
             Self::NdfdWindGust => Some(("windgust", "Wind gust", "mph")),
+            Self::NdfdWindSpeed => Some(("windspd", "Wind speed", "mph")),
             Self::NdfdHawaiiMinTemp => Some(("mint", "Overnight low", "°F")),
             Self::NdfdHawaiiMaxTemp => Some(("maxt", "Daytime high", "°F")),
             Self::NdfdHawaiiRainChance => Some(("pop12", "12-hour rain chance", "%")),
             Self::NdfdHawaiiWindGust => Some(("windgust", "Wind gust", "mph")),
+            Self::NdfdHawaiiWindSpeed => Some(("windspd", "Wind speed", "mph")),
             Self::NdfdAlaskaMinTemp => Some(("mint", "Overnight low", "°F")),
             Self::NdfdAlaskaMaxTemp => Some(("maxt", "Daytime high", "°F")),
             Self::NdfdAlaskaRainChance => Some(("pop12", "12-hour rain chance", "%")),
             Self::NdfdAlaskaWindGust => Some(("windgust", "Wind gust", "mph")),
+            Self::NdfdAlaskaWindSpeed => Some(("windspd", "Wind speed", "mph")),
             _ => None,
         }
     }
@@ -2979,7 +2997,8 @@ mod tests {
         for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp,
             BasemapStyle::NdfdAlaskaRainChance, BasemapStyle::NdfdAlaskaMaxTemp, BasemapStyle::NdfdAlaskaMinTemp,
             BasemapStyle::NdfdHawaiiRainChance, BasemapStyle::NdfdHawaiiMaxTemp, BasemapStyle::NdfdHawaiiMinTemp,
-            BasemapStyle::NdfdWindGust, BasemapStyle::NdfdAlaskaWindGust, BasemapStyle::NdfdHawaiiWindGust] {
+            BasemapStyle::NdfdWindGust, BasemapStyle::NdfdAlaskaWindGust, BasemapStyle::NdfdHawaiiWindGust,
+            BasemapStyle::NdfdWindSpeed, BasemapStyle::NdfdAlaskaWindSpeed, BasemapStyle::NdfdHawaiiWindSpeed] {
             assert!(style.timed());
             assert_eq!(style.category(), Category::Forecast);
             assert!(style.attribution().contains("NOAA/NWS"));
@@ -2997,6 +3016,12 @@ mod tests {
                 _ => "ndfd.hawaii.windgust",
             }));
             assert_eq!(style.ndfd_point(), Some(("windgust", "Wind gust", "mph")));
+        }
+        for (style, layer) in [(BasemapStyle::NdfdWindSpeed, "ndfd.conus.windspd"),
+            (BasemapStyle::NdfdAlaskaWindSpeed, "ndfd.alaska.windspd"),
+            (BasemapStyle::NdfdHawaiiWindSpeed, "ndfd.hawaii.windspd")] {
+            assert_eq!(style.ndfd_layer(), Some(layer));
+            assert_eq!(style.ndfd_point(), Some(("windspd", "Wind speed", "mph")));
         }
     }
 

@@ -39,7 +39,7 @@ pub async fn fetch_point(
     element: &str,
 ) -> anyhow::Result<Option<f64>> {
     anyhow::ensure!(matches!(region, "conus" | "alaska" | "hawaii"), "unsupported NDFD region");
-    anyhow::ensure!(matches!(element, "maxt" | "mint" | "pop12" | "windgust"), "unsupported NDFD element");
+    anyhow::ensure!(matches!(element, "maxt" | "mint" | "pop12" | "windgust" | "windspd"), "unsupported NDFD element");
     anyhow::ensure!(lon.is_finite() && lat.is_finite() && (-180.0..=180.0).contains(&lon) && (-85.0..=85.0).contains(&lat), "invalid point");
     let projected_lon = 6_378_137.0 * lon.to_radians();
     let projected_lat = 6_378_137.0
