@@ -1,10 +1,10 @@
 # HookEcho Radar Workspace
 
-Radar Zeta is an optional desktop layout and a separately launched HookEcho profile, built from observed reference app interactions and HookEcho's existing data/rendering systems. It is an independent partial implementation. It is **not a completed one-to-one clone**, and the standalone package does not add unavailable provider features.
+Radar Zeta is the default desktop layout for fresh HookEcho profiles and a separately launched HookEcho profile, built from observed reference app interactions and HookEcho's existing data/rendering systems. It is an independent partial implementation. It is **not a completed one-to-one clone**, and the standalone package does not add unavailable provider features.
 
 ## Use it inside HookEcho
 
-Open **Settings → Appearance → Desktop workspace → Radar workspace**. The mode adds a source chooser, station/projection card, grouped drawer, Display Settings and centered radar transport. Clear the same setting to return to ordinary chrome. Compact phone layouts remain HookEcho's existing responsive UI.
+Fresh website, AppImage, and desktop installs open with Radar Zeta controls. Existing saved layout choices are respected. Open **Settings → Appearance → Desktop workspace → HookEcho layout** to change the desktop layout. Radar Zeta adds a source chooser, station/projection card, grouped drawer, Display Settings and compact playback controls. Compact phone layouts remain HookEcho's existing responsive UI.
 
 The new **Presentation** vector map uses independently chosen colors over the existing public vector-map pipeline. Display Settings exposes vector state/county visibility, colors and widths; city/road visibility; radar station/range-ring controls; projection with 0–60° Mercator tilt and bearing; radar opacity; time format; and pause while panning. Raster maps cannot expose editable individual vector layers. **Show TDWR sites** is saved independently (enabled for older settings by default) and hides only TDWR map markers and their hit targets. Selected TDWR data and the complete site picker remain available; the same control is under Settings → Radar & map → Station markers.
 

@@ -248,7 +248,7 @@ pub struct Settings {
     /// Manual fallback when the low-latency chunk feed is unreliable.
     pub radar_feed: RadarFeed,
     pub theme: Theme,
-    /// Optional desktop workspace with source selector, drawer and centered transport.
+    /// Desktop Radar Zeta layout; compact phone layouts use their responsive UI.
     pub radar_workspace: bool,
     /// Show TDWR station markers. Does not disable the selected station or its radar feed.
     #[serde(default = "default_true")]
@@ -1380,7 +1380,7 @@ impl Default for Settings {
             poll_interval_secs: 30,
             radar_feed: RadarFeed::default(),
             theme: Theme::Dark,
-            radar_workspace: false,
+            radar_workspace: true,
             show_tdwr_sites: true,
             map_details: crate::basemap_style::MapDetailSettings::default(),
             pause_while_panning: true,
@@ -2530,14 +2530,20 @@ mod standalone_profile_tests {
     use super::Settings;
 
     #[test]
-    fn fresh_standalone_profile_uses_workspace_without_changing_ordinary_defaults() {
+    fn fresh_profiles_use_radar_zeta_by_default() {
         let standalone = Settings::from_saved_profile(None, true);
         assert!(standalone.radar_workspace);
         assert_eq!(standalone.mqtt_prefix, "hookecho-radar-workspace");
         assert_eq!(standalone.basemap, crate::tiles::BasemapStyle::Presentation.slug());
         let ordinary = Settings::from_saved_profile(None, false);
-        assert!(!ordinary.radar_workspace);
+        assert!(ordinary.radar_workspace);
         assert_eq!(serde_json::to_value(ordinary).unwrap(), serde_json::to_value(Settings::default()).unwrap());
+    }
+
+    #[test]
+    fn saved_layout_choice_overrides_the_new_default() {
+        assert!(Settings::from_json_lossy("{}").radar_workspace);
+        assert!(!Settings::from_saved_profile(Some(r#"{"radar_workspace":false}"#), false).radar_workspace);
     }
 
     #[test]
