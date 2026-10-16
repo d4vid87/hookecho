@@ -3746,6 +3746,12 @@ pub struct HookEchoApp {
     /// the Screenshot event arrives rather than removing it in the command frame.
     share_card_capture_frames: u8,
     loop_export: Option<LoopExport>,
+    #[cfg(target_arch = "wasm32")]
+    video_export_tx: Sender<Result<String, String>>,
+    #[cfg(target_arch = "wasm32")]
+    video_export_rx: Receiver<Result<String, String>>,
+    #[cfg(target_arch = "wasm32")]
+    video_export_pending: bool,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
     /// When true, all panes follow the active pane's valid time.
@@ -4467,6 +4473,8 @@ impl HookEchoApp {
         #[cfg(not(target_arch = "wasm32"))]
         vtiles.ensure_template();
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
+        #[cfg(target_arch = "wasm32")]
+        let (video_export_tx, video_export_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         // Loaded off the launch path: the snapshot is a few MB of JSON, and parsing it before
         // the first paint bought nothing — it is applied as `OverlayMsg::AlertSeed`, and dropped
@@ -4779,6 +4787,12 @@ impl HookEchoApp {
             share_card: None,
             share_card_capture_frames: 0,
             loop_export: None,
+            #[cfg(target_arch = "wasm32")]
+            video_export_tx,
+            #[cfg(target_arch = "wasm32")]
+            video_export_rx,
+            #[cfg(target_arch = "wasm32")]
+            video_export_pending: false,
             link_cameras: false,
             link_times: false,
             lock_source_frame: false,
@@ -19583,12 +19597,20 @@ impl HookEchoApp {
                         self.request_capture(ui.ctx(), ShotDest::Download);
                     }
                     if ui
-                        .add_enabled(self.loop_export.is_none(), egui::Button::new("Download loop (GIF)"))
+                        .add_enabled(self.loop_export.is_none() && !self.video_export_pending, egui::Button::new("Download loop (GIF)"))
                         .on_hover_text("Capture the loaded radar timeline as an animated GIF")
                         .clicked()
                     {
                         self.panel_open = false;
                         self.start_loop_export(crate::loopexport::LoopFormat::Gif);
+                    }
+                    if ui
+                        .add_enabled(self.loop_export.is_none() && !self.video_export_pending, egui::Button::new("Download video (MP4 / WebM)"))
+                        .on_hover_text("Export the loaded radar timeline; the browser selects a supported video format")
+                        .clicked()
+                    {
+                        self.panel_open = false;
+                        self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
                     }
                     toggle(ui, &mut self.settings.share_card, "Caption shared images")
                         .on_hover_text("Stamp the site, product, valid time and source onto the downloaded image");
@@ -20421,7 +20443,7 @@ impl HookEchoApp {
                     le.wait_started = wxdata::clock::Instant::now();
                     ctx.request_repaint();
                 } else {
-                    self.finish_loop_export();
+                    self.finish_loop_export(ctx);
                 }
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -20438,7 +20460,7 @@ impl HookEchoApp {
     }
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
-    fn record_loop_frame(&mut self, image: &egui::ColorImage) {
+    fn record_loop_frame(&mut self, ctx: &egui::Context, image: &egui::ColorImage) {
         // Screenshot events arrive before drive_loop_export runs. If the user switched
         // panes while a capture was in flight, do not append that pane's image to this clip.
         if self.loop_export.as_ref().is_some_and(|le| le.view_index != self.active) {
@@ -20479,11 +20501,11 @@ impl HookEchoApp {
                 le.wait_started = wxdata::clock::Instant::now();
             }
         } else {
-            self.finish_loop_export();
+            self.finish_loop_export(ctx);
         }
     }
 
-    fn finish_loop_export(&mut self) {
+    fn finish_loop_export(&mut self, _ctx: &egui::Context) {
         let le = self.loop_export.take().unwrap();
         self.restore_loop_timeline(&le);
         if le.frames.is_empty() {
@@ -20491,6 +20513,26 @@ impl HookEchoApp {
             return;
         }
         use crate::loopexport::LoopFormat;
+        #[cfg(target_arch = "wasm32")]
+        if le.format == LoopFormat::Mp4 {
+            match crate::loopexport::begin_browser_video(&le.frames, le.fps) {
+                Ok(promise) => {
+                    let tx = self.video_export_tx.clone();
+                    let repaint = _ctx.clone();
+                    self.video_export_pending = true;
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let outcome = wasm_bindgen_futures::JsFuture::from(promise).await
+                            .map(|value| value.as_string().unwrap_or_else(|| "Video saved".to_string()))
+                            .map_err(|error| error.as_string().unwrap_or_else(|| format!("{error:?}")));
+                        let _ = tx.send(outcome);
+                        repaint.request_repaint();
+                    });
+                    self.toast(ToastKind::Info, "Encoding video…");
+                }
+                Err(error) => self.toast(ToastKind::Error, format!("Video export failed: {error}")),
+            }
+            return;
+        }
         let res = match le.format {
             #[cfg(not(target_arch = "wasm32"))]
             LoopFormat::Gif => crate::loopexport::encode_gif(
@@ -20509,11 +20551,14 @@ impl HookEchoApp {
                 crate::dialog::Saved::Cancelled => Err(anyhow::anyhow!("download cancelled")),
             }),
             // The scrubber's slider is 1..=15 fps, which is also what the encoder accepts.
+            #[cfg(not(target_arch = "wasm32"))]
             LoopFormat::Mp4 => crate::loopexport::encode_mp4(
                 &le.frames,
                 le.fps.round().clamp(1.0, 15.0) as u32,
                 &le.dest,
             ),
+            #[cfg(target_arch = "wasm32")]
+            LoopFormat::Mp4 => unreachable!("browser video export returned above"),
         }
         .and_then(|()| {
             #[cfg(target_arch = "wasm32")]
@@ -20605,6 +20650,17 @@ impl HookEchoApp {
                     });
             });
         if cancel { self.cancel_loop_export(); }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn poll_video_export(&mut self) {
+        if let Ok(result) = self.video_export_rx.try_recv() {
+            self.video_export_pending = false;
+            match result {
+                Ok(message) => self.toast(ToastKind::Success, message),
+                Err(error) => self.toast(ToastKind::Error, format!("Video export failed: {error}")),
+            }
+        }
     }
 
     /// Write the widget's picture, downscaled, and tell the widget about it.
@@ -20930,7 +20986,7 @@ impl HookEchoApp {
                     log::info!("view copied to clipboard");
                     self.toast(ToastKind::Success, "View copied to clipboard");
                 }
-                ShotDest::Loop => self.record_loop_frame(&image),
+                ShotDest::Loop => self.record_loop_frame(ctx, &image),
                 ShotDest::Push(title) => self.push_snapshot(title, &image),
                 ShotDest::Widget(path) => self.save_widget_snapshot(&path, &image),
             }
@@ -22218,6 +22274,8 @@ impl eframe::App for HookEchoApp {
 
         self.drive_snapshot_push(ctx);
         self.drive_widget_snapshot(ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.poll_video_export();
         self.save_pending_screenshot(ctx);
         self.load_marker_icons(ctx);
         self.drive_loop_export(ctx);

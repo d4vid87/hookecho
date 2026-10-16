@@ -124,6 +124,34 @@ pub fn encode_mp4_timed(
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = window, js_name = __hookechoExportVideo)]
+    fn export_browser_video(
+        frames: &js_sys::Array,
+        width: u32,
+        height: u32,
+        fps: f32,
+    ) -> js_sys::Promise;
+}
+
+/// Hand the captured, captioned frames to the browser's native recorder. The Promise resolves
+/// only after the actual MP4 or WebM blob is downloaded; no file is mislabeled as an MP4.
+#[cfg(target_arch = "wasm32")]
+pub fn begin_browser_video(frames: &[RgbaImage], fps: f32) -> Result<js_sys::Promise, String> {
+    let first = frames.first().ok_or("no frames captured")?;
+    let (width, height) = first.dimensions();
+    let js_frames = js_sys::Array::new();
+    for frame in frames {
+        if frame.dimensions() != (width, height) {
+            return Err("the viewport changed size during export".to_string());
+        }
+        js_frames.push(&js_sys::Uint8Array::from(frame.as_raw().as_slice()));
+    }
+    Ok(export_browser_video(&js_frames, width, height, fps))
+}
+
 /// Encode `frames` into a looping GIF at `path`, each shown for `delay_ms` milliseconds.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn encode_gif(frames: &[RgbaImage], delay_ms: u16, path: &Path) -> anyhow::Result<()> {

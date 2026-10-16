@@ -62,6 +62,12 @@ cp "$glue" "web/dist/hookecho-$glue_hash.js"
 # Put the glue back the way git has it; the hashed copy is the one that ships.
 sed -i "s/hookecho_bg-$wasm_hash\.wasm/hookecho_bg.wasm/g" "$glue"
 
+# The browser video recorder is optional, but it must update with the shell rather than stay in
+# an old offline cache when only its JavaScript changes.
+rm -f web/dist/video-export-*.js
+video_export_hash="$(hash_of web/video-export.js)"
+cp web/video-export.js "web/dist/video-export-$video_export_hash.js"
+
 # The four default font faces, which the web build fetches instead of compiling in (see
 # crates/hookecho/src/fonts.rs and web/fonts/README.md). Hashed into /dist/ like everything else,
 # so the year-long immutable `_headers` rule covers them and a face is downloaded once, ever.
@@ -94,6 +100,7 @@ jq -n --argjson chunks "$chunks" '{voice:"en_US-amy-medium", chunks:$chunks}' > 
 sed \
   -e "s#dist/hookecho\.js#dist/hookecho-$glue_hash.js#g" \
   -e "s#dist/hookecho_bg\.wasm#dist/hookecho_bg-$wasm_hash.wasm#g" \
+  -e "s#video-export\.js#dist/video-export-$video_export_hash.js#g" \
   -e "s#__FONT_URLS__#$font_urls#" \
   web/index.src.html > web/index.html
 
@@ -102,7 +109,7 @@ sed \
 # a worker the browser never bothers to install.
 font_shell=""
 for f in web/dist/font-*.ttf; do font_shell="$font_shell,\"/${f#web/}\""; done
-shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js?boot=2\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/decode-worker.js?v=vector-tiles\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
+shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js?boot=2\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/dist/video-export-$video_export_hash.js\",\"/decode-worker.js?v=vector-tiles\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
 sed \
   -e "s#__SHELL__#$shell_json#" \
   -e "s#__VERSION__#\"$glue_hash-$wasm_hash\"#" \
