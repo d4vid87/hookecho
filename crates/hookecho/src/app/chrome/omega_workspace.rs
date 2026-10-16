@@ -277,6 +277,7 @@ impl HookEchoApp {
         let mut stream_dashboard = false;
         let mut notification_settings = false;
         let mut return_to_radar = false;
+        let mut use_standard_layout = false;
         let mut compare_panes = None;
         let entries = self.palette_entries();
         let top = egui::Area::new("omega_workspace_top".into())
@@ -406,9 +407,17 @@ impl HookEchoApp {
                         })
                         .0
                         .named("Weather source mode");
+                        use_standard_layout = ui.button("RadarOmega layout ✓")
+                            .named_toggle("RadarOmega inspired layout", true)
+                            .on_hover_text("Switch back to the standard layout")
+                            .clicked();
                     });
                 });
             });
+        if use_standard_layout {
+            self.settings.radar_workspace = false;
+            self.settings.save();
+        }
         self.mobile_occlusion.push(top.response.rect);
         self.tour_anchors.menu = Some(top.response.rect);
         crate::ui::drawer::avoid_toolbar(ctx, top.response.rect);
