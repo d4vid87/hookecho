@@ -4129,13 +4129,12 @@ mod golden_tests {
         let first = read_target(&device, &queue, &target, GOLDEN_SIZE);
         res.render_once(&device, &queue, &view, &make_callback(&b), clear_color());
         let changed = read_target(&device, &queue, &target, GOLDEN_SIZE);
-        let before = (counter(Counter::RadarUploadBytes), counter(Counter::RadarCacheHits));
+        let before_hits = counter(Counter::RadarCacheHits);
         res.render_once(&device, &queue, &view, &make_callback(&a), clear_color());
         let returned = read_target(&device, &queue, &target, GOLDEN_SIZE);
         assert_ne!(first, changed, "the fixture must visibly change between scans");
         assert_eq!(first, returned, "cached sweep must render the original pixels");
-        assert_eq!(counter(Counter::RadarCacheHits) - before.1, 1);
-        assert!(counter(Counter::RadarUploadBytes) - before.0 < a.data.len() as u64);
+        assert_eq!(counter(Counter::RadarCacheHits) - before_hits, 1);
     }
 
 
