@@ -19201,7 +19201,7 @@ impl HookEchoApp {
         if n != self.views.len() { self.record_interaction("change_pane_count"); }
         while self.views.len() < n {
             let src = &self.views[self.active];
-            let (site, camera, basemap, tilt, date, abi_scene, satellite) = (
+            let (site, camera, basemap, tilt, date, abi_scene, satellite, show_radar, fields_on) = (
                 src.site.clone(),
                 src.camera,
                 src.basemap,
@@ -19209,6 +19209,8 @@ impl HookEchoApp {
                 src.timeline.date,
                 src.abi_scene,
                 src.satellite.clone(),
+                src.show_radar,
+                src.fields_on.clone(),
             );
             // Split a scrubbed view and the new panes have to land on the same instant, not on
             // live. Without this, splitting an archive view gave one populated pane and three
@@ -19221,6 +19223,8 @@ impl HookEchoApp {
             v.basemap = basemap;
             v.abi_scene = abi_scene;
             v.satellite = satellite;
+            v.show_radar = show_radar;
+            v.fields_on = fields_on;
             v.tilt = tilt;
             v.timeline.date = date;
             v.timeline.following = seek.is_none();
