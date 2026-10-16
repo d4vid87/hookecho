@@ -21201,7 +21201,16 @@ fn map_input_at(ctx: &egui::Context, pos: egui::Pos2, occlusion: &[egui::Rect]) 
 fn map_gesture_on_map(ctx: &egui::Context, occlusion: &[egui::Rect]) -> bool {
     let (live, pos) = ctx.input(|i| (
         map_gesture_live(i),
-        i.multi_touch().map(|touch| touch.center_pos).or_else(|| i.pointer.interact_pos()),
+        i.multi_touch().map(|touch| touch.center_pos).or_else(|| {
+            // Keep a map-origin drag classified as a map gesture even when it crosses a
+            // floating control. Conversely, dragging a control over the map must not pause
+            // playback or starve map uploads.
+            if i.pointer.any_down() {
+                i.pointer.press_origin().or_else(|| i.pointer.interact_pos())
+            } else {
+                i.pointer.interact_pos()
+            }
+        }),
     ));
     live && pos.is_some_and(|pos| map_input_at(ctx, pos, occlusion))
 }
@@ -25189,6 +25198,35 @@ mod tests {
             });
         }
         assert!(!super::map_input_at(&ctx, menu.center(), &[]));
+    }
+
+    #[test]
+    fn drag_pause_follows_its_origin_across_floating_controls() {
+        let menu = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(300.0, 400.0));
+        let map = egui::pos2(600.0, 300.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![button(map, true)],
+            ..Default::default()
+        }, |ui| assert!(super::map_gesture_on_map(ui.ctx(), &[menu])));
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(menu.center())],
+            ..Default::default()
+        }, |ui| assert!(super::map_gesture_on_map(ui.ctx(), &[menu]), "a map drag stays paused across a control"));
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![button(menu.center(), false), button(menu.center(), true)],
+            ..Default::default()
+        }, |ui| assert!(!super::map_gesture_on_map(ui.ctx(), &[menu])));
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(map)],
+            ..Default::default()
+        }, |ui| assert!(!super::map_gesture_on_map(ui.ctx(), &[menu]), "a control drag stays outside the map"));
     }
 
     #[test]

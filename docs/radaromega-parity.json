@@ -882,9 +882,9 @@
       "status": "implemented-related",
       "observed_scope": "Toggle pauses animation while zooming or panning.",
       "observation_type": "runtime-screenshot",
-      "hookecho_implementation": "Existing pause-while-panning preference is exposed in Display Settings.",
+      "hookecho_implementation": "The pause-while-panning preference is exposed in Display Settings. A pointer drag now keeps its map/control origin while held: crossing a floating control after starting on the map keeps playback paused, while dragging a control over the map does not pause it.",
       "remaining_gaps": [
-        "Pan/zoom pause and resume behavior still needs final integrated fixture verification."
+        "Pan/zoom pause and resume behavior still needs final integrated fixture verification, including wheel inertia, touch and repeated playback. The map/control drag-origin regression is covered by a focused egui input test."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/omega_display.rs",
@@ -901,7 +901,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME04",
       "acceptance": "Pointer interaction temporarily pauses playback and resumes correctly without jumping state.",
-      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+      "runtime_verification": "2026-10-15: A new egui input regression passes for a map-origin pointer drag crossing a floating control and a control-origin drag crossing onto the map. All 685 active HookEcho library tests passed; the optimized browser build passed at 4,661,804/4,662,000 gzipped bytes. This verifies input classification and build integration, not a timed live-playback browser run."
     },
     {
       "id": "TIME05",
