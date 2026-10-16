@@ -152,12 +152,6 @@ impl HookEchoApp {
                     .show(ui, |ui| {
                         ui.set_width(172.0);
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        rail_heading(ui, "LAYOUT");
-                        enable_zeta_layout = rail_choice(ui, "◫  Radar Zeta layout", false)
-                            .named_toggle("Radar Zeta layout", false)
-                            .on_hover_text("Switch to the source selector, tools drawer and centered playback controls")
-                            .clicked();
-                        ui.separator();
                         rail_heading(ui, "VIEWS");
                         let regular_radar = !self.analyst_open && self.workspace_return_session.is_none();
                         single = rail_choice(ui, "▣  Radar", regular_radar)
@@ -223,6 +217,12 @@ impl HookEchoApp {
                                 }
                             });
                         }
+                        ui.separator();
+                        rail_heading(ui, "LAYOUT");
+                        enable_zeta_layout = rail_choice(ui, "◫  Radar Zeta UI", false)
+                            .named_toggle("Radar Zeta UI", false)
+                            .on_hover_text("Switch to the source selector, tools drawer and centered playback controls")
+                            .clicked();
                     });
             }));
         if let Some(modes) = modes { self.mobile_occlusion.push(modes.response.rect); }
