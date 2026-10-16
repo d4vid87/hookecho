@@ -6,7 +6,7 @@ use crate::ui::a11y::Named as _;
 
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(247, 202, 50);
 const SURFACE: egui::Color32 = egui::Color32::from_rgb(16, 24, 39);
-const MENU_ID: &str = "omega_workspace_menu";
+const MENU_ID: &str = "zeta_workspace_menu";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SourceMode {
@@ -200,7 +200,7 @@ fn section(ui: &mut egui::Ui, label: &str) {
 }
 
 impl HookEchoApp {
-    pub(super) fn omega_animation_family(&self) -> Option<crate::settings::AnimationSource> {
+    pub(super) fn zeta_animation_family(&self) -> Option<crate::settings::AnimationSource> {
         let mut modes = SourceMode::ALL.into_iter().filter(|mode| {
             (*mode == SourceMode::Radar && self.views[self.active].show_radar)
                 || (*mode == SourceMode::Forecasts && self.views[self.active].basemap.ndfd_layer().is_some())
@@ -212,9 +212,9 @@ impl HookEchoApp {
         modes.next().is_none().then(|| first.animation_source())
     }
 
-    fn sync_omega_animation_speed(&mut self, ctx: &egui::Context) {
-        let key = egui::Id::new(("omega_animation_source", self.active));
-        let current = self.omega_animation_family();
+    fn sync_zeta_animation_speed(&mut self, ctx: &egui::Context) {
+        let key = egui::Id::new(("zeta_animation_source", self.active));
+        let current = self.zeta_animation_family();
         let previous =
             ctx.data_mut(|d| d.get_temp::<Option<crate::settings::AnimationSource>>(key));
         let before = self.settings.source_animation_speeds;
@@ -245,10 +245,10 @@ impl HookEchoApp {
         ctx.data_mut(|d| d.insert_temp(key, current));
     }
 
-    pub(super) fn omega_workspace_controls(&mut self, ctx: &egui::Context) {
+    pub(super) fn zeta_workspace_controls(&mut self, ctx: &egui::Context) {
         use crate::render::FieldLayer as F;
         use egui_phosphor::regular as ph;
-        self.sync_omega_animation_speed(ctx);
+        self.sync_zeta_animation_speed(ctx);
         let menu_id = egui::Id::new(MENU_ID);
         let mut menu_open = ctx.data_mut(|d| d.get_temp::<bool>(menu_id).unwrap_or(false));
         let logo = crate::icon::texture(ctx, 128);
@@ -280,7 +280,7 @@ impl HookEchoApp {
         let mut use_standard_layout = false;
         let mut compare_panes = None;
         let entries = self.palette_entries();
-        let top = egui::Area::new("omega_workspace_top".into())
+        let top = egui::Area::new("zeta_workspace_top".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(12.0, 24.0))
@@ -313,7 +313,7 @@ impl HookEchoApp {
                                     ui.label(mode.description());
                                     ui.separator();
                                     let search_id =
-                                        egui::Id::new(("omega_source_search", mode.label()));
+                                        egui::Id::new(("zeta_source_search", mode.label()));
                                     let mut query = ctx.data_mut(|d| {
                                         d.get_temp::<String>(search_id).unwrap_or_default()
                                     });
@@ -344,7 +344,7 @@ impl HookEchoApp {
                                         ui.weak("No matching products.");
                                     }
                                     egui::ScrollArea::vertical()
-                                        .id_salt(("omega_source_products", mode.label(), &query))
+                                        .id_salt(("zeta_source_products", mode.label(), &query))
                                         .scroll_bar_visibility(
                                             egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
                                         )
@@ -407,8 +407,8 @@ impl HookEchoApp {
                         })
                         .0
                         .named("Weather source mode");
-                        use_standard_layout = ui.button("RadarOmega layout ✓")
-                            .named_toggle("RadarOmega inspired layout", true)
+                        use_standard_layout = ui.button("Radar Zeta layout ✓")
+                            .named_toggle("Radar Zeta layout", true)
                             .on_hover_text("Switch back to the standard layout")
                             .clicked();
                     });
@@ -444,7 +444,7 @@ impl HookEchoApp {
             |time| format!("Displayed scan: {} min old", Utc::now().signed_duration_since(time).num_minutes().max(0)),
         );
         let station_details = format!("{station_status}\n{scan_status}\nPin color reflects NOAA network status.");
-        let station_area = egui::Area::new("omega_workspace_station".into())
+        let station_area = egui::Area::new("zeta_workspace_station".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
             .anchor(
@@ -572,15 +572,15 @@ impl HookEchoApp {
         if menu_open && !menu_was_open {
             let previous = (self.panel_open, self.drawer.is_open());
             ctx.data_mut(|d| {
-                d.insert_temp(egui::Id::new("omega_menu_previous_surface"), previous);
-                d.insert_temp(egui::Id::new("omega_display_open"), false);
+                d.insert_temp(egui::Id::new("zeta_menu_previous_surface"), previous);
+                d.insert_temp(egui::Id::new("zeta_display_open"), false);
             });
             self.panel_open = false;
             self.drawer.show_search();
         }
         if menu_open {
             let bounds = self.chrome_rect;
-            let backdrop = egui::Area::new("omega_workspace_backdrop".into())
+            let backdrop = egui::Area::new("zeta_workspace_backdrop".into())
                 .order(egui::Order::Foreground)
                 .fixed_pos(bounds.min)
                 .show(ctx, |ui| {
@@ -593,7 +593,7 @@ impl HookEchoApp {
             if backdrop.inner.clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 menu_open = false;
             }
-            let side = egui::Area::new("omega_workspace_sidebar".into())
+            let side = egui::Area::new("zeta_workspace_sidebar".into())
                 .order(egui::Order::Foreground)
                 .fixed_pos(bounds.min)
                 .show(ctx, |ui| {
@@ -673,7 +673,7 @@ impl HookEchoApp {
                                         ));
                                     }
                                     egui::CollapsingHeader::new("Weather Products")
-                                        .id_salt("omega_weather_products")
+                                        .id_salt("zeta_weather_products")
                                         .show(ui, |ui| {
                                             for (label, mapped) in [
                                                 ("Mesoscale discussions", PaletteAction::ToggleOverlay(OverlayToggle::Mds)),
@@ -710,7 +710,7 @@ impl HookEchoApp {
                                             }
                                         });
                                     egui::CollapsingHeader::new("Data Overlays")
-                                        .id_salt("omega_data_overlays")
+                                        .id_salt("zeta_data_overlays")
                                         .show(ui, |ui| {
                                             for (label, mapped) in [
                                                 (
@@ -781,7 +781,7 @@ impl HookEchoApp {
                                         ));
                                     }
                                     egui::CollapsingHeader::new("Storm Chasers")
-                                        .id_salt("omega_storm_chasers")
+                                        .id_salt("zeta_storm_chasers")
                                         .show(ui, |ui| {
                                             if menu_row(ui, "Public camera streams", self.show_stream_dashboard).clicked() {
                                                 stream_dashboard = true;
@@ -865,7 +865,7 @@ impl HookEchoApp {
             && !notification_settings && !stream_dashboard
             && !return_to_radar && compare_panes.is_none() {
             if let Some((panel, drawer)) = ctx.data_mut(|d| {
-                d.get_temp::<(bool, bool)>(egui::Id::new("omega_menu_previous_surface"))
+                d.get_temp::<(bool, bool)>(egui::Id::new("zeta_menu_previous_surface"))
             }) {
                 self.panel_open = panel;
                 if drawer {
@@ -876,7 +876,7 @@ impl HookEchoApp {
         if let Some(source) = choose_source {
             let regional_camera = regional_mrms_camera(source);
             let speeds_before = self.settings.source_animation_speeds;
-            if let Some(previous) = self.omega_animation_family() {
+            if let Some(previous) = self.zeta_animation_family() {
                 self.settings
                     .source_animation_speeds
                     .set(previous, self.views[self.active].timeline.speed);
@@ -897,7 +897,7 @@ impl HookEchoApp {
                 self.views[self.active].camera.center = camera.center;
                 self.views[self.active].camera.zoom = camera.zoom;
             }
-            self.sync_omega_animation_speed(ctx);
+            self.sync_zeta_animation_speed(ctx);
             if speeds_before != self.settings.source_animation_speeds {
                 self.settings.save();
             }
@@ -912,7 +912,7 @@ impl HookEchoApp {
             }
             self.views[self.active].show_radar = false;
             self.set_basemap(style);
-            self.sync_omega_animation_speed(ctx);
+            self.sync_zeta_animation_speed(ctx);
             self.panel_open = false;
             self.show_alert_panel = false;
             self.drawer.show_search();
@@ -936,7 +936,7 @@ impl HookEchoApp {
         }
         if display {
             menu_open = false;
-            ctx.data_mut(|d| d.insert_temp(egui::Id::new("omega_display_open"), true));
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("zeta_display_open"), true));
         }
         if let Some(action) = action {
             menu_open = false;

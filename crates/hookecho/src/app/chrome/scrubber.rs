@@ -49,7 +49,7 @@ impl HookEchoApp {
             return;
         }
         if self.settings.radar_workspace && !compact(ctx) {
-            self.omega_transport(ctx);
+            self.zeta_transport(ctx);
             return;
         }
         use egui_phosphor::regular as ph;
@@ -292,7 +292,7 @@ impl HookEchoApp {
                             "The selected station is not ready. The map retains the explicitly identified previous station's scan.")
                     } else if t.following && fresh {
                         (
-                            mobile::OMEGA_GREEN,
+                            mobile::ZETA_GREEN,
                             "Live".to_string(),
                             if streaming {
                                 "Following the newest volume, sweep by sweep (live stream)."

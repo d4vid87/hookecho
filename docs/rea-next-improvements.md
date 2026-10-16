@@ -1,6 +1,6 @@
 # Audit follow-up implementation and verification
 
-Scope: the seven recommendations made after the RadarOmega/REA performance audit. Production source is frozen at `c2a8858`; later changes improve tests and evidence. The corresponding browser bundle is `ee5a733c` (4,407,232 gzip bytes under the 4,410,000 gate).
+Scope: the seven recommendations made after the reference app/REA performance audit. Production source is frozen at `c2a8858`; later changes improve tests and evidence. The corresponding browser bundle is `ee5a733c` (4,407,232 gzip bytes under the 4,410,000 gate).
 
 | Requirement | Implementation and evidence |
 |---|---|

@@ -1,6 +1,6 @@
 //! NOAA CPC temperature and precipitation outlook polygons.
 //!
-//! These are public NWS ArcGIS GeoJSON feeds, independent of RadarOmega's private backend.
+//! These are public NWS ArcGIS GeoJSON feeds, independent of reference app's private backend.
 
 use crate::alerts::USER_AGENT;
 use crate::overlay::{for_each_feature, polygons_of, FeatureKind, GeoFeature};

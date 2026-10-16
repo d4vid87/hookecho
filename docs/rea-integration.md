@@ -1,7 +1,7 @@
 # REA research integration
 
 This applies observed rendering and update patterns to HookEcho's own public-data
-pipeline. No RadarOmega client code, credentials, private service adapter, or
+pipeline. No reference app client code, credentials, private service adapter, or
 proprietary palette is imported.
 
 This records the initial integration and its verification revision. Subsequent custom-product precision, GPU globe wind, performance measurements and pane-independence changes are documented in [the performance audit](rea-performance-audit.md) and [the latest follow-up report](rea-next-improvements.md).

@@ -3,13 +3,13 @@ use super::*;
 use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
-    pub(super) fn omega_display_settings(&mut self, ctx: &egui::Context) {
-        let id = egui::Id::new("omega_display_open");
+    pub(super) fn zeta_display_settings(&mut self, ctx: &egui::Context) {
+        let id = egui::Id::new("zeta_display_open");
         let mut open = ctx.data_mut(|d| d.get_temp::<bool>(id).unwrap_or(false));
         if !open {
             return;
         }
-        let animation_family = self.omega_animation_family();
+        let animation_family = self.zeta_animation_family();
         let speeds_before = self.settings.source_animation_speeds;
         let mut basemap = self.views[self.active].basemap;
         let mut sites = self.show_radar_sites;
@@ -222,7 +222,7 @@ impl HookEchoApp {
                                 &mut self.settings.reduce_motion,
                                 "Reduce interface motion",
                             );
-                            right.checkbox(&mut self.settings.radar_workspace, "RadarOmega inspired layout");
+                            right.checkbox(&mut self.settings.radar_workspace, "Radar Zeta layout");
                         });
                     });
             });

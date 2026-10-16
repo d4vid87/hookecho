@@ -178,7 +178,7 @@ impl HookEchoApp {
                     let alpha = left.min(1.0).clamp(0.0, 1.0);
                     let stripe = match t.kind {
                         ToastKind::Info => accent,
-                        ToastKind::Success => crate::ui::style::OMEGA_GREEN,
+                        ToastKind::Success => crate::ui::style::ZETA_GREEN,
                         ToastKind::Error => egui::Color32::from_rgb(220, 90, 90),
                     };
                     let resp = crate::ui::style::glass(ui, (220.0 * alpha) as u8)

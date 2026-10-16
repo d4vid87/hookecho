@@ -17,7 +17,7 @@ use egui::{pos2, vec2, Align2, Color32, Id, Mesh, Rect, Shape};
 use egui_phosphor::regular as ph;
 use wxdata::level2::Moment;
 
-pub(crate) use crate::ui::style::{glass, square_btn, OMEGA_GREEN, OMEGA_ORANGE};
+pub(crate) use crate::ui::style::{glass, square_btn, ZETA_GREEN, ZETA_ORANGE};
 
 /// A slim full-width strip for a gridded field layer, with its name and range inline.
 fn paint_field_strip(painter: &egui::Painter, rect: Rect, layer: crate::render::FieldLayer, settings: &crate::settings::Settings) {
@@ -256,7 +256,7 @@ impl super::HookEchoApp {
                     } else {
                         ph::EYE_SLASH
                     };
-                    if square_btn(ui, g, self.mobile_chrome_hidden, OMEGA_ORANGE).clicked() {
+                    if square_btn(ui, g, self.mobile_chrome_hidden, ZETA_ORANGE).clicked() {
                         self.mobile_chrome_hidden = !self.mobile_chrome_hidden;
                         self.panel_open = false;
                         self.basemap_open = false;

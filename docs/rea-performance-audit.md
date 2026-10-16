@@ -1,6 +1,6 @@
 # Remaining REA findings: implementation and verification
 
-These are independent HookEcho improvements following the RadarOmega architectural research and the subsequent HookEcho source audit. The research did not establish RadarOmega performance superiority. No proprietary renderer, private service adapter, credentials or palettes are included.
+These are independent HookEcho improvements following the reference app architectural research and the subsequent HookEcho source audit. The research did not establish reference app performance superiority. No proprietary renderer, private service adapter, credentials or palettes are included.
 
 ## Custom products
 

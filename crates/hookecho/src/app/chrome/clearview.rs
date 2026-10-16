@@ -73,7 +73,7 @@ impl HookEchoApp {
         let (mut menu, mut search, mut settings, mut single) = (false, false, false, false);
         let (mut mrms, mut spc, mut outlook_day) = (false, false, None);
         let mut workspace_choice = None;
-        let mut enable_omega_layout = false;
+        let mut enable_zeta_layout = false;
         let toolbar = egui::Area::new("clearview_toolbar".into())
             .order(egui::Order::Foreground)
             .constrain_to(self.chrome_rect)
@@ -153,8 +153,8 @@ impl HookEchoApp {
                         ui.set_width(172.0);
                         ui.spacing_mut().item_spacing.y = 2.0;
                         rail_heading(ui, "LAYOUT");
-                        enable_omega_layout = rail_choice(ui, "◫  RadarOmega layout", false)
-                            .named_toggle("RadarOmega inspired layout", false)
+                        enable_zeta_layout = rail_choice(ui, "◫  Radar Zeta layout", false)
+                            .named_toggle("Radar Zeta layout", false)
                             .on_hover_text("Switch to the source selector, tools drawer and centered playback controls")
                             .clicked();
                         ui.separator();
@@ -226,7 +226,7 @@ impl HookEchoApp {
                     });
             }));
         if let Some(modes) = modes { self.mobile_occlusion.push(modes.response.rect); }
-        if enable_omega_layout {
+        if enable_zeta_layout {
             self.settings.radar_workspace = true;
             self.settings.save();
         }

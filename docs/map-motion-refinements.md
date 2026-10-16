@@ -16,7 +16,7 @@ Set `globalThis.__hookechoMapTraceEnabled = true` before boot to enable the boun
 
 Trace frame rows are `[time_ms, pane, frame, zoom, center_x, center_y, width, height, scroll, pinch, moving, tile_zoom, vector_uploads, raster_uploads, label_candidates, preparation_ms]`. Optional cost rows are `[time_ms, pane, frame, geography_layout_candidates, pane_ui_ms]`. Each array is capped at 4096 observations and omissions are counted. Preparation time precedes painter overlays; pane UI time includes them. Neither is GPU completion or display latency.
 
-Whole-window frame intervals include intentional reactive idle sleeps. Use `movingP95` for camera movement; do not interpret whole-window p95 or idle Mapbox render-event gaps as dropped-frame rates. The prewarmed route can still receive tiles. Comparisons are between HookEcho builds on the same machine and recorded scenes, not a RadarOmega speed ranking.
+Whole-window frame intervals include intentional reactive idle sleeps. Use `movingP95` for camera movement; do not interpret whole-window p95 or idle Mapbox render-event gaps as dropped-frame rates. The prewarmed route can still receive tiles. Comparisons are between HookEcho builds on the same machine and recorded scenes, not a reference app speed ranking.
 
 Run the usual web build and serve `web`, then run:
 

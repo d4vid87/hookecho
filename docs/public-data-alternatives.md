@@ -1,6 +1,6 @@
 # Public-data alternatives
 
-Audited October 14, 2026. The user accepted public-data substitutes for proprietary device telemetry, chaser video and international feeds. This changes the target provider scope; it does not make the substitutes identical or complete. No private RadarOmega service, source code, account or key is reused. Official documentation, source integration and a live metadata response are separate evidence levels.
+Audited October 14, 2026. The user accepted public-data substitutes for proprietary device telemetry, chaser video and international feeds. This changes the target provider scope; it does not make the substitutes identical or complete. No private reference app service, source code, account or key is reused. Official documentation, source integration and a live metadata response are separate evidence levels.
 
 ## Capability matrix
 
