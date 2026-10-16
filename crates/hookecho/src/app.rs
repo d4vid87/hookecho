@@ -2568,6 +2568,7 @@ enum ShotDest {
 /// In-progress loop export (GIF or MP4): steps the active timeline, grabbing one screenshot per
 /// frame.
 struct LoopExport {
+    view_index: usize,
     dest: std::path::PathBuf,
     format: crate::loopexport::LoopFormat,
     return_live: bool,
@@ -20366,6 +20367,7 @@ impl HookEchoApp {
         v.timeline.go_begin();
         v.timeline.playhead = first;
         self.loop_export = Some(LoopExport {
+            view_index: self.active,
             dest: path,
             format,
             return_live,
@@ -20393,6 +20395,10 @@ impl HookEchoApp {
 
     /// Advance the loop export: wait for the stepped radar to settle, then request a screenshot.
     fn drive_loop_export(&mut self, ctx: &egui::Context) {
+        if self.loop_export.as_ref().is_some_and(|le| le.view_index != self.active) {
+            self.cancel_loop_export();
+            return;
+        }
         let Some(le) = &mut self.loop_export else {
             return;
         };
@@ -20433,6 +20439,12 @@ impl HookEchoApp {
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
     fn record_loop_frame(&mut self, image: &egui::ColorImage) {
+        // Screenshot events arrive before drive_loop_export runs. If the user switched
+        // panes while a capture was in flight, do not append that pane's image to this clip.
+        if self.loop_export.as_ref().is_some_and(|le| le.view_index != self.active) {
+            self.cancel_loop_export();
+            return;
+        }
         let source = self.views[self.active]
             .timeline
             .current()
@@ -20473,14 +20485,7 @@ impl HookEchoApp {
 
     fn finish_loop_export(&mut self) {
         let le = self.loop_export.take().unwrap();
-        if le.return_live {
-            self.views[self.active].timeline.go_head();
-            if le.resume_playing { self.views[self.active].timeline.toggle_play(); }
-        } else {
-            let timeline = &mut self.views[self.active].timeline;
-            timeline.playhead = le.prior_playhead.min(timeline.frames.len().saturating_sub(1));
-            timeline.playing = le.resume_playing;
-        }
+        self.restore_loop_timeline(&le);
         if le.frames.is_empty() {
             self.toast(ToastKind::Error, "Loop export failed: no radar frames were available");
             return;
@@ -20547,6 +20552,59 @@ impl HookEchoApp {
                 self.toast(ToastKind::Error, format!("Loop export failed: {e}"));
             }
         }
+    }
+
+    fn restore_loop_timeline(&mut self, le: &LoopExport) {
+        let Some(view) = self.views.get_mut(le.view_index) else { return; };
+        let timeline = &mut view.timeline;
+        if le.return_live {
+            timeline.go_head();
+            if le.resume_playing && !timeline.playing { timeline.toggle_play(); }
+        } else {
+            timeline.playhead = le.prior_playhead.min(timeline.frames.len().saturating_sub(1));
+            timeline.playing = le.resume_playing;
+        }
+    }
+
+    fn cancel_loop_export(&mut self) {
+        let Some(le) = self.loop_export.take() else { return; };
+        self.restore_loop_timeline(&le);
+        if matches!(self.screenshot_pending.as_ref(), Some(ShotDest::Loop)) {
+            self.screenshot_pending = None;
+        }
+        if matches!(self.share_card.as_ref(), Some((ShotDest::Loop, _))) {
+            self.share_card = None;
+            self.share_card_capture_frames = 0;
+        }
+        self.toast(ToastKind::Info, "Loop export cancelled");
+    }
+
+    fn loop_export_progress(&mut self, ctx: &egui::Context) {
+        let Some(le) = self.loop_export.as_ref() else { return; };
+        // Screenshots are the source frames for the export. Hide this control while a
+        // screenshot is pending so the progress UI never becomes part of the image.
+        if le.capturing { return; }
+        let done = le.requested_count.saturating_sub(le.remaining);
+        let total = le.requested_count;
+        let fraction = done as f32 / total.max(1) as f32;
+        let mut cancel = false;
+        egui::Area::new(egui::Id::new("loop_export_progress"))
+            .order(egui::Order::Tooltip)
+            .fade_in(false)
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -16.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(9, 23, 39))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(95, 159, 218)))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric(12, 9))
+                    .show(ui, |ui| {
+                        ui.label(format!("Exporting radar loop · {done}/{total} scans"));
+                        ui.add(egui::ProgressBar::new(fraction).desired_width(220.0));
+                        cancel = ui.button("Cancel export").clicked();
+                    });
+            });
+        if cancel { self.cancel_loop_export(); }
     }
 
     /// Write the widget's picture, downscaled, and tell the widget about it.
@@ -22985,6 +23043,7 @@ impl eframe::App for HookEchoApp {
 
         // Over everything, and only while a capture is pending.
         self.share_card_footer(ctx);
+        self.loop_export_progress(ctx);
 
         // The spotlight tour, over the chrome it points at. Paused under the first-run card and
         // the cheat sheet — all three draw on `Order::Foreground` and would fight for it.
