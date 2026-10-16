@@ -137,7 +137,8 @@ extern "C" {
 }
 
 /// Hand the captured, captioned frames to the browser's native recorder. The Promise resolves
-/// only after the actual MP4 or WebM blob is downloaded; no file is mislabeled as an MP4.
+/// after an MP4 or WebM blob is ready for a user-initiated browser download; no file is
+/// mislabeled as an MP4.
 #[cfg(target_arch = "wasm32")]
 pub fn begin_browser_video(frames: &[RgbaImage], fps: f32) -> Result<js_sys::Promise, String> {
     let first = frames.first().ok_or("no frames captured")?;
