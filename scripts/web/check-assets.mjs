@@ -12,7 +12,21 @@ for (const origin of process.argv.slice(2)) {
     if (!response.ok || !response.headers.get("content-type")?.includes(expected)) {
       throw new Error(`${origin} ${path}: ${response.status} ${response.headers.get("content-type")}`);
     }
-    await response.body.cancel();
+    if (path.endsWith(".js?boot=2")) {
+      const glue = await response.text();
+      for (const [, snippet] of glue.matchAll(/["']\.\/((?:snippets\/)[^"']+\.js)["']/g)) {
+        if (!/inline\d+-[a-f0-9]{8}\.js$/.test(snippet)) {
+          throw new Error(`${origin}: snippet lacks a content-hashed URL: ${snippet}`);
+        }
+        const asset = await fetch(new URL(`./dist/${snippet}`, origin));
+        if (!asset.ok || !asset.headers.get("content-type")?.includes("javascript")) {
+          throw new Error(`${origin} ${snippet}: ${asset.status} ${asset.headers.get("content-type")}`);
+        }
+        await asset.body.cancel();
+      }
+    } else {
+      await response.body.cancel();
+    }
   }
   console.log(`${origin}: executable bundle assets OK`);
 }

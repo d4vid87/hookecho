@@ -29,6 +29,17 @@ wasm-bindgen --target web --no-typescript \
 wasm="web/dist/hookecho_bg.wasm"
 glue="web/dist/hookecho.js"
 
+# wasm-bindgen names inline snippets by crate, so their URLs stay the same even when their
+# exports change. Give each snippet a content-addressed URL before hashing the glue; otherwise
+# a browser can pair a new glue file with an old, immutable inline0.js.
+find web/dist/snippets -type f -name 'inline*-*.js' -delete
+find web/dist/snippets -type f -name 'inline*.js' | while read -r snippet; do
+  hash="$(sha256sum "$snippet" | cut -c1-8)"
+  hashed="${snippet%.js}-$hash.js"
+  cp "$snippet" "$hashed"
+  sed -i "s#${snippet#web/dist/}#${hashed#web/dist/}#g" "$glue"
+done
+
 # wasm-opt takes another ~15% off what LTO leaves behind. Convergence saves another ~6 KB gzip
 # on the main build, keeping room under the existing cap for analyst controls.
 # Optional on purpose: a dev running this on a laptop without binaryen still gets a working bundle,
