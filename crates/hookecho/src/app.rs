@@ -20883,7 +20883,8 @@ impl HookEchoApp {
 
     fn draw_single_share_card(&self, ctx: &egui::Context) {
         let v = &self.views[self.active];
-        let site = v.site.clone().unwrap_or_else(|| "no site".to_string());
+        let site = v.displayed_station().or(v.site.as_deref())
+            .unwrap_or("no site").to_string();
         let product = v.custom_product.clone().unwrap_or_else(|| crate::products::info(v.moment).name.to_string());
         let time = v
             .displayed_time()
@@ -20946,18 +20947,34 @@ impl HookEchoApp {
         let accent = crate::theme::accent(self.settings.theme);
         let logo = crate::icon::texture(ctx, 64);
         for (idx, (v, rect)) in self.views.iter().zip(&self.pane_bounds).enumerate() {
-            let site = v.site.as_deref().unwrap_or("no site");
+            let linked_scan_hidden = idx != self.active && self.link_times
+                && v.show_radar
+                && !v.alignment_acceptable(self.settings.linked_time_limit_seconds);
+            let site = if linked_scan_hidden { v.site.as_deref() }
+                else { v.displayed_station().or(v.site.as_deref()) }
+                .unwrap_or("no site");
             let product = v.custom_product.as_deref()
                 .unwrap_or_else(|| crate::products::info(v.moment).name);
-            let tilt = v.volume.as_ref()
-                .and_then(|volume| volume.elevations.get(v.tilt))
-                .map_or_else(String::new, |angle| format!(" · {angle:.1}°"));
-            let time = v.displayed_time()
-                .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
-                .unwrap_or_else(|| "scan time unavailable".to_string());
-            let source = v.displayed_station().or(v.site.as_deref())
-                .and_then(data_attribution)
-                .unwrap_or("Radar data: NOAA/NWS");
+            let tilt = if linked_scan_hidden { String::new() } else {
+                v.volume.as_ref()
+                    .and_then(|volume| volume.elevations.get(v.tilt))
+                    .map_or_else(String::new, |angle| format!(" · {angle:.1}°"))
+            };
+            let time = if linked_scan_hidden {
+                match self.settings.linked_time_limit_seconds {
+                    Some(limit) => format!("No scan within {limit}s of linked time"),
+                    None => "No matching linked scan".to_string(),
+                }
+            } else {
+                v.displayed_time()
+                    .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
+                    .unwrap_or_else(|| "scan time unavailable".to_string())
+            };
+            let source = if linked_scan_hidden { "Radar hidden" } else {
+                v.displayed_station().or(v.site.as_deref())
+                    .and_then(data_attribution)
+                    .unwrap_or("Radar data: NOAA/NWS")
+            };
             egui::Area::new(egui::Id::new(("share_pane_card", idx)))
                 .order(egui::Order::Tooltip)
                 .fade_in(false)
