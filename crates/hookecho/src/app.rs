@@ -20428,8 +20428,7 @@ impl HookEchoApp {
             return;
         }
         le.capturing = true;
-        self.screenshot_pending = Some(ShotDest::Loop);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        self.request_capture(ctx, ShotDest::Loop);
     }
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
@@ -20747,24 +20746,39 @@ impl HookEchoApp {
 
         let v = &self.views[self.active];
         let site = v.site.clone().unwrap_or_else(|| "no site".to_string());
-        let product = crate::products::info(v.moment).name.to_string();
+        let product = v.custom_product.clone().unwrap_or_else(|| crate::products::info(v.moment).name.to_string());
         let time = v
-            .volume
-            .as_ref()
-            .map(|vol| crate::timefmt::fmt_date_clock(vol.time, self.active_tz()))
+            .displayed_time()
+            .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
             .unwrap_or_default();
+        let source = v.displayed_station().or(v.site.as_deref())
+            .and_then(data_attribution)
+            .unwrap_or("Radar data: NOAA/NWS");
         let accent = crate::theme::accent(self.settings.theme);
         let logo = crate::icon::texture(ctx, 64);
+        // The classic Views menu occupies the upper-left corner in exported frames. Keep the
+        // caption beside it so the site, time and source remain readable after GIF downscaling.
+        let caption_x = if self.chrome_rect.width() >= 760.0 { 236.0 } else { 16.0 };
         egui::Area::new(egui::Id::new("share_card"))
-            .order(egui::Order::Foreground)
+            // Export capture arrives within a couple of frames. The default Area fade-in
+            // leaves the card translucent at that point, especially after GIF quantization.
+            .order(egui::Order::Tooltip)
+            .fade_in(false)
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 88.0))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(caption_x, 88.0))
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 245).show(ui, |ui| {
+                // GIF's 256-colour palette makes translucent, anti-aliased type disappear
+                // against detailed radar. A solid branded card survives that reduction.
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(9, 23, 39))
+                    .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(95, 159, 218)))
+                    .corner_radius(9.0)
+                    .inner_margin(egui::Margin::symmetric(12, 9))
+                    .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(&site)
-                                .size(crate::ui::style::FONT_BASE)
+                                .size(16.0)
                                 .strong()
                                 .color(accent),
                         );
@@ -20775,17 +20789,16 @@ impl HookEchoApp {
                         }
                         ui.label(
                             egui::RichText::new(line)
-                                .size(crate::ui::style::FONT_BASE)
+                                .size(16.0)
+                                .strong()
                                 .color(egui::Color32::from_gray(238)),
                         );
-                        // The mark rides with the caption: a shared loop travels without the app
-                        // around it, and the wordmark alone is not what anyone recognises.
-                        ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(16.0, 16.0)));
-                        ui.label(
-                            egui::RichText::new("HookEcho · data: NOAA/NWS")
-                                .size(crate::ui::style::FONT_SM)
-                                .color(egui::Color32::from_gray(160)),
-                        );
+                    });
+                    ui.horizontal(|ui| {
+                        // The mark rides with the caption when a shared loop leaves the app.
+                        ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(18.0, 18.0)));
+                        ui.label(egui::RichText::new(format!("HookEcho · {source}"))
+                            .size(13.0).color(egui::Color32::from_gray(230)));
                     });
                 });
             });
