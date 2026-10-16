@@ -10480,7 +10480,6 @@ impl HookEchoApp {
                 W::ChaseReplay => self.chase_replay.open = true,
                 W::PublicStreams => {
                     self.show_stream_dashboard = true;
-                    self.show_webcams = true;
                     self.dotcam_last_fetch = None;
                 }
                 W::Digest => {
@@ -11651,7 +11650,7 @@ impl HookEchoApp {
     /// public catalog on the camera layer, while station cards can use the same catalog for a
     /// nearby stream or still.
     fn sync_dotcams(&mut self, ctx: &egui::Context) {
-        if !self.show_webcams && !self.show_stations && self.stations.cards.is_empty() {
+        if !self.show_webcams && !self.show_stream_dashboard && !self.show_stations && self.stations.cards.is_empty() {
             return;
         }
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();

@@ -850,7 +850,6 @@ impl HookEchoApp {
         if stream_dashboard {
             menu_open = false;
             self.show_stream_dashboard = true;
-            self.show_webcams = true;
             self.dotcam_last_fetch = None;
             ctx.request_repaint();
         }
