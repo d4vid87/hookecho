@@ -277,6 +277,7 @@ impl HookEchoApp {
         let mut stream_dashboard = false;
         let mut notification_settings = false;
         let mut return_to_radar = false;
+        let mut workspace_choice = None;
         let mut use_standard_layout = false;
         let mut open_search = false;
         let mut compare_panes = None;
@@ -655,18 +656,26 @@ impl HookEchoApp {
                                         use_standard_layout = true;
                                         menu_open = false;
                                     }
-                                    if menu_row(ui, "Radar", !self.analyst_open).clicked() {
+                                    if menu_row(ui, "Radar", !self.analyst_open && self.active_workspace.is_none()).clicked() {
                                         return_to_radar = true;
                                     }
-                                    if menu_row(ui, "Compare radar products", self.analyst_open).clicked() {
+                                    for name in ["Chase", "National overview", "Analysis"] {
+                                        if let Some(index) = self.settings.workspaces.iter().position(|ws| ws.name == name) {
+                                            if menu_row(ui, name, self.active_workspace.as_deref() == Some(name)).clicked() {
+                                                workspace_choice = Some(index);
+                                            }
+                                        }
+                                    }
+                                    if menu_row(ui, "Compare radar products", self.analyst_open && self.active_workspace.is_none()).clicked() {
                                         compare_panes = Some(if self.analyst_open { self.views.len() } else { 2 });
                                     }
                                     if self.analyst_open {
                                         ui.horizontal(|ui| {
                                             ui.label("Panes");
-                                            for count in [2, 4] {
+                                            for count in [1, 2, 4] {
                                                 if ui.selectable_label(self.views.len() == count, count.to_string()).clicked() {
-                                                    compare_panes = Some(count);
+                                                    if count == 1 { return_to_radar = true; }
+                                                    else { compare_panes = Some(count); }
                                                 }
                                             }
                                         });
@@ -878,10 +887,14 @@ impl HookEchoApp {
         if return_to_radar {
             menu_open = false;
             self.return_to_radar(ctx);
+        } else if let Some(index) = workspace_choice {
+            menu_open = false;
+            self.activate_workspace_view(index, ctx);
         } else if let Some(count) = compare_panes {
             menu_open = false;
             self.switch_mode(ViewMode::Analyst, ctx);
             self.set_pane_count(count);
+            self.active_workspace = None;
         }
         if stream_dashboard {
             menu_open = false;
@@ -891,7 +904,7 @@ impl HookEchoApp {
         }
         if menu_was_open && !menu_open && action.is_none() && !display && !spotter_settings
             && !notification_settings && !stream_dashboard
-            && !return_to_radar && compare_panes.is_none() {
+            && !return_to_radar && workspace_choice.is_none() && compare_panes.is_none() {
             if let Some((panel, drawer)) = ctx.data_mut(|d| {
                 d.get_temp::<(bool, bool)>(egui::Id::new("zeta_menu_previous_surface"))
             }) {

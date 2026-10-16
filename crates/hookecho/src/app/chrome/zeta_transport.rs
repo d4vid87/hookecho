@@ -121,6 +121,7 @@ impl HookEchoApp {
             self.scan_cache.contains(&name.to_string())
         });
         let mut action = None;
+        let mut layout_choice = None;
         let mut show_layers = false;
         let mut mrms_step = 0isize;
         let mut mrms_boundary_step = 0isize;
@@ -360,6 +361,8 @@ impl HookEchoApp {
                                     .unwrap_or_else(|| if t.listing { "Listing volumes…" } else if archived { "No volumes" } else { "Live only" }.into())
                             }) };
                             ui.label(egui::RichText::new(clock).size(12.0));
+                            layout_choice = zeta_layout_menu(ui, self.active_workspace.as_deref(),
+                                self.analyst_open, self.views.len(), &self.settings.workspaces);
                             if split {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.button(format!("{} Minimal controls", ph::CARET_DOWN))
@@ -466,6 +469,8 @@ impl HookEchoApp {
                                     if zeta_button(ui, ph::SKIP_FORWARD, "Next frame", false).clicked() { self.views[idx].timeline.step_cut(1); }
                                     ui.separator();
                                 }
+                                layout_choice = zeta_layout_menu(ui, self.active_workspace.as_deref(),
+                                    self.analyst_open, self.views.len(), &self.settings.workspaces);
                                 if zeta_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
                                 if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
                                 if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
@@ -592,7 +597,52 @@ impl HookEchoApp {
         if before != after {
             self.record_interaction("timeline_transport");
         }
+        match layout_choice {
+            Some(ZetaLayoutChoice::Radar) => self.return_to_radar(ctx),
+            Some(ZetaLayoutChoice::Workspace(index)) => self.activate_workspace_view(index, ctx),
+            Some(ZetaLayoutChoice::Panes(count)) => {
+                self.switch_mode(ViewMode::Analyst, ctx);
+                self.set_pane_count(count);
+                self.active_workspace = None;
+            }
+            None => {}
+        }
     }
+}
+
+enum ZetaLayoutChoice { Radar, Workspace(usize), Panes(usize) }
+
+fn zeta_layout_menu(ui: &mut egui::Ui, active_workspace: Option<&str>, analyst_open: bool,
+    pane_count: usize, workspaces: &[crate::workspace::Workspace]) -> Option<ZetaLayoutChoice> {
+    use egui_phosphor::regular as ph;
+    let mut choice = None;
+    egui::containers::menu::MenuButton::new(
+        egui::RichText::new(ph::SQUARES_FOUR).size(18.0),
+    )
+    .config(egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+    .ui(ui, |ui| {
+        ui.set_min_width(190.0);
+        ui.strong("Map layout");
+        if ui.selectable_label(!analyst_open && active_workspace.is_none(), "Radar")
+            .named("Single radar layout").clicked() { choice = Some(ZetaLayoutChoice::Radar); ui.close(); }
+        for name in ["Chase", "National overview", "Analysis"] {
+            if let Some(index) = workspaces.iter().position(|ws| ws.name == name) {
+                if ui.selectable_label(active_workspace == Some(name), name)
+                    .named(name).clicked() { choice = Some(ZetaLayoutChoice::Workspace(index)); ui.close(); }
+            }
+        }
+        ui.separator();
+        ui.label("Panes");
+        for count in [1, 2, 4] {
+            if ui.selectable_label(pane_count == count, format!("{count} pane{}", if count == 1 { "" } else { "s" }))
+                .named(&format!("Show {count} map panes")).clicked() {
+                choice = Some(if count == 1 { ZetaLayoutChoice::Radar } else { ZetaLayoutChoice::Panes(count) });
+                ui.close();
+            }
+        }
+    }).0.named("Choose map layout and pane count");
+    choice
 }
 
 fn zeta_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egui::Response {
