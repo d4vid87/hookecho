@@ -4,7 +4,7 @@ use chrono::Timelike as _;
 use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
-    pub(super) fn omega_transport(&mut self, ctx: &egui::Context) {
+    pub(super) fn zeta_transport(&mut self, ctx: &egui::Context) {
         use egui_phosphor::regular as ph;
         let idx = self.active;
         let active_field = crate::render::FieldLayer::draw_order().rev()
@@ -136,7 +136,7 @@ impl HookEchoApp {
         #[cfg(target_arch = "wasm32")]
         let mut load_pack = None;
         let accent = egui::Color32::from_rgb(255, 190, 42);
-        let area = egui::Area::new(egui::Id::new("omega_transport"))
+        let area = egui::Area::new(egui::Id::new("zeta_transport"))
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .show(ctx, |ui| {
@@ -154,7 +154,7 @@ impl HookEchoApp {
                         ui.visuals_mut().selection.bg_fill = egui::Color32::from_rgb(88, 65, 17);
                         ui.horizontal(|ui| {
                             if radar_visible {
-                            egui::ComboBox::from_id_salt("omega_frame_count")
+                            egui::ComboBox::from_id_salt("zeta_frame_count")
                                 .width(92.0)
                                 .selected_text(egui::RichText::new(format!("{effective_loop} Frames")).color(accent))
                                 .show_ui(ui, |ui| {
@@ -390,35 +390,35 @@ impl HookEchoApp {
                         }
                         ui.horizontal(|ui| {
                             if radar_visible {
-                            if omega_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
+                            if zeta_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
                             let playing = self.views[idx].timeline.playing;
-                            if omega_button(ui, if playing { ph::PAUSE } else { ph::PLAY }, if playing { "Pause" } else { "Play" }, playing).clicked() { self.views[idx].timeline.toggle_play(); }
-                            if omega_button(ui, ph::SKIP_FORWARD, "Next frame", false).clicked() { self.views[idx].timeline.step_cut(1); }
-                            if omega_button(ui, ph::BROADCAST, "Return to live", self.views[idx].timeline.following).clicked() { action = Some(PaletteAction::GoLive); }
+                            if zeta_button(ui, if playing { ph::PAUSE } else { ph::PLAY }, if playing { "Pause" } else { "Play" }, playing).clicked() { self.views[idx].timeline.toggle_play(); }
+                            if zeta_button(ui, ph::SKIP_FORWARD, "Next frame", false).clicked() { self.views[idx].timeline.step_cut(1); }
+                            if zeta_button(ui, ph::BROADCAST, "Return to live", self.views[idx].timeline.following).clicked() { action = Some(PaletteAction::GoLive); }
                             ui.separator();
                             }
                             if let Some((len, index, playing)) = mrms_loop.filter(|(len, _, _)| *len > 1) {
-                                if omega_button(ui, ph::SKIP_BACK, "Previous mosaic", false).clicked() {
+                                if zeta_button(ui, ph::SKIP_BACK, "Previous mosaic", false).clicked() {
                                     if mrms_archive_at.is_some() && index == 0 { mrms_boundary_step = -1; }
                                     else { mrms_step = -1; }
                                 }
-                                if omega_button(ui, if playing { ph::PAUSE } else { ph::PLAY },
+                                if zeta_button(ui, if playing { ph::PAUSE } else { ph::PLAY },
                                     if playing { "Pause mosaic" } else if mrms_reverse_playback { "Play mosaic backward" }
                                     else { "Play mosaic forward" }, playing).clicked() { mrms_toggle = true; }
-                                if omega_button(ui, ph::SKIP_FORWARD, "Next mosaic", false).clicked() {
+                                if zeta_button(ui, ph::SKIP_FORWARD, "Next mosaic", false).clicked() {
                                     if mrms_archive_at.is_some() && index + 1 == len { mrms_boundary_step = 1; }
                                     else { mrms_step = 1; }
                                 }
-                                if omega_button(ui, ph::BROADCAST, "Latest mosaic", index + 1 == len).clicked() { mrms_seek = Some(len - 1); }
+                                if zeta_button(ui, ph::BROADCAST, "Latest mosaic", index + 1 == len).clicked() { mrms_seek = Some(len - 1); }
                                 ui.weak(format!("{}/{len}", index + 1));
                                 ui.separator();
                             }
-                            if omega_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
-                            if omega_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
-                            if omega_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
-                            if omega_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
-                            if omega_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
-                            if omega_button(ui, ph::PENCIL_SIMPLE, "Draw on the map", self.tool == MapTool::Draw).clicked() { action = Some(PaletteAction::Tool(MapTool::Draw)); }
+                            if zeta_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
+                            if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
+                            if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
+                            if zeta_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
+                            if zeta_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
+                            if zeta_button(ui, ph::PENCIL_SIMPLE, "Draw on the map", self.tool == MapTool::Draw).clicked() { action = Some(PaletteAction::Tool(MapTool::Draw)); }
                         });
                         let status = if !radar_visible {
                             field_time.map_or_else(|| if field.is_some() { "Field data has not loaded yet".into() } else { String::new() }, |(valid, _, _, aligned)| format!("{}{}", crate::timefmt::fmt_date_clock(valid, tz), if aligned { "" } else { " · outside selected time tolerance" }))
@@ -526,7 +526,7 @@ impl HookEchoApp {
     }
 }
 
-fn omega_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egui::Response {
+fn zeta_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egui::Response {
     ui.add_sized(
         [36.0, 34.0],
         egui::Button::new(egui::RichText::new(glyph).size(18.0).color(if active {

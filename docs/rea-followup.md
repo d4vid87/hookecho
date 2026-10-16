@@ -1,6 +1,6 @@
 # REA follow-up implementation
 
-These are independent HookEcho changes informed by the earlier architectural comparison. No RadarOmega implementation, private service adapter or credentials are included.
+These are independent HookEcho changes informed by the earlier architectural comparison. No reference app implementation, private service adapter or credentials are included.
 
 This records the first follow-up stage and its measured revisions. Later work adds GPU timing, broader memory accounting and adaptive globe tessellation; see [the performance audit](rea-performance-audit.md) and [the subsequent verification report](rea-next-improvements.md) for current behavior.
 

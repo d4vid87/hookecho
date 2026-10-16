@@ -9,7 +9,7 @@ const out=process.env.HOOKECHO_MOTION_OUTPUT??'outputs/map-motion';
 const cache=process.env.HOOKECHO_MOTION_TILES??'outputs/map-motion-tiles';
 await fs.mkdir(out,{recursive:true});await fs.mkdir(cache,{recursive:true});
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
-const report={version:1,started:new Date().toISOString(),trials:[],errors:[],limits:['Browser scheduling and UI preparation, not GPU completion or presentation','Historical single-sweep radar fixture; recorded OpenFreeMap vector bytes','No RadarOmega speed ranking; before/after use the same HookEcho scenes']};
+const report={version:1,started:new Date().toISOString(),trials:[],errors:[],limits:['Browser scheduling and UI preparation, not GPU completion or presentation','Historical single-sweep radar fixture; recorded OpenFreeMap vector bytes','No reference app speed ranking; before/after use the same HookEcho scenes']};
 const browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN??puppeteer.executablePath(),headless:process.env.HEADFUL!=='1',args:['--no-sandbox',...(process.env.HEADFUL==='1'?['--use-gl=angle','--use-angle=gl']:['--enable-unsafe-swiftshader','--use-gl=angle','--use-angle=swiftshader'])]});
 try {
  for(const [name,n,delay,linked,reduced] of [['warm',1,0],['cold',1,250],['quad',4,0],['quad-linked',4,0,true],['reduced',1,0,false,true]]) {

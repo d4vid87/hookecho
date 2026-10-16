@@ -21159,7 +21159,7 @@ impl HookEchoApp {
     }
 }
 
-/// RadarOmega's NORMAL radius is 230 km for the observed KFWS reflectivity and velocity sweeps;
+/// The reference app's NORMAL radius is 230 km for the observed KFWS reflectivity and velocity sweeps;
 /// their FULL radii differ with gate depth. Keep the source texture intact and clip only the
 /// shader's displayed gate count, so switching modes needs no data fetch or texture rebuild.
 fn apply_coverage_range(upload: &mut RadarUpload, full_coverage: bool, nexrad: bool) {
@@ -23134,7 +23134,7 @@ impl eframe::App for HookEchoApp {
         let blocking_surface = ctx.memory(|m| m.top_modal_layer().is_some())
             || egui::Popup::is_any_open(ctx)
             || (self.settings.radar_workspace && ctx.data_mut(|d| {
-                d.get_temp::<bool>(egui::Id::new("omega_workspace_menu")).unwrap_or(false)
+                d.get_temp::<bool>(egui::Id::new("zeta_workspace_menu")).unwrap_or(false)
             }));
         if !blocking_surface && hotkeys::search_requested(ctx) {
             self.apply_action(BindableAction::CommandSearch, ctx);

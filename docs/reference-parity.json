@@ -25,7 +25,7 @@
     "basemap_plan": "outputs/ro-parity/basemap-plan.json",
     "live_evidence_index": "outputs/ro-parity/live-evidence-index.json",
     "transport_ledger": "outputs/ro-parity/transport-implementation-ledger.json",
-    "original_artifact_findings": "outputs/RadarOmega-5.5.3-findings.json",
+    "original_artifact_findings": "research findings (external to this repository)",
     "eccc_browser_acceptance": "outputs/ro-parity/eccc-browser-accepted/results.json",
     "web_delivery_smoke": "outputs/ro-parity/web-delivery-smoke/results.json",
     "native_delivery_smoke": "outputs/ro-parity/native-final/launch-evidence.json"
@@ -103,7 +103,7 @@
     }
   ],
   "artifact_identity": {
-    "name": "RadarOmega-5.5.3-x86_64.AppImage",
+    "name": "reference application binary",
     "sha256": "c8f3b2bbb56ed37d1c2fb815b4d851e0083e073d07f038942571a615f828b845",
     "limitation": "Hosted viewer changes independently from AppImage. Screenshot evidence explicitly does not bind its artifact identity; original static artifact identity is separate."
   },
@@ -122,7 +122,7 @@
       "Final browser checks: search arrow caret, numeric tilt/bearing, radar/legend visibility and TDWR persistence, MRMS 7 fps restored after reload.",
       "Native public NWS station observation chain and DWD DEOF 0.5-degree reflectivity GPU render passed.",
       "Live ECCC browser imagery: one capabilities and 30 PNG HTTP 200 responses; current 16:54 UTC rain frame visibly rendered.",
-      "REA process-wrapped timing: nine valid hardware trials per app (idle/wheel/pan); no cross-app speed ranking. RadarOmega evidence ev_c44344280cedd8a5616f140cae54c6df58e51b601dc0a414b3f3a6adff943338; HookEcho evidence ev_415308d773bfafe35ae519c6ecab212286c4be0fa39087664ce95268b10dde38. Measured build predates final transport wording and imagery-bar placement fixes.",
+      "REA process-wrapped timing: nine valid hardware trials per app (idle/wheel/pan); no cross-app speed ranking. reference app evidence ev_c44344280cedd8a5616f140cae54c6df58e51b601dc0a414b3f3a6adff943338; HookEcho evidence ev_415308d773bfafe35ae519c6ecab212286c4be0fa39087664ce95268b10dde38. Measured build predates final transport wording and imagery-bar placement fixes.",
       "Final-source raw WASM: layouts passed at 1120×900 and 800×600; ECCC Previous/Latest navigation 17:24 → 17:18 → 17:24 UTC verified, one capabilities request and 42 PNG HTTP 200 responses, no page/request errors. Final optimized delivery is a separate artifact.",
       "Caltrans browser public catalogs: all 12 districts HTTP 200; station lookup did not complete, so no camera still/timestamp verified. No media-parity claim.",
       "Final optimized web smoke: live ECCC imagery and separated controls at both desktop sizes; all observed loaded code files HTTP 200 and served hashes match build. No page errors. Optional local /geo.json returned 404; not a zero-resource-error claim. Complete basemap loading not an acceptance gate.",
@@ -149,9 +149,9 @@
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/clearview.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/overlay.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs"
       ],
@@ -172,13 +172,13 @@
       "observation_type": "runtime-screenshot",
       "hookecho_implementation": "The grouped workspace drawer routes supported controls to existing actions. Its Notifications entry opens HookEcho alert-delivery settings directly on the Notify me page. A Weather Products section now exposes public-data routes for mesoscale discussions, convective/fire/winter/rainfall/climate outlook controls, tropical cyclones, METARs, fronts, reports, GLM lightning, spotters, and ODIN power outages. Outlook menu entries scroll the shared control page to their severe, climate, fire, rainfall, or winter section. A fixed Outlooks header keeps Back and Close visible when a lower forecast section is in view; Back opens the full controls catalog.",
       "remaining_gaps": [
-        "The menu still differs from RadarOmega's complete vendor catalog, including subscription-only services; several outlook routes share HookEcho's Outlooks control page rather than opening distinct vendor pages."
+        "The menu still differs from reference app's complete vendor catalog, including subscription-only services; several outlook routes share HookEcho's Outlooks control page rather than opening distinct vendor pages."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/clearview.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/overlay.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs"
       ],
@@ -202,9 +202,9 @@
         "No complete vendor model/product/entitlement catalog; selected source replaces other source products while Layer manager permits combinations."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/fielddiff.rs",
         "crates/hookecho/src/render/mod.rs",
         "crates/hookecho/src/ui/sounding_window.rs",
@@ -225,7 +225,7 @@
       "observation_type": "runtime-controls",
       "hookecho_implementation": "Site/place search and location workflows are available. Place lookups carry request IDs, and a result is applied only if the initiating pane, camera center, zoom, projection, orientation and site remain current. Selecting a radar site cancels pending place navigation and clears its status. Startup recovery now precedes user-directed environment, notification and browser-fragment navigation, so a saved camera cannot overwrite a shared link; geo-IP fallback does not replace a valid recovered session. A delayed default geo-IP fix only applies if camera/site still have startup values. Choosing Fly to clears search and closes the wide controls panel. Compact and wide search rank radar-site IDs and city matches; selecting a site centers that radar while preserving map orientation.",
       "remaining_gaps": [
-        "Search-result ranking versus RadarOmega, geocoder coverage, and GPS/follow transitions have not been compared end to end.",
+        "Search-result ranking versus reference app, geocoder coverage, and GPS/follow transitions have not been compared end to end.",
         "The out-of-order lookup guard and later-navigation guard have focused tests, but delayed-response interaction in the browser remains to verify."
       ],
       "hookecho_sources": [
@@ -251,12 +251,12 @@
       "status": "implemented-related",
       "observed_scope": "Dual/quad display options, pane-local product choice and synchronized frame stepping are present.",
       "observation_type": "static-client",
-      "hookecho_implementation": "Independent products, basemaps and timestamps; camera/time links, offsets, named panes, persistent workspaces. The RadarOmega-style sidebar now exposes Radar and comparison views, 2/4-pane selection, linked map/time switches, a configurable maximum radar-time difference and inspector visibility. New settings default the linked time guard to 120 seconds; a saved explicit off choice remains off. A leader's newly requested frame or archive seek now drives follower requests immediately, even while its prior scan remains loaded; an already-loaded selected source still links by actual displayed cut time.",
+      "hookecho_implementation": "Independent products, basemaps and timestamps; camera/time links, offsets, named panes, persistent workspaces. The reference app-style sidebar now exposes Radar and comparison views, 2/4-pane selection, linked map/time switches, a configurable maximum radar-time difference and inspector visibility. New settings default the linked time guard to 120 seconds; a saved explicit off choice remains off. A leader's newly requested frame or archive seek now drives follower requests immediately, even while its prior scan remains loaded; an already-loaded selected source still links by actual displayed cut time.",
       "remaining_gaps": [
         "The pane controls remain HookEcho-specific. Linked camera motion, default-limit hiding of a 13-minute-misaligned follower, and one KTLX linked frame-step arrival were verified. A user can disable the limit; other sites, providers, date transitions and repeated playback need further controlled checks. Exact vendor split-view layout and interactions are not established."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/mobile/navigation.rs",
         "crates/hookecho/src/view.rs",
         "crates/hookecho/src/workspace.rs",
@@ -297,7 +297,7 @@
       "status": "partial",
       "observed_scope": "Observed choices begin Dark Presentation, Grey Presentation, Green Presentation, Blank White, Satellite, Basic, Blue Map, Road Network, Dark Roadmap; extracted control string truncates after Te.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "Independent vector and public raster styles include a Presentation palette with black land and restrained geography. A separate Blank White choice is a tile-free white canvas under radar, station markers, and weather overlays; it suppresses geographic map labels and retains the existing Blank Dark/None behavior. Blue Map is a keyless, independently authored vector palette. Its land, water, vegetation, road, boundary and label colors were tuned against a live RadarOmega Blue Map session. Its roads and casings are narrowed, and the regional view suppresses built-up land-use fill and delays smaller road classes until closer zoom levels without changing other palettes. At regional zoom below 9, Blue Map now suppresses route shields while retaining city names; shields return at close zoom. This keeps the weather canvas quieter without changing label behavior on other palettes.",
+      "hookecho_implementation": "Independent vector and public raster styles include a Presentation palette with black land and restrained geography. A separate Blank White choice is a tile-free white canvas under radar, station markers, and weather overlays; it suppresses geographic map labels and retains the existing Blank Dark/None behavior. Blue Map is a keyless, independently authored vector palette. Its land, water, vegetation, road, boundary and label colors were tuned against a live reference app Blue Map session. Its roads and casings are narrowed, and the regional view suppresses built-up land-use fill and delays smaller road classes until closer zoom levels without changing other palettes. At regional zoom below 9, Blue Map now suppresses route shields while retaining city names; shields return at close zoom. This keeps the weather canvas quieter without changing label behavior on other palettes.",
       "remaining_gaps": [
         "No vendor style, font/sprite asset or tile content reuse; full style catalog, tile schema, imagery and label placement differ. A local browser comparison at the saved KTLX regional center verified quieter Blue Map labeling at zoom 7 and route shields returning at zoom 9. The reference screenshot and browser run have different viewport sizes, weather times and tile sources, so land-cover, label placement, and pixel equivalence remain unverified."
       ],
@@ -313,7 +313,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP01",
       "acceptance": "Selectable styles preserve map position, data overlays and readable labels.",
-      "runtime_verification": "Native style tests confirmed Blank White's stable key and Blue Map's slug, picker category, keyless vector palette and stable key. A live RadarOmega Blue Map session was captured at 920x600 over Oklahoma after its style loaded. Its background was hsl(216,38%,14%), water hsl(197,48%,6%) and road-simple colors hsl(211,17%,37-40%); these measurements informed HookEcho's independent palette. HookEcho's Blue Map was browser-captured before and after at the same 920x600 viewport. A later regional-detail pass was checked in the local browser with the app proxy: the map rendered roads, land cover, labels, warnings and station markers, with fewer primary roads and residential fills at zoom 7. All 679 active library tests passed, including the new zoom gate test; the optimized browser bundle measured 4,653,983 bytes at gzip -9, within the 4,662,000-byte budget. Earlier reference and HookEcho screenshots are in outputs/ro-parity/basemap-blue/. On 2026-10-15 the optimized local browser rendered KTLX Blue Map around -96.4510, 36.1809 at zoom 7 with no route shields, while city names and road geometry remained visible. Navigating to -97.28, 35.34 at zoom 9 showed highway shields again. The saved RadarOmega Blue Map reference at zoom 7.03 around -96.4510, 36.1809 likewise presents subdued roads and no visible route shields in the unobscured map areas; the comparison is visual and not pixel matched because the viewport, weather scan and tile schemas differ. Reference: outputs/ro-parity/basemap-blue/reference-blue-map-settled.png and reference-state.json. Full native suite passed 680/712 (32 ignored); optimized web main WASM measured 4,654,781/4,662,000 gzip bytes, Lite 74,707/80,000."
+      "runtime_verification": "Native style tests confirmed Blank White's stable key and Blue Map's slug, picker category, keyless vector palette and stable key. A live reference app Blue Map session was captured at 920x600 over Oklahoma after its style loaded. Its background was hsl(216,38%,14%), water hsl(197,48%,6%) and road-simple colors hsl(211,17%,37-40%); these measurements informed HookEcho's independent palette. HookEcho's Blue Map was browser-captured before and after at the same 920x600 viewport. A later regional-detail pass was checked in the local browser with the app proxy: the map rendered roads, land cover, labels, warnings and station markers, with fewer primary roads and residential fills at zoom 7. All 679 active library tests passed, including the new zoom gate test; the optimized browser bundle measured 4,653,983 bytes at gzip -9, within the 4,662,000-byte budget. Earlier reference and HookEcho screenshots are in outputs/ro-parity/basemap-blue/. On 2026-10-15 the optimized local browser rendered KTLX Blue Map around -96.4510, 36.1809 at zoom 7 with no route shields, while city names and road geometry remained visible. Navigating to -97.28, 35.34 at zoom 9 showed highway shields again. The saved reference app Blue Map reference at zoom 7.03 around -96.4510, 36.1809 likewise presents subdued roads and no visible route shields in the unobscured map areas; the comparison is visual and not pixel matched because the viewport, weather scan and tile schemas differ. Reference: outputs/ro-parity/basemap-blue/reference-blue-map-settled.png and reference-state.json. Full native suite passed 680/712 (32 ignored); optimized web main WASM measured 4,654,781/4,662,000 gzip bytes, Lite 74,707/80,000."
     },
     {
       "id": "MAP02",
@@ -329,9 +329,9 @@
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/ui/layer_options.rs",
         "crates/hookecho/src/ui/settings_window.rs"
       ],
@@ -356,9 +356,9 @@
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/ui/layer_options.rs",
         "crates/hookecho/src/ui/settings_window.rs"
       ],
@@ -382,9 +382,9 @@
         "Independent label collision, road placement and exact vendor zoom transitions still differ. The local browser verified visibility modes at one regional zoom; other zooms, raster basemaps, comparison panes and long-session transition smoothness remain unverified."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/basemap_style.rs",
         "crates/hookecho/src/tiles.rs",
         "crates/hookecho/src/ui/basemap_picker.rs"
@@ -406,17 +406,17 @@
       "observation_type": "runtime-screenshot",
       "hookecho_implementation": "Existing radar-site markers and range rings are exposed by Display Settings. Persisted show_tdwr_sites (default true) independently filters TDWR marker drawing, hover and click hit-testing by registry Network::Tdwr; selected station data and full site picker remain available. At city zoom (8+), unselected TDWRs use an outlined cyan pin instead of a faint small dot. A public NWS radar-stations feed now colors delayed, stale, and non-operating station pins and labels the RDA state/Level II receipt category in the radar lens. The classic lens and workspace station tooltip explicitly identify pin color as NOAA network status and show the selected site's displayed scan age separately. A missing station or report older than five minutes reverts to unknown rather than claiming an outage.",
       "remaining_gaps": [
-        "NOAA receipt/status categories are independent public-data signals and are not proven equivalent to RadarOmega's tower colors. A displayed scan can be older than NOAA's latest receipt; the lens now shows its age separately, but full station-to-scan provenance and every international tower catalog remain incomplete."
+        "NOAA receipt/status categories are independent public-data signals and are not proven equivalent to reference app's tower colors. A displayed scan can be older than NOAA's latest receipt; the lens now shows its age separately, but full station-to-scan provenance and every international tower catalog remain incomplete."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/radar_identity.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/products.rs",
         "crates/hookecho/src/view.rs",
         "crates/hookecho/src/settings.rs",
         "crates/hookecho/src/app.rs",
         "crates/hookecho/src/ui/settings_window.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
         "crates/wxdata/src/radar_status.rs",
         "crates/wxdata/src/lib.rs"
       ],
@@ -450,7 +450,7 @@
       "observation_evidence_ids": [],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP06",
       "acceptance": "Measure matched pan/wheel tasks for frame time, interaction latency, label stability and tile completion.",
-      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking. A later HookEcho browser regression reproduced an oversized Page-unit scroll jumping from California zoom 7 toward world scale; after the two-level per-event cap, the same scroll settled at zoom 5 near California with no console errors. In a local 1196×720 browser trial on 2026-10-14, the original gesture-only filter recorded 167 vector uploads and zero skips after rapid pans. Revised current-view filtering recorded one offscreen skip and 51 uploads after returning from the U.S. East Coast to KEAX, then 60 uploads and one cumulative skip after three more pans; the in-app rolling UI CPU and gesture-cadence p95 read 17.3 and 17.1 ms at the last observation. This demonstrates that the filter activates, not a speed improvement: the runs had different camera paths and cache states, and GPU timing was unsupported. Focused tests preserve visible, parent/child and speculative tiles; 657 native tests and the full web build pass (4,535,196 gzipped bytes against a 4,540,000-byte budget). On October 15, a new two-anchor motion regression passed with all 686 active library tests; the optimized web bundle passed at 4,665,450/4,675,000 gzip bytes. A local browser took two Page-unit zoom inputs at separate map points, settled at Sacramento zoom 13 from zoom 9, and logged no browser warnings or errors. REA process captures ev_d83968f78694b35599b9d98072e15007bc306802cb416508dc59bfa4733a4d80 and ev_71e70698e2d591f93d6796ffb6f3026db881246f637446899cf45daf5a85a5f2 show the RadarOmega AppImage exited with SIGSEGV before its debugger endpoint became available; the system coredump is truncated, so no cause or matched current timing is established. Matched cross-app presented-frame and input-latency trials remain needed."
+      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking. A later HookEcho browser regression reproduced an oversized Page-unit scroll jumping from California zoom 7 toward world scale; after the two-level per-event cap, the same scroll settled at zoom 5 near California with no console errors. In a local 1196×720 browser trial on 2026-10-14, the original gesture-only filter recorded 167 vector uploads and zero skips after rapid pans. Revised current-view filtering recorded one offscreen skip and 51 uploads after returning from the U.S. East Coast to KEAX, then 60 uploads and one cumulative skip after three more pans; the in-app rolling UI CPU and gesture-cadence p95 read 17.3 and 17.1 ms at the last observation. This demonstrates that the filter activates, not a speed improvement: the runs had different camera paths and cache states, and GPU timing was unsupported. Focused tests preserve visible, parent/child and speculative tiles; 657 native tests and the full web build pass (4,535,196 gzipped bytes against a 4,540,000-byte budget). On October 15, a new two-anchor motion regression passed with all 686 active library tests; the optimized web bundle passed at 4,665,450/4,675,000 gzip bytes. A local browser took two Page-unit zoom inputs at separate map points, settled at Sacramento zoom 13 from zoom 9, and logged no browser warnings or errors. REA process captures ev_d83968f78694b35599b9d98072e15007bc306802cb416508dc59bfa4733a4d80 and ev_71e70698e2d591f93d6796ffb6f3026db881246f637446899cf45daf5a85a5f2 show the reference app AppImage exited with SIGSEGV before its debugger endpoint became available; the system coredump is truncated, so no cause or matched current timing is established. Matched cross-app presented-frame and input-latency trials remain needed."
     },
     {
       "id": "MAP07",
@@ -473,7 +473,7 @@
         "crates/hookecho/src/shaders/overlay.wgsl",
         "crates/hookecho/src/vector_tiles.rs",
         "crates/hookecho/src/workspace.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/permalink.rs",
         "crates/hookecho/src/render/radar_surface.rs",
         "crates/hookecho/src/shaders/radar_surface_composite.wgsl",
@@ -500,9 +500,9 @@
         "Full vendor product catalog, labels, site-dependent availability and elevation branches are not equivalent."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs",
         "crates/hookecho/src/products.rs",
         "crates/hookecho/src/view.rs"
@@ -682,13 +682,13 @@
       "status": "partial",
       "observed_scope": "Radar display settings expose Full Coverage Radar and Show Range Ring. The client maps the switch to NORMAL/FULL and selects sweep.radius versus sweep.radius_full when supplied. In a separate signed-in KFWS debug session, HRF reflectivity exposed radius 230000 m, radius_full 458125 m, gate_depth 1824, first gate 2125 m and gate spacing 250 m; HVL velocity exposed radius 230000 m, radius_full 298125 m and gate_depth 1184 with the same first-gate and spacing. The 50% wording is therefore not a reliable universal multiplier. Real-time range rings are a separate toggle from the static map ring.",
       "observation_type": "static-client + live-runtime",
-      "hookecho_implementation": "Fixed 50–200 km distance rings and azimuth spokes remain separate from the blue live scan boundary. The Full coverage radar switch now displays every decoded NEXRAD gate when on and clips only the rendered gate count to 230 km when off, keeping the source sweep loaded. It appears in product settings and the RadarOmega-style Display Settings; the boundary labels the active display extent.",
+      "hookecho_implementation": "Fixed 50–200 km distance rings and azimuth spokes remain separate from the blue live scan boundary. The Full coverage radar switch now displays every decoded NEXRAD gate when on and clips only the rendered gate count to 230 km when off, keeping the source sweep loaded. It appears in product settings and the reference app-style Display Settings; the boundary labels the active display extent.",
       "remaining_gaps": [
         "The 230 km Normal clip is verified in the observed KFWS reflectivity and velocity sweeps; other stations, products, and radar networks still need direct runtime checks. The implementation deliberately leaves TDWR and other networks at their decoded extent until their range rules are measured. Other-product and long-session browser comparisons remain pending."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs",
         "crates/hookecho/src/products.rs",
         "crates/hookecho/src/view.rs",
@@ -700,7 +700,7 @@
       ],
       "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD08",
       "acceptance": "Toggle coverage/ring while clearly indicating actual available scan extent.",
-      "runtime_verification": "2026-10-14: REA live Radar Settings confirmed both Full Coverage Radar and Show Range Ring controls. A controlled KTLX FULL→NORMAL→FULL comparison completed, but pixel difference at 920×1028 was limited to the setting switch at this viewport; it does not establish the behavior on supported towers. HookEcho cargo check and selected-cut range unit test passed. In the local HookEcho browser at KEAX, zoom 8, REF 0.4°, enabling Map reference → Range rings displayed labeled 50/100/150 km circles and the blue selected-sweep boundary. Switching to VEL 0.4° retained the rings and live product display. This verifies the integrated ring toggle, not Normal/Full parity. 2026-10-14: The optimized web build passed at 4,541,899/4,550,000 gzip bytes (Lite 74,707/80,000). At KTLX in the local browser, the live boundary labeled Scan extent 300 km appeared at a wide zoom. Toggling Range rings separately added/removed the fixed grey distance rings; toggling Live scan boundary removed the blue 300 km circle while leaving fixed rings available. The overlay-toggle slug round-trip test passed. 2026-10-15: A separate RadarOmega debug session measured KFWS HRF at 230/458.125 km NORMAL/FULL and HVL at 230/298.125 km, with respective 1824/1184 gate depths and 2.125 km first gate at 0.25 km spacing (outputs/ro-parity/kfws-full-coverage-observation.json). In the local optimized HookEcho browser at KFWS, the Full setting showed a live 460 km decoded boundary; switching it off changed the displayed boundary to 230 km and visibly trimmed the radar. The gate-depth unit test and native cargo check passed. The clean optimized web build passed at 4,590,841/4,596,000 gzip bytes (Lite 74,707/80,000); its KFWS Normal boundary showed 230 km with no diagnostic text."
+      "runtime_verification": "2026-10-14: REA live Radar Settings confirmed both Full Coverage Radar and Show Range Ring controls. A controlled KTLX FULL→NORMAL→FULL comparison completed, but pixel difference at 920×1028 was limited to the setting switch at this viewport; it does not establish the behavior on supported towers. HookEcho cargo check and selected-cut range unit test passed. In the local HookEcho browser at KEAX, zoom 8, REF 0.4°, enabling Map reference → Range rings displayed labeled 50/100/150 km circles and the blue selected-sweep boundary. Switching to VEL 0.4° retained the rings and live product display. This verifies the integrated ring toggle, not Normal/Full parity. 2026-10-14: The optimized web build passed at 4,541,899/4,550,000 gzip bytes (Lite 74,707/80,000). At KTLX in the local browser, the live boundary labeled Scan extent 300 km appeared at a wide zoom. Toggling Range rings separately added/removed the fixed grey distance rings; toggling Live scan boundary removed the blue 300 km circle while leaving fixed rings available. The overlay-toggle slug round-trip test passed. 2026-10-15: A separate reference app debug session measured KFWS HRF at 230/458.125 km NORMAL/FULL and HVL at 230/298.125 km, with respective 1824/1184 gate depths and 2.125 km first gate at 0.25 km spacing (outputs/ro-parity/kfws-full-coverage-observation.json). In the local optimized HookEcho browser at KFWS, the Full setting showed a live 460 km decoded boundary; switching it off changed the displayed boundary to 230 km and visibly trimmed the radar. The gate-depth unit test and native cargo check passed. The clean optimized web build passed at 4,590,841/4,596,000 gzip bytes (Lite 74,707/80,000); its KFWS Normal boundary showed 230 km with no diagnostic text."
     },
     {
       "id": "RAD09",
@@ -780,7 +780,7 @@
       "observation_type": "static-client",
       "hookecho_implementation": "Velocity readouts convert internal m/s to knots, m/s or mph using the saved selection. A configurable scan sound is gated by mute/quiet hours and enabled only for a new live volume on the active pane; the first volume for each selected station is silent, and duplicate/backfilled volumes are ignored.",
       "remaining_gaps": [
-        "RadarOmega's exact velocity-unit choices and audio waveform have not been verified against a live reference session; HookEcho audio output has not been exercised on hardware."
+        "reference app's exact velocity-unit choices and audio waveform have not been verified against a live reference session; HookEcho audio output has not been exercised on hardware."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/settings.rs",
@@ -805,9 +805,9 @@
         "One two-minute TDFW browser run verified ten consecutive decoded frames. A later optimized-browser run decoded all 21 consecutive TDFW frames with playback active. A further multi-minute 21-frame run remained playing with 22 Ready scans and zero cache evictions, and the automatic visual-quality guard engaged. Retaining display bins reduced re-binning; the later bounded GPU texture cache kept the visual-quality guard off across a further 77-second local loop segment. Multi-hour cadence, full browser heap/driver memory and cross-device behavior remain unmeasured. Native allows 252 decoded cache entries. One 250-copy stress run measured retention of a real TDFW scan under the 512 MiB encoded-payload budget, but 250 distinct historical downloads, rendering/playback latency, variation between scans and long-session eviction behavior remain unverified."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/scrubber.rs",
         "crates/hookecho/src/app.rs",
         "crates/hookecho/examples/tdwr_cache_profile.rs",
@@ -833,9 +833,9 @@
         "Current fixture interaction verification pending; exact competitor scrubber, missing-frame and forecast-tail behavior not matched."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/scrubber.rs",
         "crates/hookecho/src/timeline.rs",
         "crates/hookecho/src/view.rs"
@@ -864,8 +864,8 @@
         "crates/hookecho/src/timeline.rs",
         "crates/hookecho/src/view.rs",
         "crates/hookecho/src/settings.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs"
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs"
       ],
       "observation_evidence_ids": [
         "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
@@ -887,9 +887,9 @@
         "Pan/zoom pause and resume behavior still needs final integrated fixture verification, including wheel inertia, touch and repeated playback. The map/control drag-origin regression is covered by a focused egui input test."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/camera_motion.rs",
         "crates/hookecho/src/labelplace.rs",
         "crates/hookecho/src/map_work.rs",
@@ -916,9 +916,9 @@
         "All timestamps, timezone edge cases and DST transitions have not been compared in this run."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/scrubber.rs",
         "crates/hookecho/src/timeline.rs",
         "crates/hookecho/src/view.rs"
@@ -943,9 +943,9 @@
         "Data retention and unavailable historical-product coverage differ; provider history links are not fully mapped."
       ],
       "hookecho_sources": [
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/scrubber.rs",
         "crates/hookecho/src/timeline.rs",
         "crates/hookecho/src/view.rs"
@@ -969,9 +969,9 @@
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/ui/layer_options.rs",
         "crates/hookecho/src/ui/settings_window.rs"
       ],
@@ -997,8 +997,8 @@
       "hookecho_sources": [
         "ROADMAP.md",
         "crates/hookecho/src/render/mod.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
         "crates/hookecho/src/app.rs",
         "crates/wxdata/src/mrms.rs",
         "crates/wxdata/examples/mrms_region_probe.rs",
@@ -1075,7 +1075,7 @@
         "crates/hookecho/src/ui/ndfd_legend.rs",
         "crates/hookecho/src/satellite_time.rs",
         "crates/hookecho/src/app.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/app/chrome/radar_identity.rs",
         "crates/hookecho/src/app/chrome/scrubber.rs",
         "crates/hookecho/src/app/mobile/navigation.rs",
@@ -1195,12 +1195,12 @@
       "title": "Hydrological outlooks",
       "priority": 1,
       "status": "partial",
-      "observed_scope": "Captured RadarOmega renderer supports Hydrological Outlook Day selection, risk polygons (marginal, slight, moderate, high), configurable fill opacity and line width, feature popup, and forecast discussion.",
+      "observed_scope": "Captured reference app renderer supports Hydrological Outlook Day selection, risk polygons (marginal, slight, moderate, high), configurable fill opacity and line width, feature popup, and forecast discussion.",
       "observation_type": "runtime-controls",
       "hookecho_implementation": "NOAA WPC Excessive Rainfall Outlook Days 1–5 render as selectable risk polygons with a searchable control entry. A day-aware NOAA discussion reader uses the Excessive Rainfall Discussion for Days 1–3 and the broader Extended Forecast Discussion for Days 4–5. Rainfall polygon fill opacity and border width can be adjusted independently, and selecting a current polygon offers a direct action to open its discussion. A published WPC archive index provides dated Day 1–5 shapefiles with stored issue and valid times; archived polygons are labeled, a published no-risk issue has an explicit empty state, and current discussions are hidden for them. River-gauge layers provide related hydrology context.",
       "remaining_gaps": [
         "The optimized local browser showed Day 1 ERO polygons, 0% fill opacity with outlines retained, 0 px border width hiding only the ERO outline, and 6 px producing a wider outline. A selected marginal-risk polygon opened the current NOAA Excessive Rainfall Discussion. Dated WPC archive selection is implemented for the issues exposed by the public directory; older coverage, archived discussion linkage, popup layout and exact vendor width choices remain different or unverified.",
-        "RadarOmega component request format and full historical coverage were not available in the captured renderer; exact service parity remains unverified. The WPC archive is a public-data alternative, not the vendor service."
+        "reference app component request format and full historical coverage were not available in the captured renderer; exact service parity remains unverified. The WPC archive is a public-data alternative, not the vendor service."
       ],
       "hookecho_sources": [
         "crates/wxdata/src/ero.rs",
@@ -1229,7 +1229,7 @@
       "observation_type": "shipped-client-code-and-runtime-controls",
       "hookecho_implementation": "Public NOAA SPC fire-weather MapServer polygons for days 1–8, with conditions/dry-thunderstorm choices, NOAA category colors, on-map polygon details and source/valid/expiry metadata. The layer controls report request loading, failure, stale source, empty selection and loaded states using the shared feed tracker. A forecast-discussion reader fetches official SPC Day 1, Day 2 or combined Day 3–8 text on demand, with refresh and NOAA source link.",
       "remaining_gaps": [
-        "The public NOAA discussion reader uses SPC's Day 1, Day 2 and combined Day 3–8 products; its popup hierarchy differs from RadarOmega's hosted discussion view.",
+        "The public NOAA discussion reader uses SPC's Day 1, Day 2 and combined Day 3–8 products; its popup hierarchy differs from reference app's hosted discussion view.",
         "Loading/failure/stale-source messaging is implemented but the failure and stale states still need live browser verification. When NWS alert polygons overlap an outlook, alerts take click priority; users can temporarily hide alerts to inspect the outlook."
       ],
       "hookecho_sources": [
@@ -1252,11 +1252,11 @@
       "title": "Winter weather",
       "priority": 1,
       "status": "partial",
-      "observed_scope": "The retained RadarOmega client exposes separate Day 1–3 probability selectors for at least 4 inches of snow in 24 hours and at least 0.25 inches of ice in 24 hours, with slight/moderate/high polygon categories, plus WSSI Day 1, Day 2, Day 3, and combined Days 1–3 impact layers.",
+      "observed_scope": "The retained reference app client exposes separate Day 1–3 probability selectors for at least 4 inches of snow in 24 hours and at least 0.25 inches of ice in 24 hours, with slight/moderate/high polygon categories, plus WSSI Day 1, Day 2, Day 3, and combined Days 1–3 impact layers.",
       "observation_type": "captured-client-code-and-runtime-controls",
       "hookecho_implementation": "Public NOAA WPC probabilistic winter precipitation MapServer layers now provide independent Day 1–3 snow ≥4 in and ice ≥0.25 in selections, slight/moderate/high colors, polygon details with issue/valid/source metadata, and on-demand refresh. WSSI now includes the combined Days 1–3 overall-impact layer in addition to individual days. Snowfall analysis remains available separately. Snow and ice have independent request lanes and source-health messages, so both can be displayed together without one reply invalidating the other.",
       "remaining_gaps": [
-        "RadarOmega polygon opacity/border-width settings, popup hierarchy and source-specific timing behavior are not fully matched.",
+        "reference app polygon opacity/border-width settings, popup hierarchy and source-specific timing behavior are not fully matched.",
         "Winter probability ice polygons were not present in the live public response at ≥10% during browser verification; the selector and parser are implemented, but an actual ice-polygon click remains unverified. Failure and stale-source messaging is implemented but still needs live failure/stale browser verification."
       ],
       "hookecho_sources": [
@@ -1280,12 +1280,12 @@
       "title": "Climatological outlooks",
       "priority": 2,
       "status": "partial",
-      "observed_scope": "Extracted RadarOmega client exposes temperature and precipitation toggles for 6–10 day, 8–14 day, 3–4 week, 1 month, and 3 month outlooks, plus display opacity controls. Private backend request uses type and period keys.",
+      "observed_scope": "Extracted reference app client exposes temperature and precipitation toggles for 6–10 day, 8–14 day, 3–4 week, 1 month, and 3 month outlooks, plus display opacity controls. Private backend request uses type and period keys.",
       "observation_type": "static-client-code + runtime-controls",
       "hookecho_implementation": "NOAA CPC public ArcGIS GeoJSON polygons for 6–10 day, 8–14 day, monthly, and first-season (3-month) temperature and precipitation outlooks, plus NOAA's public KML polygons for Week 3–4. Selector and 0–100% opacity control are in Outlooks layer options; polygon detail shows category, probability, issue and valid dates, and source. The panel shows loading, loaded, empty-result, overdue-refresh and failed-refresh states from the request health and selected feature count. The selected period has an in-app NOAA forecast-discussion reader with refresh and a source link.",
       "remaining_gaps": [
-        "The extracted client uses radio-like toggle logic, so only one period/variable displays at a time; HookEcho matches that selection behavior. The public NOAA discussion reader is independent of RadarOmega's private popup hierarchy.",
-        "RadarOmega's exact private categories and geometry styling have not been matched; NOAA CPC feed is an independently styled public-data alternative. Loading and loaded states were browser-verified; empty, overdue and failure labels are implemented but still need controlled runtime fault injection. The source-health age measures refresh cadence rather than each polygon's forecast expiration."
+        "The extracted client uses radio-like toggle logic, so only one period/variable displays at a time; HookEcho matches that selection behavior. The public NOAA discussion reader is independent of reference app's private popup hierarchy.",
+        "reference app's exact private categories and geometry styling have not been matched; NOAA CPC feed is an independently styled public-data alternative. Loading and loaded states were browser-verified; empty, overdue and failure labels are implemented but still need controlled runtime fault injection. The source-health age measures refresh cadence rather than each polygon's forecast expiration."
       ],
       "hookecho_sources": [
         "crates/wxdata/src/cpc.rs",
@@ -1465,9 +1465,9 @@
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
-        "crates/hookecho/src/app/chrome/omega_display.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
-        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/zeta_display.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_workspace.rs",
         "crates/hookecho/src/settings.rs",
         "crates/wxdata/src/spotters.rs"
       ],
@@ -1515,13 +1515,13 @@
       "observation_type": "static-client",
       "hookecho_implementation": "Automatic SCIT tracks and a separate manual two-click storm-track tool are available. The manual tool draws an editable path, angular cone and 15-minute points with kt/mph/km/h motion controls. Automatic tracks now have independently persisted Initial Point, Track Line, Track Cone and Time Points switches plus mph/km/h/kt speed units; the selected-cell cone expands with forecast distance, and speed units carry through the map label and cell detail views.",
       "remaining_gaps": [
-        "RadarOmega's custom/cellular cone geometry, time-point editing, ETA city overlays and vendor projection algorithm are not matched. The manual HookEcho cone is an explicitly user-defined angular estimate, not an official storm forecast.",
-        "The captured RadarOmega client persists display settings; its track save/load methods are placeholders. No saved-track equivalence claim is made."
+        "reference app's custom/cellular cone geometry, time-point editing, ETA city overlays and vendor projection algorithm are not matched. The manual HookEcho cone is an explicitly user-defined angular estimate, not an official storm forecast.",
+        "The captured reference app client persists display settings; its track save/load methods are placeholders. No saved-track equivalence claim is made."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app.rs",
         "crates/hookecho/src/app/chrome/chips.rs",
-        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/zeta_transport.rs",
         "crates/hookecho/src/app/chrome/registry.rs",
         "crates/hookecho/src/app/mobile/mod.rs",
         "crates/hookecho/src/ui/cell_window.rs",
@@ -1590,7 +1590,7 @@
       "observation_type": "static-client",
       "hookecho_implementation": "Workspace drawing chip offers pencil with four quick colors plus a custom color picker, a 1–12 px pen-size control (6 px initial size), segment eraser, 16-step drawing undo/redo, clear and GeoJSON export. Each geographic stroke retains its own color and width through erasing, export and case-file round trips; older case files default to 2.5 px. Freehand annotations stay anchored to geographic coordinates during pan and zoom. An eraser drag cuts only the portion inside an 11-pixel screen-radius brush, splitting surviving strokes at the brush boundary; each draw or erase drag is one history step.",
       "remaining_gaps": [
-        "RadarOmega's exact Size dropdown choices, canvas eraser brush size, history depth and export format have not been verified as equivalent. HookEcho's geographic vector annotations differ from the reference canvas drawing board."
+        "reference app's exact Size dropdown choices, canvas eraser brush size, history depth and export format have not been verified as equivalent. HookEcho's geographic vector annotations differ from the reference canvas drawing board."
       ],
       "hookecho_sources": [
         "crates/hookecho/src/app/chrome/clearview.rs",
@@ -1685,7 +1685,7 @@
       "status": "external-service",
       "observed_scope": "Device Settings; dashboard buttons All Streaming, Inside Warnings, Refresh, Close dashboard.",
       "observation_type": "runtime-controls",
-      "hookecho_implementation": "Public NWS/METAR station dashboards and FAA/Caltrans/optional keyed Windy cameras are accepted substitutes. Caltrans cameras have independent pins and still/source detail cards on the Weather & highway cameras layer, separate from station cards. A Public camera streams dashboard lists public HLS cameras in the current map view, filters to cameras inside current NWS warning polygons, refreshes the catalog, and opens each camera's existing still/live card. It loads the catalog without turning on the map's camera-pin layer and is reachable from the RadarOmega-style Storm Chasers menu and the shared command registry. An open card checks its JPEG about once per minute with a shared minute URL key and 60-second proxy TTL. The card's Watch live action routes published HLS streams to the native ffmpeg player or an on-demand browser hls.js player. The local and edge camera proxies now supply the fixed FAA viewer Referer only for its allowlisted API host. An open FAA card retains its still through catalog refresh and rechecks the latest frame after ten minutes, retrying an unloaded card after one minute.",
+      "hookecho_implementation": "Public NWS/METAR station dashboards and FAA/Caltrans/optional keyed Windy cameras are accepted substitutes. Caltrans cameras have independent pins and still/source detail cards on the Weather & highway cameras layer, separate from station cards. A Public camera streams dashboard lists public HLS cameras in the current map view, filters to cameras inside current NWS warning polygons, refreshes the catalog, and opens each camera's existing still/live card. It loads the catalog without turning on the map's camera-pin layer and is reachable from the reference app-style Storm Chasers menu and the shared command registry. An open card checks its JPEG about once per minute with a shared minute URL key and 60-second proxy TTL. The card's Watch live action routes published HLS streams to the native ffmpeg player or an on-demand browser hls.js player. The local and edge camera proxies now supply the fixed FAA viewer Referer only for its allowlisted API host. An open FAA card retains its still through catalog refresh and rechecks the latest frame after ten minutes, retrying an unloaded card after one minute.",
       "remaining_gaps": [
         "User accepted public-data alternatives. In the optimized local browser on October 15, the public-stream dashboard showed 291 live-capable Caltrans cameras in a Sacramento view and 41 inside current warning polygons; selecting a row opened its JPEG card and Watch live played a public HLS stream. A fresh local browser session then opened the dashboard in Sacramento with the camera-pin layer off; 291 stream rows loaded while the map remained free of camera pins. A Caltrans still/independent map card, one working native/browser HLS stream and one KEDU sensor dashboard were also verified; the open camera card advanced to a newer JPEG without a reload. The sensor dashboard now flags observations at least two hours old, offers manual refresh, retries errors after one minute and stalled loads after thirty seconds, and records the requested site before spawning a fetch to prevent repeated per-frame requests. A controlled optimized-browser outage showed the correct unavailable/retry UI, and a three-hour-old station fixture showed its timestamp and Stale observation warning. A focused test confirms failed observation payloads count as source-health failures under the Nearest station observations label; recovery across other locations and long sessions remains unverified. A repaired local proxy returned 24 FAA Sacramento-area sites, a latest-image record and a 640×480 JPEG on October 15. The earlier bare metadata probe returned 401 and the earlier local proxy returned 502; the proxy path is now live-verified, and the optimized local browser displayed a Sacramento Mather Airport FAA pin and its JPEG in a detail card. Deployed edge behavior, other camera stills, the timed FAA-card refresh and longer-session stream recovery remain unverified.",
         "CyclonePORT device control/telemetry relationships and moving-spotter video associations are not implemented; fixed weather cameras are not equivalent chaser video."

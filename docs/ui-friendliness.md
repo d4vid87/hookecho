@@ -1,6 +1,6 @@
 # Everyday radar workflows
 
-This follow-up implements the eight recommendations from the RadarOmega interface comparison. It refines HookEcho's existing Radar and Analyst surfaces, action registry, glossary, favorites, recovery and optional tour.
+This follow-up implements the eight recommendations from the reference app interface comparison. It refines HookEcho's existing Radar and Analyst surfaces, action registry, glossary, favorites, recovery and optional tour.
 
 1. The browser installation suggestion has a separate dismissal control and 44-pixel buttons. On narrow screens it sits above playback and navigation, centered away from the color legend, rather than covering a navigation destination. It remains a temporary browser-install suggestion.
 2. Station, city, full radar product name and elevation stay together on desktop and phone. Station selection uses the existing picker; product selection uses the shared action path; elevation selection preserves the existing manual-cut behavior. During a station transition the header identifies the prior station whose scan remains displayed.

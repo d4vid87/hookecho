@@ -823,8 +823,8 @@ impl HookEchoApp {
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
         if !phone(ctx) {
             if self.settings.radar_workspace {
-                self.omega_workspace_controls(ctx);
-                self.omega_display_settings(ctx);
+                self.zeta_workspace_controls(ctx);
+                self.zeta_display_settings(ctx);
             } else {
                 self.clearview_controls(ctx);
             }

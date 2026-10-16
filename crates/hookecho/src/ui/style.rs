@@ -13,11 +13,11 @@
 
 use egui::{vec2, Color32, Frame, Margin, RichText, Stroke};
 
-/// RadarOmega's signature accents: orange for the active/live radar chrome, blue for actions.
-pub const OMEGA_ORANGE: Color32 = Color32::from_rgb(0xF2, 0xA0, 0x33);
-pub const OMEGA_BLUE: Color32 = Color32::from_rgb(0x2D, 0x9C, 0xDB);
+/// Radar Zeta accents: orange for the active/live radar chrome, blue for actions.
+pub const ZETA_ORANGE: Color32 = Color32::from_rgb(0xF2, 0xA0, 0x33);
+pub const ZETA_BLUE: Color32 = Color32::from_rgb(0x2D, 0x9C, 0xDB);
 /// Reserved for live/recording semantics only — the theme accent is the accent.
-pub const OMEGA_GREEN: Color32 = Color32::from_rgb(0x3D, 0xD5, 0x6B);
+pub const ZETA_GREEN: Color32 = Color32::from_rgb(0x3D, 0xD5, 0x6B);
 
 /// Type scale for chrome text.
 pub const FONT_SM: f32 = 11.0;

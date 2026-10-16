@@ -1,4 +1,4 @@
-// The comparison matrix, shared by /compare/ and the five per-competitor pages so a corrected row
+// The comparison matrix, shared by /compare/ and the four per-competitor pages so a corrected row
 // is corrected everywhere at once.
 //
 // An honest matrix or none at all: every row a competitor wins is marked as won. Prices are tiers,
@@ -9,7 +9,6 @@
 // RadarScope: base.radarscope.app tier list (Pro Tier One / Tier Two).
 // MyRadar: myradar.com premium features; free tier carries ads.
 // Windy: windy.com Premium page; radar composite is not Level 2.
-// RadarOmega: radaromega.com feature and subscription pages, including the paid add-on packs.
 // Clime and RainViewer are grouped: both are mosaic-imagery apps on a subscription.
 // HookEcho's own column comes from README.md and docs/GUIDE.md.
 export const COLS = [
@@ -17,7 +16,6 @@ export const COLS = [
   "RadarScope",
   "MyRadar",
   "Windy",
-  "RadarOmega",
   "Clime / RainViewer",
 ];
 
@@ -30,7 +28,6 @@ export const ROWS = [
       { v: "part", t: "Paid app, subscription tiers" },
       { v: "part", t: "Free with ads, subscription" },
       { v: "part", t: "Free, optional Premium" },
-      { v: "part", t: "Paid app, subscription add-ons" },
       { v: "part", t: "Free trial, subscription" },
     ],
   },
@@ -40,7 +37,6 @@ export const ROWS = [
       { v: "yes", t: "None" },
       { v: "yes", t: "None" },
       { v: "no", t: "Unless you subscribe" },
-      { v: "yes", t: "None" },
       { v: "yes", t: "None" },
       { v: "no", t: "Yes" },
     ],
@@ -52,7 +48,6 @@ export const ROWS = [
       { v: "part", t: "For the paid tiers" },
       { v: "part", t: "For the paid tier" },
       { v: "yes", t: "Optional" },
-      { v: "part", t: "For the subscription" },
       { v: "part", t: "For the paid tier" },
     ],
   },
@@ -60,7 +55,6 @@ export const ROWS = [
     label: "Open source",
     cells: [
       { v: "yes", t: "Every line" },
-      { v: "no", t: "" },
       { v: "no", t: "" },
       { v: "no", t: "" },
       { v: "no", t: "" },
@@ -74,7 +68,6 @@ export const ROWS = [
       { v: "yes", t: "All elevations" },
       { v: "no", t: "Mosaic imagery" },
       { v: "no", t: "Composite only" },
-      { v: "yes", t: "All elevations" },
       { v: "no", t: "Mosaic imagery" },
     ],
   },
@@ -85,7 +78,6 @@ export const ROWS = [
       { v: "yes", t: "Full set" },
       { v: "no", t: "" },
       { v: "no", t: "" },
-      { v: "yes", t: "Full set" },
       { v: "no", t: "" },
     ],
   },
@@ -96,7 +88,6 @@ export const ROWS = [
       { v: "yes", t: "With storm-relative" },
       { v: "no", t: "" },
       { v: "no", t: "" },
-      { v: "yes", t: "With storm-relative" },
       { v: "no", t: "" },
     ],
   },
@@ -108,7 +99,6 @@ export const ROWS = [
       { v: "yes", t: "" },
       { v: "yes", t: "Composite" },
       { v: "yes", t: "" },
-      { v: "yes", t: "" },
     ],
   },
   {
@@ -118,7 +108,6 @@ export const ROWS = [
       { v: "part", t: "Paid tier" },
       { v: "part", t: "Paid tier" },
       { v: "yes", t: "" },
-      { v: "part", t: "Paid add-on" },
       { v: "part", t: "Paid tier" },
     ],
   },
@@ -129,7 +118,6 @@ export const ROWS = [
       { v: "no", t: "" },
       { v: "part", t: "Limited" },
       { v: "yes", t: "The best in the field" },
-      { v: "part", t: "Paid add-on" },
       { v: "no", t: "" },
     ],
   },
@@ -138,7 +126,6 @@ export const ROWS = [
     cells: [
       { v: "yes", t: "NHC cones and advisories" },
       { v: "no", t: "" },
-      { v: "yes", t: "" },
       { v: "yes", t: "" },
       { v: "yes", t: "" },
       { v: "yes", t: "" },
@@ -151,7 +138,6 @@ export const ROWS = [
       { v: "part", t: "Paid tier, recent only" },
       { v: "no", t: "" },
       { v: "no", t: "" },
-      { v: "part", t: "Paid add-on, recent only" },
       { v: "no", t: "" },
     ],
   },
@@ -159,7 +145,6 @@ export const ROWS = [
     label: "Works offline",
     cells: [
       { v: "yes", t: "Chase packs, prefetched" },
-      { v: "no", t: "" },
       { v: "no", t: "" },
       { v: "no", t: "" },
       { v: "no", t: "" },
@@ -173,7 +158,6 @@ export const ROWS = [
       { v: "part", t: "Several countries" },
       { v: "part", t: "Mostly US" },
       { v: "yes", t: "Global" },
-      { v: "part", t: "Several countries" },
       { v: "yes", t: "Global" },
     ],
   },
@@ -185,14 +169,12 @@ export const ROWS = [
       { v: "part", t: "Cut-down web view" },
       { v: "yes", t: "Web first" },
       { v: "no", t: "" },
-      { v: "no", t: "" },
     ],
   },
   {
     label: "iPhone and iPad",
     cells: [
       { v: "no", t: "Not yet" },
-      { v: "yes", t: "" },
       { v: "yes", t: "" },
       { v: "yes", t: "" },
       { v: "yes", t: "" },
@@ -206,7 +188,6 @@ export const ROWS = [
       { v: "part", t: "Windows, macOS" },
       { v: "part", t: "Windows" },
       { v: "no", t: "" },
-      { v: "part", t: "Windows" },
       { v: "no", t: "" },
     ],
   },
@@ -217,7 +198,6 @@ export const ROWS = [
       { v: "yes", t: "The bar everyone measures against" },
       { v: "yes", t: "" },
       { v: "yes", t: "" },
-      { v: "yes", t: "Deep, and heavily configurable" },
       { v: "yes", t: "" },
     ],
   },
@@ -227,7 +207,6 @@ export const ROWS = [
       { v: "yes", t: "None, at all" },
       { v: "no", t: "Analytics" },
       { v: "no", t: "Ads and analytics" },
-      { v: "no", t: "Analytics" },
       { v: "no", t: "Analytics" },
       { v: "no", t: "Ads and analytics" },
     ],
@@ -289,7 +268,7 @@ export const COMPETITORS: Competitor[] = [
   },
   {
     slug: "rainviewer",
-    col: 5,
+    col: 4,
     name: "RainViewer",
     blurb: "Global rain mosaics on a subscription. Clime is the same shape of product.",
     theyWin: [
@@ -299,17 +278,5 @@ export const COMPETITORS: Competitor[] = [
     verdict:
       "RainViewer answers \"is rain coming\" well, worldwide, and if that is your question it is a reasonable app to pay for. It cannot answer \"is this storm rotating\", because mosaic imagery has thrown that information away before it reaches you. HookEcho decodes the volume on your own machine, so nothing is thrown away — inside the US, for free.",
   },
-  {
-    slug: "radaromega",
-    col: 4,
-    name: "RadarOmega",
-    blurb: "The other serious Level 2 viewer, sold as an app plus add-on packs.",
-    theyWin: [
-      "A more configurable phone app, with a long list of paid add-on data packs.",
-      "iPhone and iPad builds.",
-      "More non-US radar networks than our US-plus-Germany coverage.",
-    ],
-    verdict:
-      "RadarOmega and HookEcho read the same public Level 2 volumes and show the same tilts, velocity and dual-pol products. The difference is the bill and the source: RadarOmega charges for the app and again for the add-ons, and you cannot read its code. HookEcho is GPL licensed, runs in a browser with nothing installed, and the archive goes back to 1991 without an add-on.",
-  },
+
 ];

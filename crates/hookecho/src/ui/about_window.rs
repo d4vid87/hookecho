@@ -69,7 +69,7 @@ pub fn show(
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!("Version {tag} is available"))
-                            .color(style::OMEGA_GREEN),
+                            .color(style::ZETA_GREEN),
                     );
                     ui.hyperlink_to("Download", format!("{REPO}/releases/latest"));
                 });

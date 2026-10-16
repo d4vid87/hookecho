@@ -4,7 +4,7 @@
 >
 > **Scope:** United States weather analysis only. Do **not** spend roadmap effort on international radar, international model coverage, or international warning products. Existing international code may remain working, but it is outside this roadmap.
 >
-> **Relationship to `ROADMAP.md`:** this file is additive. Do not replace or delete the existing roadmap. This document is the detailed path from the current HookEcho feature set to a top-tier U.S. meteorological analysis workstation comparable in breadth to RadarOmega / WeatherFront / RadarScope, in low-latency presentation to WeatherWise / WSV3, and in radar-analysis depth to GR2Analyst.
+> **Relationship to `ROADMAP.md`:** this file is additive. Do not replace or delete the existing roadmap. This document is the detailed path from the current HookEcho feature set to a top-tier U.S. meteorological analysis workstation comparable in breadth to reference app / WeatherFront / RadarScope, in low-latency presentation to WeatherWise / WSV3, and in radar-analysis depth to GR2Analyst.
 >
 > **Snapshot date:** 2026-09-12.
 
@@ -1799,7 +1799,7 @@ This is the explicit “what are we still missing?” list for agents.
 - [x] AWIPS-style pane layouts
 - [ ] WFO boundary/contact tooling
 
-## RadarOmega-class gaps
+## Reference app capability gaps
 
 - [x] 3D for more than radar reflectivity
 - [ ] 3D MRMS/model-derived surfaces where scientifically valid
@@ -2200,7 +2200,6 @@ When these are complete, further work should focus less on copying competitor ch
 
 Current public feature sets consulted in September 2026:
 
-- RadarOmega — https://www.radaromega.com/
 - WeatherWise — https://www.weatherwise.app/
 - WeatherFront — https://www.weatherfront.com/
 - WSV3 — https://wsv3.com/
