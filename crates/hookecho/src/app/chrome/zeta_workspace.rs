@@ -651,7 +651,7 @@ impl HookEchoApp {
                                 .max_height((bounds.height() - 105.0).max(60.0))
                                 .show(ui, |ui| {
                                     section(ui, "VIEWS");
-                                    if menu_row(ui, "Radar Zeta UI ✓", true).on_hover_text("Switch back to the standard layout").clicked() {
+                                    if menu_row(ui, "HookEcho layout ✓", true).on_hover_text("Switch back to the standard layout").clicked() {
                                         use_standard_layout = true;
                                         menu_open = false;
                                     }
