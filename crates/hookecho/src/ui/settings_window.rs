@@ -1175,7 +1175,7 @@ fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::U
 
 fn appearance_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     settings_group(ui, "Desktop workspace", |ui| {
-        ui.checkbox(&mut settings.radar_workspace, "Radar workspace").on_hover_text("Source selector, slide-out tools and centered playback controls.");
+        ui.checkbox(&mut settings.radar_workspace, "RadarOmega inspired layout").on_hover_text("Source selector, slide-out tools and centered playback controls.");
     });
     settings_group(ui, "Make Hook Echo yours", |ui| {
         egui::Grid::new("appearance_grid")
