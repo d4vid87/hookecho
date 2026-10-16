@@ -23126,7 +23126,12 @@ impl eframe::App for HookEchoApp {
                 // The analyst docks reserve map width. Center the transport and map chips in
                 // the remaining viewport rather than underneath either dock.
                 self.chrome_rect = root.available_rect_before_wrap();
-                self.scrubber(ctx);
+                // A comparison export labels each pane along its lower edge. Keep the
+                // playback transport out of those captures so neither the controls nor
+                // the captions obscure one another.
+                let comparison_capture = self.views.len() > 1
+                    && (self.share_card.is_some() || self.share_card_capture_frames > 0);
+                if !comparison_capture { self.scrubber(ctx); }
                 if self.settings.radar_workspace && !phone_layout {
                     self.goes_time_bar(ctx);
                     workspace_imagery_bar_handled = true;
