@@ -274,6 +274,7 @@ impl HookEchoApp {
         let mut outlook_focus = None;
         let mut display = false;
         let mut spotter_settings = false;
+        let mut stream_dashboard = false;
         let mut notification_settings = false;
         let mut return_to_radar = false;
         let mut compare_panes = None;
@@ -774,6 +775,9 @@ impl HookEchoApp {
                                     egui::CollapsingHeader::new("Storm Chasers")
                                         .id_salt("omega_storm_chasers")
                                         .show(ui, |ui| {
+                                            if menu_row(ui, "Public camera streams", self.show_stream_dashboard).clicked() {
+                                                stream_dashboard = true;
+                                            }
                                             if menu_row(ui, "Spotter Network settings", false)
                                                 .clicked()
                                             {
@@ -843,8 +847,15 @@ impl HookEchoApp {
             self.switch_mode(ViewMode::Analyst, ctx);
             self.set_pane_count(count);
         }
+        if stream_dashboard {
+            menu_open = false;
+            self.show_stream_dashboard = true;
+            self.show_webcams = true;
+            self.dotcam_last_fetch = None;
+            ctx.request_repaint();
+        }
         if menu_was_open && !menu_open && action.is_none() && !display && !spotter_settings
-            && !notification_settings
+            && !notification_settings && !stream_dashboard
             && !return_to_radar && compare_panes.is_none() {
             if let Some((panel, drawer)) = ctx.data_mut(|d| {
                 d.get_temp::<(bool, bool)>(egui::Id::new("omega_menu_previous_surface"))

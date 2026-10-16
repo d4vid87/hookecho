@@ -2164,6 +2164,7 @@ pub(crate) enum AppWindow {
     Events,
     /// Replay a recorded drive against the archive.
     ChaseReplay,
+    PublicStreams,
     Digest,
     Afd,
     Cappi,
@@ -3975,6 +3976,9 @@ pub struct HookEchoApp {
     show_spotters: bool,
     /// FAA WeatherCams: the toggle, the sites in view, and the bbox//time they were fetched for.
     show_webcams: bool,
+    /// Public fixed-camera stream list for the current map view.
+    show_stream_dashboard: bool,
+    stream_inside_warnings: bool,
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
@@ -4942,6 +4946,8 @@ impl HookEchoApp {
             last_gesture_end: None,
             show_spotters: false,
             show_webcams: false,
+            show_stream_dashboard: false,
+            stream_inside_warnings: false,
             webcams: Vec::new(),
             show_fires: false,
             fire_perims: Vec::new(),
@@ -10472,6 +10478,11 @@ impl HookEchoApp {
                 W::Palettes => self.palette_editor.open = true,
                 W::Events => self.event_window.open = true,
                 W::ChaseReplay => self.chase_replay.open = true,
+                W::PublicStreams => {
+                    self.show_stream_dashboard = true;
+                    self.show_webcams = true;
+                    self.dotcam_last_fetch = None;
+                }
                 W::Digest => {
                     self.digest_window.open = true;
                     self.generate_digest();
@@ -11837,6 +11848,85 @@ impl HookEchoApp {
         let (Some(key), Some(url)) = (image, cam.image_url.clone()) else { return; };
         self.pf_icon_tex.entry(key.clone()).or_insert(None);
         self.fetch_dotcam_still(key, url, ctx);
+    }
+
+    fn show_public_streams(&mut self, ctx: &egui::Context) {
+        let bounds = self.view_bounds();
+        let warnings: Vec<_> = self.active_alert_features().iter()
+            .filter(|feature| feature.kind == overlay::FeatureKind::Warning).collect();
+        let mut cameras: Vec<_> = self.stations.cams.iter()
+            .filter(|cam| cam.stream_url.is_some())
+            .filter(|cam| cam.lon >= bounds.0 && cam.lon <= bounds.2
+                && cam.lat >= bounds.1 && cam.lat <= bounds.3)
+            .filter(|cam| !self.stream_inside_warnings
+                || warnings.iter().any(|warning| warning.distance_km(cam.lon, cam.lat) == 0.0))
+            .cloned().collect();
+        cameras.sort_by(|a, b| (&a.agency, &a.place, &a.name, &a.id)
+            .cmp(&(&b.agency, &b.place, &b.name, &b.id)));
+        let mut open = self.show_stream_dashboard;
+        let mut warning_only = self.stream_inside_warnings;
+        let mut refresh = false;
+        let mut selected = None;
+        let mut show_california = false;
+        let mut close_requested = false;
+        egui::Window::new("Public camera streams")
+            .default_pos(egui::pos2((ctx.content_rect().width() - 380.0).max(0.0) * 0.5, 70.0))
+            .open(&mut open)
+            .default_width(370.0)
+            .max_width(460.0)
+            .show(ctx, |ui| {
+                ui.label("Live public highway cameras in the current map view.");
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut warning_only, false, "All Streaming");
+                    ui.selectable_value(&mut warning_only, true, "Inside Warnings");
+                    if ui.button("Refresh").clicked() { refresh = true; }
+                });
+                ui.separator();
+                if cameras.is_empty() {
+                    if self.dotcam_last_fetch.is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+                        ui.spinner();
+                        ui.label("Checking public camera feeds…");
+                    } else if warning_only {
+                        ui.label("No public streams inside current NWS warnings in this view.");
+                    } else {
+                        ui.label("No public live streams in this view.");
+                    }
+                    ui.label("Public live-stream coverage is currently available from Caltrans in California.");
+                    if ui.button("Show California cameras").clicked() { show_california = true; }
+                } else {
+                    ui.label(format!("{} streaming cameras", cameras.len()));
+                    egui::ScrollArea::vertical().max_height(390.0).show(ui, |ui| {
+                        for cam in &cameras {
+                            ui.horizontal(|ui| {
+                                if ui.button("View").clicked() { selected = Some(cam.clone()); }
+                                ui.vertical(|ui| {
+                                    ui.strong(if cam.name.is_empty() { &cam.id } else { &cam.name });
+                                    ui.small(format!("{} · {}", cam.agency, cam.place));
+                                });
+                            });
+                            ui.separator();
+                        }
+                    });
+                }
+                ui.small("Fixed highway cameras; these are not moving chaser feeds.");
+                if ui.button("Close dashboard").clicked() { close_requested = true; }
+            });
+        self.show_stream_dashboard = open && !close_requested;
+        self.stream_inside_warnings = warning_only;
+        if refresh || show_california {
+            if show_california {
+                self.views[self.active].camera = crate::render::mercator::Camera::at_lonlat(-121.49, 38.58, 9.0);
+                self.stream_inside_warnings = false;
+            }
+            self.dotcam_bounds = None;
+            self.dotcam_last_fetch = None;
+            ctx.request_repaint();
+        }
+        if let Some(cam) = selected {
+            self.show_stream_dashboard = false;
+            self.open_dotcam(&cam, ctx);
+            ctx.request_repaint();
+        }
     }
 
     fn fetch_dotcam_still(&self, key: String, url: String, ctx: &egui::Context) {
@@ -24126,6 +24216,9 @@ impl eframe::App for HookEchoApp {
                 self.sensor_data = None;
                 ctx.request_repaint();
             }
+        }
+        if self.show_stream_dashboard {
+            self.show_public_streams(ctx);
         }
         if self.show_hodo
             && !ui::hodograph_window::show(

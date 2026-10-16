@@ -1382,6 +1382,12 @@ impl HookEchoApp {
                 false,
             ),
             (
+                W::PublicStreams,
+                "Public camera streams\u{2026}",
+                "Browse live Caltrans highway cameras in view, including those inside warnings",
+                false,
+            ),
+            (
                 W::Digest,
                 "Storm digest…",
                 "A plain-language summary of what's happening now",

@@ -188,7 +188,8 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # UTC archive-day and hour navigation adds a source-backed historical loop without storing days of
 # grids in memory. The optimized main bundle measured 4,653,859 gzip bytes; retain under 0.2%
 # headroom while preserving the Lite and startup gates.
-budget="${HOOKECHO_WASM_BUDGET:-4662000}"
+# Public-camera dashboard adds a small amount of UI code; measured at 4,664,691 bytes gzip.
+budget="${HOOKECHO_WASM_BUDGET:-4675000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then
