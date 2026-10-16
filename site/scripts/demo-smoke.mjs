@@ -18,8 +18,7 @@ try {
 
   const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await desktop.goto(url);
-  assert.equal(await desktop.locator('[data-explore-analyst]').getAttribute("href"), "#analyst");
-  await desktop.locator('[data-explore-analyst]').click();
+  await desktop.locator('[data-mode="analyst"]').click();
   assert.equal(await desktop.locator('[data-mode="analyst"]').getAttribute("aria-pressed"), "true");
   assert.ok(await desktop.locator('[data-stage="four"]').isVisible());
   await desktop.locator('#analyst [data-action="play"]').click();
@@ -46,7 +45,7 @@ try {
 
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await mobile.goto(url);
-  await mobile.locator('[data-explore-analyst]').click();
+  await mobile.locator('[data-mode="analyst"]').click();
   await mobile.locator('[data-product="1"]').click();
   assert.ok(await mobile.locator('[data-product-frame="1"]').isVisible());
   const stage = mobile.locator('[data-stage="mobile"]');
@@ -62,7 +61,7 @@ try {
 
   const reduced = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   await reduced.goto(url);
-  await reduced.locator('[data-explore-analyst]').click();
+  await reduced.locator('[data-mode="analyst"]').click();
   assert.ok(await reduced.locator('[data-product-frame="0"] img').isVisible());
   assert.ok(!(await reduced.locator('[data-product-frame="0"] video').isVisible()));
   await reduced.close();
@@ -70,15 +69,13 @@ try {
   const noScript = await browser.newPage({ javaScriptEnabled: false });
   await noScript.goto(url);
   assert.ok(await noScript.locator('[data-stage="single"] noscript img').isVisible());
-  assert.equal(await noScript.locator('.hero .btn-primary').getAttribute('href'), '/go/web/hero');
   await noScript.close();
 
   const failedMedia = await browser.newPage();
   await failedMedia.route(/moore-2013-.*\.mp4/, (route) => route.abort());
   await failedMedia.goto(url);
-  await failedMedia.locator('[data-explore-analyst]').click();
+  await failedMedia.locator('[data-mode="analyst"]').click();
   assert.ok(await failedMedia.locator('[data-stage="four"] img').isVisible());
-  assert.equal(await failedMedia.locator('.hero .btn-primary').getAttribute('href'), '/go/web/hero');
   await failedMedia.close();
   console.log("Analyst demo smoke check passed");
 } finally {

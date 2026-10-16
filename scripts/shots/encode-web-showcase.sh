@@ -24,7 +24,8 @@ encode_gif() {
     -loop 0 "$output"
 }
 
-full='crop=1280:720:0:40'
+# The captures are 1280x800. Keep the full frame so the top bar and playback dock remain visible.
+full='null'
 encode_mp4 radar moore-2013-single "$full"
 encode_poster radar moore-2013-single "$full"
 encode_gif radar "$showcase/moore-2013-single.gif" 'scale=900:-1'

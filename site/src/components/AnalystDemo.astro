@@ -21,13 +21,13 @@ const products = [
 
   <div class="demo-surface">
     <div class="stage stage-single" data-stage="single">
-      <img data-src="/showcase/moore-2013-single.webp?v=radar-zeta-20261016" alt="HookEcho single reflectivity map of the May 20, 2013 tornado near Moore, Oklahoma" width="1280" height="720" loading="lazy" />
-      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-single.mp4?v=radar-zeta-20261016" type="video/mp4" /></video>
-      <noscript><style>.stage-single > img { display: none; }</style><img src="/showcase/moore-2013-single.webp?v=radar-zeta-20261016" alt="HookEcho reflectivity map of the Moore tornado" width="1280" height="720" loading="lazy" /></noscript>
+      <img data-src="/showcase/moore-2013-single.webp?v=full-frame-20261016" alt="HookEcho single reflectivity map of the May 20, 2013 tornado near Moore, Oklahoma" width="1280" height="800" loading="lazy" />
+      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-single.mp4?v=full-frame-20261016" type="video/mp4" /></video>
+      <noscript><style>.stage-single > img { display: none; }</style><img src="/showcase/moore-2013-single.webp?v=full-frame-20261016" alt="HookEcho reflectivity map of the Moore tornado" width="1280" height="800" loading="lazy" /></noscript>
     </div>
     <div class="stage stage-four" data-stage="four" hidden>
-      <img data-src="/showcase/moore-2013-four.webp?v=radar-zeta-20261016" alt="HookEcho Analyst showing synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity from the same KTLX scan" width="1280" height="720" loading="lazy" />
-      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-four.mp4?v=radar-zeta-20261016" type="video/mp4" /></video>
+      <img data-src="/showcase/moore-2013-four.webp?v=full-frame-20261016" alt="HookEcho Analyst showing synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity from the same KTLX scan" width="1280" height="800" loading="lazy" />
+      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-four.mp4?v=full-frame-20261016" type="video/mp4" /></video>
     </div>
     <div class="stage stage-mobile" data-stage="mobile" hidden>
       {products.map((product, index) => <div class="product-frame" data-product-frame={index} hidden={index !== 0}>
@@ -154,4 +154,6 @@ const products = [
   @media(max-width:900px){.demo-heading{align-items:start;flex-direction:column}.desktop-explainer{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:760px){.demo-surface{aspect-ratio:16/9}.stage-single img,.stage-single video{object-fit:cover;object-position:center}.stage-four{display:none!important}.stage-mobile:not([hidden]){display:block}.demo-bottom{align-items:start;flex-direction:column}.capture{text-align:left}.desktop-explainer{display:none!important}.mode-switch{width:100%}.mode-switch button{flex:1;padding-inline:.4rem;font-size:.88rem}}
   @media(prefers-reduced-motion:reduce){video{display:none!important}}
+  .demo-surface{aspect-ratio:16/10}
+  .stage img,.stage video,.product-frame img,.product-frame video{object-fit:contain}
 </style>
