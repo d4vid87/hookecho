@@ -3361,6 +3361,9 @@ pub struct HookEchoApp {
     saved: Settings,
     views: Vec<MapView>,
     active: usize,
+    /// Exact map rectangles from the last central-panel paint, used to label every pane in
+    /// exported comparison images without guessing around the analyst docks.
+    pane_bounds: Vec<egui::Rect>,
     msg_rx: Receiver<DataMsg>,
     msg_tx: Sender<DataMsg>,
     /// Geocode results for the marker window's address search: `(label, lat, lon)` or an error.
@@ -4556,6 +4559,7 @@ impl HookEchoApp {
             settings,
             views: vec![view],
             active: 0,
+            pane_bounds: Vec::new(),
             msg_rx,
             msg_tx,
             about_open: false,
@@ -20858,6 +20862,26 @@ impl HookEchoApp {
             false
         };
 
+        if self.views.len() > 1
+            && !chrome::compact(ctx)
+            && self.pane_bounds.len() == self.views.len()
+        {
+            self.draw_multi_share_cards(ctx);
+        } else {
+            self.draw_single_share_card(ctx);
+        }
+
+        if fire {
+            // Keep drawing the footer until the backend returns the captured frame.
+            let (dest, _) = self.share_card.take().expect("checked above");
+            self.share_card_capture_frames = 5;
+            self.screenshot_pending = Some(dest);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        ctx.request_repaint();
+    }
+
+    fn draw_single_share_card(&self, ctx: &egui::Context) {
         let v = &self.views[self.active];
         let site = v.site.clone().unwrap_or_else(|| "no site".to_string());
         let product = v.custom_product.clone().unwrap_or_else(|| crate::products::info(v.moment).name.to_string());
@@ -20916,15 +20940,49 @@ impl HookEchoApp {
                     });
                 });
             });
+    }
 
-        if fire {
-            // Keep drawing the footer until the backend returns the captured frame.
-            let (dest, _) = self.share_card.take().expect("checked above");
-            self.share_card_capture_frames = 5;
-            self.screenshot_pending = Some(dest);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+    fn draw_multi_share_cards(&self, ctx: &egui::Context) {
+        let accent = crate::theme::accent(self.settings.theme);
+        let logo = crate::icon::texture(ctx, 64);
+        for (idx, (v, rect)) in self.views.iter().zip(&self.pane_bounds).enumerate() {
+            let site = v.site.as_deref().unwrap_or("no site");
+            let product = v.custom_product.as_deref()
+                .unwrap_or_else(|| crate::products::info(v.moment).name);
+            let tilt = v.volume.as_ref()
+                .and_then(|volume| volume.elevations.get(v.tilt))
+                .map_or_else(String::new, |angle| format!(" · {angle:.1}°"));
+            let time = v.displayed_time()
+                .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
+                .unwrap_or_else(|| "scan time unavailable".to_string());
+            let source = v.displayed_station().or(v.site.as_deref())
+                .and_then(data_attribution)
+                .unwrap_or("Radar data: NOAA/NWS");
+            egui::Area::new(egui::Id::new(("share_pane_card", idx)))
+                .order(egui::Order::Tooltip)
+                .fade_in(false)
+                .interactable(false)
+                .pivot(egui::Align2::LEFT_BOTTOM)
+                .fixed_pos(rect.left_bottom() + egui::vec2(10.0, -10.0))
+                .constrain_to(*rect)
+                .show(ctx, |ui| {
+                    ui.set_max_width((rect.width() - 20.0).max(160.0));
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(9, 23, 39))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(95, 159, 218)))
+                        .corner_radius(7.0)
+                        .inner_margin(egui::Margin::symmetric(9, 7))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(format!("Pane {} · {site} · {product}{tilt}", idx + 1))
+                                .size(13.0).strong().color(accent));
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(15.0, 15.0)));
+                                ui.label(egui::RichText::new(format!("{time} · {source}"))
+                                    .size(11.0).color(egui::Color32::from_gray(230)));
+                            });
+                        });
+                });
         }
-        ctx.request_repaint();
     }
 
     /// If a screenshot was requested, save the delivered image event to the pending path.
@@ -24179,6 +24237,7 @@ impl eframe::App for HookEchoApp {
             } else {
                 pane_rects(full, n)
             };
+            self.pane_bounds = rects.clone();
 
             // If cameras are linked, mirror the active pane's camera to the others.
             if self.link_cameras {
