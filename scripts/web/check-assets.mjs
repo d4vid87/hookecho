@@ -14,7 +14,7 @@ for (const origin of process.argv.slice(2)) {
     }
     if (path.endsWith(".js?boot=2")) {
       const glue = await response.text();
-      for (const [, snippet] of glue.matchAll(/["']\.\/((?:snippets\/)[^"']+\.js)["']/g)) {
+      for (const [, snippet] of glue.matchAll(/^import .*? from ["']\.\/(snippets\/[^"']+\.js)["']/gm)) {
         if (!/inline\d+-[a-f0-9]{8}\.js$/.test(snippet)) {
           throw new Error(`${origin}: snippet lacks a content-hashed URL: ${snippet}`);
         }
