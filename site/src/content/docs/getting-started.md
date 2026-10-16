@@ -19,9 +19,9 @@ You should now see the map, a radar timestamp, and the colour scale. An empty
 map can mean dry weather; check the timestamp before assuming data is missing.
 If the first scan never appears, use [Troubleshooting](/docs/troubleshooting/).
 
-![HookEcho Radar mode showing reflectivity and playback during the archived Moore storm](/shots/radar-mode-20261004.webp)
+![HookEcho Radar mode showing reflectivity and playback during the archived Moore storm](/shots/radar-mode-20261016.webp)
 
-*KTLX archive replay from May 20, 2013, recaptured October 4, 2026; this is not live weather.*
+*KTLX archive replay from May 20, 2013, recaptured October 16, 2026; this is not live weather.*
 
 ## What you're looking at
 

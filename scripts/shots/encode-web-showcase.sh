@@ -28,11 +28,11 @@ full='crop=1280:720:0:40'
 encode_mp4 radar moore-2013-single "$full"
 encode_poster radar moore-2013-single "$full"
 encode_gif radar "$showcase/moore-2013-single.gif" 'scale=900:-1'
-encode_mp4 radar radar-playback-20261004 "$full"
+encode_mp4 radar radar-playback-20261016 "$full"
 encode_mp4 analyst moore-2013-four "$full"
 encode_poster analyst moore-2013-four "$full"
-encode_mp4 attributes attributes-20261004 "$full"
-encode_mp4 national mrms-20261004 "$full"
+encode_mp4 attributes attributes-20261016 "$full"
+encode_mp4 national mrms-20261016 "$full"
 
 for item in 'reflectivity 10 65' 'velocity 500 65' 'correlation 10 420' 'differential 500 420'; do
   read -r product x y <<<"$item"
@@ -44,9 +44,13 @@ done
 # The README and press kit use short, current UI loops too.
 encode_gif radar "$shots/radar-mode.gif" 'scale=900:-1'
 encode_gif analyst "$shots/analyst-mode.gif" 'scale=900:-1'
+encode_gif radar "$shots/hero.gif" 'scale=1100:-1'
 magick "$frames/radar/02.png" -quality 82 "$shots/radar-mode.jpg"
 magick "$frames/analyst/02.png" -quality 80 "$shots/analyst-mode.jpg"
-magick "$frames/national/02.png" -quality 82 "$shots/mrms.jpg"
-magick "$frames/attributes/02.png" -quality 82 "$shots/stormtable.jpg"
+magick "$frames/warning-detail.png" -strip -sampling-factor 4:2:0 -quality 78 "$shots/warning-detail.jpg"
+magick "$frames/attributes/00.png" -strip -sampling-factor 4:2:0 -quality 82 "$shots/cellconsole.jpg"
+magick "$shots/radar-mode.jpg" -quality 85 "$repo/site/public/shots/radar-mode-20261016.webp"
+magick "$shots/analyst-mode.jpg" -quality 85 "$repo/site/public/shots/analyst-mode-20261016.webp"
+magick "$shots/radar-mode.jpg" -quality 85 "$repo/site/public/shots/hookecho-poster.webp"
 
 echo 'Encoded current web showcase and README media.'

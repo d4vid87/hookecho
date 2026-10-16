@@ -6,9 +6,9 @@ import GuidedMedia from "../components/GuidedMedia.astro";
 import { DISCORD_INVITE } from "../data/community";
 
 const features = [
-  { title: "Follow a storm", label: "Radar playback", body: "Step through real radar scans to follow a storm as it changes. The source time stays visible.", src: "/showcase/radar-playback-20261004", poster: "/showcase/moore-2013-single.webp?v=warning-halo", alt: "Archived Moore storm advancing through HookEcho radar scans", source: "KTLX archive · May 20, 2013 · recaptured October 4, 2026" },
-  { title: "Inspect the details", label: "Storm attributes", body: "Open the measurements behind a detected storm: motion, height, and available hail indicators.", src: "/showcase/attributes-20261004", poster: "/shots/stormtable.jpg?v=20261004", alt: "Current storm attributes dock over Alabama radar", source: "KBMX live radar · captured October 4, 2026" },
-  { title: "See the whole country", label: "National radar", body: "Switch to the MRMS mosaic for a continuous view of rain and storms across the United States.", src: "/showcase/mrms-20261004", poster: "/shots/mrms.jpg?v=20261004", alt: "National MRMS radar mosaic in HookEcho", source: "MRMS live capture · October 4, 2026" },
+  { title: "Follow a storm", label: "Radar playback", body: "Step through real radar scans to follow a storm as it changes. The source time stays visible.", src: "/showcase/radar-playback-20261016", poster: "/showcase/moore-2013-single.webp?v=radar-zeta-20261016", alt: "Archived Moore storm advancing through HookEcho Radar Zeta", source: "KTLX archive · May 20, 2013 · recaptured October 16, 2026" },
+  { title: "Inspect the details", label: "Storm attributes", body: "Open the measurements behind a detected storm: motion, height, and available hail indicators.", src: "/showcase/attributes-20261016", poster: "/shots/stormtable.jpg?v=20261016", alt: "Current storm attributes dock over Alabama radar", source: "KBMX live radar · captured October 16, 2026" },
+  { title: "See the whole country", label: "National radar", body: "Switch to the MRMS mosaic for a continuous view of rain and storms across the United States.", src: "/showcase/mrms-20261016", poster: "/shots/mrms.jpg?v=20261016", alt: "National MRMS radar mosaic in Radar Zeta", source: "MRMS live capture · October 16, 2026" },
 ];
 const jsonld = { "@context": "https://schema.org", "@type": "SoftwareApplication", name: "HookEcho", applicationCategory: "WeatherApplication", operatingSystem: "Windows, macOS, Linux, Android, Web", url: "https://hookecho.io", downloadUrl: "https://hookecho.io/download/", license: "https://www.gnu.org/licenses/gpl-3.0.html", isAccessibleForFree: true, offers: { "@type": "Offer", price: "0", priceCurrency: "USD" }, description: "Free, open-source weather radar with four-product Analyst views and storm tools." };
 ---
@@ -42,9 +42,9 @@ const jsonld = { "@context": "https://schema.org", "@type": "SoftwareApplication
 
 <script>
   const features = [
-    { poster: "/showcase/moore-2013-single.webp?v=warning-halo", src: "/showcase/radar-playback-20261004.mp4?v=warning-halo", alt: "Archived Moore storm advancing through HookEcho radar scans", source: "KTLX archive · May 20, 2013 · recaptured October 4, 2026" },
-    { poster: "/shots/stormtable.jpg?v=20261004", src: "/showcase/attributes-20261004.mp4", alt: "Current storm attributes dock over Alabama radar", source: "KBMX live radar · captured October 4, 2026" },
-    { poster: "/shots/mrms.jpg?v=20261004", src: "/showcase/mrms-20261004.mp4", alt: "National MRMS radar mosaic in HookEcho", source: "MRMS live capture · October 4, 2026" },
+    { poster: "/showcase/moore-2013-single.webp?v=radar-zeta-20261016", src: "/showcase/radar-playback-20261016.mp4?v=radar-zeta-20261016", alt: "Archived Moore storm advancing through HookEcho Radar Zeta", source: "KTLX archive · May 20, 2013 · recaptured October 16, 2026" },
+    { poster: "/shots/stormtable.jpg?v=20261016", src: "/showcase/attributes-20261016.mp4", alt: "Current storm attributes dock over Alabama radar", source: "KBMX live radar · captured October 16, 2026" },
+    { poster: "/shots/mrms.jpg?v=20261016", src: "/showcase/mrms-20261016.mp4", alt: "National MRMS radar mosaic in Radar Zeta", source: "MRMS live capture · October 16, 2026" },
   ];
   const box = document.querySelector<HTMLElement>("[data-feature-showcase]");
   if (box) {

@@ -16,9 +16,9 @@ No account. No ads. No API key. Free and open source.
 [Visit the website](https://hookecho.io/) ·
 [Get help](https://github.com/d4vid87/hookecho/issues)
 
-![Current HookEcho Radar view stepping through an archived Oklahoma storm](docs/shots/radar-mode.gif)
+![Radar Zeta stepping through an archived Oklahoma storm](docs/shots/radar-mode.gif)
 
-*Current interface recaptured October 4, 2026; KTLX archive replay · May 20, 2013.*
+*Radar Zeta recaptured October 16, 2026; KTLX archive replay · May 20, 2013.*
 
 ## On a phone
 
@@ -28,8 +28,8 @@ Captured from the latest signed Android build on a Galaxy S24 Ultra. [Phone inst
 
 ## Radar and Analyst
 
-**Radar** opens with one map and a timeline. The desktop menu groups Views,
-Layers, and Your Map. On Android, Signal Deck keeps playback and warnings over
+**Radar** opens with one map and a timeline. Radar Zeta is the default desktop
+layout, with a compact command row and playback dock. On Android, Signal Deck keeps playback and warnings over
 the map; the Quiet Shelf opens Radar, Layers, Alerts, and More controls.
 
 **Analyst** adds linked panes, presets, an active-pane label, and an optional
