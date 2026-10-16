@@ -167,7 +167,7 @@ static MESH: FieldRamp = ramp!(
 );
 
 static HAIL_SWATH: FieldRamp = ramp!(
-    "Hail swaths (24 h)",
+    "Hail swaths",
     "mm",
     19.0,
     75.0,
@@ -828,6 +828,7 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
             "echo-tops" => Some(&MRMS_ECHO_TOPS),
             "height-msl" => Some(&MRMS_HEIGHT_MSL),
             "vil-density" => Some(&VIL_DENSITY),
+            "precip-rate" => Some(&PRECIP_RATE),
             "qpe-1h" => Some(&QPE_1H),
             "qpe-24h" => Some(&QPE_24H),
             "flash-flood" => Some(&FLASH_FLOOD),
@@ -848,6 +849,9 @@ pub fn ramp_for(layer: FieldLayer) -> Option<&'static FieldRamp> {
         FL::HailSwath => &HAIL_SWATH,
         FL::PrecipRate => &PRECIP_RATE,
         FL::Qpe1h => &QPE_1H,
+        FL::Daa => &QPE_1H,
+        FL::Oha => &QPE_1H,
+        FL::Dsa => &QPE_24H,
         FL::Qpe3h | FL::Qpe6h | FL::Qpe12h => &QPE_24H,
         FL::Qpe24h => &QPE_24H,
         FL::Cape => &CAPE,

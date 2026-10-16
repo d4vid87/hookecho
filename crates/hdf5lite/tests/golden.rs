@@ -130,11 +130,12 @@ fn packed_integers_carry_their_scale_and_offset() {
 /// The ODIM volume: superblock v0, object header v1, symbol-table groups, nested paths, and
 /// metadata that is mostly strings. None of that overlaps with the netCDF-4 path above.
 #[test]
-fn the_odim_volume_matches_h5py_structure_and_all() {
+fn the_odim_volumes_match_h5py_structure_and_all() {
+    for stem in ["bewid", "seang", "chalb"] {
     let dir = data_dir();
-    let bytes = std::fs::read(dir.join("bewid.h5")).expect("bewid.h5");
+    let bytes = std::fs::read(dir.join(format!("{stem}.h5"))).expect("ODIM fixture");
     let golden: Value =
-        serde_json::from_slice(&std::fs::read(dir.join("bewid.golden.json")).expect("golden"))
+        serde_json::from_slice(&std::fs::read(dir.join(format!("{stem}.golden.json"))).expect("golden"))
             .expect("parse golden");
     let f = hdf5lite::File::open(bytes).expect("open");
 
@@ -194,6 +195,7 @@ fn the_odim_volume_matches_h5py_structure_and_all() {
             close(sum, want["sum"].as_f64().unwrap()),
             "{path}: sum got {sum}"
         );
+    }
     }
 }
 

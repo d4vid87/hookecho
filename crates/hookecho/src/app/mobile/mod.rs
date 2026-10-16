@@ -303,6 +303,7 @@ impl super::HookEchoApp {
     fn mobile_tool_hint(&mut self, ctx: &egui::Context, content: Rect) {
         let text = match self.tool {
             crate::app::MapTool::Measure => "Tap two points to measure",
+            crate::app::MapTool::StormTrack => "Tap storm center, then projected endpoint",
             crate::app::MapTool::RegionStats => "Tap two corners for area statistics",
             crate::app::MapTool::Marker => "Tap the map to drop a marker",
             crate::app::MapTool::CrossSection => "Tap two points for a cross-section",

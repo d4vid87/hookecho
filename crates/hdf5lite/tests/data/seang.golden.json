@@ -1,0 +1,173 @@
+{
+ "names": [
+  "dataset1",
+  "how",
+  "what",
+  "where"
+ ],
+ "attrs": {
+  "": {
+   "Conventions": "ODIM_H5/V2_4"
+  },
+  "dataset1/what": {
+   "enddate": "20261015",
+   "endtime": "073034",
+   "product": "SCAN",
+   "startdate": "20261015",
+   "starttime": "073004"
+  },
+  "dataset1/where": {
+   "a1gate": 88.0,
+   "elangle": 0.5,
+   "nbins": 480.0,
+   "nrays": 360.0,
+   "rscale": 500.0,
+   "rstart": 0.0
+  },
+  "how": {
+   "BBC": "False",
+   "CSR": 10.0,
+   "Dclutter": "'8'",
+   "LOG": 2.5,
+   "NEZH": 0.0,
+   "NEZV": 0.0,
+   "NI": 24.068973541259766,
+   "PAC": 0.0,
+   "RAC": 0.0,
+   "RXbandwidth": 2000000.0,
+   "RXlossH": 1.100000023841858,
+   "RXlossV": 1.100000023841858,
+   "SNRT": 2.5,
+   "SQI": 5.0,
+   "TXlossH": 1.899999976158142,
+   "TXlossV": 1.899999976158142,
+   "TXpower": 84.14115810394287,
+   "TXtype": "magnetron",
+   "VPRCorr": "False",
+   "Vsamples": 40.0,
+   "anglesync": "azimuth",
+   "anglesyncRes": 1.0,
+   "antgainH": 44.290000915527344,
+   "antgainV": 44.290000915527344,
+   "antspeed": 12.0,
+   "astart": 0.076904296875,
+   "azmethod": "AVERAGE",
+   "beamwH": 1.0,
+   "beamwV": 1.0,
+   "beamwidth": 1.0,
+   "binmethod": "AVERAGE",
+   "binmethod_avg": 16.0,
+   "clutterType": "50 dB",
+   "creator_email": "opendata-support@smhi.se",
+   "creator_name": "Swedish Meteorological and Hydrological Institute",
+   "creator_type": "institution",
+   "creator_url": "https://www.smhi.se/",
+   "elmethod": "AVERAGE",
+   "extensions": "EEC",
+   "frequency": 5605000224.032422,
+   "gasattn": 1.7000000923871995e-05,
+   "highprf": 600.0,
+   "institution": "Swedish Meteorological and Hydrological Institute",
+   "license": "https://creativecommons.org/licenses/by/4.0/ (CC BY 4.0)",
+   "lowprf": 450.0,
+   "malfunc": "False",
+   "naming_authority": "se.smhi",
+   "nomTXpower": 83.97940008672037,
+   "nsampleH": 31.902244567871094,
+   "nsampleV": 30.541515350341797,
+   "phasediff": 17.74570083618164,
+   "polmode": "LDR-H",
+   "poltype": "simultaneous-dual",
+   "powerdiff": -0.1679210066795349,
+   "pulsewidth": 5e-07,
+   "radconstH": 72.51896667480469,
+   "radconstV": 72.51896667480469,
+   "radhoriz": 240000.0,
+   "radomelossH": 0.10000000149011612,
+   "radomelossV": 0.10000000149011612,
+   "scan_count": 10.0,
+   "scan_index": 1.0,
+   "simulated": "False",
+   "software": "EDGE",
+   "startT": 1792049427.0210602,
+   "startazA": 0.076904296875,
+   "startelA": 0.4998779296875,
+   "stopT": 1792049427.103,
+   "stopazA": 1.0601806640625,
+   "stopelA": 0.4998779296875,
+   "sw_version": "6.6.0-1",
+   "system": "EEC-DWSR-2501C-SDP",
+   "task": "ang_vol_ldr05",
+   "zcalH": -6.744999885559082,
+   "zcalV": 62.40599822998047,
+   "zdrcal": -0.20000000298023224
+  },
+  "how/process_chain": {
+   "corrections": "data_pmc",
+   "modules": "'Dealias Velocity', 'Censor: (SQIH:1:F:F:24:nan:VH,WH;SQIV:1:F:F:24:nan:VV,WV)'"
+  },
+  "how/radar_system": {
+   "radartype": "DWSR-2501C-SDP"
+  },
+  "how/rsp": {
+   "TXburstfreq": 60254261.0168457,
+   "burstpowercal": 1.5399999618530273,
+   "sigproc": "MRP"
+  },
+  "what": {
+   "date": "20261015",
+   "object": "SCAN",
+   "source": "WMO:02606,RAD:SE50,PLC:\u00c4ngelholm,NOD:seang,ORG:82,CTY:643,CMT:Swedish radar,WIGOS:0-20000-0-2606",
+   "time": "073000",
+   "version": "H5rad 2.4"
+  },
+  "where": {
+   "height": 209.0,
+   "lat": 56.367450714111335,
+   "lon": 12.851691246032715
+  },
+  "dataset1/data1/what": {
+   "gain": 0.009999999776482582,
+   "nodata": -32768.0,
+   "offset": 0.0,
+   "quantity": "DBZH",
+   "undetect": -32767.0
+  }
+ },
+ "datasets": {
+  "dataset1/data1/data": {
+   "len": 172800,
+   "first": [
+    -32767.0,
+    -32767.0,
+    -32767.0,
+    -32767.0,
+    -32767.0
+   ],
+   "last": [
+    -32767.0,
+    -32767.0,
+    -32767.0,
+    -32767.0,
+    -32767.0
+   ],
+   "n_finite": 172800,
+   "min": -32767.0,
+   "max": 4592.0,
+   "sum": -5582875836.0
+  }
+ },
+ "children": {
+  "dataset1": [
+   "data1",
+   "data2",
+   "data3",
+   "what",
+   "where"
+  ],
+  "dataset1/data1": [
+   "data",
+   "what"
+  ]
+ }
+}

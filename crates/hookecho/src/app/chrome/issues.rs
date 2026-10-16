@@ -26,11 +26,17 @@ impl RadarIssueLog {
 
 impl HookEchoApp {
     pub(crate) fn error_chip(&mut self, ctx: &egui::Context) {
+        // A forecast-only or satellite-only pane may retain its last radar-load error so
+        // returning to radar can offer Retry. It is not an active issue for the visible source.
+        if !self.views.iter().any(|view| view.show_radar) {
+            return;
+        }
         let now = ctx.input(|i| i.time);
         let errors: Vec<_> = self
             .views
             .iter()
             .enumerate()
+            .filter(|(_, view)| view.show_radar)
             .filter_map(|(idx, v)| {
                 v.error.as_ref().map(|error| {
                     (

@@ -29,6 +29,7 @@ fn impact_color(label: &str) -> [u8; 3] {
 
 /// Parse the WSSI overall-impact GeoJSON into features.
 pub fn parse(json: &str, day: u8) -> anyhow::Result<Vec<GeoFeature>> {
+    let period = if day == 4 { "Days 1–3".to_owned() } else { format!("Day {day}") };
     let mut out = Vec::new();
     for_each_feature(json, |geom, props| {
         let str_of = |k: &str| {
@@ -47,9 +48,9 @@ pub fn parse(json: &str, day: u8) -> anyhow::Result<Vec<GeoFeature>> {
                 fill: [rgb[0], rgb[1], rgb[2], 70],
                 stroke: [rgb[0], rgb[1], rgb[2], 220],
                 kind: FeatureKind::Outlook,
-                title: format!("WSSI D{day}: {impact}"),
+                title: format!("WSSI {period}: {impact}"),
                 detail: format!(
-                    "Winter Storm Severity Index — Day {day}\nImpact: {impact}\nValid: {valid}"
+                    "Winter Storm Severity Index — {period}\nImpact: {impact}\nValid: {valid}"
                 ),
                 alert: None,
             });
@@ -66,9 +67,9 @@ fn layer_id(service_json: &str, name: &str) -> Option<u32> {
     })
 }
 
-/// Fetch the WSSI overall impact for `day` (1-3).
+/// Fetch WSSI overall impact for Day 1–3, or `4` for the combined Days 1–3 layer.
 pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoFeature>> {
-    let day = day.clamp(1, 3);
+    anyhow::ensure!((1..=4).contains(&day), "WSSI day out of range");
     let meta = client
         .get(crate::net::fetch_url(&format!("{SERVICE}?f=json")))
         .timeout(crate::net::FEED_TIMEOUT)
@@ -78,7 +79,7 @@ pub async fn fetch(client: &reqwest::Client, day: u8) -> anyhow::Result<Vec<GeoF
         .error_for_status()?
         .text()
         .await?;
-    let want = format!("Overall_Impact_Day_{day}");
+    let want = if day == 4 { "Overall_Impact_Days_1-3".to_owned() } else { format!("Overall_Impact_Day_{day}") };
     let id = layer_id(&meta, &want).ok_or_else(|| anyhow::anyhow!("no WSSI layer named {want}"))?;
     let body = client
         .get(crate::net::fetch_url(&format!(
@@ -102,6 +103,7 @@ mod tests {
         {"id":0,"name":"Overall Impact"},
         {"id":1,"name":"Overall_Impact_Day_1"},
         {"id":2,"name":"Overall_Impact_Day_2"},
+        {"id":4,"name":"Overall_Impact_Days_1-3"},
         {"id":5,"name":"Snow Amount"}]}"#;
 
     const FEATURES: &str = r#"{"type":"FeatureCollection","features":[
@@ -114,6 +116,7 @@ mod tests {
     fn layers_resolve_by_name_not_by_id() {
         assert_eq!(layer_id(SERVICE_JSON, "Overall_Impact_Day_1"), Some(1));
         assert_eq!(layer_id(SERVICE_JSON, "Overall_Impact_Day_2"), Some(2));
+        assert_eq!(layer_id(SERVICE_JSON, "Overall_Impact_Days_1-3"), Some(4));
         assert_eq!(layer_id(SERVICE_JSON, "Overall_Impact_Day_3"), None);
     }
 
@@ -121,8 +124,9 @@ mod tests {
     fn features_carry_impact_and_window() {
         let f = parse(FEATURES, 1).unwrap();
         assert_eq!(f.len(), 2);
-        assert_eq!(f[0].title, "WSSI D1: MAJOR");
+        assert_eq!(f[0].title, "WSSI Day 1: MAJOR");
         assert!(f[0].detail.contains("14Z 02/15/26"));
+        assert_eq!(parse(FEATURES, 4).unwrap()[0].title, "WSSI Days 1–3: MAJOR");
         assert_eq!(f[0].fill[..3], impact_color("MAJOR"));
         // The outermost band is not an impact level and gets the neutral color.
         assert_eq!(f[1].fill[..3], impact_color("WINTER WEATHER AREA"));

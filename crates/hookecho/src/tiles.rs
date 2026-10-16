@@ -6,7 +6,7 @@
 
 use crate::render::{mercator::Camera, PendingTile, TileId, VisibleTile};
 use lru::LruCache;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -37,17 +37,19 @@ pub enum Category {
     Topo,
     /// Rendered weather fields (national radar composites), not a map of the ground.
     Weather,
+    Forecast,
     Other,
 }
 
 impl Category {
     /// Groups in picker order.
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 7] = [
         Category::Vector,
         Category::Streets,
         Category::Satellite,
         Category::Topo,
         Category::Weather,
+        Category::Forecast,
         Category::Other,
     ];
 
@@ -58,6 +60,7 @@ impl Category {
             Category::Satellite => "Satellite",
             Category::Topo => "Terrain",
             Category::Weather => "Weather",
+            Category::Forecast => "Forecast",
             Category::Other => "Other",
         }
     }
@@ -73,6 +76,10 @@ pub enum BasemapStyle {
     Light,
     Satellite,
     None,
+    /// A plain white canvas for radar, annotations and weather overlays; no map tiles.
+    BlankWhite,
+    /// Keyless blue OpenMapTiles palette, independent of provider style assets.
+    BlueMap,
     /// NOAA GOES-East GeoColor via NASA GIBS (near-real-time satellite).
     GoesEast,
     /// NOAA GOES-West GeoColor via NASA GIBS.
@@ -108,6 +115,26 @@ pub enum BasemapStyle {
     EcccRadarRain,
     /// ECCC's North American 1-km radar composite, snow field.
     EcccRadarSnow,
+    /// RainViewer's public worldwide precipitation composite, including Australia.
+    RainViewerGlobal,
+    /// NOAA's operational NDFD 12-hour precipitation probability for CONUS.
+    NdfdRainChance,
+    /// NOAA's operational NDFD daytime high temperature for CONUS.
+    NdfdMaxTemp,
+    /// NOAA's operational NDFD overnight low temperature for CONUS.
+    NdfdMinTemp,
+    NdfdAlaskaRainChance,
+    NdfdAlaskaMaxTemp,
+    NdfdAlaskaMinTemp,
+    NdfdHawaiiRainChance,
+    NdfdHawaiiMaxTemp,
+    NdfdHawaiiMinTemp,
+    NdfdWindGust,
+    NdfdAlaskaWindGust,
+    NdfdHawaiiWindGust,
+    NdfdWindSpeed,
+    NdfdAlaskaWindSpeed,
+    NdfdHawaiiWindSpeed,
     MapboxStreets,
     MapboxSatellite,
     MapboxSatelliteStreets,
@@ -144,6 +171,8 @@ pub enum BasemapStyle {
     VectorPositron,
     /// Vector basemap, night-drive look.
     VectorMidnight,
+    /// Independent black/gray vector map with bright labels for weather presentations.
+    Presentation,
     EsriDarkGray,
     EsriLightGray,
     EsriNatGeo,
@@ -161,7 +190,7 @@ pub enum BasemapStyle {
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 59] = [
+    pub const ALL: [BasemapStyle; 78] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -221,6 +250,26 @@ impl BasemapStyle {
         BasemapStyle::MapTilerTopo,
         BasemapStyle::MapTilerBasic,
         BasemapStyle::MapTilerDatavizDark,
+        BasemapStyle::Presentation,
+        // Append to retain the existing per-style cache keys.
+        BasemapStyle::BlankWhite,
+        BasemapStyle::BlueMap,
+        BasemapStyle::RainViewerGlobal,
+        BasemapStyle::NdfdRainChance,
+        BasemapStyle::NdfdMaxTemp,
+        BasemapStyle::NdfdMinTemp,
+        BasemapStyle::NdfdAlaskaRainChance,
+        BasemapStyle::NdfdAlaskaMaxTemp,
+        BasemapStyle::NdfdAlaskaMinTemp,
+        BasemapStyle::NdfdHawaiiRainChance,
+        BasemapStyle::NdfdHawaiiMaxTemp,
+        BasemapStyle::NdfdHawaiiMinTemp,
+        BasemapStyle::NdfdWindGust,
+        BasemapStyle::NdfdAlaskaWindGust,
+        BasemapStyle::NdfdHawaiiWindGust,
+        BasemapStyle::NdfdWindSpeed,
+        BasemapStyle::NdfdAlaskaWindSpeed,
+        BasemapStyle::NdfdHawaiiWindSpeed,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -266,6 +315,8 @@ impl BasemapStyle {
             BasemapStyle::Light => "Light",
             BasemapStyle::Satellite => "USGS Imagery",
             BasemapStyle::None => "None",
+            BasemapStyle::BlankWhite => "Blank White",
+            BasemapStyle::BlueMap => "Blue Map",
             BasemapStyle::GoesEast => "GOES-East (GeoColor)",
             BasemapStyle::GoesWest => "GOES-West (GeoColor)",
             BasemapStyle::GoesEastIR => "GOES-East (infrared)",
@@ -284,6 +335,22 @@ impl BasemapStyle {
             BasemapStyle::DwdRadarWN => "DWD radar (analysis)",
             BasemapStyle::EcccRadarRain => "ECCC radar (rain)",
             BasemapStyle::EcccRadarSnow => "ECCC radar (snow)",
+            BasemapStyle::RainViewerGlobal => "Global rain radar (RainViewer)",
+            BasemapStyle::NdfdRainChance => "NDFD rain chance (12 h)",
+            BasemapStyle::NdfdMaxTemp => "NDFD high temperature",
+            BasemapStyle::NdfdMinTemp => "NDFD low temperature",
+            BasemapStyle::NdfdWindGust => "NDFD wind gust",
+            BasemapStyle::NdfdWindSpeed => "NDFD wind speed",
+            BasemapStyle::NdfdHawaiiRainChance => "NDFD Hawaii rain chance (12 h)",
+            BasemapStyle::NdfdHawaiiMaxTemp => "NDFD Hawaii high temperature",
+            BasemapStyle::NdfdHawaiiMinTemp => "NDFD Hawaii low temperature",
+            BasemapStyle::NdfdHawaiiWindGust => "NDFD Hawaii wind gust",
+            BasemapStyle::NdfdHawaiiWindSpeed => "NDFD Hawaii wind speed",
+            BasemapStyle::NdfdAlaskaRainChance => "NDFD Alaska rain chance (12 h)",
+            BasemapStyle::NdfdAlaskaMaxTemp => "NDFD Alaska high temperature",
+            BasemapStyle::NdfdAlaskaMinTemp => "NDFD Alaska low temperature",
+            BasemapStyle::NdfdAlaskaWindGust => "NDFD Alaska wind gust",
+            BasemapStyle::NdfdAlaskaWindSpeed => "NDFD Alaska wind speed",
             BasemapStyle::MapboxStreets => "Mapbox Streets",
             BasemapStyle::MapboxSatellite => "Mapbox Satellite",
             BasemapStyle::MapboxSatelliteStreets => "Mapbox Satellite Streets",
@@ -308,6 +375,7 @@ impl BasemapStyle {
             BasemapStyle::VectorBright => "Bright",
             BasemapStyle::VectorPositron => "Positron",
             BasemapStyle::VectorMidnight => "Midnight",
+            BasemapStyle::Presentation => "Presentation",
             BasemapStyle::EsriDarkGray => "Esri Dark Gray Canvas",
             BasemapStyle::EsriLightGray => "Esri Light Gray Canvas",
             BasemapStyle::EsriNatGeo => "Esri National Geographic",
@@ -331,6 +399,8 @@ impl BasemapStyle {
             BasemapStyle::Light => "light",
             BasemapStyle::Satellite => "satellite",
             BasemapStyle::None => "none",
+            BasemapStyle::BlankWhite => "blank-white",
+            BasemapStyle::BlueMap => "blue-map",
             BasemapStyle::GoesEast => "goes-east",
             BasemapStyle::GoesWest => "goes-west",
             BasemapStyle::GoesEastIR => "goes-east-ir",
@@ -349,6 +419,22 @@ impl BasemapStyle {
             BasemapStyle::DwdRadarWN => "dwd-radar-wn",
             BasemapStyle::EcccRadarRain => "eccc-radar-rain",
             BasemapStyle::EcccRadarSnow => "eccc-radar-snow",
+            BasemapStyle::RainViewerGlobal => "rainviewer-global",
+            BasemapStyle::NdfdRainChance => "ndfd-rain-chance",
+            BasemapStyle::NdfdMaxTemp => "ndfd-high-temp",
+            BasemapStyle::NdfdMinTemp => "ndfd-low-temp",
+            BasemapStyle::NdfdWindGust => "ndfd-wind-gust",
+            BasemapStyle::NdfdWindSpeed => "ndfd-wind-speed",
+            BasemapStyle::NdfdHawaiiRainChance => "ndfd-hawaii-rain-chance",
+            BasemapStyle::NdfdHawaiiMaxTemp => "ndfd-hawaii-high-temp",
+            BasemapStyle::NdfdHawaiiMinTemp => "ndfd-hawaii-low-temp",
+            BasemapStyle::NdfdHawaiiWindGust => "ndfd-hawaii-wind-gust",
+            BasemapStyle::NdfdHawaiiWindSpeed => "ndfd-hawaii-wind-speed",
+            BasemapStyle::NdfdAlaskaRainChance => "ndfd-alaska-rain-chance",
+            BasemapStyle::NdfdAlaskaMaxTemp => "ndfd-alaska-high-temp",
+            BasemapStyle::NdfdAlaskaMinTemp => "ndfd-alaska-low-temp",
+            BasemapStyle::NdfdAlaskaWindGust => "ndfd-alaska-wind-gust",
+            BasemapStyle::NdfdAlaskaWindSpeed => "ndfd-alaska-wind-speed",
             BasemapStyle::MapboxStreets => "mapbox-streets",
             BasemapStyle::MapboxSatellite => "mapbox-satellite",
             BasemapStyle::MapboxSatelliteStreets => "mapbox-satellite-streets",
@@ -373,6 +459,7 @@ impl BasemapStyle {
             BasemapStyle::VectorBright => "bright",
             BasemapStyle::VectorPositron => "positron",
             BasemapStyle::VectorMidnight => "midnight",
+            BasemapStyle::Presentation => "presentation",
             BasemapStyle::EsriDarkGray => "esri-dark-gray",
             BasemapStyle::EsriLightGray => "esri-light-gray",
             BasemapStyle::EsriNatGeo => "esri-natgeo",
@@ -451,6 +538,8 @@ impl BasemapStyle {
                 BasemapStyle::EcccRadarRain | BasemapStyle::EcccRadarSnow => {
                     "Radar data © Environment and Climate Change Canada (Open Government Licence – Canada)"
                 }
+                BasemapStyle::RainViewerGlobal => "Weather data by RainViewer ↗",
+                _ if self.ndfd_layer().is_some() => "NOAA/NWS National Digital Forecast Database",
                 BasemapStyle::HimawariIR
                 | BasemapStyle::HimawariAirMass
                 | BasemapStyle::HimawariVisible => "NASA GIBS · JMA Himawari",
@@ -494,8 +583,8 @@ impl BasemapStyle {
     /// helper ([`wms_url`]) turns an XYZ tile into a GetMap and every such layer is a row here.
     ///
     /// `step` and `lag` are minutes: the publishing interval a `TIME=` must land on, and how far
-    /// behind the clock the newest published frame is. Both are per-publisher — DWD runs on 5
-    /// minutes and ECCC on 6 — and both are measured against the live servers, not guessed.
+    /// behind the clock the newest published frame is. DWD uses this five-minute cadence grid;
+    /// ECCC's six-minute cadence is descriptive here because frame discovery reads availability.
     pub(crate) fn wms_layer(self) -> Option<(&'static str, &'static str, i64, i64)> {
         const DWD: &str = "https://maps.dwd.de/geoserver/dwd/wms";
         const GEOMET: &str = "https://geo.weather.gc.ca/geomet";
@@ -508,9 +597,59 @@ impl BasemapStyle {
         }
     }
 
+    /// NDFD uses WMS with the nonstandard VTIT valid-time dimension. Keep it separate from
+    /// TIME-based radar WMS sources so a forecast request cannot silently return a default map.
+    pub(crate) fn ndfd_layer(self) -> Option<&'static str> {
+        match self {
+            Self::NdfdRainChance => Some("ndfd.conus.pop12"),
+            Self::NdfdMaxTemp => Some("ndfd.conus.maxt"),
+            Self::NdfdMinTemp => Some("ndfd.conus.mint"),
+            Self::NdfdWindGust => Some("ndfd.conus.windgust"),
+            Self::NdfdWindSpeed => Some("ndfd.conus.windspd"),
+            Self::NdfdHawaiiRainChance => Some("ndfd.hawaii.pop12"),
+            Self::NdfdHawaiiMaxTemp => Some("ndfd.hawaii.maxt"),
+            Self::NdfdHawaiiMinTemp => Some("ndfd.hawaii.mint"),
+            Self::NdfdHawaiiWindGust => Some("ndfd.hawaii.windgust"),
+            Self::NdfdHawaiiWindSpeed => Some("ndfd.hawaii.windspd"),
+            Self::NdfdAlaskaRainChance => Some("ndfd.alaska.pop12"),
+            Self::NdfdAlaskaMaxTemp => Some("ndfd.alaska.maxt"),
+            Self::NdfdAlaskaMinTemp => Some("ndfd.alaska.mint"),
+            Self::NdfdAlaskaWindGust => Some("ndfd.alaska.windgust"),
+            Self::NdfdAlaskaWindSpeed => Some("ndfd.alaska.windspd"),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn ndfd_region(self) -> Option<&'static str> {
+        self.ndfd_layer().and_then(|layer| layer.split('.').nth(1))
+    }
+
+    /// Element, label and display unit for NOAA's raster-point lookup.
+    pub(crate) fn ndfd_point(self) -> Option<(&'static str, &'static str, &'static str)> {
+        match self {
+            Self::NdfdRainChance => Some(("pop12", "12-hour rain chance", "%")),
+            Self::NdfdMaxTemp => Some(("maxt", "Daytime high", "°F")),
+            Self::NdfdMinTemp => Some(("mint", "Overnight low", "°F")),
+            Self::NdfdWindGust => Some(("windgust", "Wind gust", "mph")),
+            Self::NdfdWindSpeed => Some(("windspd", "Wind speed", "mph")),
+            Self::NdfdHawaiiMinTemp => Some(("mint", "Overnight low", "°F")),
+            Self::NdfdHawaiiMaxTemp => Some(("maxt", "Daytime high", "°F")),
+            Self::NdfdHawaiiRainChance => Some(("pop12", "12-hour rain chance", "%")),
+            Self::NdfdHawaiiWindGust => Some(("windgust", "Wind gust", "mph")),
+            Self::NdfdHawaiiWindSpeed => Some(("windspd", "Wind speed", "mph")),
+            Self::NdfdAlaskaMinTemp => Some(("mint", "Overnight low", "°F")),
+            Self::NdfdAlaskaMaxTemp => Some(("maxt", "Daytime high", "°F")),
+            Self::NdfdAlaskaRainChance => Some(("pop12", "12-hour rain chance", "%")),
+            Self::NdfdAlaskaWindGust => Some(("windgust", "Wind gust", "mph")),
+            Self::NdfdAlaskaWindSpeed => Some(("windspd", "Wind speed", "mph")),
+            _ => None,
+        }
+    }
+
     /// Does this style have a time dimension the frame bar can step through?
     pub fn timed(self) -> bool {
         self.goes_layer().is_some() || self.wms_layer().is_some()
+            || self.ndfd_layer().is_some() || self == BasemapStyle::RainViewerGlobal
     }
 
     /// Is this style a raster-tile source (as opposed to the vector MVT basemap or None)?
@@ -521,11 +660,14 @@ impl BasemapStyle {
             BasemapStyle::Dark
                 | BasemapStyle::Light
                 | BasemapStyle::None
+                | BasemapStyle::BlankWhite
+                | BasemapStyle::BlueMap
                 | BasemapStyle::Auto
                 | BasemapStyle::VectorLiberty
                 | BasemapStyle::VectorBright
                 | BasemapStyle::VectorPositron
                 | BasemapStyle::VectorMidnight
+                | BasemapStyle::Presentation
         )
     }
 
@@ -538,6 +680,9 @@ impl BasemapStyle {
     /// leaves a hole until an ancestor tile happens to be resident, which is what made the USGS
     /// satellite basemap blank out on close zoom: it served nothing past 16 but was asked for 18.
     fn max_raster_z(self) -> u8 {
+        if self == BasemapStyle::RainViewerGlobal {
+            return 7;
+        }
         if let Some((_, level)) = self.goes_layer() {
             return level;
         }
@@ -545,6 +690,9 @@ impl BasemapStyle {
         // is cheaper for us to do that from a tile we already hold.
         if self.wms_layer().is_some() {
             return 12;
+        }
+        if self.ndfd_layer().is_some() {
+            return 11;
         }
         match self {
             // USGS ArcGIS services (imagery and topo alike) stop at 16.
@@ -624,7 +772,7 @@ impl BasemapStyle {
     pub fn category(self) -> Category {
         // Satellite-derived, but what it shows is precipitation, so it belongs next to the radar
         // composites in the picker rather than next to the imagery.
-        if self == BasemapStyle::ImergRate {
+        if matches!(self, BasemapStyle::ImergRate | BasemapStyle::RainViewerGlobal) {
             return Category::Weather;
         }
         if self.goes_layer().is_some() {
@@ -633,14 +781,19 @@ impl BasemapStyle {
         if self.wms_layer().is_some() {
             return Category::Weather;
         }
+        if self.ndfd_layer().is_some() {
+            return Category::Forecast;
+        }
         match self {
-            BasemapStyle::None | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
+            BasemapStyle::None | BasemapStyle::BlankWhite | BasemapStyle::Auto | BasemapStyle::CustomXyz => Category::Other,
             BasemapStyle::Dark
             | BasemapStyle::Light
             | BasemapStyle::VectorLiberty
             | BasemapStyle::VectorBright
             | BasemapStyle::VectorPositron
-            | BasemapStyle::VectorMidnight => Category::Vector,
+            | BasemapStyle::VectorMidnight
+            | BasemapStyle::Presentation => Category::Vector,
+            BasemapStyle::BlueMap => Category::Vector,
             BasemapStyle::Satellite
             | BasemapStyle::EsriImagery
             | BasemapStyle::HybridSatellite
@@ -689,7 +842,11 @@ impl BasemapStyle {
             BasemapStyle::VectorBright => Some(crate::basemap_style::Palette::Bright),
             BasemapStyle::VectorPositron => Some(crate::basemap_style::Palette::Positron),
             BasemapStyle::VectorMidnight => Some(crate::basemap_style::Palette::Midnight),
+            BasemapStyle::Presentation => Some(crate::basemap_style::Palette::Presentation),
+            BasemapStyle::BlueMap => Some(crate::basemap_style::Palette::Blue),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
+            BasemapStyle::RainViewerGlobal => Some(crate::basemap_style::Palette::HybridOverlay),
+            _ if self.ndfd_layer().is_some() => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
     }
@@ -800,6 +957,11 @@ impl BasemapStyle {
                 )),
                 BasemapStyle::CustomXyz => valid_xyz_template(custom)
                     .then(|| crate::vector_tiles::fill_template(custom, z, x, y)),
+                BasemapStyle::RainViewerGlobal => rainviewer_tile_url(None, z, x, y),
+                style if style.ndfd_layer().is_some() => Some(wms_url(
+                    &format!("https://digital.weather.gov/ndfd.{}/wms", style.ndfd_region().unwrap()),
+                    style.ndfd_layer().unwrap(), z, x, y, "",
+                )),
                 // Standard XYZ `{z}/{x}/{y}.png` slippy tiles. Single subdomain shard where the
                 // provider uses them (ponytail: rotate a-c only if throttled).
                 BasemapStyle::OsmStandard => {
@@ -866,7 +1028,7 @@ fn tile_bbox_3857(z: u8, x: u32, y: u32) -> (f64, f64, f64, f64) {
 ///
 /// `time` is an instant the server's time dimension accepts, or empty for the layer's default.
 /// Servers reject an instant that is not on their published step, so the caller picks from
-/// [`wms_frames`] rather than rounding here.
+/// the advertised time dimension rather than rounding here.
 fn wms_url(base: &str, layer: &str, z: u8, x: u32, y: u32, time: &str) -> String {
     let (x0, y0, x1, y1) = tile_bbox_3857(z, x, y);
     // EPSG:3857 is an easting/northing CRS, so 1.3.0's axis-order rule leaves BBOX as x,y; the
@@ -939,8 +1101,8 @@ impl DetailLevel {
 
 fn tile_cover_at_level(cam: &Camera, viewport_px: (f32, f32), mut z: u8) -> Vec<VisibleTile> {
     let ((west, north), (east, south)) = cam.visible_bounds(viewport_px);
-    if cam.globe {
-        while z > 2 {
+    if cam.globe || cam.pitch_deg != 0.0 || cam.bearing_deg != 0.0 {
+        while z > if cam.globe { 2 } else { 0 } {
             let n = (1u32 << z) as f64;
             let count = ((east * n).ceil() - (west * n).floor())
                 * ((south * n).ceil() - (north * n).floor());
@@ -1048,7 +1210,7 @@ fn parse_iso_minutes(p: &str) -> Option<i64> {
     if let Some(m) = p.strip_suffix('M') {
         m.parse().ok()
     } else if let Some(h) = p.strip_suffix('H') {
-        h.parse::<i64>().ok().map(|h| h * 60)
+        h.parse::<i64>().ok().and_then(|h| h.checked_mul(60))
     } else {
         None
     }
@@ -1085,36 +1247,171 @@ pub fn goes_window(
     }
 }
 
-/// The frame times a WMS composite offers, oldest first, ending at the newest one `anchor` can
-/// expect to be published.
-///
-/// ponytail: the grid is computed, not fetched. Both publishers run a fixed interval — DWD 5
-/// minutes, ECCC 6 — and each says so in a GetCapabilities document whose only useful sentence is
-/// that; DWD's is 850 KB, so downloading it every time the style changes would cost more than every
-/// tile in the loop put together. The lags are measured (DWD served the 16:05 frame at 16:10 and not
-/// 16:10; GeoMet served 16:30 by 16:33), and asking for one that has not landed yet costs a blank
-/// tile, not an error. A layer that ever publishes irregularly needs the capabilities parse; none of
-/// the ones here does.
-fn wms_frames(
-    anchor: chrono::DateTime<chrono::Utc>,
+/// Expand the advertised time dimension of the requested WMS layer, intersecting the
+/// requested window before applying the frame limit. Never invent frames for an expired archive.
+fn wms_advertised_frame_times(
+    xml: &str,
+    layer: &str,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
     limit: usize,
-    step_min: i64,
-    lag_min: i64,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
-    let step = chrono::Duration::minutes(step_min);
-    let newest = anchor - chrono::Duration::minutes(lag_min);
-    // Down to the step boundary: an off-step instant is rejected outright.
-    let newest = newest
-        - chrono::Duration::seconds(newest.timestamp().rem_euclid(step_min * 60))
-        - chrono::Duration::nanoseconds(i64::from(newest.timestamp_subsec_nanos()));
-    (0..limit as i64)
-        .map(|i| newest - step * (i as i32))
-        .rev()
-        .collect()
+    let mut out = Vec::new();
+    if from > to || limit == 0 {
+        return out;
+    }
+    // GeoMet and DWD WMS 1.3 responses use unprefixed Name/Dimension elements.
+    // Require the exact requested layer, and do not borrow a sibling's time dimension.
+    let Some((_, tail)) = xml.split_once(&format!("<Name>{layer}</Name>")) else {
+        return out;
+    };
+    let Some((body, _)) = tail.split_once("</Layer>") else {
+        return out;
+    };
+    for dimension in body.split("<Dimension ").skip(1) {
+        let Some((attrs, tail)) = dimension.split_once('>') else {
+            continue;
+        };
+        if !attrs
+            .split_whitespace()
+            .any(|a| a == "name=\"time\"" || a == "name='time'")
+        {
+            continue;
+        }
+        let Some((times, _)) = tail.split_once("</Dimension>") else {
+            continue;
+        };
+        for range in times.split(',') {
+            let parts: Vec<_> = range.trim().split('/').collect();
+            match parts.as_slice() {
+                [instant] => {
+                    if let Some(t) = parse_domain_instant(instant) {
+                        if from <= t && t <= to {
+                            out.push(t);
+                        }
+                    }
+                }
+                [start, end, period] => {
+                    let (Some(start), Some(end), Some(minutes)) = (
+                        parse_domain_instant(start),
+                        parse_domain_instant(end),
+                        parse_iso_minutes(period),
+                    ) else {
+                        continue;
+                    };
+                    if minutes <= 0 || minutes > 1440 || start > end {
+                        continue;
+                    }
+                    let upper = to.min(end);
+                    let lower = from.max(start);
+                    if lower > upper {
+                        continue;
+                    }
+                    let step = chrono::Duration::minutes(minutes);
+                    let offset = (upper - start).num_seconds() / step.num_seconds();
+                    let mut t = start + chrono::Duration::seconds(offset * step.num_seconds());
+                    // Bound expansion even if an upstream document contains an enormous range.
+                    for _ in 0..limit.min(512) {
+                        if t < lower {
+                            break;
+                        }
+                        out.push(t);
+                        let Some(previous) = t.checked_sub_signed(step) else {
+                            break;
+                        };
+                        t = previous;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    if out.len() > limit {
+        out.drain(..out.len() - limit);
+    }
+    out
 }
 
-/// Fetch the available GOES frame times for `style` between `from` and `to` (best-effort; empty
-/// on any failure). Uses the GIBS REST DescribeDomains endpoint.
+/// NDFD advertises discrete future valid times in a `vtit` dimension. Do not synthesize times:
+/// the WMS serves its default map for an unavailable VTIT, which would mislabel a forecast.
+fn ndfd_advertised_frame_times(
+    xml: &str,
+    layer: &str,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    limit: usize,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    use chrono::NaiveDateTime;
+    if from > to || limit == 0 { return Vec::new(); }
+    let Some((_, tail)) = xml.split_once(&format!("<Name>{layer}</Name>")) else { return Vec::new() };
+    let Some((body, _)) = tail.split_once("</Layer>") else { return Vec::new() };
+    let Some((_, dimension)) = body.split_once("<Dimension name=\"vtit\"") else { return Vec::new() };
+    let Some((_, dimension)) = dimension.split_once('>') else { return Vec::new() };
+    let Some((values, _)) = dimension.split_once("</Dimension>") else { return Vec::new() };
+    let mut out: Vec<_> = values.split(',').filter_map(|stamp| {
+        let t = NaiveDateTime::parse_from_str(stamp.trim(), "%Y-%m-%dT%H:%M").ok()?.and_utc();
+        (from <= t && t <= to).then_some(t)
+    }).collect();
+    out.sort_unstable(); out.dedup();
+    if out.len() > limit { out.drain(..out.len() - limit); }
+    out
+}
+
+#[derive(serde::Deserialize)]
+struct RainviewerIndex {
+    host: String,
+    radar: RainviewerRadar,
+}
+
+#[derive(serde::Deserialize)]
+struct RainviewerRadar {
+    past: Vec<RainviewerFrame>,
+}
+
+#[derive(serde::Deserialize)]
+struct RainviewerFrame {
+    time: i64,
+    path: String,
+}
+
+/// The catalog contains opaque per-frame paths rather than timestamps in tile URLs. Keep only
+/// the short advertised window; an arbitrary host or path from remote JSON never becomes a URL.
+fn rainviewer_frames() -> &'static Mutex<Vec<(i64, String)>> {
+    static FRAMES: std::sync::OnceLock<Mutex<Vec<(i64, String)>>> = std::sync::OnceLock::new();
+    FRAMES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn parse_rainviewer_index(bytes: &[u8]) -> Option<Vec<(i64, String)>> {
+    let index: RainviewerIndex = serde_json::from_slice(bytes).ok()?;
+    if index.host != "https://tilecache.rainviewer.com" {
+        return None;
+    }
+    let mut frames = index.radar.past.into_iter().filter_map(|frame| {
+        let suffix = frame.path.strip_prefix("/v2/radar/")?;
+        if suffix.is_empty() || suffix.len() > 64 || !suffix.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        chrono::DateTime::from_timestamp(frame.time, 0)?;
+        Some((frame.time, frame.path))
+    }).collect::<Vec<_>>();
+    frames.sort_unstable_by_key(|(time, _)| *time);
+    frames.dedup_by_key(|(time, _)| *time);
+    Some(frames)
+}
+
+fn rainviewer_tile_url(time: Option<chrono::DateTime<chrono::Utc>>, z: u8, x: u32, y: u32) -> Option<String> {
+    let guard = rainviewer_frames().lock().ok()?;
+    let (_, path) = match time {
+        Some(time) => guard.iter().find(|(stamp, _)| *stamp == time.timestamp())?,
+        None => guard.last()?,
+    };
+    Some(format!("https://tilecache.rainviewer.com{path}/256/{z}/{x}/{y}/2/1_1.png"))
+}
+
+/// Fetch imagery frame times for `style` between `from` and `to` (best-effort; empty on failure).
+/// GIBS uses DescribeDomains; ECCC and DWD use their WMS availability documents.
 ///
 /// The window is a parameter rather than "the last N hours" because the same call serves the live
 /// loop and archive replay: GIBS keeps GeoColor about two weeks back and Band 13 several months,
@@ -1126,10 +1423,83 @@ pub async fn fetch_frame_times(
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
-    if let Some((_, _, step, lag)) = style.wms_layer() {
-        // `to` is the end of the window the caller wants, which is now for a live pane and the
-        // end of the replayed hour for an archived one.
-        return wms_frames(to, limit, step, lag);
+    if let Some(layer) = style.ndfd_layer() {
+        let url = format!("https://digital.weather.gov/ndfd.{}/wms?REQUEST=GetCapabilities", style.ndfd_region().unwrap());
+        let Ok(response) = client.get(wxdata::net::fetch_url(&url))
+            .header("User-Agent", USER_AGENT).timeout(wxdata::net::FEED_TIMEOUT)
+            .send().await.and_then(reqwest::Response::error_for_status) else { return Vec::new() };
+        use futures_util::StreamExt;
+        let mut body = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = body.next().await {
+            match chunk {
+                Ok(chunk) if bytes.len() + chunk.len() <= 1024 * 1024 => bytes.extend_from_slice(&chunk),
+                _ => return Vec::new(),
+            }
+        }
+        return std::str::from_utf8(&bytes).map_or_else(|_| Vec::new(), |xml| {
+            ndfd_advertised_frame_times(xml, layer, from, to, limit)
+        });
+    }
+    if style == BasemapStyle::RainViewerGlobal {
+        let response = client
+            .get(wxdata::net::fetch_url("https://api.rainviewer.com/public/weather-maps.json"))
+            .header("User-Agent", USER_AGENT)
+            .timeout(wxdata::net::FEED_TIMEOUT)
+            .send()
+            .await;
+        let Ok(response) = response.and_then(reqwest::Response::error_for_status) else {
+            return Vec::new();
+        };
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(chunk) if bytes.len() + chunk.len() <= 64 * 1024 => bytes.extend_from_slice(&chunk),
+                _ => return Vec::new(),
+            }
+        }
+        let Some(frames) = parse_rainviewer_index(&bytes) else {
+            return Vec::new();
+        };
+        let times = frames.iter().filter_map(|(time, _)| {
+            let instant = chrono::DateTime::from_timestamp(*time, 0)?;
+            (instant >= from && instant <= to).then_some(instant)
+        }).rev().take(limit).collect::<Vec<_>>();
+        *rainviewer_frames().lock().unwrap() = frames;
+        return times.into_iter().rev().collect();
+    }
+    if let Some((endpoint, layer, _, _)) = style.wms_layer() {
+        // GeoMet returns a ~21 KB layer-filtered document. DWD currently ignores LAYERS for
+        // GetCapabilities and returns ~1 MB; both are capped before text parsing.
+        let max_bytes = if matches!(style, BasemapStyle::DwdRadarRV | BasemapStyle::DwdRadarWN) {
+            2 * 1024 * 1024
+        } else {
+            256 * 1024
+        };
+        let url = format!("{endpoint}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities&LAYERS={layer}");
+        let response = client.get(wxdata::net::fetch_url(&url))
+            .header("User-Agent", USER_AGENT)
+            .timeout(wxdata::net::FEED_TIMEOUT).send().await;
+        if let Ok(response) = response {
+            if let Ok(response) = response.error_for_status() {
+                use futures_util::StreamExt;
+                // bytes_stream works on native and wasm; Response::chunk is native-only.
+                let mut body = response.bytes_stream();
+                let mut bytes = Vec::new();
+                while let Some(chunk) = body.next().await {
+                    match chunk {
+                        Ok(chunk) if bytes.len() + chunk.len() <= max_bytes => bytes.extend_from_slice(&chunk),
+                        _ => return Vec::new(),
+                    }
+                }
+                if let Ok(xml) = std::str::from_utf8(&bytes) {
+                    return wms_advertised_frame_times(xml, layer, from, to, limit);
+                }
+            }
+        }
+        return Vec::new();
     }
     let Some((layer, level)) = style.goes_layer() else {
         return Vec::new();
@@ -1182,6 +1552,9 @@ type TileResult = Result<FetchedTile, crate::render::TileKey>;
 /// itself, so a provider that stalls does not just stop the basemap — it stops the radar too.
 /// Four leaves room for the things the visitor actually came for.
 const MAX_INFLIGHT: usize = if cfg!(target_arch = "wasm32") { 4 } else { 6 };
+/// Leave room below RainViewer's published 100-requests/IP/minute ceiling for its catalog,
+/// thumbnails and other clients on the same network.
+const RAINVIEWER_TILE_REQUESTS_PER_MINUTE: usize = 80;
 
 /// How long one tile fetch may take before its slot is taken back.
 const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -1213,6 +1586,10 @@ pub struct TileManager {
     /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
     failed: std::collections::HashMap<crate::render::TileKey, wxdata::clock::Instant>,
     requested: HashSet<crate::render::TileKey>,
+    rainviewer_started: VecDeque<wxdata::clock::Instant>,
+    /// NDFD's VTIT names a valid time, not an immutable issue. Recheck resident forecast tiles
+    /// once per hour even when the selected valid time has not changed.
+    ndfd_refresh_hour: i64,
     /// Tiles believed to be live on the GPU, newest-touched first. This mirrors the renderer's
     /// tile map exactly: the CPU side decides what gets evicted and tells the renderer, so the
     /// two can never disagree about whether a tile still exists.
@@ -1261,6 +1638,8 @@ impl TileManager {
             inflight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             failed: std::collections::HashMap::new(),
             requested: HashSet::new(),
+            rainviewer_started: VecDeque::new(),
+            ndfd_refresh_hour: chrono::Utc::now().timestamp().div_euclid(3600),
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
             frame_visible: 0,
@@ -1292,6 +1671,21 @@ impl TileManager {
     pub fn frame_key(&self, style: BasemapStyle) -> u64 {
         let time = if style.timed() { self.goes_time.map_or(0, |t| t.timestamp() as u64) } else { 0 };
         (time << 8) | u64::from(style.key())
+    }
+
+    fn refresh_ndfd_at(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        let hour = now.timestamp().div_euclid(3600);
+        if self.ndfd_refresh_hour == hour { return; }
+        self.ndfd_refresh_hour = hour;
+        let mut ndfd_styles = [false; 256];
+        for style in BasemapStyle::ALL {
+            if style.ndfd_layer().is_some() { ndfd_styles[style.key() as usize] = true; }
+        }
+        // Leave resident GPU textures in place until replacement bytes arrive. An in-flight
+        // tile has not yet been displayed, so let its bounded fetch finish rather than duplicate it.
+        self.requested.retain(|key| {
+            !ndfd_styles[(key.0 & 0xff) as usize] || !self.uploaded.contains(key)
+        });
     }
 
     /// Turn `@2x` tiles on or off (high-DPI screen, and not on a metered link). Returns true if it
@@ -1450,6 +1844,7 @@ impl TileManager {
     /// Kick off fetches for any visible tiles not yet requested.
     pub fn request_missing(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
         use std::sync::atomic::Ordering;
+        if style.ndfd_layer().is_some() { self.refresh_ndfd_at(chrono::Utc::now()); }
         let skey = self.frame_key(style);
         self.failed.retain(|_, time| time.elapsed() < RETRY_AFTER);
         for v in visible {
@@ -1468,15 +1863,12 @@ impl TileManager {
                 break;
             }
             let (z, x, y) = v.id;
-            let Some(mut url) = style.url(
-                z,
-                x,
-                y,
-                self.retina,
-                &self.mapbox_key,
-                &self.maptiler_key,
-                &self.custom_template,
-            ) else {
+            let source_url = if style == BasemapStyle::RainViewerGlobal {
+                rainviewer_tile_url(self.goes_time, z, x, y)
+            } else {
+                style.url(z, x, y, self.retina, &self.mapbox_key, &self.maptiler_key, &self.custom_template)
+            };
+            let Some(mut url) = source_url else {
                 continue;
             };
             // GOES frame time: rewrite the `default` time slot in the GIBS URL and tag the cache
@@ -1484,7 +1876,11 @@ impl TileManager {
             let time_tag = match self.goes_time {
                 Some(t) if style.timed() => {
                     let iso = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                    if style.wms_layer().is_some() {
+                    if style == BasemapStyle::RainViewerGlobal {
+                        // Its opaque path already names the selected immutable frame.
+                    } else if style.ndfd_layer().is_some() {
+                        url.push_str(&format!("&VTIT={}", t.format("%Y-%m-%dT%H:%M")));
+                    } else if style.wms_layer().is_some() {
                         url.push_str(&format!("&TIME={iso}"));
                     } else {
                         url = url.replace(
@@ -1492,10 +1888,24 @@ impl TileManager {
                             &format!("/{iso}/GoogleMapsCompatible"),
                         );
                     }
-                    t.format("%Y%m%dT%H%M%S").to_string()
+                    if style.ndfd_layer().is_some() {
+                        format!("{}-r{}", t.format("%Y%m%dT%H%M%S"), self.ndfd_refresh_hour)
+                    } else {
+                        t.format("%Y%m%dT%H%M%S").to_string()
+                    }
                 }
                 _ => "default".to_string(),
             };
+            if style == BasemapStyle::RainViewerGlobal {
+                self.rainviewer_started.retain(|started| started.elapsed() < std::time::Duration::from_secs(60));
+                if self.rainviewer_started.len() >= RAINVIEWER_TILE_REQUESTS_PER_MINUTE {
+                    if let Some(ctx) = &self.ctx {
+                        ctx.request_repaint_after(std::time::Duration::from_secs(5));
+                    }
+                    break;
+                }
+                self.rainviewer_started.push_back(wxdata::clock::Instant::now());
+            }
             self.requested.insert((skey, v.id));
             let path = self.cache_root.as_ref().map(|d| {
                 d.join(style.provider(self.retina, &self.custom_template))
@@ -1673,8 +2083,6 @@ impl TileManager {
             if let Some((id, _)) = evicted.filter(|(id, _)| *id != key) {
                 self.requested.remove(&id);
                 self.evicted.push(id);
-            } else if evicted.is_some() {
-                continue; // already resident
             }
             ready.push(PendingTile {
                 id: t.id,
@@ -2176,6 +2584,33 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn ndfd_new_issue_replaces_resident_tile_without_blanking_map() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut manager = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let now = chrono::Utc::now();
+        manager.ndfd_refresh_hour = now.timestamp().div_euclid(3600);
+        manager.set_goes_time(Some(now + chrono::Duration::hours(3)));
+        let forecast = (manager.frame_key(BasemapStyle::NdfdWindSpeed), (4, 3, 5));
+        let streets = (manager.frame_key(BasemapStyle::OsmStandard), (4, 3, 5));
+        for key in [forecast, streets] {
+            manager.requested.insert(key);
+            manager.uploaded.put(key, 4);
+        }
+        manager.refresh_ndfd_at(now + chrono::Duration::hours(1));
+        assert!(!manager.requested.contains(&forecast));
+        assert!(manager.uploaded.contains(&forecast), "keep the old forecast visible during refresh");
+        assert!(manager.requested.contains(&streets), "do not reload unrelated map sources");
+        manager.tx.send(Ok(FetchedTile {
+            id: forecast.1, style: forecast.0, rgba: vec![4, 3, 2, 1], width: 1, height: 1,
+        })).unwrap();
+        let ready = manager.drain_ready();
+        assert_eq!(ready.len(), 1, "a resident key must accept replacement pixels");
+        assert_eq!(ready[0].rgba, vec![4, 3, 2, 1]);
+        assert_eq!(ready[0].style, forecast.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn completed_tiles_are_uploaded_in_bounded_batches() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -2506,15 +2941,16 @@ mod tests {
         }
     }
 
-    /// Hybrid satellite is the one style that is raster *and* draws vector geometry.
+    /// These raster sources draw transparent weather/imagery tiles over a vector reference map.
     #[test]
-    fn only_hybrid_is_both_raster_and_vector() {
+    fn hybrid_sources_draw_raster_and_vector() {
         for s in BasemapStyle::ALL {
             let both = s.is_raster() && s.vector_palette().is_some();
             assert_eq!(
                 both,
-                s == BasemapStyle::HybridSatellite,
-                "{s:?} raster+vector should only be hybrid"
+                matches!(s, BasemapStyle::HybridSatellite | BasemapStyle::RainViewerGlobal)
+                    || s.ndfd_layer().is_some(),
+                "{s:?} raster+vector should be an intentional hybrid"
             );
         }
         assert_eq!(
@@ -2564,6 +3000,92 @@ mod tests {
         }
     }
 
+    #[test]
+    fn blank_white_is_a_tile_free_style_with_a_stable_slug() {
+        let style = BasemapStyle::BlankWhite;
+        assert_eq!(BasemapStyle::from_slug("blank-white"), style);
+        assert_eq!(style.category(), Category::Other);
+        assert!(!style.is_raster());
+        assert!(style.vector_palette().is_none());
+        assert!(style.thumb_url("", "", "").is_none());
+        assert_eq!(style.key(), 60);
+    }
+
+    #[test]
+    fn blue_map_is_a_keyless_vector_style() {
+        let style = BasemapStyle::BlueMap;
+        assert_eq!(BasemapStyle::from_slug("blue-map"), style);
+        assert_eq!(style.category(), Category::Vector);
+        assert!(!style.is_raster());
+        assert_eq!(style.vector_palette(), Some(crate::basemap_style::Palette::Blue));
+        assert_eq!(style.key(), 61);
+    }
+
+    #[test]
+    fn rainviewer_catalog_uses_only_advertised_safe_paths() {
+        let body = br#"{"host":"https://tilecache.rainviewer.com","radar":{"past":[{"time":1792044000,"path":"/v2/radar/2675d40cc6ca"},{"time":1792044600,"path":"/v2/radar/next123"},{"time":1792045200,"path":"/v2/radar/../../private"}]}}"#;
+        let frames = parse_rainviewer_index(body).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].0, 1792044000);
+        assert_eq!(frames[1].1, "/v2/radar/next123");
+        assert!(parse_rainviewer_index(br#"{"host":"https://evil.example","radar":{"past":[]}}"#).is_none());
+        assert_eq!(BasemapStyle::RainViewerGlobal.category(), Category::Weather);
+        assert_eq!(BasemapStyle::RainViewerGlobal.max_raster_z(), 7);
+        assert!(BasemapStyle::RainViewerGlobal.timed());
+        assert_eq!(BasemapStyle::RainViewerGlobal.key(), 62);
+    }
+
+    #[test]
+    fn ndfd_uses_advertised_forecast_times_and_valid_time_urls() {
+        let from = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let to = from + chrono::Duration::days(2);
+        let xml = r#"<Layer><Name>ndfd.conus.maxt</Name><Dimension name="vtit" default="1970-01-01T00:00">2026-10-15T00:00,2026-10-16T00:00,2026-10-17T00:00</Dimension></Layer>"#;
+        assert_eq!(ndfd_advertised_frame_times(xml, "ndfd.conus.maxt", from, to, 2),
+            vec![from + chrono::Duration::days(1), from + chrono::Duration::days(2)]);
+        assert!(ndfd_advertised_frame_times(xml, "ndfd.conus.pop12", from, to, 8).is_empty());
+        for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp,
+            BasemapStyle::NdfdAlaskaRainChance, BasemapStyle::NdfdAlaskaMaxTemp, BasemapStyle::NdfdAlaskaMinTemp,
+            BasemapStyle::NdfdHawaiiRainChance, BasemapStyle::NdfdHawaiiMaxTemp, BasemapStyle::NdfdHawaiiMinTemp,
+            BasemapStyle::NdfdWindGust, BasemapStyle::NdfdAlaskaWindGust, BasemapStyle::NdfdHawaiiWindGust,
+            BasemapStyle::NdfdWindSpeed, BasemapStyle::NdfdAlaskaWindSpeed, BasemapStyle::NdfdHawaiiWindSpeed] {
+            assert!(style.timed());
+            assert_eq!(style.category(), Category::Forecast);
+            assert!(style.attribution().contains("NOAA/NWS"));
+            let url = style.url(5, 7, 12, false, "", "", "").unwrap();
+            assert!(url.contains(&format!("digital.weather.gov/ndfd.{}/wms", style.ndfd_region().unwrap())));
+            assert!(url.contains(style.ndfd_layer().unwrap()));
+            assert!(!url.contains("&TIME="));
+        }
+        for (style, region) in [(BasemapStyle::NdfdWindGust, "conus"),
+            (BasemapStyle::NdfdAlaskaWindGust, "alaska"),
+            (BasemapStyle::NdfdHawaiiWindGust, "hawaii")] {
+            assert_eq!(style.ndfd_layer(), Some(match region {
+                "conus" => "ndfd.conus.windgust",
+                "alaska" => "ndfd.alaska.windgust",
+                _ => "ndfd.hawaii.windgust",
+            }));
+            assert_eq!(style.ndfd_point(), Some(("windgust", "Wind gust", "mph")));
+        }
+        for (style, layer) in [(BasemapStyle::NdfdWindSpeed, "ndfd.conus.windspd"),
+            (BasemapStyle::NdfdAlaskaWindSpeed, "ndfd.alaska.windspd"),
+            (BasemapStyle::NdfdHawaiiWindSpeed, "ndfd.hawaii.windspd")] {
+            assert_eq!(style.ndfd_layer(), Some(layer));
+            assert_eq!(style.ndfd_point(), Some(("windspd", "Wind speed", "mph")));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_ndfd_catalog_has_current_and_future_forecasts() {
+        let client = reqwest::Client::new();
+        let now = chrono::Utc::now();
+        for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp] {
+            let times = fetch_frame_times(&client, style, now - chrono::Duration::hours(12),
+                now + chrono::Duration::days(8), 48).await;
+            assert!(times.iter().any(|time| *time > now), "{style:?}: {times:?}");
+        }
+    }
+
     /// The picker draws one section per category. A style in no section is invisible, and a
     /// section with nothing in it is a stray heading.
     #[test]
@@ -2581,6 +3103,7 @@ mod tests {
         // The three that are not a map of anywhere belong together, away from the imagery.
         for s in [
             BasemapStyle::None,
+            BasemapStyle::BlankWhite,
             BasemapStyle::Auto,
             BasemapStyle::CustomXyz,
         ] {
@@ -2661,39 +3184,7 @@ mod tests {
         );
     }
 
-    /// DWD rejects a TIME that is not on its 5-minute step outright, so every frame the bar can
-    /// select has to land on one — and none of them may be newer than the publisher.
-    #[test]
-    fn wms_frames_land_on_the_publishers_step() {
-        // 12:03:17Z, deliberately off-step and off-second.
-        let anchor = chrono::DateTime::from_timestamp(1_700_000_597, 0).unwrap();
-        let f = wms_frames(anchor, 12, 5, 10);
-        assert_eq!(f.len(), 12);
-        assert!(f.windows(2).all(|w| w[0] < w[1]), "oldest first");
-        for t in &f {
-            assert_eq!(t.timestamp() % 300, 0, "{t} is off the 5-minute step");
-            assert!(
-                *t <= anchor - chrono::Duration::minutes(10),
-                "{t} is ahead of the publisher"
-            );
-        }
-        // GeoMet runs on 6 minutes, so the same grid has to move with the publisher, not with a
-        // constant baked in for the first one.
-        let g = wms_frames(anchor, 12, 6, 6);
-        for t in &g {
-            assert_eq!(t.timestamp() % 360, 0, "{t} is off the 6-minute step");
-            assert!(
-                *t <= anchor - chrono::Duration::minutes(6),
-                "{t} is ahead of the publisher"
-            );
-        }
-        let last = *f.last().unwrap();
-        assert!(
-            anchor - last < chrono::Duration::minutes(15),
-            "the newest frame is the newest one there is"
-        );
-        assert_eq!(last - f[f.len() - 2], chrono::Duration::minutes(5));
-    }
+
 }
 
 #[cfg(test)]
@@ -2739,4 +3230,191 @@ mod detail_transition_tests {
         cam.zoom=12.0;assert_eq!(z(&mut level,&cam),12);
         cam.zoom=20.0;assert_eq!(z(&mut level,&cam),18);
     }
+}
+
+#[cfg(test)]
+mod eccc_availability_tests {
+    use super::*;
+
+    fn instant(s: &str) -> chrono::DateTime<chrono::Utc> {
+        s.parse().unwrap()
+    }
+    fn capabilities(domain: &str) -> String {
+        format!("<WMS_Capabilities><Layer><Name>RADAR_1KM_RRAI</Name><Dimension name=\"time\" units=\"ISO8601\">{domain}</Dimension></Layer></WMS_Capabilities>")
+    }
+
+    /// A captured public GetCapabilities response can exercise the exact production parser
+    /// without making default tests network-dependent or committing a changing live document.
+    #[test]
+    #[ignore = "set HOOKECHO_ECCC_CAPABILITIES_FIXTURE to a captured public response"]
+    fn eccc_captured_proxy_response_parses() {
+        let path = std::env::var("HOOKECHO_ECCC_CAPABILITIES_FIXTURE").expect("fixture path");
+        let xml = std::fs::read_to_string(path).expect("read captured XML");
+        let frames = wms_advertised_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            chrono::DateTime::<chrono::Utc>::MIN_UTC,
+            chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            48,
+        );
+        assert!(!frames.is_empty(), "requested live layer must expose frame times");
+        assert!(frames.windows(2).all(|pair| pair[1] - pair[0] == chrono::Duration::minutes(6)));
+        println!("Parsed {} advertised frames: {} through {}", frames.len(), frames[0], frames[frames.len() - 1]);
+    }
+
+    #[test]
+    fn eccc_advertised_window_rejects_expired_archive_and_future_frames() {
+        let xml = capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT6M");
+        let frames = wms_advertised_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-14T08:00:00Z"),
+            instant("2026-10-14T18:00:00Z"),
+            48,
+        );
+        assert_eq!(frames.len(), 31);
+        assert_eq!(frames[0], instant("2026-10-14T13:00:00Z"));
+        assert_eq!(frames[30], instant("2026-10-14T16:00:00Z"));
+        assert!(wms_advertised_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-13T08:00:00Z"),
+            instant("2026-10-13T18:00:00Z"),
+            48
+        )
+        .is_empty());
+        assert!(wms_advertised_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-14T16:01:00Z"),
+            instant("2026-10-14T18:00:00Z"),
+            48
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn eccc_intersects_before_limiting_and_honors_six_minute_boundaries() {
+        let xml = capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT6M");
+        let frames = wms_advertised_frame_times(
+            &xml,
+            "RADAR_1KM_RRAI",
+            instant("2026-10-14T13:01:00Z"),
+            instant("2026-10-14T13:29:00Z"),
+            2,
+        );
+        assert_eq!(
+            frames,
+            vec![
+                instant("2026-10-14T13:18:00Z"),
+                instant("2026-10-14T13:24:00Z")
+            ]
+        );
+        assert!(wms_advertised_frame_times(
+            &xml,
+            "RADAR_1KM_RSNO",
+            instant("2026-10-14T13:00:00Z"),
+            instant("2026-10-14T16:00:00Z"),
+            48
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn eccc_malformed_or_empty_availability_never_falls_back_to_guessed_times() {
+        let from = instant("2026-10-14T13:00:00Z");
+        let to = instant("2026-10-14T16:00:00Z");
+        for xml in [
+            String::new(),
+            capabilities("bad"),
+            capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT0M"),
+            capabilities("2026-10-14T13:00:00Z/2026-10-14T16:00:00Z/PT9223372036854775807H"),
+        ] {
+            assert!(wms_advertised_frame_times(&xml, "RADAR_1KM_RRAI", from, to, 48).is_empty());
+        }
+        assert!(wms_advertised_frame_times(
+            &capabilities("2026-10-14T14:00:00Z"),
+            "RADAR_1KM_RRAI",
+            from,
+            to,
+            0
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn dwd_availability_uses_only_the_requested_layer_and_expired_scans_are_absent() {
+        let xml = concat!(
+            "<WMS_Capabilities><Layer><Name>Radar_rv_product_1x1km_ger</Name>",
+            "<Dimension name=\"time\" default=\"current\" units=\"ISO8601\">",
+            "2026-10-11T00:00:00.000Z/2026-10-15T02:00:00.000Z/PT5M",
+            "</Dimension></Layer><Layer><Name>Radar_wn-analysis_1x1km_ger</Name>",
+            "<Dimension name=\"time\" default=\"2026-10-15T00:00:00Z\" units=\"ISO8601\">",
+            "2026-10-11T00:00:00.000Z/2026-10-15T00:00:00.000Z/PT5M",
+            "</Dimension></Layer></WMS_Capabilities>"
+        );
+        let from = instant("2026-10-14T23:30:00Z");
+        let to = instant("2026-10-15T00:30:00Z");
+        let analysis = wms_advertised_frame_times(xml, "Radar_wn-analysis_1x1km_ger", from, to, 48);
+        assert_eq!(analysis.len(), 7);
+        assert_eq!(analysis.last().copied(), Some(instant("2026-10-15T00:00:00Z")));
+        let nowcast = wms_advertised_frame_times(xml, "Radar_rv_product_1x1km_ger", from, to, 48);
+        assert_eq!(nowcast.last().copied(), Some(to));
+        assert!(wms_advertised_frame_times(
+            xml,
+            "Radar_wn-analysis_1x1km_ger",
+            instant("2026-10-10T00:00:00Z"),
+            instant("2026-10-10T23:59:00Z"),
+            48
+        ).is_empty());
+    }
+
+    #[test]
+    #[ignore = "set HOOKECHO_DWD_CAPABILITIES_FIXTURE to a captured public response"]
+    fn dwd_captured_capabilities_parse() {
+        let path = std::env::var("HOOKECHO_DWD_CAPABILITIES_FIXTURE").expect("fixture path");
+        let xml = std::fs::read_to_string(path).expect("read captured XML");
+        for layer in ["Radar_rv_product_1x1km_ger", "Radar_wn-analysis_1x1km_ger"] {
+            let frames = wms_advertised_frame_times(
+                &xml,
+                layer,
+                instant("2026-10-14T23:00:00Z"),
+                instant("2026-10-15T00:00:00Z"),
+                48,
+            );
+            assert!(!frames.is_empty(), "{layer} has no advertised frames");
+            assert!(frames.windows(2).all(|pair| pair[1] - pair[0] == chrono::Duration::minutes(5)));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "live DWD service check; run explicitly"]
+    async fn dwd_live_frame_discovery() {
+        let now = chrono::Utc::now();
+        let frames = fetch_frame_times(
+            &reqwest::Client::new(),
+            BasemapStyle::DwdRadarWN,
+            now - chrono::Duration::hours(2),
+            now,
+            24,
+        ).await;
+        assert!(!frames.is_empty(), "DWD WN advertised no recent frames");
+        assert!(frames.windows(2).all(|pair| pair[1] - pair[0] == chrono::Duration::minutes(5)));
+        assert!(frames.last().is_some_and(|last| *last <= now));
+    }
+    #[test]
+    fn pitched_tile_cover_is_bounded_and_covers_inverse_viewport_samples() {
+        let vp=(1200.0,800.0);
+        for pitch in [0.0,60.0] { for bearing in [0.0,45.0,90.0,225.0] {
+            let mut cam=Camera::at_lonlat(179.9,35.0,8.0);
+            cam.set_orientation(pitch,bearing);
+            let cover=tile_cover_at_level(&cam,vp,8);
+            assert!(cover.len()<=512);
+            for iy in 0..10 { for ix in 0..10 {
+                let world=cam.screen_to_world((vp.0*(ix as f32+0.5)/10.0,vp.1*(iy as f32+0.5)/10.0),vp);
+                assert!(cover.iter().any(|t| world.0>=t.world_min[0] as f64 && world.0<=t.world_max[0] as f64 && world.1>=t.world_min[1] as f64 && world.1<=t.world_max[1] as f64), "missing tile at {world:?}");
+            } }
+        } }
+    }
+
 }

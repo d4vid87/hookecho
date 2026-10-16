@@ -62,6 +62,12 @@ cp "$glue" "web/dist/hookecho-$glue_hash.js"
 # Put the glue back the way git has it; the hashed copy is the one that ships.
 sed -i "s/hookecho_bg-$wasm_hash\.wasm/hookecho_bg.wasm/g" "$glue"
 
+# The browser video recorder is optional, but it must update with the shell rather than stay in
+# an old offline cache when only its JavaScript changes.
+rm -f web/dist/video-export-*.js
+video_export_hash="$(hash_of web/video-export.js)"
+cp web/video-export.js "web/dist/video-export-$video_export_hash.js"
+
 # The four default font faces, which the web build fetches instead of compiling in (see
 # crates/hookecho/src/fonts.rs and web/fonts/README.md). Hashed into /dist/ like everything else,
 # so the year-long immutable `_headers` rule covers them and a face is downloaded once, ever.
@@ -94,6 +100,7 @@ jq -n --argjson chunks "$chunks" '{voice:"en_US-amy-medium", chunks:$chunks}' > 
 sed \
   -e "s#dist/hookecho\.js#dist/hookecho-$glue_hash.js#g" \
   -e "s#dist/hookecho_bg\.wasm#dist/hookecho_bg-$wasm_hash.wasm#g" \
+  -e "s#video-export\.js#dist/video-export-$video_export_hash.js#g" \
   -e "s#__FONT_URLS__#$font_urls#" \
   web/index.src.html > web/index.html
 
@@ -102,7 +109,7 @@ sed \
 # a worker the browser never bothers to install.
 font_shell=""
 for f in web/dist/font-*.ttf; do font_shell="$font_shell,\"/${f#web/}\""; done
-shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js?boot=2\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/decode-worker.js?v=vector-tiles\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
+shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js?boot=2\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/dist/video-export-$video_export_hash.js\",\"/decode-worker.js?v=vector-tiles\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
 sed \
   -e "s#__SHELL__#$shell_json#" \
   -e "s#__VERSION__#\"$glue_hash-$wasm_hash\"#" \
@@ -148,7 +155,41 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # replay metadata measured 4,427,028 gzip bytes before the final timeline export. Allocate
 # 30 KB (0.68%) over the prior cap for the complete reliability follow-up; lite and startup
 # limits remain unchanged. Alternative binaryen shrinking passes measured larger outputs.
-budget="${HOOKECHO_WASM_BUDGET:-4450000}"
+# Radar Workspace, perspective camera, source catalog and public-feed availability measured
+# 4,489,754 gzip bytes with binaryen 130. Allocate 50 KB (1.12%) over the former cap;
+# the lite and startup limits remain unchanged.
+# Public CPC and SPC fire-weather polygons measured 4,503,536 gzip bytes with binaryen 130,
+# 3,536 bytes above the previous cap (0.08%). Allow 11,464 bytes of headroom; the lite and
+# startup limits remain unchanged.
+# Timestamped TDWR archive playback measured 4,523,808 gzip bytes with binaryen 130.
+# Allow 6,192 bytes of margin above that measured result; lite/startup caps are unchanged.
+# Public Level III DAA/DSA accumulation adds two real radar products to the first-load bundle.
+# The measured optimized main WASM is 4,531,260 bytes gzip; retain under 0.2% headroom.
+# NOAA SPC fire-weather discussion adds 1,305 gzip bytes to the measured 4,539,943-byte
+# main WASM. Keep a narrow 8,752-byte margin for this public-data parity feature.
+# The manual storm-track controls add a few kilobytes to the interactive map bundle.
+# Browser PNG capture reuses the existing screenshot command and download helper but includes
+# the PNG encoder in the main bundle. Its measured size is 4,555,906 gzip bytes; allow 4,094
+# bytes of margin (under 0.1%) while keeping the lite and startup limits unchanged.
+# Browser GIF export adds the codec and in-memory loop capture. The optimized main bundle measured
+# 4,583,740 gzip bytes; retain about 6 KB of margin (0.13%) for this verified four-frame export.
+# Public global-radar tiles and frame discovery measure 4,590,891 bytes gzip with binaryen 130.
+# Keep roughly 5 KB of regression headroom while leaving the lite and startup caps unchanged.
+# Dublin's complete velocity volume and product-specific tilt picker measure 4,628,168 gzip bytes.
+# Keep 832 bytes of headroom without changing the lite or startup caps.
+# NOAA's matching NDFD legend images are fetched only when a forecast map is selected. The
+# desktop loader and compact forecast controls measured 4,632,979 bytes gzip; retain 3,021 bytes
+# of margin (0.07%) for the main bundle without changing lite/startup budgets.
+# NOAA's exact raster-point readout adds 5,248 gzip bytes to the previous 4,632,160-byte build.
+# Allow 2,592 bytes of margin for the completed forecast inspection path; lite/startup stay put.
+# Alaska/Hawaii NDFD regions measured 4,639,631 gzip bytes; retain 4,369 bytes of margin.
+# Six-frame regional MRMS replay measured 4,650,476 gzip bytes with binaryen 130. Allow 4,524
+# bytes of headroom for the new source-backed transport; lite and startup budgets stay unchanged.
+# UTC archive-day and hour navigation adds a source-backed historical loop without storing days of
+# grids in memory. The optimized main bundle measured 4,653,859 gzip bytes; retain under 0.2%
+# headroom while preserving the Lite and startup gates.
+# Public-camera dashboard adds a small amount of UI code; measured at 4,664,691 bytes gzip.
+budget="${HOOKECHO_WASM_BUDGET:-4675000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

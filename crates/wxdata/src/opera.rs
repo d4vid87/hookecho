@@ -3,7 +3,8 @@
 //!
 //! ORD is an OGC EDR API on `api.meteogate.eu`, but the API only serves CoverageJSON: the ODIM
 //! files themselves live in a public S3 bucket, `openradar-24h`, one object per volume per moment,
-//! keyed `YYYY/MM/DD/CC/nod/PVOL/nod@YYYYMMDDThhmm@<elevations>@<moments>.h5`. Anonymous, no key,
+//! keyed `YYYY/MM/DD/CC/nod/PVOL/nod@YYYYMMDDThhmm@<elevations>@<moments>.h5`. Nordic sites
+//! instead publish one `SCAN` object per elevation. Anonymous, no key,
 //! no registration, CC BY 4.0, and the bucket lists with a prefix — so finding the newest volume
 //! is one ~5 KB listing of the current hour rather than the megabyte of HTML DWD charges for the
 //! same question.
@@ -13,18 +14,22 @@
 //! magnitude cheaper than a German one, which needs forty files. Publishers that split moments
 //! into one file per quantity are handled by fetching the rest of the group and folding them in.
 //!
-//! ponytail: a curated table of the sites that verify live, not the whole 129-radar feed. Three
-//! things disqualify a country, and all three were measured rather than assumed:
+//! The site table is curated from live published objects rather than every registered radar.
+//! Publisher-specific differences are handled explicitly:
 //!
-//! * Norway (12 sites) writes HDF5 with 4-byte file offsets and Malta writes big-endian
-//!   datatypes; `hdf5lite` reads neither. Nothing in this crate can fix that.
-//! * Switzerland, Finland, France, Estonia, Lithuania and Sweden publish `SCAN/`, one file per
-//!   elevation, which is DWD's shape and a different fetch loop. Later, if ever.
+//! * Malta writes big-endian numeric metadata, now read by `hdf5lite`, but currently publishes
+//!   reflectivity only. Norway's 4-byte-address volumes and delayed velocity are supported below.
+//! * France publishes `SCAN/` cuts at consecutive minutes within a five-minute cycle, unlike the
+//!   Nordic, Swiss, Estonian and Lithuanian SCAN publishers' equal-timestamp cuts.
+//! * Spain alternates two- and three-cut PVOL strategies; the newest two-cut strategy carries both
+//!   reflectivity and velocity. Slovakia publishes one PVOL object per moment at each timestamp.
+//! * Dublin publishes eight reflectivity SCAN cuts over three minutes but velocity as a separate
+//!   fifteen-minute PVOL strategy. The latest low velocity cut keeps its own radial time.
 //! * Germany is already here through [`crate::dwd`], from the source rather than the aggregator.
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use nexrad_model::data::{Scan, Sweep};
 use nexrad_model::meta::registry::SiteEntry;
 
@@ -60,11 +65,60 @@ pub const SITES: &[SiteEntry] = &[
     site("BEWID", "Wideumont", "BE", 49.9136, 5.5044, 585),
     site("CZBRD", "Brdy", "CZ", 49.6583, 13.8178, 916),
     site("CZSKA", "Skalky", "CZ", 49.5011, 16.7885, 767),
+    site("CHALB", "Albis", "CH", 47.2843, 8.5120, 938),
+    site("CHDOL", "La Dole", "CH", 46.4251, 6.0994, 1682),
+    site("CHPPM", "Plaine Morte", "CH", 46.3706, 7.4866, 2937),
+    site("CHWEI", "Weissfluhgipfel", "CH", 46.8350, 9.7945, 2850),
     site("DKBOR", "Bornholm", "DK", 55.1127, 14.8875, 171),
     site("DKROM", "Romo", "DK", 55.1731, 8.5520, 15),
     site("DKSAM", "Samso", "DK", 55.8119, 10.5853, 48),
     site("DKSIN", "Sindal", "DK", 57.4893, 10.1365, 109),
     site("DKSTE", "Stevns", "DK", 55.3262, 12.4493, 53),
+    site("EEHAR", "Harku", "EE", 59.3971, 24.6021, 70),
+    site("EESUR", "Sürgavere", "EE", 58.4823, 25.5187, 157),
+    site("ESAHR", "Alhaurín el Grande", "ES", 36.6134, -4.6593, 1159),
+    site("ESATN", "Artenara", "ES", 28.0188, -15.6145, 1777),
+    site("ESGLD", "Gelida", "ES", 41.4082, 1.8849, 662),
+    site("ESLID", "Autilla del Pino", "ES", 41.9956, -4.6028, 887),
+    site("ESNJR", "Níjar", "ES", 36.8324, -2.0821, 499),
+    site("ESPDG", "Perdiguera", "ES", 41.7340, -0.5459, 835),
+    site("ESSFT", "Sierra de Fuentes", "ES", 39.4288, -6.2853, 667),
+    site("ESSSE", "Bakio", "ES", 43.4033, -2.8419, 625),
+    site("ESTJV", "Torrejón de Velasco", "ES", 40.1759, -3.7137, 717),
+    site("FRABB", "Abbeville", "FR", 50.1360, 1.8347, 84),
+    site("FRAJA", "Ajaccio", "FR", 41.9531, 8.7005, 784),
+    site("FRALE", "Aléria", "FR", 42.1297, 9.4964, 63),
+    site("FRAVE", "Avesnes", "FR", 50.1283, 3.8118, 209),
+    site("FRBLA", "Blaisy-Haut", "FR", 47.3552, 4.7759, 607),
+    site("FRBOL", "Bollène", "FR", 44.3231, 4.7622, 325),
+    site("FRBOR", "Bordeaux", "FR", 44.8315, -0.6919, 70),
+    site("FRBOU", "Bourges", "FR", 47.0586, 2.3596, 174),
+    site("FRCAE", "Falaise", "FR", 48.9272, -0.1496, 167),
+    site("FRCOL", "Collobrières", "FR", 43.2166, 6.3729, 654),
+    site("FRGRE", "Grèzes", "FR", 45.1044, 1.3697, 360),
+    site("FRMCL", "Montclar", "FR", 43.9905, 2.6096, 679),
+    site("FRMOM", "Momuy", "FR", 43.6245, -0.6094, 146),
+    site("FRMTC", "Montancy", "FR", 47.3686, 7.0190, 926),
+    site("FRNAN", "Nancy", "FR", 48.7158, 6.5816, 296),
+    site("FRNIM", "Nîmes", "FR", 43.8061, 4.5027, 78),
+    site("FRNIZ", "Saint Nizier", "FR", 46.0678, 4.4454, 920),
+    site("FROPO", "Opoul", "FR", 42.9184, 2.8650, 718),
+    site("FRPLA", "Plabennec", "FR", 48.4609, -4.4298, 111),
+    site("FRTOU", "Toulouse", "FR", 43.5743, 1.3763, 187),
+    site("FRTRA", "Trappes", "FR", 48.7746, 2.0083, 190),
+    site("FRTRE", "Treillères", "FR", 47.3374, -1.6563, 81),
+    site("FRTRO", "Arcis-sur-Aube", "FR", 48.4621, 4.3093, 165),
+    site("FIKAN", "Kankaanpää", "FI", 61.8108, 22.5020, 175),
+    site("FIKAU", "Kaunispää", "FI", 68.4344, 27.4440, 463),
+    site("FIKES", "Kesälahti", "FI", 61.9070, 29.7977, 174),
+    site("FIKOR", "Korpo", "FI", 60.1285, 21.6434, 61),
+    site("FIKUO", "Kuopio", "FI", 62.8626, 27.3815, 268),
+    site("FILUO", "Luosto", "FI", 67.1391, 26.8969, 533),
+    site("FINUR", "Nurmes", "FI", 63.8379, 29.4489, 323),
+    site("FIPET", "Petäjävesi", "FI", 62.3045, 25.4401, 271),
+    site("FIUTA", "Utajärvi", "FI", 64.7749, 26.3189, 118),
+    site("FIVIH", "Vihti", "FI", 60.5562, 24.4956, 181),
+    site("FIVIM", "Vimpeli", "FI", 63.1048, 23.8209, 200),
     site("HRBIL", "Bilogora", "HR", 45.8835, 17.2005, 280),
     site("HRDEB", "Debeljak", "HR", 44.0452, 15.3764, 208),
     site("HRGOL", "Goli", "HR", 45.0205, 14.1223, 553),
@@ -72,12 +126,28 @@ pub const SITES: &[SiteEntry] = &[
     site("HRPUN", "Puntijarka", "HR", 45.9078, 15.9684, 1030),
     site("HRULJ", "Uljenje", "HR", 42.8944, 17.4783, 463),
     site("IESHA", "Shannon", "IE", 52.6928, -8.9200, 29),
+    site("IEDUB", "Dublin", "IE", 53.4299, -6.2443, 99),
     site("ISBJO", "Bjolfur", "IS", 65.2659, -14.0618, 1090),
     site("ISKEF", "Keflavik", "IS", 64.0257, -22.6354, 48),
     site("ISSKA", "Skagi", "IS", 66.0557, -20.2680, 164),
     site("ISX2", "Mobile 2", "IS", 63.8696, -20.2023, 42),
+    site("LTLAU", "Laukuva", "LT", 55.6090, 22.2395, 200),
+    site("LTVIL", "Vilnius", "LT", 54.6262, 25.1068, 193),
+    site("MTGUD", "Gudja", "MT", 35.8528, 14.4747, 100),
     site("NLDHL", "Den Helder", "NL", 52.9528, 4.7906, 55),
     site("NLHRW", "Herwijnen", "NL", 51.8369, 5.1381, 25),
+    site("NOAND", "Andøya", "NO", 69.2414, 16.0030, 441),
+    site("NOBER", "Berlevåg", "NO", 70.5107, 29.0184, 474),
+    site("NOBML", "Bømlo", "NO", 59.8540, 5.0900, 102),
+    site("NOHAS", "Hasvik", "NO", 70.6052, 22.4430, 446),
+    site("NOHFJ", "Hafjell", "NO", 61.2318, 10.5273, 1080),
+    site("NOHGB", "Hægebostad", "NO", 58.3601, 7.1648, 631),
+    site("NOHUR", "Hurum", "NO", 59.6271, 10.5645, 363),
+    site("NORSA", "Rissa", "NO", 63.6900, 10.2040, 616),
+    site("NORSG", "Rassegalvarri", "NO", 69.2186, 23.4398, 604),
+    site("NORST", "Røst", "NO", 67.5307, 12.0986, 17),
+    site("NOSMN", "Sømna", "NO", 65.2199, 11.9926, 315),
+    site("NOSTA", "Stad", "NO", 62.1871, 5.1275, 508),
     site("PLBRZ", "Brzuchania", "PL", 50.3942, 20.0832, 434),
     site("PLGDY", "Gdynia", "PL", 54.5009, 18.2718, 261),
     site("PLGSA", "Gora Sw Anny", "PL", 50.4639, 18.1532, 433),
@@ -97,6 +167,20 @@ pub const SITES: &[SiteEntry] = &[
     site("ROTIM", "Timisoara", "RO", 45.7717, 21.2577, 145),
     site("SILIS", "Lisca", "SI", 46.0678, 15.2849, 950),
     site("SIPAS", "Pasja ravan", "SI", 46.0980, 14.2282, 1043),
+    site("SEANG", "Ängelholm", "SE", 56.3675, 12.8517, 209),
+    site("SEATV", "Åtvidaberg", "SE", 58.1059, 15.9365, 222),
+    site("SEBAA", "Bålsta", "SE", 59.6110, 17.5833, 83),
+    site("SEHUV", "Hudiksvall", "SE", 61.5771, 16.7144, 389),
+    site("SEKAA", "Karlskrona", "SE", 56.2955, 15.6102, 132),
+    site("SEKRN", "Kiruna", "SE", 67.7088, 20.6178, 647),
+    site("SELEK", "Leksand", "SE", 60.7230, 14.8776, 457),
+    site("SELLA", "Luleå (Rosvik)", "SE", 65.4309, 21.8650, 69),
+    site("SEOER", "Örnsköldsvik", "SE", 63.6395, 18.4019, 522),
+    site("SEOSD", "Östersund", "SE", 63.2951, 14.7591, 466),
+    site("SKJAV", "Malý Javorník", "SK", 48.2556, 17.1524, 600),
+    site("SKKOJ", "Kojšovská hoľa", "SK", 48.7827, 20.9873, 1256),
+    site("SKKUB", "Kubínska hoľa", "SK", 49.2717, 19.2493, 1425),
+    site("SKLAZ", "Španí laz", "SK", 48.2404, 19.2573, 661),
 ];
 
 /// The OPERA radar with this id, if any (case-insensitive).
@@ -114,8 +198,9 @@ fn index_url(country: &str, nod: &str, hour: DateTime<Utc>) -> String {
     // The `@` in the key is left as-is: S3 accepts it unescaped in a prefix, and escaping it would
     // have to survive the proxy's path rewrite as well.
     format!(
-        "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/PVOL/{nod}@{}",
+        "{BUCKET}?list-type=2&prefix={}/{country}/{nod}/{}/{nod}@{}",
         hour.format("%Y/%m/%d"),
+        if matches!(country, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") || nod == "iedub" { "SCAN" } else { "PVOL" },
         hour.format("%Y%m%dT%H")
     )
 }
@@ -167,6 +252,167 @@ fn newest_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
     group
 }
 
+/// Most Norwegian sites publish DBZH/TH at a five-minute mark, with VRADH about one minute later
+/// on every other strategy. That velocity volume omits the 0.5° reflectivity cut. Rissa publishes
+/// VRADH with the same timestamp and elevations. Prefer the latest complete pair over a newer
+/// reflectivity-only scan, so both moments share matching tilts.
+fn newest_norwegian_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    let all = keys(xml);
+    for base in all.iter().rev().copied().filter(|key| key.ends_with("@DBZH.h5")) {
+        let Some(name) = base.rsplit('/').next() else { continue };
+        let mut fields = name.split('@');
+        if fields.next() != Some(nod) { continue; }
+        let (Some(stamp), Some(angles)) = (fields.next(), fields.next()) else { continue };
+        // These scans start at :00/:05/…/:55, so the delayed file is always in this hour.
+        let Some(minute) = stamp.get(11..13).and_then(|s| s.parse::<u8>().ok()).filter(|m| *m < 59) else { continue };
+        let velocity_angles = angles.strip_prefix("0.5_").unwrap_or(angles);
+        let next_stamp = format!("{}{:02}", &stamp[..11], minute + 1);
+        let velocity_name = format!("{nod}@{next_stamp}@{velocity_angles}@VRADH.h5");
+        let same_time_name = format!("{nod}@{stamp}@{angles}@VRADH.h5");
+        let Some(velocity) = all.iter().copied().find(|key| key.rsplit('/').next() == Some(same_time_name.as_str()))
+            .or_else(|| all.iter().copied().find(|key| key.rsplit('/').next() == Some(velocity_name.as_str()))) else { continue };
+        let prefix = base.rsplit_once('@').map(|(p, _)| p).unwrap_or(base);
+        let mut group = vec![base];
+        group.extend(all.iter().copied().filter(|key| *key != base && key.rsplit_once('@').is_some_and(|(p, _)| p == prefix)));
+        if !group.contains(&velocity) { group.push(velocity); }
+        return group;
+    }
+    Vec::new()
+}
+
+/// Pick the latest *complete enough* SCAN volume. Individual elevations arrive separately;
+/// choosing a timestamp after only its base tilt lands would repeatedly replace a full volume
+/// with a one-tilt one. Swiss scans publish two cuts; other supported sites publish at least five.
+fn newest_scan_group<'a>(xml: &'a str, nod: &str, minimum: usize) -> Vec<&'a str> {
+    let all = keys(xml);
+    let mut stamps: Vec<&str> = all.iter().filter_map(|key| {
+        let mut parts = key.rsplit('/').next()?.split('@');
+        (parts.next()? == nod).then(|| parts.next()).flatten()
+    }).collect();
+    stamps.sort_unstable();
+    stamps.dedup();
+    for stamp in stamps.into_iter().rev() {
+        let prefix = format!("{nod}@{stamp}@");
+        let group: Vec<&str> = all.iter().copied().filter(|key| {
+            key.rsplit('/').next().is_some_and(|name| name.starts_with(&prefix) && name.contains("DBZH"))
+        }).collect();
+        if group.len() >= minimum {
+            return group;
+        }
+    }
+    Vec::new()
+}
+
+/// French cuts are stamped at each minute of a five-minute cycle, not all at its start. Require
+/// all five minute slots before presenting a cycle, with the final (lowest) cut as its timestamp.
+fn newest_french_scan_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    let mut cycles: std::collections::BTreeMap<(&str, u8), Vec<(u8, &'a str)>> =
+        std::collections::BTreeMap::new();
+    for key in keys(xml) {
+        let Some(name) = key.rsplit('/').next() else { continue };
+        let mut fields = name.split('@');
+        if fields.next() != Some(nod) { continue; }
+        let (Some(stamp), Some(_angle), Some(moment)) =
+            (fields.next(), fields.next(), fields.next()) else { continue };
+        if !moment.contains("DBZH") || stamp.len() != 13 { continue; }
+        let Some(minute) = stamp.get(11..13).and_then(|s| s.parse::<u8>().ok()) else { continue };
+        if minute >= 60 { continue; }
+        cycles.entry((&stamp[..11], minute / 5)).or_default().push((minute % 5, key));
+    }
+    for (_, cuts) in cycles.into_iter().rev() {
+        if cuts.len() < 5 || !(0..5).all(|slot| cuts.iter().any(|(minute, _)| *minute == slot)) {
+            continue;
+        }
+        let mut group: Vec<&str> = cuts.into_iter().map(|(_, key)| key).collect();
+        group.sort_unstable();
+        let base = group.pop().expect("a complete cycle has a final cut");
+        group.insert(0, base);
+        return group;
+    }
+    Vec::new()
+}
+
+/// Spanish PVOL alternates a three-cut DBZH/TH-only strategy with a two-cut DBZH/VRADH strategy.
+/// Choose the latest dual-moment volume so the velocity picker does not silently lose its data
+/// every ten minutes when a reflectivity-only object arrives.
+fn newest_spanish_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    keys(xml)
+        .into_iter()
+        .rev()
+        .find(|key| key.rsplit('/').next().is_some_and(|name| {
+            name.starts_with(&format!("{nod}@")) && name.ends_with("@DBZH_VRADH.h5")
+        }))
+        .into_iter()
+        .collect()
+}
+
+/// Slovak reflectivity, TH and velocity arrive as separate objects. Wait for velocity instead of
+/// replacing a complete volume with a momentarily newer reflectivity-only one.
+fn newest_slovak_group<'a>(xml: &'a str, nod: &str) -> Vec<&'a str> {
+    let all = keys(xml);
+    for base in all.iter().rev().copied().filter(|key| {
+        key.rsplit('/').next().is_some_and(|name| name.starts_with(&format!("{nod}@"))
+            && name.ends_with("@DBZH.h5"))
+    }) {
+        let Some((prefix, _)) = base.rsplit_once('@') else { continue };
+        let velocity_name = format!("{prefix}@VRAD.h5");
+        if !all.contains(&velocity_name.as_str()) { continue; }
+        let mut group = vec![base];
+        group.extend(all.iter().copied().filter(|key| *key != base
+            && key.rsplit_once('@').is_some_and(|(p, _)| p == prefix)));
+        return group;
+    }
+    Vec::new()
+}
+
+/// Dublin's eight reflectivity cuts occupy minutes 0–2 of each five-minute cycle. Require the
+/// final 10° cut, so an in-progress scan never replaces a full one. TH siblings are not needed
+/// for the reflectivity image and would double the downloads.
+fn newest_dublin_scan_group<'a>(xml: &'a str) -> Vec<&'a str> {
+    let mut cycles: std::collections::BTreeMap<(&str, u8), Vec<(u8, &'a str)>> =
+        std::collections::BTreeMap::new();
+    for key in keys(xml) {
+        let Some(name) = key.rsplit('/').next() else { continue };
+        let mut fields = name.split('@');
+        if fields.next() != Some("iedub") { continue; }
+        let (Some(stamp), Some(_angle), Some(moment)) =
+            (fields.next(), fields.next(), fields.next()) else { continue };
+        if moment != "DBZH.h5" || stamp.len() != 13 { continue; }
+        let Some(minute) = stamp.get(11..13).and_then(|s| s.parse::<u8>().ok()) else { continue };
+        if minute >= 60 { continue; }
+        cycles.entry((&stamp[..11], minute / 5)).or_default().push((minute % 5, key));
+    }
+    for (_, cuts) in cycles.into_iter().rev() {
+        if cuts.len() < 8 || !(0..3).all(|slot| cuts.iter().any(|(minute, _)| *minute == slot)) {
+            continue;
+        }
+        let mut group: Vec<&str> = cuts.into_iter().map(|(_, key)| key).collect();
+        group.sort_unstable();
+        let base = group.pop().expect("a complete Dublin cycle has a final cut");
+        group.insert(0, base);
+        return group;
+    }
+    Vec::new()
+}
+
+fn dublin_velocity_index_url(hour: DateTime<Utc>) -> String {
+    format!(
+        "{BUCKET}?list-type=2&prefix={}/IE/iedub/PVOL/iedub@{}",
+        hour.format("%Y/%m/%d"), hour.format("%Y%m%dT%H")
+    )
+}
+
+fn newest_dublin_velocity_key(xml: &str) -> Option<&str> {
+    keys(xml).into_iter().rev().find(|key| key.rsplit('/').next()
+        .is_some_and(|name| name.starts_with("iedub@") && name.ends_with("@VRADH.h5")))
+}
+
+fn key_minute(key: &str) -> Option<DateTime<Utc>> {
+    let stamp = key.rsplit('/').next()?.split('@').nth(1)?;
+    let naive = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M").ok()?;
+    Some(Utc.from_utc_datetime(&naive))
+}
+
 /// The newest volume for `id`, assembled from the objects EUMETNET published for it.
 pub async fn fetch_volume(
     http: &reqwest::Client,
@@ -203,7 +449,21 @@ pub async fn fetch_volume(
         ))
         .await
         .unwrap_or_default();
-        group = newest_group(&index, &nod)
+        group = (if id.eq_ignore_ascii_case("IEDUB") {
+            newest_dublin_scan_group(&index)
+        } else if meta.state == "FR" {
+            newest_french_scan_group(&index, &nod)
+        } else if meta.state == "ES" {
+            newest_spanish_group(&index, &nod)
+        } else if meta.state == "SK" {
+            newest_slovak_group(&index, &nod)
+        } else if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
+            newest_scan_group(&index, &nod, if meta.state == "CH" { 2 } else { 5 })
+        } else if meta.state == "NO" {
+            newest_norwegian_group(&index, &nod)
+        } else {
+            newest_group(&index, &nod)
+        })
             .into_iter()
             .map(str::to_string)
             .collect();
@@ -249,21 +509,71 @@ pub async fn fetch_volume(
     let (time, base) = fetch(group[0].clone())
         .await
         .ok_or_else(|| anyhow::anyhow!("no decodable OPERA volume for {id}"))?;
-    if current_name == Some(volume_name(id, time).as_str()) {
+    let mut dublin_velocity = None;
+    if id.eq_ignore_ascii_case("IEDUB") {
+        for back in 0..2 {
+            let index = text(dublin_velocity_index_url(now - chrono::Duration::hours(back)))
+                .await.unwrap_or_default();
+            if let Some(key) = newest_dublin_velocity_key(&index) {
+                if key_minute(key).is_some_and(|at| (time - at).num_minutes().abs() <= 30) {
+                    dublin_velocity = Some(key.to_string());
+                }
+                break;
+            }
+        }
+    }
+    let base_name = volume_name(id, time);
+    let candidate_name = if let Some(key) = dublin_velocity.as_deref() {
+        format!("{base_name}~{}", key_minute(key).expect("checked key time").format("%Y%m%d%H%M"))
+    } else {
+        base_name.clone()
+    };
+    if current_name == Some(candidate_name.as_str()) {
         crate::stats::bump(crate::stats::Counter::FetchSkipped);
         return Ok(None);
     }
 
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
-    let files = files.into_iter().flatten();
+    let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
+    if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") || id.eq_ignore_ascii_case("IEDUB") {
+        let mut parts: Vec<(f32, Sweep)> = std::iter::once(&base)
+            .chain(files.iter())
+            .filter(|scan| scan.sweeps().len() == 1)
+            .map(|scan| {
+                let sweep = scan.sweeps()[0].clone();
+                (angle(&sweep), sweep)
+            })
+            .filter(|(angle, _)| angle.is_finite())
+            .collect();
+        anyhow::ensure!(parts.len() >= if id.eq_ignore_ascii_case("IEDUB") { 8 } else if meta.state == "CH" { 2 } else { 5 }, "incomplete SCAN volume for {id}");
+        let mut delivered_name = base_name;
+        if let Some(key) = dublin_velocity {
+            if let Some((_, velocity)) = fetch(key).await {
+                let velocity_cuts: Vec<_> = velocity.sweeps().iter()
+                    .filter(|sweep| angle(sweep).is_finite()
+                        && sweep.radials().iter().any(|radial| radial.velocity().is_some()))
+                    .map(|sweep| (angle(sweep), sweep.clone()))
+                    .collect();
+                if velocity_cuts.iter().any(|(angle, _)| (*angle - 0.5).abs() < 0.15) {
+                    parts.extend(velocity_cuts);
+                    delivered_name = candidate_name;
+                }
+            }
+        }
+        return Ok(Some((
+            delivered_name,
+            time,
+            Scan::with_site(meta.to_site(), base.coverage_pattern().clone(), crate::dwd::assemble(parts)),
+        )));
+    }
     // Every object in the group is the same scan sampled at once, so sweep `i` of one is sweep `i`
     // of the others; a file that disagrees about the scan it describes is dropped rather than
     // smeared across it.
     let extras: Vec<Scan> = files
-        .map(|(_, s)| s)
+        .into_iter()
         .filter(|s| {
-            s.sweeps().len() == base.sweeps().len()
-                && std::iter::zip(s.sweeps(), base.sweeps()).all(|(a, b)| angle(a) == angle(b))
+            meta.state == "NO" || (s.sweeps().len() == base.sweeps().len()
+                && std::iter::zip(s.sweeps(), base.sweeps()).all(|(a, b)| angle(a) == angle(b)))
         })
         .collect();
     let merged: Vec<Sweep> = base
@@ -273,7 +583,12 @@ pub async fn fetch_volume(
         .map(|(i, sweep)| {
             let siblings: Vec<Sweep> = extras
                 .iter()
-                .filter_map(|s| s.sweeps().get(i).cloned())
+                .filter_map(|s| {
+                    if meta.state == "NO" {
+                        s.sweeps().iter().find(|candidate| angle(candidate) == angle(sweep)
+                            && candidate.radials().len() == sweep.radials().len()).cloned()
+                    } else { s.sweeps().get(i).cloned() }
+                })
                 .collect();
             crate::dwd::merge(sweep, &siblings)
         })
@@ -372,6 +687,128 @@ mod tests {
         assert!(newest_group("<Key>", "plgsa").is_empty());
     }
 
+    #[test]
+    fn swedish_scan_waits_for_multiple_elevations() {
+        let entry = |stamp: &str, angle: &str| format!(
+            "<Key>2026/10/15/SE/seang/SCAN/seang@{stamp}@{angle}@DBZH_TH_VRADH.h5</Key>"
+        );
+        let mut xml = String::new();
+        for angle in ["0.5", "1.0", "1.5", "2.0", "2.5", "4.0"] {
+            xml.push_str(&entry("20261015T0730", angle));
+        }
+        xml.push_str(&entry("20261015T0735", "0.5"));
+        assert_eq!(newest_scan_group(&xml, "seang", 5).len(), 6);
+        for angle in ["1.0", "1.5", "2.0", "2.5"] {
+            xml.push_str(&entry("20261015T0735", angle));
+        }
+        let picked = newest_scan_group(&xml, "seang", 5);
+        assert_eq!(picked.len(), 5);
+        assert!(picked.iter().all(|key| key.contains("T0735")));
+    }
+
+    #[test]
+    fn french_scan_waits_for_the_final_minute_of_every_cycle() {
+        let entry = |minute: u8, angle: &str| format!(
+            "<Key>2026/10/15/FR/frabb/SCAN/frabb@20261015T08{minute:02}@{angle}@DBZH_TH_VRADH.h5</Key>"
+        );
+        let mut xml = String::new();
+        for (minute, angle) in [(45, "7.5"), (45, "90.0"), (46, "0.9"),
+            (47, "1.51"), (48, "4.5"), (49, "0.4")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        for (minute, angle) in [(50, "6.5"), (50, "9.5"), (51, "0.9"),
+            (52, "1.51"), (53, "3.5")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        let picked = newest_french_scan_group(&xml, "frabb");
+        assert_eq!(picked.len(), 6);
+        assert!(picked[0].contains("T0849@0.4"));
+        xml.push_str(&entry(54, "0.4"));
+        let picked = newest_french_scan_group(&xml, "frabb");
+        assert_eq!(picked.len(), 6);
+        assert!(picked[0].contains("T0854@0.4"));
+        assert!(picked.iter().all(|key| key.contains("T085")));
+    }
+
+    #[test]
+    fn spanish_volume_prefers_recent_dual_moment_strategy() {
+        let entry = |stamp: &str, angles: &str, moments: &str| format!(
+            "<Key>2026/10/15/ES/eslid/PVOL/eslid@{stamp}@{angles}@{moments}.h5</Key>"
+        );
+        let xml = format!("{}{}{}", entry("20261015T0856", "0.5_1.4", "DBZH_VRADH"),
+            entry("20261015T0900", "0.5_1.4_2.3", "DBZH_TH"),
+            entry("20261015T0906", "0.5_1.4", "DBZH_VRADH"));
+        let picked = newest_spanish_group(&xml, "eslid");
+        assert_eq!(picked.len(), 1);
+        assert!(picked[0].contains("T0906"));
+        assert!(newest_spanish_group(&xml, "other").is_empty());
+    }
+
+    #[test]
+    fn slovak_group_waits_for_velocity_object() {
+        let entry = |stamp: &str, moment: &str| format!(
+            "<Key>2026/10/15/SK/skjav/PVOL/skjav@{stamp}@0.0_0.5_1.0@{moment}.h5</Key>"
+        );
+        let xml = format!("{}{}{}{}", entry("20261015T0850", "DBZH"),
+            entry("20261015T0850", "VRAD"), entry("20261015T0855", "DBZH"),
+            entry("20261015T0855", "TH"));
+        let picked = newest_slovak_group(&xml, "skjav");
+        assert_eq!(picked.len(), 2);
+        assert!(picked.iter().all(|key| key.contains("T0850")));
+    }
+
+    #[test]
+    fn dublin_scan_waits_for_its_eighth_cut() {
+        let entry = |minute: u8, angle: &str| format!(
+            "<Key>2026/10/15/IE/iedub/SCAN/iedub@20261015T09{minute:02}@{angle}@DBZH.h5</Key>"
+        );
+        let mut xml = String::new();
+        for (minute, angle) in [(10, "0.5"), (10, "1.1"), (10, "1.9"),
+            (11, "2.9"), (11, "4.0"), (11, "5.4"), (11, "7.2"), (12, "10.0")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        for (minute, angle) in [(15, "0.5"), (15, "1.1"), (15, "1.9"),
+            (16, "2.9"), (16, "4.0"), (16, "5.4"), (16, "7.2")] {
+            xml.push_str(&entry(minute, angle));
+        }
+        let picked = newest_dublin_scan_group(&xml);
+        assert_eq!(picked.len(), 8);
+        assert!(picked[0].contains("T0912@10.0"));
+        xml.push_str(&entry(17, "10.0"));
+        let picked = newest_dublin_scan_group(&xml);
+        assert_eq!(picked.len(), 8);
+        assert!(picked[0].contains("T0917@10.0"));
+    }
+
+    #[test]
+    fn dublin_velocity_key_keeps_its_own_minute() {
+        let xml = "<Key>2026/10/15/IE/iedub/PVOL/iedub@20261015T0900@0.5_2.2@VRADH.h5</Key>\
+                   <Key>2026/10/15/IE/iedub/PVOL/iedub@20261015T0915@0.5_2.2@VRADH.h5</Key>";
+        let key = newest_dublin_velocity_key(xml).expect("velocity");
+        assert_eq!(key_minute(key).unwrap().to_rfc3339(), "2026-10-15T09:15:00+00:00");
+    }
+
+    #[test]
+    fn norwegian_group_waits_for_matching_delayed_velocity() {
+        let row = |time: &str, angles: &str, moment: &str| format!(
+            "<Key>2026/10/15/NO/noand/PVOL/noand@{time}@{angles}@{moment}.h5</Key>"
+        );
+        let full = "0.5_1.0_2.6_5.2_8.6_13.0_18.6_25.8_35.0_90.0";
+        let short = "1.0_2.6_5.2_8.6_13.0_18.6_25.8_35.0_90.0";
+        let xml = format!("{}{}{}{}", row("20261015T0755", full, "DBZH"),
+            row("20261015T0755", full, "TH"), row("20261015T0756", short, "VRADH"),
+            row("20261015T0800", full, "DBZH"));
+        let group = newest_norwegian_group(&xml, "noand");
+        assert_eq!(group.len(), 3);
+        assert!(group[0].contains("T0755"));
+        assert!(group[2].contains("T0756") && group[2].contains("VRADH"));
+        let rissa = format!("{}{}", row("20261015T0800", full, "DBZH"),
+            row("20261015T0800", full, "VRADH")).replace("/noand/", "/norsa/").replace("noand@", "norsa@");
+        let paired = newest_norwegian_group(&rissa, "norsa");
+        assert_eq!(paired.len(), 2);
+        assert!(paired[1].contains("T0800") && paired[1].contains("VRADH"));
+    }
+
     /// One digit out in the prefix and the listing comes back empty.
     #[test]
     fn the_index_url_names_one_hour_of_one_site() {
@@ -425,5 +862,155 @@ mod tests {
             "base tilt carries reflectivity"
         );
         assert!(base.velocity().is_some(), "and velocity");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_swedish_scan_assembles_reflectivity_and_velocity() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "SEANG", None)
+            .await.expect("volume").expect("fresh volume");
+        assert!(scan.sweeps().len() >= 5);
+        let base = &scan.sweeps()[0].radials()[0];
+        assert!(base.reflectivity().is_some());
+        assert!(base.velocity().is_some());
+        for tilt in 0..scan.sweeps().len() {
+            crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                .unwrap_or_else(|e| panic!("SEANG tilt {tilt} reflectivity: {e}"));
+            crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                .unwrap_or_else(|e| panic!("SEANG tilt {tilt} velocity: {e}"));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_finnish_scan_assembles_reflectivity_and_velocity() {
+        let http = reqwest::Client::new();
+        for id in ["FIKAN", "FIKAU", "FIKES", "FIKOR", "FIKUO", "FILUO", "FINUR", "FIPET", "FIUTA", "FIVIH", "FIVIM"] {
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            assert!(scan.sweeps().len() >= 5, "{id}");
+            let base = &scan.sweeps()[0].radials()[0];
+            assert!(base.reflectivity().is_some(), "{id}: reflectivity");
+            assert!(base.velocity().is_some(), "{id}: velocity");
+            for tilt in 0..5 {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_swiss_baltic_scans_assemble_every_elevation() {
+        let http = reqwest::Client::new();
+        for id in ["CHALB", "CHDOL", "CHPPM", "CHWEI", "EEHAR", "EESUR", "LTLAU", "LTVIL"] {
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            let minimum = if id.starts_with("CH") { 2 } else { 5 };
+            assert!(scan.sweeps().len() >= minimum, "{id}");
+            for tilt in 0..scan.sweeps().len() {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_maltese_volume_has_reflectivity_only() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "MTGUD", None)
+            .await.expect("volume").expect("fresh volume");
+        assert!(scan.sweeps().len() >= 5);
+        crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, 0).expect("reflectivity");
+        assert!(!crate::level2::available_moments(&scan)[crate::level2::Moment::Velocity.index()]);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_french_cycles_assemble_every_elevation() {
+        let http = reqwest::Client::new();
+        for site in SITES.iter().filter(|site| site.state == "FR") {
+            let id = site.id;
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            assert!(scan.sweeps().len() >= 5, "{id}");
+            for tilt in 0..scan.sweeps().len() {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_spanish_and_slovak_volumes_assemble_every_elevation() {
+        let http = reqwest::Client::new();
+        for site in SITES.iter().filter(|site| matches!(site.state, "ES" | "SK")) {
+            let id = site.id;
+            let (_, _, scan) = fetch_volume(&http, id, None)
+                .await.unwrap_or_else(|e| panic!("{id}: {e}"))
+                .expect("fresh volume");
+            let minimum = if site.state == "ES" { 2 } else { 12 };
+            assert!(scan.sweeps().len() >= minimum, "{id}");
+            for tilt in 0..scan.sweeps().len() {
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} reflectivity: {e}"));
+                crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                    .unwrap_or_else(|e| panic!("{id} tilt {tilt} velocity: {e}"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_dublin_scan_assembles_reflectivity_and_all_velocity() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "IEDUB", None)
+            .await.expect("volume").expect("fresh volume");
+        assert!(scan.sweeps().len() >= 18);
+        let angles = crate::level2::elevation_angles(&scan);
+        let reflectivity: Vec<_> = angles.iter().enumerate().filter(|(_, angle)| {
+            scan.sweeps().iter().any(|sweep| (super::angle(sweep) - **angle).abs() < 0.15
+                && sweep.radials().iter().any(|radial| radial.reflectivity().is_some()))
+        }).map(|(index, _)| index).collect();
+        assert_eq!(reflectivity.len(), 8);
+        for tilt in reflectivity {
+            crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, tilt)
+                .unwrap_or_else(|e| panic!("IEDUB tilt {tilt} reflectivity: {e}"));
+        }
+        let velocity: Vec<_> = angles.iter().enumerate().filter(|(_, angle)| {
+            scan.sweeps().iter().any(|sweep| (super::angle(sweep) - **angle).abs() < 0.15
+                && sweep.radials().iter().any(|radial| radial.velocity().is_some()))
+        }).map(|(index, _)| index).collect();
+        assert_eq!(velocity.len(), 10, "all public Dublin velocity elevations should load");
+        for tilt in velocity {
+            let vel = crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, tilt)
+                .unwrap_or_else(|e| panic!("IEDUB tilt {tilt} velocity: {e}"));
+            if tilt == 0 { assert!(vel.data.iter().any(|&gate| gate >= 2)); }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_norwegian_volume_assembles_reflectivity_and_velocity() {
+        let http = reqwest::Client::new();
+        let (_, _, scan) = fetch_volume(&http, "NOAND", None)
+            .await.expect("volume").expect("fresh volume");
+        assert!(scan.sweeps().len() >= 5);
+        let base = &scan.sweeps()[0].radials()[0];
+        assert!(base.reflectivity().is_some());
+        // Norway's separate velocity scan starts at 1.0°, not the 0.5° base cut.
+        assert!(scan.sweeps().iter().any(|s| s.radials()[0].velocity().is_some()));
     }
 }

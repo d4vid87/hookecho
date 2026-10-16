@@ -1435,6 +1435,11 @@ const ALLOWED_HOSTS: &[&str] = &[
     "api.weather.gov",
     "tgftp.nws.noaa.gov",
     "mapservices.weather.noaa.gov",
+    "ftp.cpc.ncep.noaa.gov",
+    "www.cpc.ncep.noaa.gov",
+    "www.wpc.ncep.noaa.gov",
+    "digital.weather.gov",
+    "ftp-wpc.ncep.noaa.gov",
     "www.spc.noaa.gov",
     "www.nhc.noaa.gov",
     "www.ndbc.noaa.gov",
@@ -1498,6 +1503,10 @@ const ARCHIVE_BUCKET: &str = "unidata-nexrad-level2.s3.amazonaws.com";
 /// one answer from the Pages deployment and a different one from `--serve` is a bug that only
 /// shows up as a loop that will not advance.
 fn cache_seconds(host: &str, query: &str) -> u64 {
+    // Caltrans still URLs stay fixed while the image changes; match the open-card refresh cycle.
+    if host == "cwwp2.dot.ca.gov" {
+        return 60;
+    }
     // A bucket listing is how the app finds the newest volume — cache that like a live feed or
     // the loop stops advancing.
     if query.contains("list-type=") {
@@ -1582,7 +1591,9 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
     if !ALLOWED_HOSTS.contains(&host) {
         return forbidden("host not in allowlist");
     }
-    if let Some(range) = range {
+    // Browsers may attach a Range header while resuming a small cached object. For ordinary
+    // feeds, strip it and serve the capped whole object; only model GRIB hosts need byte ranges.
+    if let Some(range) = range.filter(|_| model_range_host(host)) {
         if !valid_model_range(host, range) {
             return forbidden("invalid model byte range");
         }
@@ -1659,7 +1670,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
     }
 }
 
-fn valid_model_range(host: &str, range: &str) -> bool {
+fn model_range_host(host: &str) -> bool {
     const HOSTS: &[&str] = &[
         "noaa-gfs-bdp-pds.s3.amazonaws.com",
         "noaa-hrrr-bdp-pds.s3.amazonaws.com",
@@ -1668,6 +1679,10 @@ fn valid_model_range(host: &str, range: &str) -> bool {
         "noaa-nbm-grib2-pds.s3.amazonaws.com",
         "nomads.ncep.noaa.gov",
     ];
+    HOSTS.contains(&host)
+}
+
+fn valid_model_range(host: &str, range: &str) -> bool {
     let Some((start, end)) = range.strip_prefix("bytes=").and_then(|s| s.split_once('-')) else {
         return false;
     };
@@ -1682,7 +1697,7 @@ fn valid_model_range(host: &str, range: &str) -> bool {
             Err(_) => return false,
         }
     };
-    HOSTS.contains(&host)
+    model_range_host(host)
         && end.is_none_or(|end| end >= start && end - start < PROXY_MAX_BYTES as u64)
 }
 
@@ -1763,11 +1778,15 @@ async fn fetch_capped(
     url: &str,
     limit: usize,
 ) -> anyhow::Result<(&'static str, Vec<u8>)> {
-    let mut resp = http
+    let mut req = http
         .get(url)
-        .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT)
-        .send()
-        .await?;
+        .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT);
+    // The public FAA WeatherCams API checks its own site's Referer. The browser's header is
+    // deliberately not forwarded; this fixed value is only for our allowlisted FAA host.
+    if url.starts_with("https://weathercams.faa.gov/") {
+        req = req.header(reqwest::header::REFERER, "https://weathercams.faa.gov/");
+    }
+    let mut resp = req.send().await?;
     anyhow::ensure!(resp.status().is_success(), "upstream returned {}", resp.status());
     let ctype = proxy_content_type(
         resp.headers()
@@ -1791,7 +1810,7 @@ async fn fetch_capped(
 fn proxy_content_type(upstream: &str) -> &'static str {
     match upstream.split(';').next().unwrap_or("").trim() {
         "application/json" | "application/geo+json" => "application/json",
-        "application/xml" | "text/xml" => "application/xml",
+        "application/xml" | "text/xml" | "application/vnd.google-earth.kml+xml" => "application/xml",
         "text/plain" => "text/plain; charset=utf-8",
         // HTML is deliberately downgraded: proxied bytes are served from our own origin, and no
         // feed on the list needs a page that a browser will execute.
@@ -2235,6 +2254,7 @@ mod tests {
         assert_eq!(cache_seconds("api.weather.gov", ""), 15);
         assert_eq!(cache_seconds("opendata.dwd.de", ""), 15);
         assert_eq!(cache_seconds("tgftp.nws.noaa.gov", ""), 300);
+        assert_eq!(cache_seconds("cwwp2.dot.ca.gov", ""), 60);
         assert_eq!(cache_seconds("basemaps.cartocdn.com", ""), 300);
     }
 
@@ -2246,6 +2266,7 @@ mod tests {
 
     #[test]
     fn model_ranges_are_bounded_and_host_scoped() {
+        assert!(!model_range_host("unidata-nexrad-level3.s3.amazonaws.com"));
         assert!(valid_model_range("noaa-gfs-bdp-pds.s3.amazonaws.com", "bytes=0-1023"));
         assert!(valid_model_range("nomads.ncep.noaa.gov", "bytes=1024-"));
         assert!(!valid_model_range("api.weather.gov", "bytes=0-1023"));

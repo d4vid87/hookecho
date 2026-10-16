@@ -34,6 +34,11 @@
       }
       #install-prompt button { min-height: 44px; padding: 8px 12px; border: 0; border-radius: 8px; cursor: pointer; background: transparent; color: inherit; font: inherit; }
       #dismiss-install { min-width: 44px; }
+      /* Narrow desktop: the centered transport reaches the left margin. Keep this transient
+         suggestion beneath the header instead of covering playback controls. */
+      @media (min-width: 601px) and (max-width: 1000px) {
+        #install-prompt { top: calc(88px + env(safe-area-inset-top)); bottom: auto; max-width: calc(100% - 24px); }
+      }
       @media (max-width: 600px) { #install-prompt { left: 50%; right: auto; transform: translateX(-50%); bottom: calc(264px + env(safe-area-inset-bottom)); max-width: calc(100% - 24px); } }
     </style>
   </head>
@@ -44,6 +49,8 @@
       <button id="install" type="button">Install HookEcho</button>
       <button id="dismiss-install" type="button" aria-label="Dismiss installation suggestion">×</button>
     </div>
+    <script type="module" src="./video-player.js"></script>
+    <script src="./video-export.js"></script>
     <!-- Which radar to open on comes from the edge, and nothing about it depends on the app being
          loaded. Fired here, before the module graph is even parsed, it is almost always already
          resolved by the time Rust asks — the app's opening site costs no round trip at all. -->

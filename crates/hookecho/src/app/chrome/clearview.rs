@@ -66,7 +66,7 @@ pub(super) fn launch_cards(ui: &mut egui::Ui) -> Option<PanelSection> {
 impl HookEchoApp {
     pub(super) fn clearview_controls(&mut self, ctx: &egui::Context) {
         use egui_phosphor::regular as ph;
-        let logo = crate::icon::texture(ctx, 64);
+        let logo = crate::icon::texture(ctx, 128);
         let home_id = egui::Id::new(HOME_KEY);
         if !self.panel_open { ctx.data_mut(|d| d.remove::<bool>(home_id)); }
         let home = ctx.data_mut(|d| d.get_temp::<bool>(home_id).unwrap_or(false));
@@ -107,7 +107,7 @@ impl HookEchoApp {
                         widgets.active.bg_fill = egui::Color32::from_rgb(45, 110, 209);
                         widgets.active.weak_bg_fill = widgets.active.bg_fill;
                         ui.horizontal(|ui| {
-                            ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(22.0, 22.0)));
+                            ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(40.0, 40.0)));
                             if ui.add(egui::Button::new(format!("{summary} {}", if expanded { ph::CARET_UP } else { ph::CARET_DOWN }))
                                 .min_size(egui::vec2(0.0, 32.0)))
                                 .named_toggle("Expand radar controls", expanded)

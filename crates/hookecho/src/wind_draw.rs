@@ -243,7 +243,7 @@ impl Particles {
                 let (a, b) = (pts[k], pts[k + 1]);
                 let seg = b - a;
                 let len = seg.length();
-                if len < 0.01 || (cam.globe && (a.x < origin.x - 1.0e6 || b.x < origin.x - 1.0e6)) {
+                if len < 0.01 || (a.x < origin.x - 1.0e6 || b.x < origin.x - 1.0e6) {
                     continue;
                 }
                 // Taper and fade from head to tail; the fade IS the motion blur, which is why this

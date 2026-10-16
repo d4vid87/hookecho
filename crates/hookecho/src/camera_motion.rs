@@ -3,8 +3,7 @@ use crate::render::mercator::Camera;
 
 #[derive(Debug, Default)]
 pub struct Motion {
-    zoom_left: f64,
-    anchor: (f32, f32),
+    zoom_impulses: Vec<ZoomImpulse>,
     velocity: (f32, f32),
     dragging: bool,
     fresh_input: bool,
@@ -13,14 +12,20 @@ pub struct Motion {
     viewport: Option<(f32, f32)>,
 }
 
+#[derive(Debug)]
+struct ZoomImpulse {
+    remaining: f64,
+    anchor: (f32, f32),
+}
+
 impl Motion {
     pub fn active(&self) -> bool {
-        self.zoom_left.abs() > 1e-5
+        self.zoom_impulses.iter().any(|impulse| impulse.remaining.abs() > 1e-5)
             || (!self.dragging && self.velocity.0.hypot(self.velocity.1) >= 8.0)
     }
 
     pub fn cancel(&mut self) {
-        self.zoom_left = 0.0;
+        self.zoom_impulses.clear();
         self.velocity = (0.0, 0.0);
         self.dragging = false;
         self.fresh_input = false;
@@ -32,7 +37,7 @@ impl Motion {
     pub fn sync(&mut self, cam: &Camera, vp: (f32, f32)) {
         if self
             .expected
-            .is_some_and(|e| e.center != cam.center || e.zoom != cam.zoom || e.globe != cam.globe)
+            .is_some_and(|e| e.center != cam.center || e.zoom != cam.zoom || e.globe != cam.globe || e.pitch_deg != cam.pitch_deg || e.bearing_deg != cam.bearing_deg)
             || self.viewport.is_some_and(|old| old != vp)
         {
             self.cancel();
@@ -52,17 +57,33 @@ impl Motion {
         if !delta.is_finite() {
             return;
         }
+        // Some browsers report a Page wheel unit as a whole viewport per event. A multi-page
+        // burst can otherwise jump from a regional map to world view in a single frame.
+        let delta = delta.clamp(-2.0, 2.0);
         self.sync(cam, vp);
         self.velocity = (0.0, 0.0);
         self.dragging = false;
         if reduced {
-            self.zoom_left = 0.0;
+            self.zoom_impulses.clear();
             cam.zoom_at(delta, anchor, vp);
             self.expected = Some(*cam);
         } else {
             self.fresh_input = true;
-            self.anchor = anchor;
-            self.zoom_left = (cam.zoom + self.zoom_left + delta).clamp(-2.0, 20.0) - cam.zoom;
+            // A new wheel event can arrive before the previous ease has settled. Keep each
+            // unfinished part at its own cursor anchor; reanchoring the old part to the latest
+            // cursor makes the geography slide sideways during an otherwise smooth zoom.
+            if self.zoom_impulses.len() >= 32 {
+                let oldest = self.zoom_impulses.remove(0);
+                cam.zoom_at(oldest.remaining, oldest.anchor, vp);
+                self.expected = Some(*cam);
+            }
+            let queued: f64 = self.zoom_impulses.iter().map(|impulse| impulse.remaining).sum();
+            let accepted = (cam.zoom + queued + delta).clamp(-2.0, 20.0) - cam.zoom - queued;
+            if let Some(last) = self.zoom_impulses.last_mut().filter(|last| last.anchor == anchor) {
+                last.remaining += accepted;
+            } else if accepted.abs() > 1e-5 {
+                self.zoom_impulses.push(ZoomImpulse { remaining: accepted, anchor });
+            }
         }
     }
 
@@ -95,6 +116,14 @@ impl Motion {
         self.expected = Some(*cam);
     }
 
+    pub fn drag_at(&mut self, cam: &mut Camera, delta: (f32, f32), to: (f32, f32), dt: f32, vp: (f32, f32), now: f64) {
+        let mut anchored = *cam;
+        anchored.pan_at(delta, to, vp);
+        self.drag(cam, delta, dt, vp, now);
+        *cam = anchored;
+        self.expected = Some(*cam);
+    }
+
     pub fn release(&mut self, reduced: bool, now: f64) {
         self.dragging = false;
         if reduced || !now.is_finite() || self.last_drag_move.is_none_or(|last| now - last > 0.08) {
@@ -107,8 +136,10 @@ impl Motion {
     pub fn advance(&mut self, cam: &mut Camera, dt: f32, vp: (f32, f32), reduced: bool) -> bool {
         self.sync(cam, vp);
         if !dt.is_finite() || (dt > 0.25 && !self.fresh_input) || reduced {
-            if reduced && self.zoom_left != 0.0 {
-                cam.zoom_at(self.zoom_left, self.anchor, vp);
+            if reduced {
+                for impulse in &self.zoom_impulses {
+                    cam.zoom_at(impulse.remaining, impulse.anchor, vp);
+                }
             }
             self.cancel();
             self.expected = Some(*cam);
@@ -120,15 +151,16 @@ impl Motion {
             dt.clamp(0.0, 0.05)
         } as f64;
         self.fresh_input = false;
-        if self.zoom_left.abs() > 1e-5 {
-            let delta = if self.zoom_left.abs() < 1e-4 {
-                self.zoom_left
+        for impulse in &mut self.zoom_impulses {
+            let delta = if impulse.remaining.abs() < 1e-4 {
+                impulse.remaining
             } else {
-                self.zoom_left * (1.0 - (-dt / 0.045).exp())
+                impulse.remaining * (1.0 - (-dt / 0.045).exp())
             };
-            cam.zoom_at(delta, self.anchor, vp);
-            self.zoom_left -= delta;
+            cam.zoom_at(delta, impulse.anchor, vp);
+            impulse.remaining -= delta;
         }
+        self.zoom_impulses.retain(|impulse| impulse.remaining.abs() > 1e-5);
         if !self.dragging && self.velocity.0.hypot(self.velocity.1) >= 8.0 {
             let decay = (-dt * 7.5).exp() as f32;
             let distance = (1.0 - decay) / 7.5;
@@ -164,6 +196,44 @@ mod tests {
         assert!((cam.zoom - 8.25).abs() < 1e-4);
         let at = cam.world_to_screen(world, VP);
         assert!((at.0 - anchor.0).abs() < 0.01 && (at.1 - anchor.1).abs() < 0.01);
+    }
+    #[test]
+    fn overlapping_wheel_events_keep_their_original_anchors() {
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut expected = cam;
+        let mut motion = Motion::default();
+        let first = (250.0, 400.0);
+        let second = (750.0, 400.0);
+        motion.wheel(&mut cam, 1.0, first, VP, false);
+        motion.advance(&mut cam, 1.0 / 60.0, VP, false);
+        let mut first_left = 1.0;
+        let step = first_left * (1.0 - (-(1.0 / 60.0) / 0.045_f64).exp());
+        expected.zoom_at(step, first, VP);
+        first_left -= step;
+        motion.wheel(&mut cam, 1.0, second, VP, false);
+        let mut second_left = 1.0;
+        for _ in 0..30 {
+            motion.advance(&mut cam, 1.0 / 60.0, VP, false);
+            let first_step = first_left * (1.0 - (-(1.0 / 60.0) / 0.045_f64).exp());
+            let second_step = second_left * (1.0 - (-(1.0 / 60.0) / 0.045_f64).exp());
+            expected.zoom_at(first_step, first, VP);
+            expected.zoom_at(second_step, second, VP);
+            first_left -= first_step;
+            second_left -= second_step;
+        }
+        assert!((cam.zoom - expected.zoom).abs() < 1e-3);
+        assert!((cam.center.0 - expected.center.0).abs() < 1e-5);
+        assert!((cam.center.1 - expected.center.1).abs() < 1e-5);
+    }
+    #[test]
+    fn oversized_page_wheel_stays_regional() {
+        let mut cam = Camera::at_lonlat(-120.4, 34.8, 7.0);
+        let mut motion = Motion::default();
+        motion.wheel(&mut cam, -13.0, (570.0, 400.0), VP, false);
+        for _ in 0..90 { motion.advance(&mut cam, 1.0 / 60.0, VP, false); }
+        assert!((cam.zoom - 5.0).abs() < 1e-4);
+        let (_, lat) = crate::render::mercator::world_to_lonlat(cam.center.0, cam.center.1);
+        assert!((lat - 34.8).abs() < 5.0);
     }
     #[test]
     fn external_camera_and_resize_cancel_old_motion() {
@@ -269,4 +339,13 @@ mod tests {
         }
         assert!((c.zoom - 7.5).abs() < 1e-4);
     }
+    #[test]
+    fn changing_orientation_cancels_old_inertia() {
+        let mut c=Camera::at_lonlat(-97.0,35.0,8.0);
+        let mut m=Motion::default();m.wheel(&mut c,1.0,(500.0,400.0),VP,false);
+        c.set_orientation(45.0,90.0);
+        assert!(!m.advance(&mut c,0.016,VP,false));
+        assert_eq!(c.zoom,8.0);
+    }
+
 }

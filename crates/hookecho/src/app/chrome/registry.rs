@@ -12,8 +12,8 @@ impl HookEchoApp {
 
     pub(in crate::app) fn radar_health(&self) -> SourceHealth {
         let v = &self.views[self.active];
-        let age = v.volume.as_ref().map(|volume| {
-            (chrono::Utc::now() - volume.time)
+        let age = v.displayed_time().map(|time| {
+            (chrono::Utc::now() - time)
                 .to_std()
                 .unwrap_or_default()
         });
@@ -36,6 +36,7 @@ impl HookEchoApp {
             data_age: age,
             last_failure: v.error.as_ref().map(|_| std::time::Duration::ZERO),
             error: v.error.clone(),
+            freshness_window: std::time::Duration::from_secs(120),
             cadence: std::time::Duration::from_secs(120),
             successes: u64::from(v.volume.is_some()),
             failures: u64::from(v.error.is_some()),
@@ -46,7 +47,7 @@ impl HookEchoApp {
         use crate::render::FieldLayer as FL;
         use OverlayToggle as T;
         if let PaletteAction::ToggleField(layer) = action {
-            if layer.is_native_abi() { return Some(self.request_health(RequestLane::PaneField(self.active, layer))); }
+            if layer.is_pane_field() { return Some(self.request_health(RequestLane::PaneField(self.active, layer))); }
         }
         let lane = match action {
             PaletteAction::SetMoment(..) => return Some(self.radar_health()),
@@ -81,6 +82,9 @@ impl HookEchoApp {
                         | FL::Qpe6h
                         | FL::Qpe12h
                         | FL::Qpe24h
+                        | FL::Daa
+                        | FL::Oha
+                        | FL::Dsa
                         | FL::PrecipType
                         | FL::FlashFlood
                         | FL::SnowBands
@@ -131,7 +135,7 @@ impl HookEchoApp {
                 T::ProbSevere => RequestLane::Feed("ProbSevere"),
                 T::Aviation => RequestLane::Feed("Aviation advisories"),
                 T::Tfr => RequestLane::Feed("Temporary flight restrictions"),
-                T::Sensors => RequestLane::Feed("Radar observations"),
+                T::Sensors => RequestLane::Feed("Nearest station observations"),
                 T::Hodo => RequestLane::Feed("VAD profile"),
                 T::Cells | T::Tracks | T::ArrivalCones => RequestLane::Feed("Storm cells"),
                 T::Mds => RequestLane::Feed("Mesoscale discussions"),
@@ -489,23 +493,44 @@ impl HookEchoApp {
             ),
             (
                 FL::Vil,
-                "National",
+                "Radar site",
                 "Water aloft (VIL, L3)",
-                "How much water the storm is holding aloft",
+                "Level III water content from the selected radar",
+                false,
+            ),
+            (
+                FL::Daa,
+                "Radar site",
+                "Digital Accumulation Array (DAA)",
+                "One-hour digital precipitation accumulation from the selected radar",
+                false,
+            ),
+            (
+                FL::Dsa,
+                "Radar site",
+                "Storm Total Precipitation (DSA)",
+                "Digital storm-total precipitation from the selected radar",
+                false,
+            ),
+            (
+                FL::Oha,
+                "Radar site",
+                "1 Hour Precip Total (OHA)",
+                "Sixteen precipitation bands from the selected radar; values are band lower bounds",
                 false,
             ),
             (
                 FL::EchoTops,
-                "National",
+                "Radar site",
                 "Storm-top height (echo tops, L3)",
-                "How tall the storm is",
+                "Level III echo-top height from the selected radar",
                 false,
             ),
             (
                 FL::Hca,
-                "National",
+                "Radar site",
                 "What the radar is seeing (hydrometeor class, L3)",
-                "What the radar thinks it's seeing: rain, hail, debris",
+                "Level III hydrometeor classification from the selected radar",
                 false,
             ),
             (
@@ -842,9 +867,8 @@ impl HookEchoApp {
             (
                 T::Webcams,
                 "Obs",
-                "Webcams (FAA + Windy)",
-                "Look at the sky through a real camera \u{2014} FAA airports, plus the Windy \
-                 network worldwide with a key in Settings",
+                "Weather & highway cameras",
+                "FAA airports and public Caltrans highway cameras, plus Windy webcams with a key in Settings",
                 false,
             ),
             (
@@ -1006,6 +1030,13 @@ impl HookEchoApp {
                 true,
             ),
             (
+                T::ScanBoundary,
+                "Reference",
+                "Live scan boundary",
+                "Boundary at the farthest gate of the radar scan on screen",
+                true,
+            ),
+            (
                 T::LinkCameras,
                 "Reference",
                 "Link pane cameras",
@@ -1049,6 +1080,16 @@ impl HookEchoApp {
                 PaletteAction::ToggleOverlay(t),
                 Some(on),
             );
+            if t == T::Spotters {
+                push(
+                    "Spotter Network settings",
+                    "Obs",
+                    "Choose active report window and distance from the selected radar",
+                    false,
+                    PaletteAction::OpenSpotterSettings,
+                    None,
+                );
+            }
         }
         push(
             "SPC convective outlook",
@@ -1057,6 +1098,46 @@ impl HookEchoApp {
             true,
             PaletteAction::OpenOutlooks,
             Some(self.filters.outlook_day != 0),
+        );
+        push(
+            "SPC fire-weather outlook",
+            "Severe",
+            "Public NOAA fire-weather conditions and dry-thunderstorm outlooks",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.fire_weather_day != 0),
+        );
+        push(
+            "Climate outlook (CPC)",
+            "National",
+            "Public NOAA CPC temperature and precipitation outlooks",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.cpc_period.is_some()),
+        );
+        push(
+            "Winter snow probability",
+            "Severe",
+            "NOAA WPC Day 1–3 chance of at least 4 inches of snow in 24 hours",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.winter_snow_day != 0),
+        );
+        push(
+            "Winter ice probability",
+            "Severe",
+            "NOAA WPC Day 1–3 chance of at least 0.25 inches of ice in 24 hours",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.winter_ice_day != 0),
+        );
+        push(
+            "Excessive rainfall outlook",
+            "Severe",
+            "NOAA WPC Day 1–5 flash-flood risk areas",
+            true,
+            PaletteAction::OpenOutlooks,
+            Some(self.filters.ero_day != 0),
         );
         push(
             "Map settings",
@@ -1186,6 +1267,12 @@ impl HookEchoApp {
                 true,
             ),
             (
+                MapTool::StormTrack,
+                "Tool: Manual storm track",
+                "Place a storm center and projected endpoint, then edit motion and cone",
+                true,
+            ),
+            (
                 MapTool::RegionStats,
                 "Tool: Area statistics",
                 "Select two corners for native-value statistics and a histogram",
@@ -1292,6 +1379,12 @@ impl HookEchoApp {
                 W::ChaseReplay,
                 "Chase replay\u{2026}",
                 "Drive a recorded chase again, with the radar as it was",
+                false,
+            ),
+            (
+                W::PublicStreams,
+                "Public camera streams\u{2026}",
+                "Browse live Caltrans highway cameras in view, including those inside warnings",
                 false,
             ),
             (

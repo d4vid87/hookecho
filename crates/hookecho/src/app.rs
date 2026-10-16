@@ -28,6 +28,7 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Runtime;
 use wxdata::alerts::{self};
@@ -94,10 +95,11 @@ fn new_tds_locations(
 
 /// Soft encoded-payload cap. Displayed frames and actively borrowed scans are never evicted;
 /// diagnostics explicitly report when those pinned allocations alone exceed the cap.
+pub const NATIVE_RADAR_PAYLOAD_BUDGET: usize = 512 * 1024 * 1024;
 fn radar_payload_budget() -> usize {
     if cfg!(target_os = "android") { 96 * 1024 * 1024 }
     else if cfg!(target_arch = "wasm32") { 192 * 1024 * 1024 }
-    else { 512 * 1024 * 1024 }
+    else { NATIVE_RADAR_PAYLOAD_BUDGET }
 }
 
 /// Loop frames in flight, keyed by volume name, with when each was kicked off.
@@ -171,13 +173,31 @@ pub struct OverlayFilters {
     pub outlook_day: u8,
     /// Day-1 outlook hazard: categorical risk, or a tornado/wind/hail probability grid.
     pub outlook_kind: wxdata::spc::OutlookKind,
+    /// Public NOAA SPC fire-weather outlook (0 = off, 1–8 = forecast day).
+    pub fire_weather_day: u8,
+    pub fire_weather_kind: wxdata::fire_weather::Kind,
+    /// Public NOAA CPC temperature/precipitation outlook. None keeps it off.
+    pub cpc_period: Option<wxdata::cpc::Period>,
+    pub cpc_variable: wxdata::cpc::Variable,
+    /// Display opacity for CPC outlook polygons, 0–100 percent.
+    pub cpc_opacity_pct: u8,
     pub show_mds: bool,
     /// SPC tornado and severe thunderstorm watches in effect.
     pub show_watches: bool,
-    /// WPC Winter Storm Severity Index day (0 = off, else 1-3).
+    /// WPC Winter Storm Severity Index day (0 = off, 1–3 = single day, 4 = combined).
     pub wssi_day: u8,
-    /// WPC Excessive Rainfall Outlook day (0 = off, else 1-3).
+    /// WPC probability of at least 4 inches of snow in 24 hours (0 = off).
+    pub winter_snow_day: u8,
+    /// WPC probability of at least 0.25 inches of ice in 24 hours (0 = off).
+    pub winter_ice_day: u8,
+    /// WPC Excessive Rainfall Outlook day (0 = off, else 1–5).
     pub ero_day: u8,
+    /// A published WPC archive filename, or None for the current outlook.
+    pub ero_archive: Option<String>,
+    /// Fill opacity for WPC excessive-rainfall outlook polygons, 0–100 percent.
+    pub ero_opacity_pct: u8,
+    /// Screen-space width of WPC excessive-rainfall outlook outlines.
+    pub ero_border_px: f32,
     /// Level 3 storm cells (clickable dots: storm tracking, hail, mesocyclone).
     pub show_cells: bool,
     /// SCIT forecast tracks (painter-only; no overlay rebuild).
@@ -205,8 +225,18 @@ impl Default for OverlayFilters {
             alert_cats: [true; 6],
             outlook_day: 0, // SPC outlook off by default; user opts in from Layer options
             outlook_kind: wxdata::spc::OutlookKind::Categorical,
+            fire_weather_day: 0,
+            fire_weather_kind: wxdata::fire_weather::Kind::Conditions,
+            cpc_period: None,
+            cpc_variable: wxdata::cpc::Variable::Temperature,
+            cpc_opacity_pct: 100,
             wssi_day: 0, // off by default, like the SPC outlook
+            winter_snow_day: 0,
+            winter_ice_day: 0,
             ero_day: 0,
+            ero_archive: None,
+            ero_opacity_pct: 100,
+            ero_border_px: 1.6,
 
             show_mds: true,
             show_watches: true,
@@ -240,12 +270,16 @@ enum OverlayMsg {
     /// WPC coded surface analysis (fronts + pressure centers).
     Fronts(wxdata::fronts::SurfaceAnalysis),
     Outlook(u8, Vec<GeoFeature>),
+    FireWeather(u8, wxdata::fire_weather::Kind, Vec<GeoFeature>),
+    Cpc(wxdata::cpc::Period, wxdata::cpc::Variable, Vec<GeoFeature>),
     Mds(Vec<GeoFeature>),
     Watches(Vec<GeoFeature>),
     /// WPC Winter Storm Severity Index polygons for a day.
     Wssi(u8, Vec<GeoFeature>),
+    WinterProb(u8, wxdata::winter_prob::Kind, Vec<GeoFeature>),
     /// WPC Excessive Rainfall Outlook polygons for a day.
-    Ero(u8, Vec<GeoFeature>),
+    Ero(u8, Option<String>, Vec<GeoFeature>),
+    EroIssues(Vec<wxdata::ero::ArchiveIssue>),
     /// mPING crowd precipitation-type reports.
     Mping(Vec<wxdata::mping::Report>),
     /// Pilot reports within the fetched bbox.
@@ -264,8 +298,9 @@ enum OverlayMsg {
         wxdata::field::FieldFrame,
         Option<wxdata::mrms::MrmsField>,
     ),
-    /// A direct RGBA satellite composite.
-    PaneAbi(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
+    MrmsHistory(crate::render::FieldLayer, Option<DateTime<Utc>>, Vec<wxdata::field::FieldFrame>),
+    /// A registry-backed grid owned by one pane (satellite or single-site radar).
+    PaneField(usize, crate::render::FieldLayer, wxdata::field::FieldFrame, Option<wxdata::mrms::MrmsField>),
     PaneRgb(usize, crate::render::FieldLayer, wxdata::abi::RgbImage),
     /// A model-difference grid plus the two valid times it compared, for the layer's own row.
     ModelDiff(wxdata::field::FieldFrame, (String, String)),
@@ -277,6 +312,7 @@ enum OverlayMsg {
     StormReports(Option<i64>, Vec<wxdata::spc::StormReport>),
     /// Live Spotter Network positions (CONUS-wide; filtered to the active site at draw time).
     Spotters(Vec<wxdata::spotters::Spotter>),
+    RadarSiteStatus(wxdata::radar_status::Report),
     /// ProbSevere per-storm probability polygons.
     ProbSevere(Vec<GeoFeature>),
     /// HRRR wind components for the particle layer.
@@ -355,8 +391,10 @@ enum OverlaySource {
     Watches,
     /// Winter Storm Severity Index for a day (1-3).
     Wssi(u8),
-    /// Excessive Rainfall Outlook for a day (1-3).
-    Ero(u8),
+    WinterProb(u8, wxdata::winter_prob::Kind),
+    /// Current or archived Excessive Rainfall Outlook for a day (1–5).
+    Ero(u8, Option<String>),
+    EroIssues,
     /// mPING crowd reports from the last hour, with the user's API key.
     Mping(String),
     /// Pilot reports within a lat/lon bbox `(lat0, lon0, lat1, lon1)`.
@@ -364,10 +402,13 @@ enum OverlaySource {
     /// Hurricane-hunter HDOBs from the last few hours.
     Recon,
     Outlook(u8, wxdata::spc::OutlookKind),
+    FireWeather(u8, wxdata::fire_weather::Kind),
+    Cpc(wxdata::cpc::Period, wxdata::cpc::Variable),
     Cells(String),
     Placefile(String),
     /// A national field layer plus the MRMS S3 product path to fetch it from.
     Field(crate::render::FieldLayer, String),
+    MrmsHistory(crate::render::FieldLayer, String, Option<DateTime<Utc>>),
     /// Native GOES ABI imagery for a registered band.
     GoesAbi(
         usize,
@@ -380,6 +421,7 @@ enum OverlaySource {
     /// Local storm reports: live (`None`) or a 30-min archive bucket (Unix secs / 1800).
     StormReports(Option<i64>),
     Spotters,
+    RadarSiteStatus,
     ProbSevere,
     /// WPC coded surface analysis (fronts + pressure centers).
     Fronts,
@@ -409,8 +451,8 @@ enum OverlaySource {
     /// One model's field minus another's, at a forecast hour. Which two models is implied by the
     /// field (see `fielddiff::DiffField::pair`).
     ModelDiff(crate::fielddiff::DiffField, u16),
-    /// Gridded L3 product (DVL/EET) for a site, projected to a lat/lon field (feature X).
-    L3Grid(crate::render::FieldLayer, String),
+    /// Gridded L3 product for one pane's selected radar site.
+    L3Grid(usize, crate::render::FieldLayer, String),
     /// Melting-level and −20 °C heights at `(lon, lat)`, for the derived hail grids.
     FreezingLevels(f64, f64),
     /// NOHRSC observed snowfall analysis over an accumulation window (hours).
@@ -526,18 +568,28 @@ impl RequestLane {
                 "mPING reports" | "Power outages" | "River gauges" | "Electric field"
                 | "VAD profile" | "Archived warnings" => 300,
                 "Webcams" => 480,
-                "Hurricane reconnaissance" | "Aviation advisories" | "Radar observations"
+                "Hurricane reconnaissance" | "Aviation advisories" | "Nearest station observations"
                 | "HRRR station temperature" => 600,
                 "RTMA station temperature" => 3600,
                 "Tropical cyclones" | "Wildfires" | "Air quality"
                 | "Temporary flight restrictions" | "Wind particles" | "Freezing levels"
-                | "Contours" => 900,
+                | "Contours" | "Highway cameras" => 900,
                 "Surface analysis" | "Archived storm reports" => 1800,
-                "Highway cameras" | "Damage surveys" => 3600,
+                "Damage surveys" => 3600,
                 _ => 120,
             },
         };
         std::time::Duration::from_secs(secs)
+    }
+
+    fn freshness_window(&self) -> std::time::Duration {
+        // NEXRAD Level III products are published per volume scan. Continue polling every two
+        // minutes, but allow two typical precipitation-mode scans before flagging stale data.
+        if matches!(self, Self::PaneField(_, layer) if layer.is_l3_grid()) {
+            std::time::Duration::from_secs(12 * 60)
+        } else {
+            self.cadence()
+        }
     }
 }
 
@@ -561,6 +613,9 @@ pub(crate) struct SourceHealth {
     pub data_age: Option<std::time::Duration>,
     pub last_failure: Option<std::time::Duration>,
     pub error: Option<String>,
+    /// How old the source observation may be before the UI calls it stale. This can exceed the
+    /// request cadence when a provider publishes only once per radar volume scan.
+    pub freshness_window: std::time::Duration,
     pub cadence: std::time::Duration,
     pub successes: u64,
     pub failures: u64,
@@ -578,7 +633,7 @@ impl SourceHealth {
         } else if self
             .data_age
             .or(self.last_success)
-            .is_some_and(|age| age <= self.cadence)
+            .is_some_and(|age| age <= self.freshness_window)
         {
             HealthState::Fresh
         } else if self.data_age.is_some() || self.last_success.is_some() {
@@ -602,6 +657,13 @@ enum OverlayDelivery {
         generation: u64,
         result: Result<OverlayMsg, String>,
     },
+}
+
+fn overlay_result_error(result: &Result<OverlayMsg, String>) -> Option<&str> {
+    match result {
+        Err(error) | Ok(OverlayMsg::Obs(_, Err(error))) => Some(error),
+        _ => None,
+    }
 }
 
 fn registered_display_field(
@@ -633,21 +695,26 @@ impl OverlaySource {
             Self::Mds => RequestLane::Feed("Mesoscale discussions"),
             Self::Watches => RequestLane::Feed("Watch boxes"),
             Self::Wssi(..) => RequestLane::Feed("Winter storm severity"),
+            Self::WinterProb(_, wxdata::winter_prob::Kind::Snow) => RequestLane::Feed("Winter snow probability"),
+            Self::WinterProb(_, wxdata::winter_prob::Kind::Ice) => RequestLane::Feed("Winter ice probability"),
             Self::Ero(..) => RequestLane::Feed("Excessive rainfall outlook"),
+            Self::EroIssues => RequestLane::Feed("Rainfall outlook archive"),
             Self::Mping(..) => RequestLane::Feed("mPING reports"),
             Self::Pireps(..) => RequestLane::Feed("Pilot reports"),
             Self::Recon => RequestLane::Feed("Hurricane reconnaissance"),
             Self::Outlook(..) => RequestLane::Feed("SPC outlook"),
+            Self::FireWeather(..) => RequestLane::Feed("SPC fire weather"),
+            Self::Cpc(..) => RequestLane::Feed("CPC outlook"),
             Self::Cells(..) => RequestLane::Feed("Storm cells"),
             Self::Placefile(url) => RequestLane::Placefile(url.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::Plugin(key, ..) => RequestLane::Placefile(key.clone()),
             Self::Field(layer, ..)
+            | Self::MrmsHistory(layer, ..)
             | Self::Env(layer, ..)
             | Self::HrrrLayer(layer, ..)
             | Self::Global(layer, ..)
-            | Self::Rtma(layer, ..)
-            | Self::L3Grid(layer, ..) => RequestLane::Field(*layer),
+            | Self::Rtma(layer, ..) => RequestLane::Field(*layer),
             Self::GefsDistribution(..) => RequestLane::Feed("GEFS plume"),
             Self::GefsPostage(..) => RequestLane::Feed("GEFS postage stamps"),
             Self::ModelDiff(..) => RequestLane::Field(FL::ModelDiff),
@@ -659,12 +726,14 @@ impl OverlaySource {
             Self::StormReports(Some(_)) => RequestLane::Feed("Archived storm reports"),
             Self::StormReports(None) => RequestLane::Feed("Storm reports"),
             Self::Spotters => RequestLane::Feed("Spotter Network"),
+            Self::RadarSiteStatus => RequestLane::Feed("NWS radar station status"),
             Self::ProbSevere => RequestLane::Feed("ProbSevere"),
             Self::Fronts => RequestLane::Feed("Surface analysis"),
             Self::GoesAbi(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
             Self::GoesRgb(pane, ..) => RequestLane::PaneField(*pane, crate::render::FieldLayer::GoesTrueColor),
+            Self::L3Grid(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
             Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
-            Self::Obs { .. } => RequestLane::Feed("Radar observations"),
+            Self::Obs { .. } => RequestLane::Feed("Nearest station observations"),
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
             Self::SensorRtma { .. } => RequestLane::Feed("RTMA station temperature"),
             Self::SensorGfs { .. } => RequestLane::Feed("GFS station temperature"),
@@ -725,16 +794,32 @@ impl OverlaySource {
             OverlaySource::Wssi(day) => {
                 OverlayMsg::Wssi(day, wxdata::wssi::fetch(http, day).await?)
             }
+            OverlaySource::WinterProb(day, kind) => {
+                OverlayMsg::WinterProb(day, kind, wxdata::winter_prob::fetch(http, day, kind).await?)
+            }
             OverlaySource::Mping(key) => {
                 OverlayMsg::Mping(wxdata::mping::fetch(http, &key, 60).await?)
             }
             OverlaySource::Pireps(lat0, lon0, lat1, lon1) => OverlayMsg::Pireps(
                 wxdata::aviation::fetch_pireps(http, lat0, lon0, lat1, lon1).await?,
             ),
-            OverlaySource::Ero(day) => OverlayMsg::Ero(day, wxdata::ero::fetch(http, day).await?),
+            OverlaySource::Ero(day, key) => {
+                let features = match key.as_deref() {
+                    Some(key) => wxdata::ero::fetch_archive(http, day, key).await?,
+                    None => wxdata::ero::fetch(http, day).await?,
+                };
+                OverlayMsg::Ero(day, key, features)
+            }
+            OverlaySource::EroIssues => OverlayMsg::EroIssues(wxdata::ero::fetch_archive_index(http).await?),
             OverlaySource::Recon => OverlayMsg::Recon(wxdata::recon::fetch(http, 6).await?),
             OverlaySource::Outlook(day, kind) => {
                 OverlayMsg::Outlook(day, wxdata::spc::fetch_outlook_kind(http, day, kind).await?)
+            }
+            OverlaySource::FireWeather(day, kind) => {
+                OverlayMsg::FireWeather(day, kind, wxdata::fire_weather::fetch(http, day, kind).await?)
+            }
+            OverlaySource::Cpc(period, variable) => {
+                OverlayMsg::Cpc(period, variable, wxdata::cpc::fetch(http, period, variable).await?)
             }
             OverlaySource::Cells(site) => {
                 let cells = level3::fetch_cells(http, &site).await;
@@ -764,6 +849,23 @@ impl OverlaySource {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
             }
+            OverlaySource::MrmsHistory(layer, product, at) => {
+                let keys = if let Some(at) = at {
+                    wxdata::mrms::history_keys_before(http, &product, at, 6).await?
+                } else {
+                    wxdata::mrms::recent_keys(http, &product, 6).await?
+                };
+                let mut frames = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let frame = wxdata::mrms::fetch_frame_key(http, &product, &key).await?;
+                    // Keep six display-sized grids, rather than six full regional source grids.
+                    let display = frame.field().clone().decimated(2_048);
+                    frames.push(wxdata::field::FieldFrame::new(
+                        frame.descriptor, display, frame.stamp.clone(),
+                    ));
+                }
+                OverlayMsg::MrmsHistory(layer, at, frames)
+            }
             OverlaySource::GoesAbi(pane, layer, band, scene, at) => {
                 let received = Utc::now();
                 let image = wxdata::abi::fetch_at(
@@ -786,7 +888,7 @@ impl OverlaySource {
                 let frame = image.into_frame(received)?;
                 let mut frame = frame;
                 frame.stamp.received_time = Utc::now();
-                OverlayMsg::PaneAbi(pane, layer, frame, None)
+                OverlayMsg::PaneField(pane, layer, frame, None)
             }
             OverlaySource::GoesRgb(pane, scene, at) => OverlayMsg::PaneRgb(
                 pane,
@@ -936,6 +1038,9 @@ impl OverlaySource {
             OverlaySource::Spotters => {
                 OverlayMsg::Spotters(wxdata::spotters::fetch_spotters(http).await?)
             }
+            OverlaySource::RadarSiteStatus => {
+                OverlayMsg::RadarSiteStatus(wxdata::radar_status::fetch(http).await?)
+            }
             OverlaySource::ProbSevere => {
                 OverlayMsg::ProbSevere(wxdata::probsevere::fetch_probsevere(http).await?)
             }
@@ -1039,16 +1144,19 @@ impl OverlaySource {
                     .ok_or_else(|| anyhow::anyhow!("unregistered environment field {layer:?}"))?;
                 OverlayMsg::RegisteredField(layer, fc.into_frame(descriptor, model), None)
             }
-            OverlaySource::L3Grid(layer, site) => {
+            OverlaySource::L3Grid(pane, layer, site) => {
                 use crate::render::FieldLayer as FL;
                 let field = match layer {
                     FL::Vil => wxdata::level3::fetch_dvl_frame(http, &site).await,
                     FL::EchoTops => wxdata::level3::fetch_eet_frame(http, &site).await,
                     FL::Hca => wxdata::level3::fetch_hhc_frame(http, &site).await,
+                    FL::Daa => wxdata::level3::fetch_daa_frame(http, &site).await,
+                    FL::Oha => wxdata::level3::fetch_oha_frame(http, &site).await,
+                    FL::Dsa => wxdata::level3::fetch_dsa_frame(http, &site).await,
                     _ => None,
                 };
                 match field {
-                    Some(f) => OverlayMsg::RegisteredField(layer, f, None),
+                    Some(f) => OverlayMsg::PaneField(pane, layer, f, None),
                     None => anyhow::bail!("no L3 grid for {site}"),
                 }
             }
@@ -1329,11 +1437,12 @@ impl OverlaySource {
     }
 }
 
-/// One freehand annotation stroke: a lon/lat polyline and the colour it was drawn in.
+/// One freehand annotation stroke: a lon/lat polyline and its screen-space pen style.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Stroke2d {
     pub points: Vec<[f64; 2]>,
     pub color: egui::Color32,
+    pub width: f32,
 }
 
 /// The four annotation colours, picked to stay legible over both radar and satellite basemaps.
@@ -1344,17 +1453,19 @@ pub(crate) const DRAW_COLORS: [egui::Color32; 4] = [
     egui::Color32::WHITE,
 ];
 
-/// Append `pt` to the newest stroke, or start one in `color` when `new_stroke`.
+/// Append `pt` to the newest stroke, or start one in the chosen pen style.
 pub(crate) fn draw_append(
     strokes: &mut Vec<Stroke2d>,
     pt: [f64; 2],
     color: egui::Color32,
+    width: f32,
     new_stroke: bool,
 ) {
     if new_stroke || strokes.is_empty() {
         strokes.push(Stroke2d {
             points: vec![pt],
             color,
+            width,
         });
         return;
     }
@@ -1364,6 +1475,96 @@ pub(crate) fn draw_append(
     if last.points.last() != Some(&pt) {
         last.points.push(pt);
     }
+}
+
+/// Cut only the painted portion under an eraser drag. Clipping in screen space keeps the brush
+/// the same size at every zoom; the surviving endpoints return to lon/lat with their stroke.
+fn erase_strokes_at(strokes: &mut Vec<Stroke2d>, cam: &crate::render::mercator::Camera, vp: (f32, f32), cursor: (f32, f32)) -> bool {
+    let radius_sq = 11.0_f64.powi(2);
+    let screen = |ll: [f64; 2]| {
+        let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+        let (x, y) = cam.world_to_screen(world, vp);
+        (f64::from(x), f64::from(y))
+    };
+    let mut changed = false;
+    let mut result = Vec::with_capacity(strokes.len());
+    for stroke in strokes.drain(..) {
+        if stroke.points.len() < 2 {
+            if stroke.points.first().is_some_and(|&point| {
+                let p = screen(point);
+                (p.0 - f64::from(cursor.0)).powi(2) + (p.1 - f64::from(cursor.1)).powi(2) <= radius_sq
+            }) {
+                changed = true;
+            } else {
+                result.push(stroke);
+            }
+            continue;
+        }
+        let mut kept = Vec::new();
+        let mut current = Vec::new();
+        let mut stroke_changed = false;
+        for pair in stroke.points.windows(2) {
+            let (a, b) = (screen(pair[0]), screen(pair[1]));
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let (ox, oy) = (a.0 - f64::from(cursor.0), a.1 - f64::from(cursor.1));
+            let quadratic_a = dx * dx + dy * dy;
+            let quadratic_b = 2.0 * (ox * dx + oy * dy);
+            let quadratic_c = ox * ox + oy * oy - radius_sq;
+            let mut cuts = vec![0.0, 1.0];
+            let discriminant = quadratic_b * quadratic_b - 4.0 * quadratic_a * quadratic_c;
+            if quadratic_a > 1e-12 && discriminant > 0.0 {
+                let root = discriminant.sqrt();
+                for t in [(-quadratic_b - root) / (2.0 * quadratic_a), (-quadratic_b + root) / (2.0 * quadratic_a)] {
+                    if t > 0.0 && t < 1.0 { cuts.push(t); }
+                }
+            }
+            cuts.sort_by(f64::total_cmp);
+            for interval in cuts.windows(2) {
+                let midpoint = (interval[0] + interval[1]) * 0.5;
+                let mx = ox + midpoint * dx;
+                let my = oy + midpoint * dy;
+                if mx * mx + my * my <= radius_sq {
+                    stroke_changed = true;
+                    if current.len() >= 2 { kept.push(std::mem::take(&mut current)); }
+                    current.clear();
+                } else {
+                    let interpolate = |t: f64| [
+                        pair[0][0] + t * (pair[1][0] - pair[0][0]),
+                        pair[0][1] + t * (pair[1][1] - pair[0][1]),
+                    ];
+                    let start = interpolate(interval[0]);
+                    let end = interpolate(interval[1]);
+                    if current.last() != Some(&start) {
+                        if current.len() >= 2 { kept.push(std::mem::take(&mut current)); }
+                        current.push(start);
+                    }
+                    current.push(end);
+                }
+            }
+        }
+        if current.len() >= 2 { kept.push(current); }
+        if stroke_changed {
+            changed = true;
+            result.extend(kept.into_iter().map(|points| Stroke2d { points, color: stroke.color, width: stroke.width }));
+        } else {
+            result.push(stroke);
+        }
+    }
+    *strokes = result;
+    changed
+}
+
+/// Sample the whole pointer movement so a quick eraser stroke cannot leave gaps between frames.
+fn erase_strokes_along(strokes: &mut Vec<Stroke2d>, cam: &crate::render::mercator::Camera, vp: (f32, f32), from: Option<(f32, f32)>, to: (f32, f32)) -> bool {
+    let Some(from) = from else { return erase_strokes_at(strokes, cam, vp, to); };
+    let distance = ((to.0 - from.0).powi(2) + (to.1 - from.1).powi(2)).sqrt();
+    let steps = (distance / 5.5).ceil().max(1.0) as usize;
+    let mut changed = false;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        changed |= erase_strokes_at(strokes, cam, vp, (from.0 + t * (to.0 - from.0), from.1 + t * (to.1 - from.1)));
+    }
+    changed
 }
 
 fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
@@ -1386,6 +1587,7 @@ fn annotations_geojson(strokes: &[Stroke2d]) -> anyhow::Result<String> {
                     "source": "HookEcho annotation",
                     "stroke": format!("#{r:02x}{g:02x}{b:02x}"),
                     "stroke-opacity": f64::from(a) / 255.0,
+                    "stroke-width": stroke.width,
                 }
             }))
         })
@@ -1520,6 +1722,8 @@ pub(crate) enum MapTool {
     Interrogate,
     /// Measure great-circle distance/bearing between two clicks.
     Measure,
+    /// Place a storm center, then a forecast endpoint; edit motion and cone in the tool chip.
+    StormTrack,
     /// Select opposite corners and calculate exact native-value area statistics.
     RegionStats,
     /// Drop a location marker at the clicked point.
@@ -1540,6 +1744,48 @@ pub(crate) enum MapTool {
     Draw,
     /// Click out a watch zone vertex by vertex; double-click (or Enter) closes and names it.
     AlertZone,
+}
+
+/// User-drawn motion estimate, independent of the provider's automatic cell tracks.
+struct ManualStormTrack {
+    origin: Option<[f64; 2]>,
+    endpoint_set: bool,
+    bearing_deg: f64,
+    speed_kt: f64,
+    horizon_min: u16,
+    cone_half_angle_deg: f64,
+    /// 0 = kt, 1 = mph, 2 = km/h.
+    speed_unit: u8,
+}
+
+impl Default for ManualStormTrack {
+    fn default() -> Self {
+        Self { origin: None, endpoint_set: false, bearing_deg: 0.0, speed_kt: 30.0, horizon_min: 60, cone_half_angle_deg: 15.0, speed_unit: 0 }
+    }
+}
+
+impl ManualStormTrack {
+    fn click(&mut self, point: [f64; 2]) {
+        let Some(origin) = self.origin else {
+            self.origin = Some(point);
+            self.endpoint_set = false;
+            return;
+        };
+        if self.endpoint_set {
+            self.origin = Some(point);
+            self.endpoint_set = false;
+            return;
+        }
+        let (distance_km, bearing) = crate::geo::great_circle(origin, point);
+        self.bearing_deg = bearing;
+        self.speed_kt = (distance_km / (self.horizon_min as f64 / 60.0) / 1.852).clamp(0.0, 150.0);
+        self.endpoint_set = true;
+    }
+
+    fn point_at(&self, minutes: u16) -> Option<[f64; 2]> {
+        let origin = self.origin?;
+        Some(crate::geo::destination_point(origin, self.bearing_deg, self.speed_kt * 1.852 * minutes as f64 / 60.0))
+    }
 }
 
 /// HRRR model field drawn as contour lines over the radar (surface `f00`). SB-CAPE / 0-3 km SRH
@@ -1785,6 +2031,7 @@ pub(crate) enum OverlayToggle {
     Aviation,
     Tfr,
     RangeRings,
+    ScanBoundary,
     Sensors,
     Hodo,
     Cells,
@@ -1832,7 +2079,7 @@ pub(crate) struct BlockageKey {
 impl OverlayToggle {
     /// Every toggle, for the persistence sweep. A new variant belongs here too, or it silently
     /// stops being remembered across restarts.
-    pub(crate) const ALL: [OverlayToggle; 43] = [
+    pub(crate) const ALL: [OverlayToggle; 44] = [
         Self::AlertPanel,
         Self::StormReports,
         Self::Spotters,
@@ -1850,6 +2097,7 @@ impl OverlayToggle {
         Self::Aviation,
         Self::Tfr,
         Self::RangeRings,
+        Self::ScanBoundary,
         Self::Sensors,
         Self::Hodo,
         Self::Cells,
@@ -1916,6 +2164,7 @@ pub(crate) enum AppWindow {
     Events,
     /// Replay a recorded drive against the archive.
     ChaseReplay,
+    PublicStreams,
     Digest,
     Afd,
     Cappi,
@@ -1959,6 +2208,8 @@ pub(crate) enum PaletteAction {
     OpenOutlooks,
     /// Open display and projection controls for the active pane.
     OpenMapSettings,
+    /// Open the public Spotter Network's range and active-time controls.
+    OpenSpotterSettings,
     /// Show Day 1 SPC outlook, or hide the selected outlook.
     ToggleOutlook,
     SetOutlookDay(u8),
@@ -2119,7 +2370,7 @@ fn field_refresh_secs(layer: crate::render::FieldLayer) -> u64 {
         FL::PrecipRate => 120,
         FL::Qpe1h | FL::Qpe3h | FL::Qpe6h | FL::Qpe12h | FL::Qpe24h => 120,
         // MRMS precip type / flash-flood ARI on the ~2-min cadence; L3 grids on the 120 s L3 cadence.
-        FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca => 120,
+        FL::PrecipType | FL::FlashFlood | FL::Vil | FL::EchoTops | FL::Hca | FL::Daa | FL::Oha | FL::Dsa => 120,
         // Bands are cut from the ~2-min mosaic, so they are as fresh as it is.
         FL::SnowBands => 120,
         FL::UpdraftHelicity => 600,
@@ -2161,6 +2412,9 @@ fn field_time_tolerance(layer: crate::render::FieldLayer) -> chrono::Duration {
     match layer {
         // NOHRSC analyses are issued at 00/06/12/18Z; allow one cadence plus posting delay.
         crate::render::FieldLayer::SnowAnalysis => chrono::Duration::hours(7),
+        // A rolling maximum remains useful across a short MRMS posting delay. Its source time
+        // must still be shown, and a genuinely stale frame will be hidden after half an hour.
+        crate::render::FieldLayer::HailSwath => chrono::Duration::minutes(30),
         _ => chrono::Duration::seconds((field_refresh_secs(layer) * 2) as i64),
     }
 }
@@ -2171,6 +2425,14 @@ fn mrms_reference_time(
     now: chrono::DateTime<Utc>,
 ) -> Option<chrono::DateTime<Utc>> {
     if following { Some(now) } else { selected }
+}
+
+fn accept_near_future_mrms_time(
+    reference: chrono::DateTime<Utc>,
+    valid: chrono::DateTime<Utc>,
+    tolerance: chrono::Duration,
+) -> chrono::DateTime<Utc> {
+    if valid > reference && valid - reference <= tolerance { valid } else { reference }
 }
 
 /// The ZDR-column cache: the volume it was computed for, its columns, and the bright band the
@@ -2210,9 +2472,37 @@ pub(crate) struct FieldState {
     /// Analysis time used by the current native-satellite request (`None` inside = live).
     pub requested_time: Option<Option<DateTime<Utc>>>,
     pub requested_scene: Option<wxdata::abi::Scene>,
+    /// Station selector for a pane-local Level III grid.
+    pub requested_site: Option<String>,
     /// Since when no pane has drawn this layer. Its GPU texture (up to 8192 px of R8) is freed
     /// after [`FIELD_EVICT`]; before this, thirty-five layers could stay resident until exit.
     pub off_since: Option<Instant>,
+}
+
+struct MrmsLoop {
+    layer: crate::render::FieldLayer,
+    frames: Vec<wxdata::field::FieldFrame>,
+    index: usize,
+    playing: bool,
+    last_step: Instant,
+    requested_at: Option<DateTime<Utc>>,
+    follow_through_archive: bool,
+    reverse_playback: bool,
+    follow_from: Option<DateTime<Utc>>,
+    backward_from: Option<DateTime<Utc>>,
+    error: Option<String>,
+    loading: bool,
+}
+
+impl FieldState {
+    fn select_site(&mut self, site: Option<&str>) {
+        if self.requested_site.as_deref() == site { return; }
+        self.frame = None;
+        self.metadata = None;
+        self.pending = None;
+        self.last_fetch = None;
+        self.requested_site = site.map(str::to_owned);
+    }
 }
 
 struct RegionAnalysis {
@@ -2266,6 +2556,8 @@ enum SyncMsg {
 /// captured as one frame of a loop-GIF export.
 enum ShotDest {
     File(std::path::PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    Download,
     Clipboard,
     Loop,
     /// Pushed to the user's ntfy topic as an attachment, captioned with this title.
@@ -2277,13 +2569,19 @@ enum ShotDest {
 /// In-progress loop export (GIF or MP4): steps the active timeline, grabbing one screenshot per
 /// frame.
 struct LoopExport {
+    view_index: usize,
     dest: std::path::PathBuf,
     format: crate::loopexport::LoopFormat,
+    return_live: bool,
+    resume_playing: bool,
+    prior_playhead: usize,
     frames: Vec<image::RgbaImage>,
     /// Slots still to capture (counts down as frames are grabbed).
     remaining: usize,
+    requested_count: usize,
     /// Frames to let the newly-stepped radar settle/load before grabbing.
     settle: u8,
+    wait_started: wxdata::clock::Instant,
     /// A screenshot has been requested; waiting for its event.
     capturing: bool,
     /// Playback speed the scrubber was set to when the export started — the exported clip plays
@@ -2378,10 +2676,20 @@ fn cached_loop_tail(frames: &[Identifier], window: usize, cached: impl Fn(&str) 
     tail.iter().rev().take_while(|id| cached(id.name())).count()
 }
 
-/// Loop frames the browser build keeps decoded at once — "the last fifteen minutes", which at a
-/// severe-weather VCP is four volumes. A wasm heap is 32-bit and a decoded volume is tens of MB,
-/// so this is a memory budget as much as a time window.
-const WEB_LOOP_WINDOW: usize = 4;
+/// Upper bound for browser live replay. The current scan's measured gate payload and the web
+/// budget still decide which choices are available; small scans can use the full frame catalog.
+const WEB_LOOP_WINDOW: usize = 250;
+/// Desktop's largest selectable loop, plus two slots below for the head and an in-flight scan.
+/// The separate encoded-payload budget still evicts large scans before this count is reached.
+pub const NATIVE_LOOP_WINDOW: usize = 250;
+pub const NATIVE_SCAN_CACHE_CAPACITY: usize = NATIVE_LOOP_WINDOW + 2;
+
+fn web_loop_window_for_bytes(scan_bytes: usize, budget: usize) -> usize {
+    if scan_bytes == 0 { return 4; } // no measured scan yet
+    // Never regress the established four-frame loop for a large volume. The payload budget is
+    // soft, and the memory trimmer still evicts unpinned scans when a site exceeds it.
+    (budget / scan_bytes).saturating_sub(2).clamp(4, WEB_LOOP_WINDOW)
+}
 
 enum DataMsg {
     ListingFailed { view: usize, site: String, date: NaiveDate },
@@ -2395,6 +2703,7 @@ enum DataMsg {
         name: String,
         time: DateTime<Utc>,
         scan: Scan,
+        tdwr_revision: Option<String>,
     },
     /// A live radial-block update (merged full volume) from the chunk streamer.
     Live {
@@ -2563,6 +2872,10 @@ struct Goto {
     moment: Option<Moment>,
     tilt: Option<usize>,
     basemap: Option<String>,
+    /// Omitted in old links, so those preserve the recipient's current camera orientation.
+    globe: Option<bool>,
+    pitch_deg: Option<f64>,
+    bearing_deg: Option<f64>,
     /// Outer `None`: the link said nothing about the threshold, so the viewer keeps its own.
     /// Inner `None`: the link said `thr:off`, which turns the threshold off on purpose.
     threshold: Option<Option<f32>>,
@@ -2570,7 +2883,8 @@ struct Goto {
 }
 
 /// Parse `[hookecho://goto/]SITE[,lon,lat,zoom][,extra…]`, where each extra is an RFC3339 time, a
-/// moment code (`VEL`), a tilt index, a basemap (`bm:dark`), a threshold (`thr:25` / `thr:off`)
+/// moment code (`VEL`), a tilt index, a basemap (`bm:dark`), camera orientation
+/// (`proj:merc`, `pitch:42`, `brg:90`), a threshold (`thr:25` / `thr:off`)
 /// or the literal `srv` — sniffed by shape, so their order does not matter. A bare `SITE` flies to the site itself; the site may be
 /// empty when lon/lat are given.
 fn parse_goto(v: &str) -> Option<Goto> {
@@ -2593,6 +2907,9 @@ fn parse_goto(v: &str) -> Option<Goto> {
             moment: None,
             tilt: None,
             basemap: None,
+            globe: None,
+            pitch_deg: None,
+            bearing_deg: None,
             threshold: None,
             srv: false,
         }
@@ -2605,8 +2922,18 @@ fn parse_goto(v: &str) -> Option<Goto> {
         ) else {
             return None;
         };
+        let requested_site = site.to_ascii_uppercase();
+        let site = if requested_site.is_empty()
+            || wxdata::sites::site_by_id(&requested_site).is_some()
+        {
+            requested_site
+        } else {
+            let nearest = crate::geo::nearest_site_id(lon, lat).unwrap_or_default();
+            log::warn!("goto: unknown radar site {requested_site:?}; using nearest {nearest:?}");
+            nearest
+        };
         Goto {
-            site: site.to_string(),
+            site,
             lon,
             lat,
             zoom,
@@ -2614,6 +2941,9 @@ fn parse_goto(v: &str) -> Option<Goto> {
             moment: None,
             tilt: None,
             basemap: None,
+            globe: None,
+            pitch_deg: None,
+            bearing_deg: None,
             threshold: None,
             srv: false,
         }
@@ -2627,6 +2957,12 @@ fn parse_goto(v: &str) -> Option<Goto> {
             g.tilt = Some(i);
         } else if let Some(slug) = s.strip_prefix("bm:") {
             g.basemap = Some(slug.to_string());
+        } else if let Some(projection) = s.strip_prefix("proj:") {
+            g.globe = match projection { "globe" => Some(true), "merc" => Some(false), _ => None };
+        } else if let Some(value) = s.strip_prefix("pitch:") {
+            g.pitch_deg = value.parse::<f64>().ok().filter(|v| v.is_finite());
+        } else if let Some(value) = s.strip_prefix("brg:") {
+            g.bearing_deg = value.parse::<f64>().ok().filter(|v| v.is_finite());
         } else if let Some(t) = s.strip_prefix("thr:") {
             // The value is in the moment's own unit, which is what the slider stores: dBZ for
             // reflectivity, m/s for velocity. Not the display unit — a link must mean the same
@@ -2676,8 +3012,11 @@ fn goto_link(g: &Goto) -> String {
         .map(|v| format!(",thr:{v}"))
         .unwrap_or_default();
     let basemap = g.basemap.as_ref().map(|s| format!(",bm:{s}")).unwrap_or_default();
+    let projection = g.globe.map(|globe| if globe { ",proj:globe" } else { ",proj:merc" }).unwrap_or("");
+    let pitch = g.pitch_deg.map(|v| format!(",pitch:{v:.1}")).unwrap_or_default();
+    let bearing = g.bearing_deg.map(|v| format!(",brg:{v:.1}")).unwrap_or_default();
     let srv = if g.srv { ",srv" } else { "" };
-    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}{thr}{basemap}{srv}");
+    let body = format!("{site},{lon:.4},{lat:.4},{zoom:.1}{t}{m}{z}{thr}{basemap}{projection}{pitch}{bearing}{srv}");
     #[cfg(target_arch = "wasm32")]
     {
         let origin = web_sys::window()
@@ -2822,6 +3161,30 @@ impl RecoverySnapshot {
 }
 
 type MarkerGeocodeResult = Result<Vec<(String, String, f64, f64)>, String>;
+type GeocodeReply = (u64, Result<(String, f64, f64), String>);
+type IpGeoReply = ((f64, f64), (f64, f64), f64, Option<String>);
+type NdfdProbeReply = Result<(Option<f64>, &'static str, &'static str, chrono::DateTime<Utc>, f64, f64), String>;
+
+/// A place lookup may take seconds. Apply its answer only to the pane and map state that
+/// requested it; a later pane switch, pan, zoom or site change is a newer navigation intent.
+struct GeocodeNavigation {
+    request_id: u64,
+    view_index: usize,
+    camera: crate::render::mercator::Camera,
+    site: Option<String>,
+}
+
+impl GeocodeNavigation {
+    fn still_current(&self, active: usize, view: &crate::view::MapView) -> bool {
+        self.view_index == active
+            && self.camera.center == view.camera.center
+            && self.camera.zoom == view.camera.zoom
+            && self.camera.globe == view.camera.globe
+            && self.camera.pitch_deg == view.camera.pitch_deg
+            && self.camera.bearing_deg == view.camera.bearing_deg
+            && self.site == view.site
+    }
+}
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct PaneSession {
@@ -2993,6 +3356,7 @@ pub struct HookEchoApp {
     _rt: Runtime,
     spawner: crate::rt::Spawner,
     tiles: TileManager,
+    ndfd_legends: ui::ndfd_legend::NdfdLegends,
     vtiles: crate::vector_tiles::VectorTileManager,
     pane_vtiles: Vec<crate::vector_tiles::VectorTileManager>,
     /// One shared label-occupancy pass for the whole frame — see [`crate::labelplace`].
@@ -3001,6 +3365,9 @@ pub struct HookEchoApp {
     saved: Settings,
     views: Vec<MapView>,
     active: usize,
+    /// Exact map rectangles from the last central-panel paint, used to label every pane in
+    /// exported comparison images without guessing around the analyst docks.
+    pane_bounds: Vec<egui::Rect>,
     msg_rx: Receiver<DataMsg>,
     msg_tx: Sender<DataMsg>,
     /// Geocode results for the marker window's address search: `(label, lat, lon)` or an error.
@@ -3011,15 +3378,15 @@ pub struct HookEchoApp {
     update_chip_hidden: bool,
     update_tx: Sender<ui::about_window::UpdateState>,
     update_rx: Receiver<ui::about_window::UpdateState>,
-    geocode_tx: Sender<Result<(String, f64, f64), String>>,
-    geocode_rx: Receiver<Result<(String, f64, f64), String>>,
+    geocode_tx: Sender<GeocodeReply>,
+    geocode_rx: Receiver<GeocodeReply>,
     marker_geocode_tx: Sender<MarkerGeocodeResult>,
     marker_geocode_rx: Receiver<MarkerGeocodeResult>,
-    /// `(lon, lat)` from the hosting edge's own geo-IP (browser build only), used once at boot to
-    /// open on the nearest radar. Never fed on native, where the saved view is the answer.
+    /// Edge geo-IP and the camera/site at request time. Apply only while the user still has
+    /// that initial view; never fed on native, where the saved view is the answer.
     #[cfg(target_arch = "wasm32")]
-    ipgeo_tx: Sender<(f64, f64)>,
-    ipgeo_rx: Receiver<(f64, f64)>,
+    ipgeo_tx: Sender<IpGeoReply>,
+    ipgeo_rx: Receiver<IpGeoReply>,
     /// In-progress offline chase-pack tile download (basemap pre-cache for the current view).
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
@@ -3130,13 +3497,19 @@ pub struct HookEchoApp {
     arch_lsr_shown: Option<i64>,
     /// One slot per SPC outlook day, 1..=8 (Days 4–8 are the experimental probability layer).
     outlook_features: [Vec<GeoFeature>; 8],
+    fire_weather_features: Vec<GeoFeature>,
+    cpc_features: Vec<GeoFeature>,
     md_features: Vec<GeoFeature>,
     /// Watch boxes in effect, one feature per county row the service returns.
     watch_features: Vec<GeoFeature>,
     /// Winter Storm Severity Index polygons for the selected day.
     wssi_features: Vec<GeoFeature>,
+    winter_snow_features: Vec<GeoFeature>,
+    winter_ice_features: Vec<GeoFeature>,
     /// Excessive Rainfall Outlook polygons for the selected day.
     ero_features: Vec<GeoFeature>,
+    ero_loaded: Option<(u8, Option<String>)>,
+    ero_issues: Vec<wxdata::ero::ArchiveIssue>,
     /// Crowd precipitation-type reports (mPING), and their fetch clock.
     show_mping: bool,
     mping_reports: Vec<wxdata::mping::Report>,
@@ -3260,6 +3633,7 @@ pub struct HookEchoApp {
     tool: MapTool,
     /// Measure-tool clicked endpoints in `[lon, lat]` (max 2).
     measure: Vec<[f64; 2]>,
+    manual_storm_track: ManualStormTrack,
     /// Opposite corners and cached native-value statistics for the selected registered field.
     region_points: Vec<[f64; 2]>,
     region_analysis: Option<RegionAnalysis>,
@@ -3270,12 +3644,19 @@ pub struct HookEchoApp {
     /// Freehand annotation strokes, in lon/lat so they stick to the ground through pan and zoom.
     /// Session-only by design: this is for pointing at a storm on a stream, not a saved document.
     strokes: Vec<Stroke2d>,
+    draw_eraser: bool,
+    draw_erase_last: Option<(f32, f32)>,
+    draw_undo: Vec<Vec<Stroke2d>>,
+    draw_redo: Vec<Vec<Stroke2d>>,
+    draw_gesture_active: bool,
     /// Clicked start/waypoints/destination and provider-returned road alternatives.
     route_waypoints: Vec<[f64; 2]>,
     routes: Vec<wxdata::route::Route>,
     route_rx: Option<std::sync::mpsc::Receiver<Result<Vec<wxdata::route::Route>, String>>>,
     /// The colour the next stroke gets.
     draw_color: egui::Color32,
+    /// Screen-space width of the next annotation stroke.
+    draw_width: f32,
     marker_window: ui::marker_window::MarkerWindow,
     event_window: ui::event_window::EventWindow,
     chase_replay: ui::chase_replay::ChaseReplay,
@@ -3349,8 +3730,8 @@ pub struct HookEchoApp {
     snapshot_push: Option<String>,
     /// Per-location cooldown for the rotation-near-a-watched-place alert.
     rotation_alerted: std::collections::HashMap<String, Instant>,
-    /// Volume start time of the last new-scan chime (see `scan_chime`).
-    last_chime: Option<chrono::DateTime<Utc>>,
+    /// Site and volume start time of the last new-scan chime (see `scan_chime`).
+    last_chime: Option<(String, chrono::DateTime<Utc>)>,
     /// Pushes held back by quiet hours, replayed as one summary when the window ends.
     ///
     /// A `Mutex` because `notify_alert` takes `&self` (ten call sites); a lock beats threading
@@ -3368,7 +3749,16 @@ pub struct HookEchoApp {
     /// A capture waiting on the share-card footer to be on screen: the destination, and how many
     /// more frames to draw the footer before asking for the image (see `share_card_footer`).
     share_card: Option<(ShotDest, u8)>,
+    /// The web renderer fulfills screenshot commands one frame later; retain the footer until
+    /// the Screenshot event arrives rather than removing it in the command frame.
+    share_card_capture_frames: u8,
     loop_export: Option<LoopExport>,
+    #[cfg(target_arch = "wasm32")]
+    video_export_tx: Sender<Result<String, String>>,
+    #[cfg(target_arch = "wasm32")]
+    video_export_rx: Receiver<Result<String, String>>,
+    #[cfg(target_arch = "wasm32")]
+    video_export_pending: bool,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
     /// When true, all panes follow the active pane's valid time.
@@ -3387,6 +3777,7 @@ pub struct HookEchoApp {
     /// National gridded field layers (MRMS mosaic, rotation, MESH, AzShear, lightning), each with
     /// its own toggle + pending GPU upload + refresh throttle. Keyed by [`crate::render::FieldLayer`].
     fields: std::collections::HashMap<crate::render::FieldLayer, FieldState>,
+    mrms_loops: Vec<MrmsLoop>,
     pane_fields: std::collections::HashMap<(usize, crate::render::FieldLayer), FieldState>,
     /// Selected rotation-track accumulation window (minutes): 30, 60, or 120.
     rotation_minutes: u16,
@@ -3396,6 +3787,8 @@ pub struct HookEchoApp {
     reflectivity_trail_threshold: f32,
     /// Selected hail-swath accumulation window (minutes); see [`wxdata::mrms::hail_swath`].
     hail_minutes: u16,
+    /// Minimum estimated MESH hail size to display, in whole inches; zero shows the full swath.
+    hail_threshold_inches: u8,
     /// Environment suite (HRRR CAPE/SRH): CAPE uses the mixed-layer (90-0 mb) parcel when true,
     /// else surface-based; SRH depth in km (1 = 0-1 km, 3 = 0-3 km). Changing either clears the
     /// layer's last_fetch so the next frame refetches.
@@ -3404,9 +3797,6 @@ pub struct HookEchoApp {
     /// Where the environment fields and contours come from: the HRRR forecast, or the RAP f00
     /// analysis (13 km, observation-assimilated — "mesoanalysis"). Changing it refetches both.
     env_model: wxdata::hrrr::Model,
-    /// The site the L3 gridded products (DVL/EET) were last fetched for (feature X); refetch on
-    /// site change.
-    l3grid_site: Option<String>,
     /// What the locally derived products (VIL/VILD/echo tops) were last computed from:
     /// `(volume name, echo-top threshold, enabled-layer mask, melting level)`. Any of them moving
     /// recomputes.
@@ -3500,11 +3890,18 @@ pub struct HookEchoApp {
     afd_error: Option<String>,
     afd_busy: bool,
     afd_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::afd::Afd, String>>>,
+    cpc_discussion: ui::cpc_discussion_window::CpcDiscussionWindow,
+    cpc_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::cpc::Discussion, String>>>,
+    fire_weather_discussion: ui::fire_weather_discussion_window::FireWeatherDiscussionWindow,
+    fire_weather_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::fire_weather::Discussion, String>>>,
+    ero_discussion: ui::ero_discussion_window::EroDiscussionWindow,
+    ero_discussion_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::ero::Discussion, String>>>,
     /// NHC public advisory / forecast discussion reader.
     tropical_window: ui::tropical_window::TropicalWindow,
     tropical_text_rx: Option<std::sync::mpsc::Receiver<Result<wxdata::tropical::Advisory, String>>>,
     /// Range rings + azimuth spokes around the active site (feature HH).
     show_range_rings: bool,
+    show_scan_boundary: bool,
     /// Optional live-scan azimuth age ring in the analyst workbench.
     show_scan_progress: bool,
     /// Draw all NEXRAD radar sites on the map; clicking one switches the pane to that radar.
@@ -3554,9 +3951,9 @@ pub struct HookEchoApp {
     /// After a search flies somewhere, the offer to keep it: `(name, lat, lon, when)`. Searching is
     /// how you look around, so dropping a pin every time would litter the map — this asks first.
     save_offer: Option<(String, f64, f64, Instant)>,
-    /// True while the in-flight geocode came from the search pill (navigate only) rather than
-    /// the marker window (which adds a marker).
-    geocode_nav: bool,
+    /// The newest pending place-navigation lookup. Older replies must never move the map.
+    geocode_nav: Option<GeocodeNavigation>,
+    geocode_request_next: u64,
     /// Layer manager window (per-placefile enable/order/opacity).
     layer_window_open: bool,
     /// Placefile icon-sheet textures by URL. `None` = fetch in flight or failed (negative-cached
@@ -3582,9 +3979,13 @@ pub struct HookEchoApp {
     show_spotters: bool,
     /// FAA WeatherCams: the toggle, the sites in view, and the bbox//time they were fetched for.
     show_webcams: bool,
+    /// Public fixed-camera stream list for the current map view.
+    show_stream_dashboard: bool,
+    stream_inside_warnings: bool,
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
     webcam_last_fetch: Option<Instant>,
+    webcam_detail_last_fetch: Option<Instant>,
     /// WFIGS wildfires: perimeters (tessellated with the other overlay polygons), incident points,
     /// and the bbox/clock they were fetched for.
     show_fires: bool,
@@ -3606,6 +4007,8 @@ pub struct HookEchoApp {
     station_last_regional: Option<bool>,
     ppef_last_fetch: Option<Instant>,
     dotcam_bounds: Option<(f64, f64, f64, f64)>,
+    dotcam_last_fetch: Option<Instant>,
+    dotcam_detail_last_fetch: Option<Instant>,
     /// NOAA Weather Radio: the running player (dropping it stops playback) and the relay picked
     /// in the drawer.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3625,6 +4028,8 @@ pub struct HookEchoApp {
     mosaic_bounds: Option<(f64, f64, f64, f64)>,
     spotters: Vec<wxdata::spotters::Spotter>,
     spotters_last_fetch: Option<Instant>,
+    radar_site_status: Option<wxdata::radar_status::Report>,
+    radar_site_status_last_fetch: Option<Instant>,
     /// Sensor dashboard: open flag, latest fetch (Ok/Err), the site it's for, and a refresh clock.
     show_sensors: bool,
     sensor_data: Option<Result<wxdata::obs::StationObs, String>>,
@@ -3657,6 +4062,9 @@ pub struct HookEchoApp {
         (i32, i32),
         std::sync::mpsc::Receiver<Result<wxdata::forecast::PointForecast, String>>,
     )>,
+    /// NOAA raster-point value for an interrogated NDFD map pixel. Replacing the receiver on a
+    /// second tap drops any older reply, so a slow first request cannot overwrite the new point.
+    ndfd_probe_rx: Option<std::sync::mpsc::Receiver<NdfdProbeReply>>,
     forecast_cache:
         std::collections::HashMap<(i32, i32), (Instant, wxdata::forecast::PointForecast)>,
     /// Current conditions for the same tapped point, fetched beside the forecast and cached the
@@ -3882,6 +4290,23 @@ fn analysis_station_bbox(lon: f64, lat: f64) -> (f64, f64, f64, f64) {
     (lat - dlat, lon - dlon, lat + dlat, lon + dlon)
 }
 
+/// Consume a live volume once per site and start time. Changing stations establishes a new
+/// baseline without sounding an alert for the scan that the user explicitly requested.
+fn advance_scan_chime(
+    last: &mut Option<(String, chrono::DateTime<Utc>)>,
+    site: &str,
+    time: chrono::DateTime<Utc>,
+) -> bool {
+    let sound = matches!(last, Some((previous_site, previous_time))
+        if previous_site == site && time > *previous_time);
+    if last.as_ref().is_none_or(|(previous_site, previous_time)|
+        previous_site != site || time > *previous_time)
+    {
+        *last = Some((site.to_owned(), time));
+    }
+    sound
+}
+
 impl HookEchoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Inter in front, Phosphor's icon glyphs behind it (the mobile chrome draws line icons
@@ -3993,14 +4418,14 @@ impl HookEchoApp {
         // actually afford (see ANDROID_LOOP_WINDOW) plus the head and the frame in flight —
         // enough that a loop stops re-downloading itself on every wrap, without the ~900 MB RSS
         // that holding a full desktop-sized window cost.
-        // The browser gets the same treatment for the same reason, only harder: a wasm heap is
-        // 32-bit, so thirty decoded volumes is not a large cache there, it is an out-of-memory.
+        // The browser reserves room for its adaptive loop ceiling plus displayed/in-flight scans;
+        // the separate payload budget limits encoded gates, though total 32-bit heap use is higher.
         let scan_cache_cap = if cfg!(target_os = "android") {
             ANDROID_LOOP_WINDOW + 2
         } else if cfg!(target_arch = "wasm32") {
             WEB_LOOP_WINDOW + 4
         } else {
-            30
+            NATIVE_SCAN_CACHE_CAPACITY
         };
         // The alert overlay from the last run, minus anything that has expired since. Also seeds
         // the known-warning ids, so a restart during an event doesn't re-banner and re-speak
@@ -4058,6 +4483,8 @@ impl HookEchoApp {
         #[cfg(not(target_arch = "wasm32"))]
         vtiles.ensure_template();
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
+        #[cfg(target_arch = "wasm32")]
+        let (video_export_tx, video_export_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         // Loaded off the launch path: the snapshot is a few MB of JSON, and parsing it before
         // the first paint bought nothing — it is applied as `OverlayMsg::AlertSeed`, and dropped
@@ -4076,7 +4503,7 @@ impl HookEchoApp {
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         let (geocode_tx, geocode_rx) = std::sync::mpsc::channel();
         let (marker_geocode_tx, marker_geocode_rx) = std::sync::mpsc::channel();
-        let (ipgeo_tx, ipgeo_rx) = std::sync::mpsc::channel::<(f64, f64)>();
+        let (ipgeo_tx, ipgeo_rx) = std::sync::mpsc::channel();
         #[cfg(not(target_arch = "wasm32"))]
         drop(ipgeo_tx); // native never asks; the receiver just stays empty
         let (pf_icon_tx, pf_icon_rx) = std::sync::mpsc::channel();
@@ -4102,6 +4529,8 @@ impl HookEchoApp {
                     center: (sv.x, sv.y),
                     zoom: sv.zoom,
                     globe: false,
+            pitch_deg: 0.0,
+            bearing_deg: 0.0,
                 },
             ),
             _ => {
@@ -4132,10 +4561,12 @@ impl HookEchoApp {
             #[cfg(not(target_arch = "wasm32"))]
             _rt: rt,
             tiles,
+            ndfd_legends: Default::default(),
             saved: settings.clone(),
             settings,
             views: vec![view],
             active: 0,
+            pane_bounds: Vec::new(),
             msg_rx,
             msg_tx,
             about_open: false,
@@ -4218,10 +4649,16 @@ impl HookEchoApp {
             arch_lsr_inflight: None,
             arch_lsr_shown: None,
             outlook_features: std::array::from_fn(|_| Vec::new()),
+            fire_weather_features: Vec::new(),
+            cpc_features: Vec::new(),
             md_features: Vec::new(),
             watch_features: Vec::new(),
             wssi_features: Vec::new(),
+            winter_snow_features: Vec::new(),
+            winter_ice_features: Vec::new(),
             ero_features: Vec::new(),
+            ero_loaded: None,
+            ero_issues: Vec::new(),
             show_mping: false,
             mping_reports: Vec::new(),
             mping_last_fetch: None,
@@ -4291,6 +4728,7 @@ impl HookEchoApp {
             last_viewport: (1000.0, 800.0),
             tool: MapTool::default(),
             measure: Vec::new(),
+            manual_storm_track: ManualStormTrack::default(),
             region_points: Vec::new(),
             region_analysis: None,
             radar_scatter: None,
@@ -4298,10 +4736,16 @@ impl HookEchoApp {
             detector_history: std::collections::VecDeque::new(),
             detector_history_key: None,
             strokes: Vec::new(),
+            draw_eraser: false,
+            draw_erase_last: None,
+            draw_undo: Vec::new(),
+            draw_redo: Vec::new(),
+            draw_gesture_active: false,
             route_waypoints: Vec::new(),
             routes: Vec::new(),
             route_rx: None,
             draw_color: DRAW_COLORS[0],
+            draw_width: 6.0,
             marker_window: Default::default(),
             event_window: Default::default(),
             chase_replay: Default::default(),
@@ -4352,7 +4796,14 @@ impl HookEchoApp {
             was_quiet: false,
             screenshot_pending: None,
             share_card: None,
+            share_card_capture_frames: 0,
             loop_export: None,
+            #[cfg(target_arch = "wasm32")]
+            video_export_tx,
+            #[cfg(target_arch = "wasm32")]
+            video_export_rx,
+            #[cfg(target_arch = "wasm32")]
+            video_export_pending: false,
             link_cameras: false,
             link_times: false,
             lock_source_frame: false,
@@ -4370,6 +4821,7 @@ impl HookEchoApp {
             fields: crate::render::FieldLayer::draw_order()
                 .map(|l| (l, FieldState::default()))
                 .collect(),
+            mrms_loops: Vec::new(),
             rotation_minutes: 30,
             reflectivity_trail: wxdata::trail::ExtremaTrail::new(
                 30,
@@ -4381,9 +4833,9 @@ impl HookEchoApp {
             reflectivity_trail_minutes: 30,
             reflectivity_trail_threshold: 35.0,
             hail_minutes: 1440,
+            hail_threshold_inches: 0,
             env_cape_ml: false,
             env_srh_km: 3,
-            l3grid_site: None,
             derived_key: None,
             snow_hours: 24,
             snow_fetched: None,
@@ -4444,9 +4896,16 @@ impl HookEchoApp {
             afd_error: None,
             afd_busy: false,
             afd_rx: None,
+            cpc_discussion: ui::cpc_discussion_window::CpcDiscussionWindow::default(),
+            cpc_discussion_rx: None,
+            fire_weather_discussion: ui::fire_weather_discussion_window::FireWeatherDiscussionWindow::default(),
+            fire_weather_discussion_rx: None,
+            ero_discussion: ui::ero_discussion_window::EroDiscussionWindow::default(),
+            ero_discussion_rx: None,
             tropical_window: ui::tropical_window::TropicalWindow::default(),
             tropical_text_rx: None,
             show_range_rings: false,
+            show_scan_boundary: false,
             show_scan_progress: false,
             show_radar_sites: true,
             show_blockage: false,
@@ -4477,7 +4936,8 @@ impl HookEchoApp {
             place_query: String::new(),
             place_status: None,
             save_offer: None,
-            geocode_nav: false,
+            geocode_nav: None,
+            geocode_request_next: 0,
             layer_window_open: false,
             pf_icon_tex: std::collections::HashMap::new(),
             pf_icon_rx,
@@ -4489,6 +4949,8 @@ impl HookEchoApp {
             last_gesture_end: None,
             show_spotters: false,
             show_webcams: false,
+            show_stream_dashboard: false,
+            stream_inside_warnings: false,
             webcams: Vec::new(),
             show_fires: false,
             fire_perims: Vec::new(),
@@ -4501,6 +4963,7 @@ impl HookEchoApp {
             aqi_last_fetch: None,
             webcam_bounds: None,
             webcam_last_fetch: None,
+            webcam_detail_last_fetch: None,
             show_stations: false,
             stations: Default::default(),
             station_last_poll: None,
@@ -4508,6 +4971,8 @@ impl HookEchoApp {
             station_last_regional: None,
             ppef_last_fetch: None,
             dotcam_bounds: None,
+            dotcam_last_fetch: None,
+            dotcam_detail_last_fetch: None,
             #[cfg(not(target_arch = "wasm32"))]
             nwr: None,
             nwr_pick: String::new(),
@@ -4521,6 +4986,8 @@ impl HookEchoApp {
             mosaic_bounds: None,
             spotters: Vec::new(),
             spotters_last_fetch: None,
+            radar_site_status: None,
+            radar_site_status_last_fetch: None,
             show_sensors: false,
             sensor_data: None,
             sensor_history: Default::default(),
@@ -4542,6 +5009,7 @@ impl HookEchoApp {
             forecast_at: None,
             forecast_state: ui::forecast_window::State::Loading,
             forecast_rx: None,
+            ndfd_probe_rx: None,
             forecast_cache: std::collections::HashMap::new(),
             forecast_obs_rx: None,
             forecast_obs_cache: std::collections::HashMap::new(),
@@ -4639,14 +5107,6 @@ impl HookEchoApp {
             app.rebuild_overlays();
         }
         app.palettes.reload(&app.settings.palette_paths());
-        app.apply_goto_env();
-        app.drain_goto_file();
-        #[cfg(target_arch = "wasm32")]
-        app.apply_goto_hash();
-        #[cfg(target_arch = "wasm32")]
-        if opened_on_default {
-            app.locate_by_ip(&cc.egui_ctx.clone());
-        }
         crate::platform::set_background_alerts(app.settings.background_alerts);
         crate::platform::set_battery_saver(app.settings.battery_saver);
         // The broker is publish-only and reconnects on its own, so it starts here and is never
@@ -4656,11 +5116,6 @@ impl HookEchoApp {
         // Point the speech path at Piper before anything can speak.
         #[cfg(not(target_arch = "wasm32"))]
         crate::speech::set_piper(&app.settings.piper_path, &app.settings.piper_voice);
-        // Not on the web: this is a burst of six fetches, and on the one thread a browser gives
-        // us they queue ahead of the radar the visitor actually came for. The periodic refresh in
-        // `update` picks them up a moment later, once there is radar on screen.
-        #[cfg(not(target_arch = "wasm32"))]
-        app.fetch_overlays(&cc.egui_ctx.clone());
         // The receiver on the dash does not need a click every morning.
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         if app.settings.gps_autoconnect {
@@ -4671,11 +5126,15 @@ impl HookEchoApp {
             .is_some_and(|search| search.trim_start_matches('?').split('&').any(|part| part.split('=').next() == Some("relaunched")));
         #[cfg(not(target_arch = "wasm32"))]
         let graphics_relaunch = false;
+        #[cfg(target_arch = "wasm32")]
+        let mut recovered_session = false;
         if !app.embed && (app.settings.start_view.is_none() || graphics_relaunch) {
             if let Some(json) = crate::recovery::load() {
                 if let Ok(snapshot) = serde_json::from_str::<RecoverySnapshot>(&json) {
                     if snapshot.valid() {
                         app.restore_mode_session(snapshot.session, &cc.egui_ctx);
+                        #[cfg(target_arch = "wasm32")]
+                        { recovered_session = true; }
                         app.analyst_open = snapshot.analyst;
                         for (i, view) in app.views.iter_mut().enumerate() {
                             view.timeline.playing = snapshot.playing.get(i).copied().unwrap_or(false);
@@ -4687,6 +5146,22 @@ impl HookEchoApp {
                 }
             }
         }
+        // Recovery is only a fallback. A user-directed link or pending notification must win
+        // over the saved session; otherwise its camera is restored after the link is applied and
+        // the permalink writer promptly replaces the requested URL with that stale view.
+        app.apply_goto_env();
+        app.drain_goto_file();
+        #[cfg(target_arch = "wasm32")]
+        app.apply_goto_hash();
+        #[cfg(target_arch = "wasm32")]
+        if opened_on_default && !recovered_session {
+            app.locate_by_ip(&cc.egui_ctx.clone());
+        }
+        // Not on the web: this is a burst of six fetches, and on the one thread a browser gives
+        // us they queue ahead of the radar the visitor actually came for. The periodic refresh in
+        // `update` picks them up a moment later, once there is radar on screen.
+        #[cfg(not(target_arch = "wasm32"))]
+        app.fetch_overlays(&cc.egui_ctx.clone());
         app
     }
 
@@ -4723,6 +5198,12 @@ impl HookEchoApp {
             log::warn!("HOOKECHO_GOTO: want SITE[,lon,lat,zoom[,RFC3339|product|tilt]], got {v:?}");
             return;
         };
+        // A point value belongs to the map location and forecast frame where it was requested.
+        // Fragment-only navigation keeps the app alive, so discard that card and any late reply.
+        if self.detail.as_ref().is_some_and(|detail| detail.title == "NDFD point forecast") {
+            self.detail = None;
+        }
+        self.ndfd_probe_rx = None;
         self.firstrun.open = false;
         self.settings.setup_done = true;
         self.goto_view(&g.site, g.lon, g.lat, g.zoom, g.time);
@@ -4735,6 +5216,13 @@ impl HookEchoApp {
         }
         if let Some(slug) = &g.basemap {
             view.basemap = crate::tiles::BasemapStyle::from_slug(slug);
+        }
+        if let Some(globe) = g.globe { view.camera.set_globe(globe); }
+        if g.pitch_deg.is_some() || g.bearing_deg.is_some() {
+            view.camera.set_orientation(
+                g.pitch_deg.unwrap_or(view.camera.pitch_deg),
+                g.bearing_deg.unwrap_or(view.camera.bearing_deg),
+            );
         }
         // After the moment, so `VEL,thr:15` thresholds velocity and not whatever was showing.
         if let Some(t) = g.threshold {
@@ -4792,6 +5280,8 @@ impl HookEchoApp {
         let http = self.http.clone();
         let tx = self.ipgeo_tx.clone();
         let ctx = ctx.clone();
+        let initial_camera = self.views[self.active].camera;
+        let initial_site = self.views[self.active].site.clone();
         self.spawner.spawn(async move {
             // index.html starts this fetch before the wasm has even downloaded, so by now it has
             // almost always landed: the opening site costs no round trip. Falling back to our own
@@ -4809,7 +5299,7 @@ impl HookEchoApp {
                 }
             };
             if let Ok(Some(pos)) = serde_json::from_str::<Option<(f64, f64)>>(&body) {
-                let _ = tx.send(pos);
+                let _ = tx.send((pos, initial_camera.center, initial_camera.zoom, initial_site));
                 ctx.request_repaint();
             }
         });
@@ -5154,9 +5644,9 @@ impl HookEchoApp {
                             let display = registered_display_field(&frame, cap);
                             OverlayMsg::RegisteredField(layer, frame, display)
                         }
-                        OverlayMsg::PaneAbi(pane, layer, frame, _) => {
+                        OverlayMsg::PaneField(pane, layer, frame, _) => {
                             let display = registered_display_field(&frame, cap);
-                            OverlayMsg::PaneAbi(pane, layer, frame, display)
+                            OverlayMsg::PaneField(pane, layer, frame, display)
                         }
                         other => other,
                     })
@@ -5191,11 +5681,17 @@ impl HookEchoApp {
         self.fetch_alerts(ctx);
         self.spawn_overlay(ctx, OverlaySource::Mds);
         self.spawn_overlay(ctx, OverlaySource::Watches);
-        if (1..=3).contains(&self.filters.wssi_day) {
+        if (1..=4).contains(&self.filters.wssi_day) {
             self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
         }
-        if (1..=3).contains(&self.filters.ero_day) {
-            self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
+        for (day, kind) in [
+            (self.filters.winter_snow_day, wxdata::winter_prob::Kind::Snow),
+            (self.filters.winter_ice_day, wxdata::winter_prob::Kind::Ice),
+        ] {
+            if (1..=3).contains(&day) { self.spawn_overlay(ctx, OverlaySource::WinterProb(day, kind)); }
+        }
+        if (1..=5).contains(&self.filters.ero_day) && self.filters.ero_archive.is_none() {
+            self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day, None));
         }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=8).contains(&self.filters.outlook_day) {
@@ -5203,6 +5699,12 @@ impl HookEchoApp {
                 ctx,
                 OverlaySource::Outlook(self.filters.outlook_day, self.outlook_kind_for_day()),
             );
+        }
+        if (1..=8).contains(&self.filters.fire_weather_day) {
+            self.spawn_overlay(ctx, OverlaySource::FireWeather(self.filters.fire_weather_day, self.filters.fire_weather_kind));
+        }
+        if let Some(period) = self.filters.cpc_period {
+            self.spawn_overlay(ctx, OverlaySource::Cpc(period, self.filters.cpc_variable));
         }
         // Storm cells for the active view's site (Level 3 products are per-site). Terminal and
         // DWD radars don't publish the storm-cell algorithms under their four-letter id.
@@ -5503,12 +6005,8 @@ impl HookEchoApp {
         {
             return;
         }
-        let first = self.last_chime.is_none();
-        if self.last_chime.is_some_and(|t| t >= time) {
-            return;
-        }
-        self.last_chime = Some(time);
-        if !first {
+        let Some(site) = self.views[view].site.as_deref() else { return; };
+        if advance_scan_chime(&mut self.last_chime, site, time) {
             self.play_alert(&self.settings.scan_sound.clone());
         }
     }
@@ -6485,6 +6983,7 @@ impl HookEchoApp {
             return false;
         }
         let hit = wxdata::sites::all()
+            .filter(|s| self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)))
             .filter(|s| {
                 let w = crate::render::mercator::lonlat_to_world(
                     s.longitude as f64,
@@ -6580,6 +7079,7 @@ impl HookEchoApp {
             color: [105, 203, 255, 255],
             image: None,
             link: None,
+            stream: None,
         });
     }
 
@@ -6588,6 +7088,13 @@ impl HookEchoApp {
     // ponytail: no yt-dlp sidecar — the browser already plays those better than we would.
     fn watch_stream(&mut self, title: String, url: String) {
         if url.is_empty() {
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if url.split(['?', '#']).next().is_some_and(|path| path.to_ascii_lowercase().ends_with(".m3u8")) {
+            if let Err(e) = crate::platform::open_hls_player(&title, &url) {
+                log::warn!("open browser HLS player failed: {e}");
+            }
             return;
         }
         if ui::video_window::playable_in_app(&url) {
@@ -6829,42 +7336,107 @@ impl HookEchoApp {
             return;
         }
         let times = self.goes[idx].times.clone();
+        let forecast = self.views[idx].basemap.ndfd_layer().is_some();
+        let loop_times = if forecast { times.as_slice() } else {
+            crate::satellite_time::loop_window(&times, Utc::now(), self.goes[idx].hour)
+        };
         let radar = self.views[idx].displayed_time();
-        let selected = self.views[idx].satellite.selected(&times, radar);
+        let frame_interval = Duration::from_secs_f32(
+            1.0 / self.settings.source_animation_speeds.get(if forecast {
+                crate::settings::AnimationSource::Forecasts
+            } else { crate::settings::AnimationSource::Satellite })
+        );
+        if self.goes[idx].playing {
+            if loop_times.len() < 2 || self.goes[idx].imagery_incomplete {
+                self.goes[idx].playing = false;
+            } else {
+                ctx.request_repaint_after(frame_interval);
+                if self.goes[idx].imagery_ready
+                    && self.goes[idx].last_advance.is_none_or(|at| at.elapsed() >= frame_interval)
+                {
+                    let selection = &mut self.views[idx].satellite;
+                    let current = if forecast { selection.selected_forecast(&times, Utc::now()) }
+                        else { selection.selected(&times, radar) };
+                    selection.time = crate::satellite_time::next_loop_frame(loop_times, current);
+                    selection.follow_radar = false;
+                    self.goes[idx].last_advance = Some(Instant::now());
+                }
+            }
+        }
+        let selected = if forecast { self.views[idx].satellite.selected_forecast(&times, Utc::now()) }
+            else { self.views[idx].satellite.selected(&times, radar) };
         let tz = self.active_tz();
-        egui::Area::new(egui::Id::new("goes_time_bar"))
+        let workspace = self.settings.radar_workspace && !chrome::compact(ctx);
+        let forecast_only = forecast && !self.views[idx].show_radar && self.views[idx].fields_on.is_empty();
+        let bottom_offset = if forecast_only {
+            if chrome::compact(ctx) { 78.0 } else { 24.0 }
+        } else if workspace {
+            ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("corner_scrubber_rect")))
+                .map_or(240.0, |rect| (self.chrome_rect.bottom() - rect.top() + 8.0).max(120.0))
+        } else {
+            120.0
+        };
+        let area = egui::Area::new(egui::Id::new("goes_time_bar"))
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -120.0))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -bottom_offset))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    if workspace {
+                        ui.set_max_width((self.chrome_rect.width() - 32.0).clamp(240.0, 480.0));
+                    }
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(if self.goes[idx].imagery_ready {
-                            "🛰 GOES displayed:"
+                        let state = if selected.is_none() && self.goes[idx].rx.is_none() {
+                            "frame unavailable"
+                        } else if self.goes[idx].imagery_ready {
+                            "displayed"
                         } else if self.goes[idx].imagery_incomplete {
-                            "🛰 GOES selected (incomplete):"
+                            "selected (incomplete)"
                         } else {
-                            "🛰 GOES selected (loading):"
-                        });
+                            "selected (loading)"
+                        };
+                        ui.label(format!("{} {state}:", self.views[idx].basemap.label()));
                         let selection = &mut self.views[idx].satellite;
                         if ui
-                            .selectable_label(selection.follow_radar, "Follow radar")
+                            .selectable_label(selection.follow_radar, if forecast { "Auto-follow" } else { "Follow radar" })
                             .clicked()
                         {
+                            self.goes[idx].playing = false;
                             selection.follow_radar = !selection.follow_radar;
                             selection.time = None;
                         }
                         let cur =
                             selected.and_then(|time| times.iter().position(|frame| *frame == time));
                         if ui
+                            .add_enabled(loop_times.len() > 1, egui::Button::new(if self.goes[idx].playing { "Pause" } else { "Play" }))
+                            .clicked()
+                        {
+                            let catalog = &mut self.goes[idx];
+                            catalog.playing = !catalog.playing;
+                            catalog.last_advance = Some(Instant::now());
+                            if catalog.playing {
+                                selection.follow_radar = false;
+                                selection.time = Some(if selected == loop_times.last().copied()
+                                    || !selected.is_some_and(|time| loop_times.contains(&time))
+                                {
+                                    loop_times[0]
+                                } else {
+                                    selected.unwrap()
+                                });
+                                ctx.request_repaint_after(frame_interval);
+                            }
+                        }
+                        if ui
                             .add_enabled(cur.is_some_and(|i| i > 0), egui::Button::new("◀"))
                             .clicked()
                         {
+                            self.goes[idx].playing = false;
                             selection.follow_radar = false;
                             selection.time = cur.map(|i| times[i - 1]);
                         }
                         if let Some(time) = selected {
-                            ui.monospace(crate::timefmt::fmt_clock(time, tz, false));
-                            if let Some(radar) = radar {
+                            ui.monospace(if forecast { time.format("%a %b %-d %HZ").to_string() }
+                                else { crate::timefmt::fmt_clock(time, tz, false) });
+                            if let Some(radar) = radar.filter(|_| !forecast) {
                                 ui.label(format!(
                                     "Δ radar {:+.1}s",
                                     (time - radar).num_milliseconds() as f64 / 1000.0
@@ -6884,17 +7456,19 @@ impl HookEchoApp {
                             )
                             .clicked()
                         {
+                            self.goes[idx].playing = false;
                             selection.follow_radar = false;
                             selection.time = cur.map(|i| times[i + 1]);
                         }
-                        if ui.button("Latest").clicked() {
-                            selection.follow_radar = false;
+                        if ui.button(if forecast { "Jump to next" } else { "Latest" }).clicked() {
+                            self.goes[idx].playing = false;
+                            selection.follow_radar = forecast;
                             selection.time = None;
                         }
                         if ui
                             .checkbox(
                                 &mut self.settings.link_satellite_times,
-                                "Link satellite panes",
+                                if forecast { "Link forecast panes" } else { "Link imagery panes" },
                             )
                             .changed()
                         {
@@ -6903,6 +7477,18 @@ impl HookEchoApp {
                     });
                 });
             });
+        if workspace {
+            // Alerts and their expanded details must reserve the complete transport/imagery
+            // stack. The scrubber overwrites this rect with its own geometry next frame.
+            ctx.data_mut(|d| {
+                let id = egui::Id::new("corner_scrubber_rect");
+                let stack = d.get_temp::<egui::Rect>(id)
+                    .map_or(area.response.rect, |transport| transport.union(area.response.rect));
+                d.insert_temp(id, stack);
+                d.insert_temp(egui::Id::new("workspace_imagery_timebar_pane"), idx);
+            });
+            self.mobile_occlusion.push(area.response.rect);
+        }
     }
 
     fn prepare_satellite_pane(
@@ -6916,6 +7502,9 @@ impl HookEchoApp {
         if self.goes.len() <= idx {
             self.goes.resize_with(idx + 1, Default::default);
         }
+        // Manual frame instants belong to the source that supplied them. Persisting the slug
+        // makes this work across reloads as well as in-session basemap changes.
+        self.views[idx].satellite.bind_source(style.slug());
         let radar = self.views[idx].displayed_time();
         let selection_clock = if self.settings.link_satellite_times { self.views[self.active].displayed_time() } else { radar };
         // An explicit satellite selection must fetch its own archive window.
@@ -6924,7 +7513,9 @@ impl HookEchoApp {
         } else {
             self.views[idx].satellite.time
         };
-        let (hour, from, to) = crate::tiles::goes_window(Utc::now(), clock);
+        let (hour, from, to) = if style.ndfd_layer().is_some() {
+            (None, Utc::now() - chrono::Duration::hours(12), Utc::now() + chrono::Duration::days(8))
+        } else { crate::tiles::goes_window(Utc::now(), clock) };
         let catalog = &mut self.goes[idx];
         let changed = catalog.style != Some(style) || catalog.hour != hour;
         let refresh = catalog.rx.is_none()
@@ -6936,6 +7527,10 @@ impl HookEchoApp {
             catalog.hour = hour;
             if changed {
                 catalog.times.clear();
+                catalog.playing = false;
+                catalog.last_advance = None;
+                catalog.imagery_ready = false;
+                catalog.imagery_incomplete = false;
             }
             catalog.requested_at = Some(wxdata::clock::Instant::now());
             let (tx, rx) = std::sync::mpsc::channel();
@@ -6946,7 +7541,11 @@ impl HookEchoApp {
                 let _ = tx.send(times);
             });
         }
-        self.views[idx].satellite.selected(&catalog.times, selection_clock)
+        if style.ndfd_layer().is_some() {
+            self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
+        } else {
+            self.views[idx].satellite.selected(&catalog.times, selection_clock)
+        }
     }
 
     /// Open the gpsd stream and enter chase mode. Shared by the Chase tab's connect button,
@@ -7377,6 +7976,39 @@ impl HookEchoApp {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
+        });
+    }
+
+    /// Query the same raster point service NOAA's graphical forecast viewer uses. Its WMS
+    /// advertises these layers as non-queryable, so GetFeatureInfo cannot supply this value.
+    fn fetch_ndfd_point(&mut self, ctx: &egui::Context, idx: usize, style: crate::tiles::BasemapStyle, lon: f64, lat: f64) {
+        let Some((element, label, unit)) = style.ndfd_point() else { return; };
+        let Some(region) = style.ndfd_region() else { return; };
+        let Some(valid) = self.goes.get(idx).and_then(|catalog| {
+            self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
+        }) else {
+            self.toast(ToastKind::Info, "Forecast time is still loading".to_string());
+            return;
+        };
+        self.detail = Some(Detail {
+            title: "NDFD point forecast".to_string(),
+            body: format!("{label} · valid {}\n{lat:.4}°, {lon:.4}°\nLoading NOAA point value…", valid.format("%a %b %-d %HZ")),
+            color: [91, 164, 236, 255],
+            image: None,
+            link: Some(("NOAA graphical forecast".to_string(), "https://digital.weather.gov/".to_string())),
+            stream: None,
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ndfd_probe_rx = Some(rx);
+        let http = self.http.clone();
+        let ctx2 = ctx.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::ndfd::fetch_point(&http, lon, lat, valid, region, element)
+                .await
+                .map_err(|error| error.to_string());
+            let result = result.map(|value| (value, label, unit, valid, lon, lat));
+            let _ = tx.send(result);
+            ctx2.request_repaint();
         });
     }
 
@@ -8692,17 +9324,62 @@ impl HookEchoApp {
             // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
             self.outlook_features[0].clear();
         }
+        if actions.fire_weather_changed {
+            self.fire_weather_features.clear();
+            if (1..=8).contains(&self.filters.fire_weather_day) {
+                self.spawn_overlay(ctx, OverlaySource::FireWeather(self.filters.fire_weather_day, self.filters.fire_weather_kind));
+            }
+            if self.fire_weather_discussion.open { self.fetch_fire_weather_discussion(); }
+        }
+        if actions.fire_weather_discussion {
+            self.fire_weather_discussion.open = true;
+            self.fetch_fire_weather_discussion();
+        }
+        if actions.cpc_changed {
+            self.cpc_features.clear();
+            if let Some(period) = self.filters.cpc_period {
+                self.spawn_overlay(ctx, OverlaySource::Cpc(period, self.filters.cpc_variable));
+            }
+            if self.cpc_discussion.open { self.fetch_cpc_discussion(); }
+        }
+        if actions.cpc_discussion {
+            self.cpc_discussion.open = true;
+            self.fetch_cpc_discussion();
+        }
         if actions.ero_day_changed {
             self.ero_features.clear();
-            if (1..=3).contains(&self.filters.ero_day) {
-                self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day));
+            self.ero_loaded = None;
+            if (1..=5).contains(&self.filters.ero_day) {
+                self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day, self.filters.ero_archive.clone()));
+                if self.ero_issues.is_empty() {
+                    self.spawn_overlay(ctx, OverlaySource::EroIssues);
+                }
             }
+            if self.filters.ero_archive.is_some() {
+                self.ero_discussion.open = false;
+            } else if self.ero_discussion.open {
+                self.fetch_ero_discussion();
+            }
+        }
+        if actions.ero_discussion {
+            self.ero_discussion.open = true;
+            self.fetch_ero_discussion();
         }
         if actions.wssi_day_changed {
             // Day switched: the shown polygons belong to the old day until the new ones land.
             self.wssi_features.clear();
-            if (1..=3).contains(&self.filters.wssi_day) {
+            if (1..=4).contains(&self.filters.wssi_day) {
                 self.spawn_overlay(ctx, OverlaySource::Wssi(self.filters.wssi_day));
+            }
+        }
+        if actions.winter_prob_changed {
+            self.winter_snow_features.clear();
+            self.winter_ice_features.clear();
+            for (day, kind) in [
+                (self.filters.winter_snow_day, wxdata::winter_prob::Kind::Snow),
+                (self.filters.winter_ice_day, wxdata::winter_prob::Kind::Ice),
+            ] {
+                if (1..=3).contains(&day) { self.spawn_overlay(ctx, OverlaySource::WinterProb(day, kind)); }
             }
         }
         if actions.overlays_changed {
@@ -9051,6 +9728,9 @@ impl HookEchoApp {
             .as_ref()
             .map(|v| v.elevations.clone())
             .unwrap_or_default();
+        let available_tilts = self.views[self.active].volume.as_ref()
+            .map(|v| v.available_tilts(moment))
+            .unwrap_or_default();
         let site = self.views[self.active]
             .site
             .clone()
@@ -9063,6 +9743,7 @@ impl HookEchoApp {
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
         let mut srv_from_cells = false;
         let mut dealias = self.settings.dealias_velocity;
+        let mut full_coverage = self.settings.full_coverage_radar;
         let mut precip_tint = self.settings.precip_tint;
         let mut srv_on = srv;
         let mi = moment.index();
@@ -9176,6 +9857,7 @@ impl HookEchoApp {
                         .width(78.0)
                         .show_ui(ui, |ui| {
                             for (i, angle) in elevations.iter().enumerate() {
+                                if !available_tilts.contains(&i) { continue; }
                                 if ui
                                     .selectable_label(i == tilt, format!("{angle:.1}\u{b0}"))
                                     .clicked()
@@ -9195,6 +9877,10 @@ impl HookEchoApp {
                 egui::CollapsingHeader::new("Product settings")
                     .default_open(false)
                     .show(ui, |ui| {
+                        ui.add_enabled_ui(wxdata::sites::is_nexrad(&site), |ui| {
+                            ui.checkbox(&mut full_coverage, "Full coverage radar")
+                                .on_hover_text("Show every available NEXRAD gate. Off displays the standard 230 km radius; source data stays loaded.");
+                        });
                         if moment == wxdata::level2::Moment::Reflectivity {
                             ui.checkbox(&mut precip_tint, "Tint by precipitation type")
                                 .on_hover_text(
@@ -9274,9 +9960,14 @@ impl HookEchoApp {
         if let Some(i) = pick_tilt {
             self.views[self.active].tilt = i;
             self.views[self.active].follow_low_cut = false;
+            self.views[self.active].error = None;
         }
         if self.settings.precip_tint != precip_tint {
             self.settings.precip_tint = precip_tint;
+            self.settings.save();
+        }
+        if self.settings.full_coverage_radar != full_coverage {
+            self.settings.full_coverage_radar = full_coverage;
             self.settings.save();
         }
         self.settings.dealias_velocity = dealias;
@@ -9470,8 +10161,19 @@ impl HookEchoApp {
         let set = &mut self.views[self.active].fields_on;
         if on {
             set.insert(layer);
+            if let crate::render::FieldLayer::MrmsCatalog(index) = layer {
+                if wxdata::mrms::CATALOG.get(index as usize).is_some_and(|entry| {
+                    matches!(entry.product.split_once('/').map(|(region, _)| region),
+                        Some("ALASKA" | "HAWAII" | "GUAM" | "CARIB"))
+                }) {
+                    self.fields.entry(layer).or_default().last_fetch = None;
+                }
+            }
         } else {
             set.remove(&layer);
+            if !self.views.iter().any(|view| !view.show_radar && view.fields_on.contains(&layer)) {
+                self.mrms_loops.retain(|loop_state| loop_state.layer != layer);
+            }
         }
     }
 
@@ -9495,6 +10197,7 @@ impl HookEchoApp {
             T::Aviation => &mut self.show_aviation,
             T::Tfr => &mut self.show_tfr,
             T::RangeRings => &mut self.show_range_rings,
+            T::ScanBoundary => &mut self.show_scan_boundary,
             T::Fronts => &mut self.show_fronts,
             T::GlmLightning => &mut self.show_glm,
             T::Strikes => &mut self.show_strikes,
@@ -9541,6 +10244,7 @@ impl HookEchoApp {
                 let v = &mut self.views[self.active];
                 v.moment = m;
                 v.custom_product = None;
+                v.clamp_tilt_to_moment();
                 if m == Moment::Velocity {
                     v.srv = srv;
                 }
@@ -9591,6 +10295,19 @@ impl HookEchoApp {
                 self.drawer.show_search();
                 ctx.data_mut(|d| {
                     d.insert_temp(egui::Id::new("panel_settings_page"), Some("Map settings"));
+                    d.insert_temp(egui::Id::new("context_all_controls"), false);
+                });
+            }
+            PaletteAction::OpenSpotterSettings => {
+                self.show_spotters = true;
+                self.panel_open = true;
+                self.show_alert_panel = false;
+                self.sidebar_focus_search = false;
+                self.layers_query.clear();
+                self.panel_section = PanelSection::Tools;
+                self.drawer.show_search();
+                ctx.data_mut(|d| {
+                    d.insert_temp(egui::Id::new("panel_settings_page"), Some("Spotters"));
                     d.insert_temp(egui::Id::new("context_all_controls"), false);
                 });
             }
@@ -9688,6 +10405,9 @@ impl HookEchoApp {
                     moment: Some(v.moment),
                     tilt: Some(v.tilt),
                     basemap: Some(v.basemap.slug().to_string()),
+                    globe: Some(v.camera.globe),
+                    pitch_deg: Some(v.camera.pitch_deg),
+                    bearing_deg: Some(v.camera.bearing_deg),
                     threshold: v.threshold_enabled[v.moment.index()]
                         .then(|| v.thresholds[v.moment.index()]),
                     srv: v.srv,
@@ -9759,6 +10479,10 @@ impl HookEchoApp {
                 W::Palettes => self.palette_editor.open = true,
                 W::Events => self.event_window.open = true,
                 W::ChaseReplay => self.chase_replay.open = true,
+                W::PublicStreams => {
+                    self.show_stream_dashboard = true;
+                    self.dotcam_last_fetch = None;
+                }
                 W::Digest => {
                     self.digest_window.open = true;
                     self.generate_digest();
@@ -9837,9 +10561,10 @@ impl HookEchoApp {
                     result,
                 } => {
                     let data_time = match &result {
-                        Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneAbi(_, _, frame, _)) => {
+                        Ok(OverlayMsg::RegisteredField(_, frame, _)) | Ok(OverlayMsg::PaneField(_, _, frame, _)) => {
                             Some(frame.stamp.valid_time)
                         }
+                        Ok(OverlayMsg::MrmsHistory(_, _, frames)) => frames.last().map(|frame| frame.stamp.valid_time),
                         _ => None,
                     };
                     let current = self
@@ -9849,7 +10574,7 @@ impl HookEchoApp {
                         .finish(
                             &lane,
                             generation,
-                            result.as_ref().err().map(|e| e.as_str()),
+                            overlay_result_error(&result),
                             data_time,
                         );
                     if !current {
@@ -9859,6 +10584,17 @@ impl HookEchoApp {
                     match result {
                         Ok(msg) => msg,
                         Err(err) => {
+                            if let RequestLane::Field(layer) = &lane {
+                                if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == *layer) {
+                                    loop_state.error = Some(err.clone());
+                                    loop_state.loading = false;
+                                    let forward = loop_state.follow_from.take().is_some();
+                                    let backward = loop_state.backward_from.take().is_some();
+                                    if forward || backward {
+                                        loop_state.playing = false;
+                                    }
+                                }
+                            }
                             note_feed_error(lane.label(), err);
                             continue;
                         }
@@ -9889,20 +10625,39 @@ impl HookEchoApp {
                 OverlayMsg::Mping(r) => self.mping_reports = r,
                 OverlayMsg::Pireps(p) => self.pireps = p,
                 OverlayMsg::Recon(o) => self.recon = o,
-                OverlayMsg::Ero(day, f) => {
-                    if day == self.filters.ero_day {
+                OverlayMsg::Ero(day, key, f) => {
+                    if day == self.filters.ero_day && key == self.filters.ero_archive {
+                        self.ero_loaded = Some((day, key));
                         self.ero_features = f;
                     }
                 }
+                OverlayMsg::EroIssues(issues) => self.ero_issues = issues,
                 OverlayMsg::Wssi(day, f) => {
                     // A day change in flight must not overwrite the day now selected.
                     if day == self.filters.wssi_day {
                         self.wssi_features = f;
                     }
                 }
+                OverlayMsg::WinterProb(day, kind, features) => {
+                    match kind {
+                        wxdata::winter_prob::Kind::Snow if day == self.filters.winter_snow_day => self.winter_snow_features = features,
+                        wxdata::winter_prob::Kind::Ice if day == self.filters.winter_ice_day => self.winter_ice_features = features,
+                        _ => {},
+                    }
+                }
                 OverlayMsg::Outlook(day, f) => {
                     if (1..=3).contains(&day) {
                         self.outlook_features[(day - 1) as usize] = f;
+                    }
+                }
+                OverlayMsg::FireWeather(day, kind, f) => {
+                    if day == self.filters.fire_weather_day && kind == self.filters.fire_weather_kind {
+                        self.fire_weather_features = f;
+                    }
+                }
+                OverlayMsg::Cpc(period, variable, f) => {
+                    if self.filters.cpc_period == Some(period) && self.filters.cpc_variable == variable {
+                        self.cpc_features = f;
                     }
                 }
                 OverlayMsg::Cells(site, cells) => {
@@ -10026,7 +10781,42 @@ impl HookEchoApp {
                         s.frame = Some(frame);
                     }
                 }
-                OverlayMsg::PaneAbi(pane, layer, frame, display) => {
+                OverlayMsg::MrmsHistory(layer, at, frames) => {
+                    if frames.is_empty() || !self.views.iter().any(|view|
+                        !view.show_radar && view.fields_on.contains(&layer)) { continue; }
+                    let prior = self.mrms_loops.iter().find(|old| old.layer == layer);
+                    if prior.is_some_and(|old| old.requested_at != at) { continue; }
+                    let prior_time = prior.and_then(|old| old.frames.get(old.index)).map(|frame| frame.stamp.valid_time);
+                    let was_live = prior.is_none_or(|old| old.index + 1 == old.frames.len());
+                    let playing = prior.is_some_and(|old| old.playing);
+                    let follow_from = prior.and_then(|old| old.follow_from);
+                    let backward_from = prior.and_then(|old| old.backward_from);
+                    let first_newer = follow_from.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time > time));
+                    let last_older = backward_from.and_then(|time| frames.iter().rposition(|frame| frame.stamp.valid_time < time));
+                    let exhausted = (follow_from.is_some() && first_newer.is_none())
+                        || (backward_from.is_some() && last_older.is_none());
+                    let index = if let Some(index) = first_newer.or(last_older) { index } else if was_live { frames.len() - 1 } else {
+                        prior_time.and_then(|time| frames.iter().position(|frame| frame.stamp.valid_time == time))
+                            .unwrap_or(0)
+                    };
+                    let loop_state = MrmsLoop { layer, frames, index, playing: playing && !exhausted,
+                        last_step: Instant::now(), requested_at: at,
+                        follow_through_archive: prior.is_some_and(|old| old.follow_through_archive),
+                        reverse_playback: prior.is_some_and(|old| old.reverse_playback),
+                        follow_from: None,
+                        backward_from: None,
+                        error: exhausted.then(|| if backward_from.is_some() {
+                            "No earlier mosaic in this window. Choose another time."
+                        } else { "No newer mosaic in this window. Choose a later time or return to latest." }.to_owned()),
+                        loading: false };
+                    if let Some(slot) = self.mrms_loops.iter_mut().find(|old| old.layer == layer) {
+                        *slot = loop_state;
+                    } else {
+                        self.mrms_loops.push(loop_state);
+                    }
+                    self.show_mrms_loop_frame(layer);
+                }
+                OverlayMsg::PaneField(pane, layer, frame, display) => {
                     if pane >= self.views.len() || !self.views[pane].fields_on.contains(&layer) { continue; }
                     let upload = self.field_upload(layer, display.as_ref().unwrap_or(frame.field()));
                     let state = self.pane_fields.entry((pane, layer)).or_default();
@@ -10086,6 +10876,7 @@ impl HookEchoApp {
                     self.tfr_pending = remaining;
                 }
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
+                OverlayMsg::RadarSiteStatus(report) => self.radar_site_status = Some(report),
                 OverlayMsg::Fronts(a) => self.fronts = Some(a),
                 OverlayMsg::FreezingLevels(h0, hm20) => {
                     if let Some(site) = self.views[self.active].site.clone() {
@@ -10162,8 +10953,10 @@ impl HookEchoApp {
                 OverlayMsg::Webcams(sites) => {
                     // Drop the cached stills with the list they belonged to. Windy's free-tier
                     // image URLs expire after ten minutes, and a kept texture would otherwise
-                    // show the same frame until the layer was toggled off and on.
-                    self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:"));
+                    // show the same frame until the layer was toggled off and on. Keep the open
+                    // card's image while its metadata refreshes, so the card does not blank.
+                    let open_image = self.detail.as_ref().and_then(|d| d.image.as_deref());
+                    self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:") || open_image == Some(k.as_str()));
                     self.webcams = sites;
                 }
                 OverlayMsg::Aqi(obs) => self.aqi = obs,
@@ -10287,7 +11080,7 @@ impl HookEchoApp {
                 moment.short_name().to_string(),
                 moment.units(),
                 moment.short_name(),
-                volume.time,
+                view.displayed_time().unwrap_or(volume.time),
                 wxdata::field::DataClass::Observed,
                 wxdata::route::sample_profile(&route.points, 1_000.0, |lon, lat| {
                     wxdata::level2::sample_native(
@@ -10489,6 +11282,61 @@ impl HookEchoApp {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
+        });
+    }
+
+    fn fetch_fire_weather_discussion(&mut self) {
+        let day = self.filters.fire_weather_day;
+        self.fire_weather_discussion.day = day;
+        self.fire_weather_discussion.discussion = None;
+        self.fire_weather_discussion.error = None;
+        self.fire_weather_discussion.busy = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fire_weather_discussion_rx = Some(rx);
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::fire_weather::fetch_discussion(&http, day).await.map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+    }
+
+    fn fetch_ero_discussion(&mut self) {
+        let day = self.filters.ero_day;
+        self.ero_discussion.day = day;
+        self.ero_discussion.discussion = None;
+        self.ero_discussion.error = None;
+        if !(1..=5).contains(&day) {
+            self.ero_discussion.busy = false;
+            self.ero_discussion.error = Some("Select a rainfall outlook day first.".to_owned());
+            return;
+        }
+        self.ero_discussion.busy = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ero_discussion_rx = Some(rx);
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::ero::fetch_discussion(&http, day).await.map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+    }
+
+    fn fetch_cpc_discussion(&mut self) {
+        let Some(period) = self.filters.cpc_period else {
+            self.cpc_discussion.discussion = None;
+            self.cpc_discussion.error = Some("Select a CPC outlook period first.".to_owned());
+            self.cpc_discussion.busy = false;
+            return;
+        };
+        self.cpc_discussion.period = Some(period);
+        self.cpc_discussion.discussion = None;
+        self.cpc_discussion.error = None;
+        self.cpc_discussion.busy = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.cpc_discussion_rx = Some(rx);
+        let http = self.http.clone();
+        self.spawner.spawn(async move {
+            let result = wxdata::cpc::fetch_discussion(&http, period).await.map_err(|e| e.to_string());
+            let _ = tx.send(result);
         });
     }
 
@@ -10742,9 +11590,8 @@ impl HookEchoApp {
         }
     }
 
-    /// Drive the live-station layer: poll the networks on a clock, refresh the electric field
-    /// far more slowly (the model publishes every five minutes), and pull the camera catalog only
-    /// when the view has moved somewhere new.
+    /// Drive the live-station layer: poll the networks on a clock and refresh the electric field
+    /// far more slowly (the model publishes every five minutes).
     ///
     /// The poll is what fills every open card's ring buffer, so it keeps running while any card is
     /// open even if the layer itself has been switched off.
@@ -10798,15 +11645,30 @@ impl HookEchoApp {
             self.ppef_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Ppef);
         }
-        // The camera catalog is megabytes of slow-changing agency data: fetch it per view box.
+    }
+
+    /// Highway cameras are useful even when station observations are unavailable. Keep their
+    /// public catalog on the camera layer, while station cards can use the same catalog for a
+    /// nearby stream or still.
+    fn sync_dotcams(&mut self, ctx: &egui::Context) {
+        if !self.show_webcams && !self.show_stream_dashboard && !self.show_stations && self.stations.cards.is_empty() {
+            return;
+        }
+        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        if (max_lon - min_lon) > 20.0 { return; }
+        // Refresh large camera catalogs on view changes or expiry, including a stationary view.
         let bbox = (
             (min_lon * 2.0).round() / 2.0,
             (min_lat * 2.0).round() / 2.0,
             (max_lon * 2.0).round() / 2.0,
             (max_lat * 2.0).round() / 2.0,
         );
-        if self.dotcam_bounds != Some(bbox) {
+        if wxdata::dotcams::catalog_refresh_due(
+            self.dotcam_bounds != Some(bbox),
+            self.dotcam_last_fetch.map(|time| time.elapsed()),
+        ) {
             self.dotcam_bounds = Some(bbox);
+            self.dotcam_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::DotCams(bbox.0, bbox.1, bbox.2, bbox.3));
         }
     }
@@ -10885,7 +11747,9 @@ impl HookEchoApp {
                 .link
                 .clone()
                 .map(|u| ("View on Windy.com".to_string(), u)),
+            stream: None,
         });
+        self.webcam_detail_last_fetch = Some(Instant::now());
         let (Some(key), Some(cam)) = (key, cam) else {
             return;
         };
@@ -10922,6 +11786,184 @@ impl HookEchoApp {
                 Err(e) => log::warn!("webcam image {url} failed: {e}"),
             }
         });
+    }
+
+    /// FAA publishes new stills at its own cadence. Keep an open card current without blanking
+    /// it between the metadata lookup and the replacement image arriving.
+    fn refresh_open_webcam(&mut self, ctx: &egui::Context) {
+        let Some((key, cam_id)) = self.detail.as_ref().and_then(|detail| {
+            if detail.link.is_some() { return None; } // Windy URLs arrive with the site list.
+            let key = detail.image.as_ref()?;
+            let id = key.strip_prefix("cam:")?.parse::<u64>().ok()?;
+            Some((key.clone(), id))
+        }) else {
+            self.webcam_detail_last_fetch = None;
+            return;
+        };
+        let loaded = self.pf_icon_tex.get(&key).and_then(Option::as_ref).is_some();
+        let interval = Duration::from_secs(if loaded { 600 } else { 60 });
+        let elapsed = self.webcam_detail_last_fetch.map(|time| time.elapsed()).unwrap_or_default();
+        if elapsed < interval {
+            ctx.request_repaint_after(interval - elapsed);
+            return;
+        }
+        self.webcam_detail_last_fetch = Some(Instant::now());
+        let (http, tx, ctx2) = (self.http.clone(), self.pf_icon_tx.clone(), ctx.clone());
+        self.spawner.spawn(async move {
+            match wxdata::webcams::latest_image(&http, cam_id).await {
+                Ok(Some(url)) => match fetch_icon_sheet(&http, &url).await {
+                    Ok(image) => {
+                        let _ = tx.send((key, image));
+                        ctx2.request_repaint();
+                    }
+                    Err(e) => log::warn!("webcam image {url} refresh failed: {e}"),
+                },
+                Ok(None) => log::info!("camera {cam_id} has no recent image"),
+                Err(e) => log::warn!("webcam {cam_id} refresh failed: {e}"),
+            }
+        });
+    }
+
+    /// Open a public highway camera directly, without requiring a nearby station card.
+    fn open_dotcam(&mut self, cam: &wxdata::dotcams::DotCam, ctx: &egui::Context) {
+        let title = if cam.name.is_empty() { cam.id.clone() } else { cam.name.clone() };
+        let image = cam.image_url.as_ref().map(|_| {
+            // A still URL can remain constant while its bytes change. A five-minute texture key
+            // lets reopening the camera refresh it without minting a texture on every frame.
+            format!("dotcam:{}:{}", cam.id, Utc::now().timestamp() / 300)
+        });
+        let place = if cam.place.is_empty() { String::new() } else { format!("\n{}", cam.place) };
+        let capability = if cam.stream_url.is_some() { "Stream URL available" } else { "Still image only" };
+        self.detail = Some(Detail {
+            title: format!("{} camera", cam.agency),
+            body: format!("{title}{place}\n{capability}\nChecks for a new still about once a minute while open. Capture time is not supplied by the camera catalog.\nPublic fixed highway camera; not a chaser feed."),
+            color: [91, 220, 206, 255],
+            image: image.clone(),
+            link: cam.image_url.as_ref()
+                .map(|url| ("Open image from Caltrans".to_string(), url.clone())),
+            stream: cam.stream_url.clone(),
+        });
+        self.dotcam_detail_last_fetch = Some(Instant::now());
+        ctx.request_repaint_after(Duration::from_secs(60));
+        let (Some(key), Some(url)) = (image, cam.image_url.clone()) else { return; };
+        self.pf_icon_tex.entry(key.clone()).or_insert(None);
+        self.fetch_dotcam_still(key, url, ctx);
+    }
+
+    fn show_public_streams(&mut self, ctx: &egui::Context) {
+        let bounds = self.view_bounds();
+        let warnings: Vec<_> = self.active_alert_features().iter()
+            .filter(|feature| feature.kind == overlay::FeatureKind::Warning).collect();
+        let mut cameras: Vec<_> = self.stations.cams.iter()
+            .filter(|cam| cam.stream_url.is_some())
+            .filter(|cam| cam.lon >= bounds.0 && cam.lon <= bounds.2
+                && cam.lat >= bounds.1 && cam.lat <= bounds.3)
+            .filter(|cam| !self.stream_inside_warnings
+                || warnings.iter().any(|warning| warning.distance_km(cam.lon, cam.lat) == 0.0))
+            .cloned().collect();
+        cameras.sort_by(|a, b| (&a.agency, &a.place, &a.name, &a.id)
+            .cmp(&(&b.agency, &b.place, &b.name, &b.id)));
+        let mut open = self.show_stream_dashboard;
+        let mut warning_only = self.stream_inside_warnings;
+        let mut refresh = false;
+        let mut selected = None;
+        let mut show_california = false;
+        let mut close_requested = false;
+        egui::Window::new("Public camera streams")
+            .default_pos(egui::pos2((ctx.content_rect().width() - 380.0).max(0.0) * 0.5, 70.0))
+            .open(&mut open)
+            .default_width(370.0)
+            .max_width(460.0)
+            .show(ctx, |ui| {
+                ui.label("Live public highway cameras in the current map view.");
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut warning_only, false, "All Streaming");
+                    ui.selectable_value(&mut warning_only, true, "Inside Warnings");
+                    if ui.button("Refresh").clicked() { refresh = true; }
+                });
+                ui.separator();
+                if cameras.is_empty() {
+                    if self.dotcam_last_fetch.is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+                        ui.spinner();
+                        ui.label("Checking public camera feeds…");
+                    } else if warning_only {
+                        ui.label("No public streams inside current NWS warnings in this view.");
+                    } else {
+                        ui.label("No public live streams in this view.");
+                    }
+                    ui.label("Public live-stream coverage is currently available from Caltrans in California.");
+                    if ui.button("Show California cameras").clicked() { show_california = true; }
+                } else {
+                    ui.label(format!("{} streaming cameras", cameras.len()));
+                    egui::ScrollArea::vertical().max_height(390.0).show(ui, |ui| {
+                        for cam in &cameras {
+                            ui.horizontal(|ui| {
+                                if ui.button("View").clicked() { selected = Some(cam.clone()); }
+                                ui.vertical(|ui| {
+                                    ui.strong(if cam.name.is_empty() { &cam.id } else { &cam.name });
+                                    ui.small(format!("{} · {}", cam.agency, cam.place));
+                                });
+                            });
+                            ui.separator();
+                        }
+                    });
+                }
+                ui.small("Fixed highway cameras; these are not moving chaser feeds.");
+                if ui.button("Close dashboard").clicked() { close_requested = true; }
+            });
+        self.show_stream_dashboard = open && !close_requested;
+        self.stream_inside_warnings = warning_only;
+        if refresh || show_california {
+            if show_california {
+                self.views[self.active].camera = crate::render::mercator::Camera::at_lonlat(-121.49, 38.58, 9.0);
+                self.stream_inside_warnings = false;
+            }
+            self.dotcam_bounds = None;
+            self.dotcam_last_fetch = None;
+            ctx.request_repaint();
+        }
+        if let Some(cam) = selected {
+            self.show_stream_dashboard = false;
+            self.open_dotcam(&cam, ctx);
+            ctx.request_repaint();
+        }
+    }
+
+    fn fetch_dotcam_still(&self, key: String, url: String, ctx: &egui::Context) {
+        let (http, tx, ctx2) = (self.http.clone(), self.pf_icon_tx.clone(), ctx.clone());
+        // The JPEG URL stays fixed while its bytes change. A shared minute bucket bypasses older
+        // browser-cache entries without making every viewer use a unique proxy cache key.
+        let separator = if url.contains('?') { '&' } else { '?' };
+        let request_url = format!("{url}{separator}he_still={}", Utc::now().timestamp() / 60);
+        self.spawner.spawn(async move {
+            match crate::stationlayer::fetch_image(&http, &request_url).await {
+                Ok(image) => {
+                    let _ = tx.send((key, image));
+                    ctx2.request_repaint();
+                }
+                Err(e) => log::warn!("highway camera still {url}: {e}"),
+            }
+        });
+    }
+
+    fn refresh_open_dotcam(&mut self, ctx: &egui::Context) {
+        let Some(detail) = self.detail.as_ref().filter(|detail| {
+            detail.image.as_deref().is_some_and(|key| key.starts_with("dotcam:"))
+        }) else {
+            self.dotcam_detail_last_fetch = None;
+            return;
+        };
+        let Some((_, url)) = detail.link.as_ref() else { return; };
+        let Some(key) = detail.image.as_ref() else { return; };
+        let elapsed = self.dotcam_detail_last_fetch.map(|time| time.elapsed()).unwrap_or_default();
+        if elapsed < Duration::from_secs(60) {
+            ctx.request_repaint_after(Duration::from_secs(60) - elapsed);
+            return;
+        }
+        let (key, url) = (key.clone(), url.clone());
+        self.dotcam_detail_last_fetch = Some(Instant::now());
+        self.fetch_dotcam_still(key, url, ctx);
+        ctx.request_repaint_after(Duration::from_secs(60));
     }
 
     /// The weather-radio rows: pick a configured relay, play or stop it, and see honestly whether
@@ -11033,6 +12075,7 @@ impl HookEchoApp {
             color,
             image: key.clone(),
             link: None,
+            stream: None,
         });
         let (Some(key), Some(url)) = (key, p.image.clone()) else {
             return;
@@ -11244,17 +12287,37 @@ impl HookEchoApp {
                     .cloned(),
             );
         }
+        if (1..=8).contains(&self.filters.fire_weather_day) {
+            v.extend(self.fire_weather_features.iter().cloned());
+        }
+        if self.filters.cpc_period.is_some() && self.filters.cpc_opacity_pct > 0 {
+            for mut feature in self.cpc_features.iter().cloned() {
+                for alpha in [&mut feature.fill[3], &mut feature.stroke[3]] {
+                    *alpha = ((*alpha as u16 * self.filters.cpc_opacity_pct as u16) / 100) as u8;
+                }
+                v.push(feature);
+            }
+        }
         if self.filters.show_mds {
             v.extend(self.md_features.iter().cloned());
         }
         if self.filters.show_watches {
             v.extend(self.watch_features.iter().cloned());
         }
-        if (1..=3).contains(&self.filters.wssi_day) {
+        if (1..=4).contains(&self.filters.wssi_day) {
             v.extend(self.wssi_features.iter().cloned());
         }
-        if (1..=3).contains(&self.filters.ero_day) {
-            v.extend(self.ero_features.iter().cloned());
+        if (1..=3).contains(&self.filters.winter_snow_day) {
+            v.extend(self.winter_snow_features.iter().cloned());
+        }
+        if (1..=3).contains(&self.filters.winter_ice_day) {
+            v.extend(self.winter_ice_features.iter().cloned());
+        }
+        if (1..=5).contains(&self.filters.ero_day) {
+            for mut feature in self.ero_features.iter().cloned() {
+                feature.fill[3] = ((feature.fill[3] as u16 * self.filters.ero_opacity_pct as u16) / 100) as u8;
+                v.push(feature);
+            }
         }
         if self.show_outages {
             v.extend(self.outage_features.iter().cloned());
@@ -11358,7 +12421,7 @@ impl HookEchoApp {
         self.views[self.active]
             .timeline
             .selected_time()
-            .or_else(|| self.views[self.active].volume.as_ref().map(|volume| volume.time))
+            .or_else(|| self.views[self.active].displayed_time())
             .unwrap_or_else(Utc::now)
     }
 
@@ -11532,8 +12595,9 @@ impl HookEchoApp {
             self.overlay_gen != self.built_gen || theme_changed,
             bucket != self.built_zoom_bucket || theme_changed,
         ) {
-            let mut geom =
-                overlay_build::build_map_with_theme(&self.overlays, zoom, self.settings.theme);
+            let mut geom = overlay_build::build_map_with_theme(
+                &self.overlays, zoom, self.settings.theme, self.filters.ero_border_px,
+            );
             let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> = self
                 .visible_placefile_iter()
                 .map(|(it, op, _)| (it, op))
@@ -11561,12 +12625,13 @@ impl HookEchoApp {
     ) {
         let generation = self.views[view_idx].head_request.start(site.clone());
         let request_site = site.clone();
+        let current_tdwr_revision = self.views[view_idx].tdwr_revision.clone();
         let tx = self.msg_tx.clone();
         let network = wxdata::sites::network(&site);
         if network != wxdata::sites::Network::Nexrad {
-            // None of these has a Level 2 feed or an archive: one volume per poll, synthesized
-            // from the newest Level 3 tilt products (TDWR) or assembled from the newest ODIM
-            // files (DWD, OPERA).
+            // None of these has a Level 2 feed: each live poll synthesizes the newest TDWR
+            // Level 3 products or assembles the newest DWD/OPERA ODIM files. TDWR also has a
+            // timestamped Level 3 archive for timeline playback.
             let http = self.http.clone();
             let handle = self.spawner.spawn_abortable(async move {
                 use wxdata::sites::Network;
@@ -11577,10 +12642,13 @@ impl HookEchoApp {
                 // DWD meant ~50 requests and ~2 MB discarded on nine polls out of ten.
                 let cur = current_name.as_deref();
                 let fetched = match network {
-                    Network::Dwd => wxdata::dwd::fetch_volume(&http, &site, cur).await,
-                    Network::Opera => wxdata::opera::fetch_volume(&http, &site, cur).await,
+                    Network::Dwd => wxdata::dwd::fetch_volume(&http, &site, cur).await
+                        .map(|result| result.map(|(name, time, scan)| (name, time, scan, None))),
+                    Network::Opera => wxdata::opera::fetch_volume(&http, &site, cur).await
+                        .map(|result| result.map(|(name, time, scan)| (name, time, scan, None))),
                     Network::Tdwr | Network::Nexrad => {
-                        wxdata::tdwr::fetch_volume(&http, &site, cur).await
+                        wxdata::tdwr::fetch_volume(&http, &site, cur, current_tdwr_revision.as_deref()).await
+                            .map(|result| result.map(|(name, time, scan, revision)| (name, time, scan, Some(revision))))
                     }
                 };
                 let msg = match fetched {
@@ -11590,19 +12658,20 @@ impl HookEchoApp {
                     },
                     // A feed that hands back the name we already hold anyway — a probe that could
                     // not decode, say — is still up to date.
-                    Ok(Some((name, _, _))) if current_name.as_deref() == Some(name.as_str()) => {
+                    Ok(Some((name, _, _, _))) if network != Network::Tdwr && current_name.as_deref() == Some(name.as_str()) => {
                         DataMsg::UpToDate {
                             view: view_idx,
                             site,
                         }
                     }
-                    Ok(Some((name, time, scan))) => DataMsg::Volume {
+                    Ok(Some((name, time, scan, tdwr_revision))) => DataMsg::Volume {
                         selected_frame: None,
                         view: view_idx,
                         site,
                         name,
                         time,
                         scan,
+                        tdwr_revision,
                     },
                     Err(e) => DataMsg::Error {
                         view: view_idx,
@@ -11664,6 +12733,7 @@ impl HookEchoApp {
                                 name,
                                 time,
                                 scan,
+                                tdwr_revision: None,
                             },
                             Err(e) => DataMsg::Error {
                                 view: view_idx,
@@ -11690,13 +12760,24 @@ impl HookEchoApp {
         self.views[view_idx].head_request.attach(generation, handle);
     }
 
+    /// Available live replay frames for the active platform and current radar payload. Browser
+    /// scans vary substantially by site/VCP; a fixed four-frame ceiling wastes the existing
+    /// memory budget on small volumes, while a fixed larger ceiling can thrash on large ones.
+    pub(crate) fn live_loop_limit(&mut self, idx: usize) -> usize {
+        if cfg!(target_os = "android") { return ANDROID_LOOP_WINDOW; }
+        if !cfg!(target_arch = "wasm32") { return NATIVE_LOOP_WINDOW; }
+        let bytes = self.views.get(idx).and_then(|view| view.volume.as_ref())
+            .map(|volume| self.radar_memory.scan_bytes(&volume.scan)).unwrap_or(0);
+        web_loop_window_for_bytes(bytes, radar_payload_budget())
+    }
+
     fn trim_radar_memory(&mut self) {
         let mut bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan)
             .chain(self.views.iter().flat_map(|view| view.retained_scans())));
         self.radar_memory_highwater = self.radar_memory_highwater.max(bytes);
         let cap = radar_payload_budget();
         let binned_cap = if cfg!(target_os = "android") { 16 * 1024 * 1024 }
-            else if cfg!(target_arch = "wasm32") { 24 * 1024 * 1024 } else { 64 * 1024 * 1024 };
+            else if cfg!(target_arch = "wasm32") { 32 * 1024 * 1024 } else { 64 * 1024 * 1024 };
         for view in &mut self.views { view.trim_binned_memory(binned_cap); }
         if bytes <= cap { return; }
         // Displayed frames remain pinned. Recent display bins can be rebuilt from the shared
@@ -11768,6 +12849,7 @@ impl HookEchoApp {
                     name,
                     time,
                     scan,
+                    tdwr_revision,
                     selected_frame,
                     ..
                 } => {
@@ -11779,12 +12861,16 @@ impl HookEchoApp {
                     } else if !v.timeline.following && v.timeline.current().is_some() && !frame_result_is_current(&v.timeline, &name) {
                         continue;
                     }
+                    if selected_frame.is_none() && tdwr_revision.is_some() {
+                        v.tdwr_revision = tdwr_revision;
+                        v.forget_recent_frame(&name);
+                    }
                     let looping = v.timeline.live_looping();
                     // A newly-arrived live head (following): roll the day at UTC midnight, or grow
                     // the frame list so the loop window slides forward. A frame-fetch result for a
                     // scrubbed/loop-display frame is older than the head and isn't a new head.
-                    let new_head = v.timeline.following
-                        && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
+                    let _new_head = v.timeline.following
+                        && v.site.as_deref().is_some_and(|site| matches!(wxdata::sites::network(site), wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr))
                         && {
                             let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
                             if time.date_naive() != v.timeline.date {
@@ -11800,14 +12886,15 @@ impl HookEchoApp {
                                 false
                             }
                         };
-                    // While looping, the playhead frame owns the display; a genuinely new head is
-                    // only appended, not shown. Every other case updates the displayed volume.
-                    if !(looping && new_head) {
+                    // While looping, the playhead frame owns the display. A live head update,
+                    // including a same-name TDWR revision, belongs in the cache until playback
+                    // reaches that frame.
+                    if !(looping && selected_frame.is_none()) {
                         v.show_volume(scan, name, time);
-                        v.loading = false;
-                        v.error = None;
                         self.pane_shown.remove(&view);
                     }
+                    v.loading = false;
+                    v.error = None;
                     v.fetch_failures = 0;
                     v.clamp_tilt();
                     v.clamp_moment();
@@ -12236,17 +13323,18 @@ impl HookEchoApp {
                 self.cells_site = None;
                 self.cell_trends.clear();
                 self.cell_popup = None;
-                if let Some(site) = self.views[idx].site.clone() {
+                if let Some(site) = self.views[idx].site.clone().filter(|site| wxdata::sites::is_nexrad(site)) {
                     self.spawn_overlay(ctx, OverlaySource::Cells(site));
                 }
             }
         }
 
         // Advance playback (if playing) then reconcile the displayed volume with the timeline.
+        let live_limit = self.live_loop_limit(idx);
         let wanted_window = if cfg!(target_os = "android") {
             self.settings.live_loop_frames.clamp(1, ANDROID_LOOP_WINDOW)
         } else if cfg!(target_arch = "wasm32") {
-            self.settings.live_loop_frames.clamp(1, WEB_LOOP_WINDOW)
+            self.settings.live_loop_frames.clamp(1, live_limit)
         } else {
             self.settings.live_loop_frames.max(1)
         };
@@ -12312,7 +13400,7 @@ impl HookEchoApp {
         // A frame switch bins and uploads a full sweep. Holding animation while the map is under
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
         self.views[idx].buffering = next_pending;
-        if should_advance_timeline(next_pending, self.gesture_live) {
+        if should_advance_timeline(next_pending, self.settings.pause_while_panning && self.gesture_live) {
             let view = &mut self.views[idx];
             let previous = view.timeline.playhead;
             let unavailable = view.failed_frame.as_deref().is_some_and(|name| view.timeline.current().is_some_and(|frame| frame.name() == name));
@@ -12360,9 +13448,9 @@ impl HookEchoApp {
         let (site, date, following, need_list, listing) = {
             let v = &self.views[idx];
             let key = v.site.clone().map(|s| (s, v.timeline.date));
-            // TDWRs and DWD radars have no archive to list; their timeline stays empty and
-            // always live.
-            let need = v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
+            // NEXRAD and TDWR have timestamped public archives. DWD and OPERA currently
+            // expose only their newest assembled volume to this timeline.
+            let need = v.site.as_deref().is_some_and(|site| matches!(wxdata::sites::network(site), wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr))
                 && v.timeline.frames_key != key
                 && v.last_list_failure.is_none_or(|at| at.elapsed().as_secs() >= 10);
             (
@@ -12522,13 +13610,20 @@ impl HookEchoApp {
         book(&self.prefetching).insert(name, Instant::now());
         let tx = self.msg_tx.clone();
         let (site, ctx) = (site.to_string(), ctx.clone());
+        let http = self.http.clone();
         let view = idx;
         let slot = self.prefetching.clone();
         self.spawner.spawn(async move {
             let name = id.name().to_string();
             let fetched = wxdata::task::timeout(
                 VOLUME_TIMEOUT,
-                crate::volume::fetch(id, crate::paths::cache_dir()),
+                async {
+                    if wxdata::tdwr::is_tdwr(&site) {
+                        wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan)
+                    } else {
+                        crate::volume::fetch(id, crate::paths::cache_dir()).await
+                    }
+                },
             )
             .await
             .unwrap_or_else(Err);
@@ -12568,9 +13663,10 @@ impl HookEchoApp {
         let Some(site) = self.views[idx].site.clone() else {
             return;
         };
+        let live_limit = self.live_loop_limit(idx);
         let tl = &self.views[idx].timeline;
         let window = if cfg!(target_arch = "wasm32") {
-            self.settings.live_loop_frames.clamp(1, WEB_LOOP_WINDOW)
+            self.settings.live_loop_frames.clamp(1, live_limit)
         } else {
             tl.live_window.max(1)
         };
@@ -12589,19 +13685,23 @@ impl HookEchoApp {
         let generation = self.views[view_idx].frame_request.start(id.name().to_string());
         self.views[view_idx].load_phase = None;
         let tx = self.msg_tx.clone();
+        let http = self.http.clone();
         let handle = self.spawner.spawn_abortable(async move {
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
             // The `Err` arm is what matters here: it clears the pane's `loading` flag. Without a
             // deadline a swallowed request never took either arm, and a pane stuck on `loading`
             // stops polling for the rest of the session.
-            let fetched = wxdata::task::timeout(
-                VOLUME_TIMEOUT,
-                crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
-                    let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
-                    ctx.request_repaint();
-                }),
-            )
+            let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
+                if wxdata::tdwr::is_tdwr(&site) {
+                    wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan)
+                } else {
+                    crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
+                        let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
+                        ctx.request_repaint();
+                    }).await
+                }
+            })
             .await
             .unwrap_or_else(Err);
             let msg = match fetched {
@@ -12612,6 +13712,7 @@ impl HookEchoApp {
                     name,
                     time,
                     scan,
+                    tdwr_revision: None,
                 },
                 Err(e) => DataMsg::FrameError {
                     name,
@@ -12632,8 +13733,15 @@ impl HookEchoApp {
         let identity = format!("{site}:{date}");
         let generation = self.views[view_idx].list_request.start(identity.clone());
         let tx = self.msg_tx.clone();
+        let http = self.http.clone();
         let handle = self.spawner.spawn_abortable(async move {
-            let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, level2::list_volumes(&site, date)).await.unwrap_or_else(Err);
+            let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
+                if wxdata::tdwr::is_tdwr(&site) {
+                    wxdata::tdwr::list_volumes(&http, &site, date).await
+                } else {
+                    level2::list_volumes(&site, date).await
+                }
+            }).await.unwrap_or_else(Err);
             let result = match fetched {
                 Ok(frames) => DataMsg::Frames { view: view_idx, site, date, frames },
                 Err(error) => {
@@ -12727,7 +13835,7 @@ impl HookEchoApp {
             None,
             precision,
         );
-        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(u64::from(self.adaptive.reduced)).wrapping_add(
+        let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(u64::from(self.adaptive.reduced)).wrapping_add(u64::from(self.settings.full_coverage_radar)).wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
                 0x9e37_79b9_7f4a_7c15
             } else {
@@ -12773,7 +13881,12 @@ impl HookEchoApp {
         };
         match upload {
             Ok(mut up) => {
+                up.cache_loop = self.views[idx].timeline.playing
+                    && self.views[idx].timeline.frames.len() > 1;
                 self.views[idx].appearance.apply_upload(&mut up, moment);
+                apply_coverage_range(&mut up, self.settings.full_coverage_radar,
+                    self.views[idx].displayed_station().is_some_and(wxdata::sites::is_nexrad)
+                    || self.views[idx].site.as_deref().is_some_and(wxdata::sites::is_nexrad));
                 let view = &self.views[idx];
                 if view.appearance.fade_old_sectors && view.timeline.following && cut_end_ms.is_none() {
                     up.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
@@ -12953,7 +14066,8 @@ impl HookEchoApp {
             .gen
             .wrapping_add(product_hash)
             .wrapping_add(self.views[idx].appearance.fingerprint(palette_moment))
-            .wrapping_add(u64::from(self.adaptive.reduced));
+            .wrapping_add(u64::from(self.adaptive.reduced))
+            .wrapping_add(u64::from(self.settings.full_coverage_radar));
         let same_data = reuse && self.pane_shown.get(&idx) == Some(&key);
         let token = self.pane_upload_tokens.get(&idx).copied().unwrap_or(0);
         let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
@@ -12966,6 +14080,9 @@ impl HookEchoApp {
                 .appearance
                 .table(&self.palettes, palette_moment, self.settings.theme);
         let mut upload = to_upload(sweep, &table, None, smooth, None, None, lut_only);
+        apply_coverage_range(&mut upload, self.settings.full_coverage_radar,
+            self.views[idx].displayed_station().is_some_and(wxdata::sites::is_nexrad)
+            || self.views[idx].site.as_deref().is_some_and(wxdata::sites::is_nexrad));
         if self.views[idx].appearance.fade_old_sectors && self.views[idx].timeline.following && cut_end_ms.is_none() {
             upload.sector_opacity = self.views[data].volume.as_ref().and_then(|volume| {
                 let status = volume
@@ -13033,7 +14150,7 @@ impl HookEchoApp {
     }
 
     fn field_state(&self, pane: usize, layer: crate::render::FieldLayer) -> Option<&FieldState> {
-        if layer.is_native_abi() { self.pane_fields.get(&(pane, layer)) } else { self.fields.get(&layer) }
+        if layer.is_pane_field() { self.pane_fields.get(&(pane, layer)) } else { self.fields.get(&layer) }
     }
 
     fn field_probe_at(&self, idx: usize, lon: f64, lat: f64) -> Option<String> {
@@ -13069,13 +14186,27 @@ impl HookEchoApp {
                     format!("\nContributor {site} · confidence {:.0}%", confidence * 100.0)
                 })
                 .unwrap_or_default();
+            let hail_detail = if layer == crate::render::FieldLayer::HailSwath {
+                format!(
+                    "\nMESH maximum {:.2} in ({value:.1} mm) over {} min · filter {}",
+                    value / 25.4,
+                    self.hail_minutes,
+                    if self.hail_threshold_inches == 0 {
+                        "All".to_owned()
+                    } else {
+                        format!("{}+ in", self.hail_threshold_inches)
+                    }
+                )
+            } else {
+                String::new()
+            };
             format!(
                 "{}\n{:.1} {} · valid {}{coverage_warning}",
                 frame.descriptor.short_name,
                 display.value,
                 display.units,
                 sample.valid_time.format("%Y-%m-%d %H:%M UTC"),
-            ) + &provenance + &profile
+            ) + &hail_detail + &provenance + &profile
         })
     }
 
@@ -13116,6 +14247,9 @@ impl HookEchoApp {
     }
 
     fn radar_probe_at(&mut self, idx: usize, lon: f64, lat: f64) -> Option<String> {
+        if !self.views.get(idx)?.show_radar {
+            return None;
+        }
         if let Some(name) = self.views.get(idx).and_then(|view| view.custom_product.as_deref()) {
             return self.custom_radar_probe(idx, lon, lat).or_else(|| Some(format!("{name}\nCustom sample unavailable")));
         }
@@ -13347,7 +14481,14 @@ impl HookEchoApp {
         let is_vector = pane_style.vector_palette().is_some();
         let palette = pane_style.vector_palette().unwrap_or_default();
         self.pane_vtiles[idx].set_ctx(ctx.clone());
+        let mut map_details = self.settings.map_details.resolve(self.show_radar_sites);
+        map_details.extrude_buildings = is_vector
+            && !self.views[idx].camera.globe
+            && self.views[idx].camera.pitch_deg > 1.0
+            && self.views[idx].camera.zoom >= 12.0
+            && self.settings.map_quality != crate::settings::MapQuality::Performance;
         let clear_vector = clear_vector | self.pane_vtiles[idx].set_style(palette)
+            | self.pane_vtiles[idx].set_details(map_details)
             | self.pane_vtiles[idx].set_theme(self.settings.theme)
             | self.pane_vtiles[idx].set_simplified(
                 self.settings.map_quality == crate::settings::MapQuality::Performance
@@ -13402,6 +14543,10 @@ impl HookEchoApp {
         }
         // The draw tool takes the drag away from the pan, the same deal the measure tool makes
         // with the click: while it's armed, a drag draws. Disarm it (Esc / another tool) to pan.
+        if !ctx.input(|i| i.pointer.primary_down()) {
+            self.draw_gesture_active = false;
+            self.draw_erase_last = None;
+        }
         if self.tool == MapTool::Draw && quiet {
             if response.dragged() {
                 self.active = idx;
@@ -13410,12 +14555,28 @@ impl HookEchoApp {
                     let px = (pos.x - prect.left(), pos.y - prect.top());
                     let w = cam.screen_to_world(px, vp);
                     let ll = crate::render::mercator::world_to_lonlat(w.0, w.1);
-                    draw_append(
-                        &mut self.strokes,
-                        [ll.0, ll.1],
-                        self.draw_color,
-                        response.drag_started(),
-                    );
+                    if self.draw_eraser {
+                        let before = (!self.draw_gesture_active).then(|| self.strokes.clone());
+                        let last = self.draw_erase_last.replace(px);
+                        if erase_strokes_along(&mut self.strokes, &cam, vp, last, px)
+                            && !self.draw_gesture_active
+                        {
+                            self.draw_undo.push(before.expect("new eraser gesture has a snapshot"));
+                            if self.draw_undo.len() > 16 { self.draw_undo.remove(0); }
+                            self.draw_redo.clear();
+                            self.draw_gesture_active = true;
+                        }
+                    } else {
+                        self.draw_erase_last = None;
+                        let new_stroke = !self.draw_gesture_active;
+                        if new_stroke {
+                            self.draw_undo.push(self.strokes.clone());
+                            if self.draw_undo.len() > 16 { self.draw_undo.remove(0); }
+                            self.draw_redo.clear();
+                            self.draw_gesture_active = true;
+                        }
+                        draw_append(&mut self.strokes, [ll.0, ll.1], self.draw_color, self.draw_width, new_stroke);
+                    }
                 }
             }
         } else if response.dragged() && quiet {
@@ -13435,7 +14596,8 @@ impl HookEchoApp {
                 }
                 None => {
                     let view = &mut self.views[idx];
-                    view.camera_motion.drag(&mut view.camera, (d.x, d.y), dt, vp, ctx.input(|i| i.time));
+                    let to = response.interact_pointer_pos().map(|p| (p.x - prect.left(), p.y - prect.top())).unwrap_or((vp.0 / 2.0, vp.1 / 2.0));
+                    view.camera_motion.drag_at(&mut view.camera, (d.x, d.y), to, dt, vp, ctx.input(|i| i.time));
                     self.follow_cell = None; // a manual pan takes over the camera
                 }
             }
@@ -13523,7 +14685,7 @@ impl HookEchoApp {
                 }
                 let t = mt.translation_delta;
                 if t != egui::Vec2::ZERO {
-                    self.views[idx].camera.pan_pixels(t.x, t.y, vp);
+                    self.views[idx].camera.pan_at((t.x, t.y), (mt.center_pos.x - prect.left(), mt.center_pos.y - prect.top()), vp);
                     self.follow_cell = None; // a manual pan takes over the camera (pinch-zoom does not)
                 }
             }
@@ -13651,10 +14813,31 @@ impl HookEchoApp {
                 } else {
                     cam_site
                 };
+                let dotcam_hit = (marker_hit.is_none()
+                    && !picked_site
+                    && station_hit.is_none()
+                    && cam_site.is_none()
+                    && tool == MapTool::Interrogate
+                    && self.show_webcams)
+                    .then(|| {
+                        self.stations.cams.iter()
+                            .map(|site| {
+                                let w = crate::render::mercator::lonlat_to_world(site.lon, site.lat);
+                                let (sx, sy) = cam.world_to_screen(w, vp);
+                                let dx = prect.left() + sx - pos.x;
+                                let dy = prect.top() + sy - pos.y;
+                                (site, dx * dx + dy * dy)
+                            })
+                            .filter(|(_, distance2)| *distance2 <= tap_r2(12.0))
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(site, _)| site.clone())
+                    })
+                    .flatten();
                 // A surveyed damage point under an interrogate click, same rule as the cameras.
                 let dat_hit = (marker_hit.is_none()
                     && !picked_site
                     && cam_site.is_none()
+                    && dotcam_hit.is_none()
                     && tool == MapTool::Interrogate
                     && self.show_dat)
                     .then(|| {
@@ -13678,6 +14861,9 @@ impl HookEchoApp {
                     return;
                 }
                 match tool {
+                    MapTool::StormTrack => {
+                        self.manual_storm_track.click([lon, lat]);
+                    }
                     // Also catches the drop tool: a second marker within a finger's width of an
                     // existing one is never what someone meant, and this makes a stray drop undoable.
                     _ if marker_hit.is_some() => {
@@ -13700,6 +14886,12 @@ impl HookEchoApp {
                         self.warning_popup = None;
                         let site = cam_site.expect("checked Some");
                         self.open_webcam(&site, ctx);
+                    }
+                    _ if dotcam_hit.is_some() => {
+                        self.cell_popup = None;
+                        self.warning_popup = None;
+                        let site = dotcam_hit.expect("checked Some");
+                        self.open_dotcam(&site, ctx);
                     }
                     _ if dat_hit.is_some() => {
                         self.cell_popup = None;
@@ -13932,6 +15124,7 @@ impl HookEchoApp {
                                 color: [c[0], c[1], c[2], 255],
                                 image: None,
                                 link: None,
+                                stream: None,
                             });
                         } else if let Some(f) = fire {
                             self.cell_popup = None;
@@ -13950,6 +15143,7 @@ impl HookEchoApp {
                                 color: [235, 110, 40, 255],
                                 image: None,
                                 link: None,
+                                stream: None,
                             });
                         } else if let Some(r) = report {
                             self.cell_popup = None;
@@ -13963,6 +15157,7 @@ impl HookEchoApp {
                                 color: report_color(r.kind),
                                 image: None,
                                 link: None,
+                                stream: None,
                             });
                         } else {
                             let cell_hit = self.filters.show_cells
@@ -13996,6 +15191,7 @@ impl HookEchoApp {
                                         color: cell_color(c.kind),
                                         image: None,
                                         link: None,
+                                        stream: None,
                                     });
                                 }
                                 None => {
@@ -14047,7 +15243,15 @@ impl HookEchoApp {
                                             color: f.stroke,
                                             image: None,
                                             link: None,
+                                            stream: None,
                                         });
+                                        if self.detail.is_none()
+                                            && pane_style.ndfd_point().is_some()
+                                            && !self.views[idx].show_radar
+                                            && self.views[idx].fields_on.is_empty()
+                                        {
+                                            self.fetch_ndfd_point(ctx, idx, pane_style, lon, lat);
+                                        }
                                     }
                                 }
                             }
@@ -14085,6 +15289,11 @@ impl HookEchoApp {
                 .clamp(0.0, bias_cap) as f64
         };
         let satellite_time = self.prepare_satellite_pane(idx, pane_style);
+        if self.views[idx].show_legend {
+            if let Some(valid) = satellite_time.filter(|_| pane_style.ndfd_layer().is_some()) {
+                self.ndfd_legends.update(ctx, &self.spawner, &self.http, pane_style, valid);
+            }
+        }
         self.tiles.set_goes_time(satellite_time);
         let is_raster = is_raster && (!pane_style.timed() || satellite_time.is_some());
         let visible = if is_raster {
@@ -14100,15 +15309,23 @@ impl HookEchoApp {
             self.goes[idx].imagery_ready = ready;
             self.goes[idx].imagery_incomplete = self.tiles.visible_failed(pane_style, &visible);
             let status = if let Some(time) = satellite_time {
-                let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
-                format!("{} satellite {}{}", if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" }, crate::timefmt::fmt_clock(time, self.active_tz(), false), offset)
-            } else { "Satellite frame unavailable".to_owned() };
+                let state = if ready { "Displayed" } else if self.goes[idx].imagery_incomplete { "Incomplete / retrying" } else { "Loading" };
+                if pane_style.ndfd_layer().is_some() {
+                    format!("{} · {state} · valid {}", pane_style.label(), time.format("%a %b %-d %HZ"))
+                } else {
+                    let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
+                    format!("{} · {state} {}{offset}", pane_style.label(), crate::timefmt::fmt_clock(time, self.active_tz(), false))
+                }
+            } else { format!("{} · frame unavailable", pane_style.label()) };
             Some(status)
         } else { None };
-        // Always run the vector-tile pipeline for its city/town labels — raster basemaps (satellite)
-        // bake in faint labels that are hard to read, so we overlay crisp haloed ones. Only the
-        // *geometry* is basemap-specific: vector basemaps draw it, raster keeps its own imagery.
-        let (visible_vector, vlabels, visible_vector_tiles) = {
+        // Raster maps still use vector-tile city/town labels where baked-in labels are faint.
+        // Blank White deliberately skips both the requests and the geographic labels.
+        let (visible_vector, vlabels, visible_vector_tiles) = if pane_style == BasemapStyle::BlankWhite {
+            self.vlabel_cache[idx] = None;
+            let labels: std::sync::Arc<[crate::vector_tiles::PlaceLabel]> = Vec::new().into();
+            (Vec::new(), labels, Vec::new())
+        } else {
             let vis = self.pane_vtiles[idx].request_view(&cam, vp, self.gesture_live, if self.adaptive.reduced && self.settings.map_quality == crate::settings::MapQuality::Auto { crate::settings::MapQuality::Performance } else { self.settings.map_quality });
             let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             // Deep-copying every visible place name every frame (for every pane) showed up at the
@@ -14154,7 +15371,7 @@ impl HookEchoApp {
         let upload_turn = !self.gesture_live || chrome::compact(ctx)
             || idx == self.frame_nr as usize % self.views.len();
         let new_vector_tiles = if upload_turn {
-            self.pane_vtiles[idx].drain_ready_budget(&mut self.map_upload_budget)
+            self.pane_vtiles[idx].drain_ready_for_view(&mut self.map_upload_budget, &visible_vector_tiles)
         } else { Vec::new() };
         if !new_tiles.is_empty() || !new_vector_tiles.is_empty() { ctx.request_repaint(); }
 
@@ -14244,8 +15461,16 @@ impl HookEchoApp {
         let cam = self.views[idx].camera;
         let map_hover = response.hover_pos().filter(|pos| cam.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some());
         let (center, scale) = cam.world_to_clip_uniform(vp);
+        if pane_style == BasemapStyle::BlankWhite {
+            ui.painter().rect_filled(prect, 0.0, egui::Color32::WHITE);
+        }
         if cam.globe {
-            ui.painter().with_clip_rect(prect).circle_filled(prect.center(), cam.globe_radius() as f32, egui::Color32::from_rgb(20, 35, 48));
+            let globe_color = if pane_style == BasemapStyle::BlankWhite {
+                egui::Color32::from_rgb(247, 248, 249)
+            } else {
+                egui::Color32::from_rgb(20, 35, 48)
+            };
+            ui.painter().with_clip_rect(prect).circle_filled(prect.center(), cam.globe_radius() as f32, globe_color);
         }
         let (wind_upload, wind) = self.wind_gpu_frame(idx, &cam, vp);
         if let Some(started) = trace_started.as_ref() {
@@ -14265,6 +15490,7 @@ impl HookEchoApp {
             camera_center: center,
             camera_scale: scale,
             globe: cam.globe_uniform(vp),
+            planar: cam.planar_uniform(vp),
             world_per_pixel: cam.world_per_pixel() as f32,
             new_tiles,
             visible,
@@ -14272,6 +15498,9 @@ impl HookEchoApp {
             vector_over_raster: pane_style == BasemapStyle::HybridSatellite,
             radar_upload,
             draw_radar,
+            radar_surface: draw_radar && !cam.globe && cam.pitch_deg > 1.0
+                && self.views[idx].custom_product.is_none()
+                && crate::render::radar_surface_supported(self.views[idx].moment),
             overlay_upload: if first {
                 self.pending_overlay.take()
             } else {
@@ -14293,18 +15522,23 @@ impl HookEchoApp {
         ui.painter()
             .add(egui_wgpu::Callback::new_paint_callback(prect, cb));
         // Captions must follow the opaque GPU callback in paint order.
-        if let Some(previous) = self.views[idx].retained_station.as_deref() {
+        if let Some(previous) = self.views[idx].retained_station.as_deref().filter(|_| self.views[idx].show_radar) {
             let requested = self.views[idx].site.as_deref().unwrap_or("station");
             let time = self.views[idx].displayed_time().map_or_else(|| "unknown time".into(), |time| time.format("%H:%M:%SZ").to_string());
             let state = if self.views[idx].error.is_some() { "Unavailable" } else { "Loading" };
             let painter = ui.painter().with_clip_rect(prect);
-            let text = painter.layout(format!("{state} {requested} · showing {previous} scan {time}"),
+            let text = painter.layout(format!("{state} {requested} · last {previous} scan {time}"),
                 egui::FontId::proportional(12.0), egui::Color32::from_rgb(255, 218, 140), (prect.width() - 64.0).max(100.0));
             let position = egui::pos2((prect.right() - 30.0 - text.size().x).max(prect.left() + 12.0), prect.top() + 68.0);
             painter.rect_filled(egui::Rect::from_min_size(position - egui::vec2(4.0, 3.0), text.size() + egui::vec2(8.0, 6.0)), 3.0, egui::Color32::from_black_alpha(210));
             painter.galley(position, text, egui::Color32::WHITE);
         }
-        if let Some(status) = satellite_status {
+        // The active workspace pane already exposes imagery time/loading state in its bar.
+        // Inactive panes retain their own captions, as do mobile/ordinary/hidden-chrome views.
+        let imagery_bar_visible = idx == self.active && ctx.data(|d| {
+            d.get_temp::<usize>(egui::Id::new("workspace_imagery_timebar_pane")) == Some(idx)
+        });
+        if let Some(status) = satellite_status.filter(|_| !imagery_bar_visible) {
             let painter = ui.painter().with_clip_rect(prect);
             let text = painter.layout(status, egui::FontId::proportional(12.0), egui::Color32::WHITE, (prect.width() - 50.0).max(100.0));
             let position = egui::pos2((prect.right() - 30.0 - text.size().x).max(prect.left() + 10.0), prect.top() + 52.0);
@@ -14341,6 +15575,7 @@ impl HookEchoApp {
 
         if idx == self.active
             && self.show_radar_sites
+            && !self.settings.radar_workspace
             && !self.obs_mode
             && !self.forecast_open
             && !self.cells_window.open
@@ -14350,6 +15585,7 @@ impl HookEchoApp {
         {
             let focused = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
+                    if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { return None; }
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
                     (d <= 16.0 * 16.0).then_some((s, d))
@@ -14371,6 +15607,35 @@ impl HookEchoApp {
                                 ui.separator();
                                 ui.label(egui::RichText::new(site.id).strong().size(17.0).color(egui::Color32::WHITE));
                                 ui.label(format!("{}, {}", site.city, site.state));
+                                let availability = self.radar_site_status.as_ref().map_or(
+                                    wxdata::radar_status::Availability::Unknown,
+                                    |report| report.availability(site.id, Utc::now()),
+                                );
+                                let status = match availability {
+                                    wxdata::radar_status::Availability::Recent => "NOAA: recent Level II receipt".to_owned(),
+                                    wxdata::radar_status::Availability::Delayed => "NOAA: Level II receipt delayed over 10 min".to_owned(),
+                                    wxdata::radar_status::Availability::Stale => "NOAA: no Level II receipt for over 25 min".to_owned(),
+                                    wxdata::radar_status::Availability::NotOperating => format!(
+                                        "NOAA: RDA {}",
+                                        self.radar_site_status.as_ref()
+                                            .and_then(|report| report.stations.get(site.id))
+                                            .and_then(|station| station.rda_state.as_deref())
+                                            .unwrap_or("not operating"),
+                                    ),
+                                    wxdata::radar_status::Availability::Unknown => "NOAA status unavailable".to_owned(),
+                                };
+                                ui.label(egui::RichText::new(status).small());
+                                ui.label(egui::RichText::new("Pin color reflects NOAA network status").small().color(egui::Color32::from_rgb(149, 188, 211)));
+                                if self.views[idx].site.as_deref() == Some(site.id) {
+                                    let displayed = self.views[idx].displayed_time().map_or_else(
+                                        || "Displayed scan: not loaded".to_owned(),
+                                        |time| {
+                                            let age = Utc::now().signed_duration_since(time).num_minutes().max(0);
+                                            format!("Displayed scan: {age} min old")
+                                        },
+                                    );
+                                    ui.label(egui::RichText::new(displayed).small());
+                                }
                                 ui.label(egui::RichText::new("Visual range guide").small().color(egui::Color32::from_rgb(149, 188, 211)));
                             }
                     });
@@ -14543,6 +15808,8 @@ impl HookEchoApp {
                 )
             };
             let z = cam.zoom;
+            let blue_regional = basemap.vector_palette() == Some(crate::basemap_style::Palette::Blue)
+                && z < 9.0;
             // Repeat route shields from regional zoom; collision placement still prevents overlap.
             let repeat_shields = z >= 5.0;
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
@@ -14558,6 +15825,7 @@ impl HookEchoApp {
                     let returning = self.labels.was_shown(label_key(l));
                     // Different enter/leave thresholds prevent a label toggling at its minzoom.
                     l.visible_stable(z, returning)
+                        && !(blue_regional && l.shield != crate::vector_tiles::RoadShield::None)
                         && (!(self.gesture_live
                             && self.settings.map_quality == crate::settings::MapQuality::Auto)
                             || returning || l.city || l.priority() <= 1)
@@ -14759,19 +16027,33 @@ impl HookEchoApp {
         // Raster basemap attribution (provider styles + USGS satellite).
         if pane_style.is_raster() {
             let col = egui::Color32::from_gray(200).gamma_multiply(0.6);
-            painter.text(
-                egui::pos2(prect.left() + 6.0, prect.bottom() - 4.0),
-                egui::Align2::LEFT_BOTTOM,
-                if pane_style == BasemapStyle::CustomXyz
-                    && !self.settings.custom_tile_attribution.is_empty()
-                {
-                    self.settings.custom_tile_attribution.as_str()
-                } else {
-                    pane_style.attribution()
-                },
-                egui::FontId::proportional(10.0),
-                col,
-            );
+            if pane_style == BasemapStyle::RainViewerGlobal {
+                let credit = ui.put(
+                    egui::Rect::from_min_size(
+                        egui::pos2(prect.left() + 6.0, prect.bottom() - 18.0),
+                        egui::vec2(185.0, 14.0),
+                    ),
+                    egui::Label::new(egui::RichText::new(pane_style.attribution()).size(10.0).color(col))
+                        .sense(egui::Sense::click()),
+                ).on_hover_text("Open RainViewer source attribution");
+                if credit.clicked() {
+                    ctx.open_url(egui::OpenUrl::new_tab("https://www.rainviewer.com/"));
+                }
+            } else {
+                painter.text(
+                    egui::pos2(prect.left() + 6.0, prect.bottom() - 4.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    if pane_style == BasemapStyle::CustomXyz
+                        && !self.settings.custom_tile_attribution.is_empty()
+                    {
+                        self.settings.custom_tile_attribution.as_str()
+                    } else {
+                        pane_style.attribution()
+                    },
+                    egui::FontId::proportional(10.0),
+                    col,
+                );
+            }
         }
 
         // Radar-data attribution, opposite the basemap credit so neither has to know the other's
@@ -15316,18 +16598,36 @@ impl HookEchoApp {
                     && ui::priority::track_visible(c, &self.settings.priority_rules, chrono::Utc::now()) {
                     let dark = egui::Color32::from_rgb(6, 20, 33);
                     let blue = egui::Color32::from_rgb(98, 185, 255);
-                    let points: Vec<_> = c.track.iter().filter(|point| point.minutes <= self.settings.priority_rules.track_horizon_min.clamp(15,60)
+                    let rules = &self.settings.priority_rules;
+                    let points: Vec<_> = c.track.iter().filter(|point| point.minutes <= rules.track_horizon_min.clamp(15,60)
                         && point.lon.is_finite() && point.lat.is_finite()
                         && point.lon.abs() <= 180.0 && point.lat.abs() <= 90.0)
-                        .map(|tp| (to_screen(tp.lon, tp.lat), tp.minutes)).collect();
-                    let mut prev = p;
-                    for &(tpp, _) in &points {
-                        for (width, color) in [(9.0, dark), (4.5, blue)] {
-                            painter.line_segment([prev, tpp], egui::Stroke::new(width, color));
+                        .map(|tp| (to_screen(tp.lon, tp.lat), tp.minutes, [tp.lon, tp.lat])).collect();
+                    if rules.track_cone && self.cell_popup.as_ref().is_some_and(|selected| selected.id == c.id) {
+                        if let Some((_, _, end)) = points.last() {
+                            let (distance_km, bearing) = crate::geo::great_circle([c.lon, c.lat], *end);
+                            let width_km = 3.3 + distance_km * 0.15;
+                            let left = crate::geo::destination_point(*end, bearing - 90.0, width_km);
+                            let right = crate::geo::destination_point(*end, bearing + 90.0, width_km);
+                            painter.add(egui::Shape::convex_polygon(
+                                vec![p, to_screen(left[0], left[1]), to_screen(right[0], right[1])],
+                                blue.gamma_multiply(0.10), egui::Stroke::new(1.0, blue.gamma_multiply(0.65))));
                         }
-                        prev = tpp;
                     }
-                    for (tpp, minutes) in points {
+                    if rules.track_line {
+                        let mut prev = p;
+                        for &(tpp, _, _) in &points {
+                            for (width, color) in [(9.0, dark), (4.5, blue)] {
+                                painter.line_segment([prev, tpp], egui::Stroke::new(width, color));
+                            }
+                            prev = tpp;
+                        }
+                    }
+                    if rules.track_initial_point {
+                        painter.circle_stroke(p, 11.0, egui::Stroke::new(2.0, blue));
+                    }
+                    if rules.track_time_points {
+                      for (tpp, minutes, _) in points {
                         painter.circle_filled(tpp, 8.0, dark);
                         painter.circle_stroke(tpp, 6.0, egui::Stroke::new(2.0, blue));
                         painter.circle_filled(tpp, 2.0, blue);
@@ -15343,6 +16643,13 @@ impl HookEchoApp {
                                 egui::FontId::proportional(11.0),
                                 egui::Color32::WHITE,
                             );
+                        }
+                      }
+                    }
+                    if self.cell_popup.as_ref().is_some_and(|selected| selected.id == c.id) {
+                        if let Some(speed) = c.mvt_kt {
+                            painter.text(p + egui::vec2(14.0, 13.0), egui::Align2::LEFT_TOP,
+                                rules.format_track_speed(speed), egui::FontId::proportional(11.0), blue);
                         }
                     }
                 }
@@ -15609,6 +16916,27 @@ impl HookEchoApp {
                     );
                 }
             }
+            // Highway cameras are separate from airport observations. Their square pins stay
+            // usable even when the METAR station lookup fails or the station layer is off.
+            let highway_col = egui::Color32::from_rgb(91, 220, 206);
+            for site in &self.stations.cams {
+                let w = crate::render::mercator::lonlat_to_world(site.lon, site.lat);
+                let (sx, sy) = cam.world_to_screen(w, vp);
+                let p = egui::pos2(prect.left() + sx, prect.top() + sy);
+                if !prect.contains(p) { continue; }
+                let pin = egui::Rect::from_center_size(p, egui::vec2(8.0, 8.0));
+                painter.rect_filled(pin, 2.0, highway_col);
+                painter.rect_stroke(pin, 2.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(190)),
+                    egui::StrokeKind::Inside);
+                if cam.zoom >= 10.0 {
+                    painter.text(p + egui::vec2(6.0, -5.0), egui::Align2::LEFT_BOTTOM,
+                        &site.name, egui::FontId::proportional(10.0), highway_col);
+                }
+                if map_hover.is_some_and(|hover| pin.expand(4.0).contains(hover)) {
+                    response.clone().show_tooltip_text(format!("{} · {}", site.agency, site.name));
+                }
+            }
         }
 
         // Live stations: a dot per station, warm where it is hot and cool where it is not, so a
@@ -15769,6 +17097,9 @@ impl HookEchoApp {
                 };
                 let mut spotter_click: Option<wxdata::spotters::Spotter> = None;
                 for sp in &self.spotters {
+                    if !sp.within_active_timeframe(now, self.settings.spotter_max_age_minutes) {
+                        continue;
+                    }
                     if (sp.lon - site_pos[0]).abs() > max_dlon
                         || (sp.lat - site_pos[1]).abs() > max_dlat
                     {
@@ -15801,8 +17132,8 @@ impl HookEchoApp {
                     painter.circle_filled(p, 3.5, accent);
                     // Movement arrow tick, heading clockwise from north.
                     if let Some(h) = sp.heading {
-                        let r = h.to_radians();
-                        let dir = egui::vec2(r.sin(), -r.cos());
+                        let heading = cam.heading_on_screen(w, h as f64, vp);
+                        let dir = egui::vec2(heading.0, heading.1);
                         painter.line_segment(
                             [p + dir * 8.0, p + dir * 14.0],
                             egui::Stroke::new(2.0, egui::Color32::WHITE),
@@ -16021,8 +17352,8 @@ impl HookEchoApp {
                 painter.circle_stroke(p, 3.0, egui::Stroke::new(1.5, col));
                 // Wind barb, rotated so the shaft points toward the wind source (FROM bearing).
                 if let Some(dir) = ob.wdir_deg {
-                    let th = dir.to_radians();
-                    let (up, right) = ([th.sin(), -th.cos()], [th.cos(), th.sin()]);
+                    let heading = cam.heading_on_screen(crate::render::mercator::lonlat_to_world(ob.lon, ob.lat), dir as f64, vp);
+                    let (up, right) = ([heading.0, heading.1], [-heading.1, heading.0]);
                     let map = |u: [f32; 2]| {
                         p + egui::vec2(
                             (u[0] * right[0] + u[1] * up[0]) * 22.0,
@@ -16306,7 +17637,7 @@ impl HookEchoApp {
         // a rebuild is in flight the previous rect keeps it registered to the ground.
         if self.show_blockage {
             if let Some((_, tex, world)) = &self.blockage_tex {
-                if cam.globe {
+                if cam.globe || cam.pitch_deg != 0.0 || cam.bearing_deg != 0.0 {
                     crate::geo::paint_image(&painter, &cam, prect, tex.id(), *world);
                 } else {
                 let a = cam.world_to_screen((world[0], world[1]), vp);
@@ -16325,9 +17656,9 @@ impl HookEchoApp {
             }
         }
 
-        // Range rings + azimuth spokes around this pane's site (feature HH).
-        if self.show_range_rings {
-            if let Some(site) = view.site.as_deref().and_then(wxdata::sites::site_by_id) {
+        // Fixed distance reference and the actual loaded-scan edge have separate switches.
+        if view.show_radar && (self.show_range_rings || self.show_scan_boundary) {
+            if let Some(site) = view.displayed_station().or(view.site.as_deref()).and_then(wxdata::sites::site_by_id) {
                 let origin = [site.longitude as f64, site.latitude as f64];
                 let col = egui::Color32::from_gray(150).gamma_multiply(0.55);
                 let to_screen = |lon: f64, lat: f64| {
@@ -16335,23 +17666,54 @@ impl HookEchoApp {
                     let (sx, sy) = cam.world_to_screen(w, vp);
                     egui::pos2(prect.left() + sx, prect.top() + sy)
                 };
-                for km in [50.0, 100.0, 150.0, 200.0] {
-                    let pts: Vec<_> = (0..=72).map(|i| crate::geo::destination_point(origin, i as f64 * 5.0, km)).collect();
-                    crate::geo::paint_path(&painter, &cam, prect, &pts, egui::Stroke::new(1.0, col));
-                    if cam.zoom >= 6.0 {
-                        let top = crate::geo::destination_point(origin, 0.0, km);
-                        painter.text(
-                            to_screen(top[0], top[1]),
-                            egui::Align2::CENTER_BOTTOM,
-                            format!("{km:.0} km"),
-                            egui::FontId::proportional(10.0),
-                            col,
-                        );
+                if self.show_range_rings {
+                    for km in [50.0, 100.0, 150.0, 200.0] {
+                        let pts: Vec<_> = (0..=72).map(|i| crate::geo::destination_point(origin, i as f64 * 5.0, km)).collect();
+                        crate::geo::paint_path(&painter, &cam, prect, &pts, egui::Stroke::new(1.0, col));
+                        if cam.zoom >= 6.0 {
+                            let top = crate::geo::destination_point(origin, 0.0, km);
+                            painter.text(
+                                to_screen(top[0], top[1]),
+                                egui::Align2::CENTER_BOTTOM,
+                                format!("{km:.0} km"),
+                                egui::FontId::proportional(10.0),
+                                col,
+                            );
+                        }
+                    }
+                    for az in (0..360).step_by(45) {
+                        let far = crate::geo::destination_point(origin, az as f64, 200.0);
+                        crate::geo::paint_path(&painter, &cam, prect, &[origin, far], egui::Stroke::new(0.6, col.gamma_multiply(0.7)));
                     }
                 }
-                for az in (0..360).step_by(45) {
-                    let far = crate::geo::destination_point(origin, az as f64, 200.0);
-                    crate::geo::paint_path(&painter, &cam, prect, &[origin, far], egui::Stroke::new(0.6, col.gamma_multiply(0.7)));
+                if self.show_scan_boundary {
+                    if let Some(source_extent) = view.volume.as_ref().and_then(|volume| {
+                        wxdata::level2::display_extent_km(
+                            &volume.scan,
+                            view.moment,
+                            view.tilt,
+                            view.selected_cut_ms(),
+                        )
+                    }) {
+                        let clipped = !self.settings.full_coverage_radar
+                            && wxdata::sites::is_nexrad(site.id);
+                        let extent = if clipped { source_extent.min(230.0) } else { source_extent };
+                        let boundary: Vec<_> = (0..=120)
+                            .map(|i| crate::geo::destination_point(origin, i as f64 * 3.0, extent))
+                            .collect();
+                        let edge = egui::Color32::from_rgb(75, 170, 255);
+                        crate::geo::paint_path(&painter, &cam, prect, &boundary, egui::Stroke::new(1.4, edge));
+                        if cam.zoom >= 5.0 {
+                            let top = crate::geo::destination_point(origin, 0.0, extent);
+                            painter.text(
+                                to_screen(top[0], top[1]),
+                                egui::Align2::CENTER_BOTTOM,
+                                format!("Display extent {:.0} km", extent),
+                                egui::FontId::proportional(11.0),
+                                edge,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -16382,11 +17744,13 @@ impl HookEchoApp {
             }
         }
 
-        // Radar lens: spaced bright pins keep the network legible; every site remains clickable.
+        // Radar lens: spaced bright pins keep visible networks legible and clickable.
         if self.show_radar_sites {
+            let status_now = Utc::now();
             let current = self.views[idx].site.as_deref();
             let hovered = map_hover.and_then(|pos| {
                 sites_in_world().iter().filter_map(|(s, w)| {
+                    if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { return None; }
                     let (x, y) = cam.world_to_screen(*w, vp);
                     let d = pos.distance_sq(egui::pos2(prect.left() + x, prect.top() + y));
                     (d <= 16.0 * 16.0).then_some((s.id, d))
@@ -16396,6 +17760,7 @@ impl HookEchoApp {
             let spacing = 110.0;
             let mut cells = std::collections::HashMap::new();
             for (s, w) in sites_in_world() {
+                if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { continue; }
                 if !s.id.starts_with('K') || !(-126.0..-66.0).contains(&s.longitude)
                     || !(24.0..50.0).contains(&s.latitude) { continue; }
                 let (sx, sy) = cam.world_to_screen(*w, vp);
@@ -16409,16 +17774,32 @@ impl HookEchoApp {
             }
             let strong: std::collections::HashSet<&str> = cells.values().map(|(id, _)| *id).collect();
             for (s, w) in sites_in_world() {
+                if !self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)) { continue; }
                 let (sx, sy) = cam.world_to_screen(*w, vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
                 if !prect.contains(p) { continue; }
                 let selected = current == Some(s.id);
                 let bright = selected || hovered == Some(s.id) || strong.contains(s.id);
-                painter.circle_filled(p, if bright { 5.4 } else { 2.4 },
-                    if bright { egui::Color32::from_rgb(31, 108, 212) }
-                    else { egui::Color32::from_rgba_unmultiplied(139, 184, 213, 110) });
-                if bright {
-                    painter.circle_stroke(p, 5.4, egui::Stroke::new(1.4, egui::Color32::from_rgb(194, 231, 255)));
+                // TDWR sites are omitted from the wide-area NEXRAD spacing pass above. At a
+                // city-scale zoom, do not leave their opt-in map layer as almost invisible dots.
+                let tdwr = wxdata::sites::network(s.id) == wxdata::sites::Network::Tdwr;
+                let prominent = bright || (tdwr && cam.zoom >= 8.0);
+                let availability = self.radar_site_status.as_ref().map_or(
+                    wxdata::radar_status::Availability::Unknown,
+                    |report| report.availability(s.id, status_now),
+                );
+                let color = match availability {
+                    wxdata::radar_status::Availability::Delayed => egui::Color32::from_rgb(226, 170, 42),
+                    wxdata::radar_status::Availability::Stale => egui::Color32::from_rgb(218, 99, 49),
+                    wxdata::radar_status::Availability::NotOperating => egui::Color32::from_rgb(211, 65, 75),
+                    _ if tdwr && !selected => egui::Color32::from_rgb(20, 149, 178),
+                    _ => egui::Color32::from_rgb(31, 108, 212),
+                };
+                painter.circle_filled(p, if prominent { 5.4 } else { 2.4 },
+                    if prominent { color }
+                    else { color.gamma_multiply(0.55) });
+                if prominent {
+                    painter.circle_stroke(p, 5.4, egui::Stroke::new(1.4, color.gamma_multiply(0.85)));
                     painter.circle_filled(p, 1.5, egui::Color32::WHITE);
                 }
                 if focus == Some(s.id) {
@@ -16461,8 +17842,10 @@ impl HookEchoApp {
                 let km = m.alert_radius_mi * crate::geo::KM_PER_MILE;
                 let edge = crate::geo::destination_point([m.lon, m.lat], 90.0, km);
                 let ew = crate::render::mercator::lonlat_to_world(edge[0], edge[1]);
-                let (ex, _) = cam.world_to_screen(ew, vp);
-                let r = (prect.left() + ex - p.x).abs();
+                let (ex, ey) = cam.world_to_screen(ew, vp);
+                let r = egui::pos2(prect.left() + ex, prect.top() + ey).distance(p);
+                let geographic = cam.globe || cam.pitch_deg != 0.0 || cam.bearing_deg != 0.0;
+                let ring: Vec<_> = if geographic { (0..=144).map(|i| crate::geo::destination_point([m.lon, m.lat], i as f64 * 2.5, km)).collect() } else { Vec::new() };
                 if r > 4.0 && r < 4000.0 {
                     for (width, color) in [
                         (24.0, egui::Color32::from_rgba_unmultiplied(106, 199, 255, 24)),
@@ -16470,13 +17853,18 @@ impl HookEchoApp {
                         (9.0, egui::Color32::from_rgb(6, 26, 43)),
                         (4.0, egui::Color32::from_rgb(167, 228, 255)),
                     ] {
-                        painter.circle_stroke(p, r, egui::Stroke::new(width, color));
+                        if geographic { crate::geo::paint_path(&painter, &cam, prect, &ring, egui::Stroke::new(width, color)); }
+                        else { painter.circle_stroke(p, r, egui::Stroke::new(width, color)); }
                     }
-                    if r > 9.0 {
+                    if r > 9.0 && !geographic {
                         painter.circle_stroke(p, r - 5.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(62, 156, 219)));
                     }
                     if r >= 35.0 {
-                        let edge = p + egui::vec2(r * std::f32::consts::FRAC_1_SQRT_2, -r * std::f32::consts::FRAC_1_SQRT_2);
+                        let edge = if geographic {
+                            let ll = crate::geo::destination_point([m.lon, m.lat], 45.0, km);
+                            let xy = cam.world_to_screen(crate::render::mercator::lonlat_to_world(ll[0], ll[1]), vp);
+                            egui::pos2(prect.left() + xy.0, prect.top() + xy.1)
+                        } else { p + egui::vec2(r * std::f32::consts::FRAC_1_SQRT_2, -r * std::f32::consts::FRAC_1_SQRT_2) };
                         let badge = egui::Rect::from_min_size(
                             egui::pos2(
                                 (edge.x + 12.0).clamp(prect.left() + 8.0, (prect.right() - 124.0).max(prect.left() + 8.0)),
@@ -16649,7 +18037,7 @@ impl HookEchoApp {
             if st.points.len() < 2 {
                 continue;
             }
-            crate::geo::paint_path(&painter, &cam, prect, &st.points, egui::Stroke::new(2.5, st.color));
+            crate::geo::paint_path(&painter, &cam, prect, &st.points, egui::Stroke::new(st.width, st.color));
         }
 
         // Saved watch zones, plus the one being clicked out right now.
@@ -16756,6 +18144,44 @@ impl HookEchoApp {
                         egui::FontId::proportional(11.0),
                         egui::Color32::WHITE,
                     );
+                }
+            }
+        }
+
+        // User-defined storm motion. This is a geometric estimate, not an official forecast.
+        if let Some(origin) = self.manual_storm_track.origin {
+            let track = &self.manual_storm_track;
+            let col = egui::Color32::from_rgb(78, 198, 245);
+            let screen = |ll: [f64; 2]| {
+                let world = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                let (x, y) = cam.world_to_screen(world, vp);
+                egui::pos2(prect.left() + x, prect.top() + y)
+            };
+            painter.circle_filled(screen(origin), 5.0, col);
+            if track.endpoint_set {
+                let horizon = track.horizon_min;
+                let end = track.point_at(horizon).unwrap();
+                let distance_km = track.speed_kt * 1.852 * horizon as f64 / 60.0;
+                let left = crate::geo::destination_point(origin, track.bearing_deg - track.cone_half_angle_deg, distance_km);
+                let right = crate::geo::destination_point(origin, track.bearing_deg + track.cone_half_angle_deg, distance_km);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![screen(origin), screen(left), screen(right)],
+                    col.gamma_multiply(0.12),
+                    egui::Stroke::new(1.25, col.gamma_multiply(0.75)),
+                ));
+                crate::geo::paint_path(&painter, &cam, prect, &[origin, end], egui::Stroke::new(2.0, col));
+                for minute in (15..=horizon).step_by(15) {
+                    if let Some(point) = track.point_at(minute) {
+                        let p = screen(point);
+                        painter.circle_filled(p, 3.5, col);
+                        let (offset, align) = if minute / 15 % 2 == 0 {
+                            (egui::vec2(5.0, 5.0), egui::Align2::LEFT_TOP)
+                        } else {
+                            (egui::vec2(5.0, -4.0), egui::Align2::LEFT_BOTTOM)
+                        };
+                        painter.text(p + offset, align,
+                            format!("+{minute}m"), egui::FontId::proportional(11.0), col);
+                    }
                 }
             }
         }
@@ -16957,14 +18383,19 @@ impl HookEchoApp {
             }
         }
 
-        // The boxed legend is desktop-only; Android draws a full-width color scale in the mobile
-        // chrome (see `app::mobile`), so drawing both would be redundant.
+        // Android draws radar and field scales in its mobile chrome, but the NOAA forecast scale
+        // is a separate source image and still needs its own readable card on every platform.
+        let workspace_chrome = self.settings.radar_workspace && !chrome::compact(ctx);
+        let mut field_status_y = if workspace_chrome { 84.0 } else { 12.0 };
+        // The phone header's station and source rows occupy the first ~150 px of the map.
+        let mut y = if chrome::compact(ctx) { 160.0 } else if workspace_chrome { 84.0 } else { 48.0 };
         if view.show_legend && !cfg!(target_os = "android") {
             // The moment's scale floats over this pane's right edge (no panel, no card) so the map
             // keeps the pixels; the field/wind ramps still need their cards.
-            if view.volume.is_some() {
+            if view.volume.is_some() && view.show_radar {
                 let (df, dl) = display_units(view.moment, &self.settings);
-                ui::legend::draw_vertical(
+                let draw_scale = if self.settings.radar_workspace && !chrome::compact(ctx) { ui::legend::draw_horizontal } else { ui::legend::draw_vertical };
+                draw_scale(
                     &painter,
                     prect,
                     view.moment,
@@ -16979,13 +18410,12 @@ impl HookEchoApp {
             // Every pane ducks by the same amount rather than only the top row: in a 2x2 grid the
             // lower cards then sit a little further from their pane's edge, which nobody notices,
             // and the alternative is a rect comparison that has to know about window insets.
-            let mut y = 48.0;
             // Whichever gridded layer the user actually sees on top — the last enabled one in
             // paint order — gets its scale keyed underneath. Without this, MESH/QPE/VIL and the
             // categorical classifications were unlabeled color.
             if let Some(top) = crate::render::FieldLayer::draw_order()
                 .rev()
-                .find(|l| view.fields_on.contains(l))
+                .find(|l| view.fields_on.contains(l) && self.field_aligned(idx, *l))
             {
                 y += if top == crate::render::FieldLayer::ModelDiff {
                     ui::legend::draw_diff(&painter, prect, self.diff_field, y)
@@ -16996,9 +18426,13 @@ impl HookEchoApp {
             // Wind particles carry their own scale — it isn't a FieldLayer, so it needs its own
             // call rather than a slot in DRAW_ORDER.
             if self.show_wind && self.wind.is_some() {
-                ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
+                y += ui::legend::draw_ramp_units(&painter, prect, &crate::render::field_ramps::WIND, y, Some(&self.settings));
             }
         }
+        if view.show_legend && view.basemap.ndfd_layer().is_some() && satellite_time.is_some() {
+            y += self.ndfd_legends.draw(&painter, prect, view.basemap, y);
+        }
+        if workspace_chrome { field_status_y = y + 20.0; }
 
         if let Some((layer, valid, selected, tolerance, aligned)) =
             crate::render::FieldLayer::draw_order().rev().find_map(|layer| {
@@ -17038,7 +18472,7 @@ impl HookEchoApp {
             let font = egui::FontId::proportional(12.0);
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let rect = egui::Rect::from_min_size(
-                prect.left_top() + egui::vec2(12.0, 12.0),
+                prect.left_top() + egui::vec2(12.0, field_status_y),
                 galley.size() + egui::vec2(16.0, 10.0),
             );
             painter.rect_filled(rect, 6.0, egui::Color32::from_black_alpha(220));
@@ -17107,8 +18541,62 @@ impl HookEchoApp {
             if !selection.satellite.follow_radar && selection.satellite.time.is_none() { return false; }
             if self.field_state(pane, layer).is_none_or(|state| state.metadata.is_none()) { return false; }
         }
+        if layer.is_l3_grid() && self.pane_fields.get(&(pane, layer)).is_none_or(|state| {
+            state.metadata.is_none()
+                || state.requested_site.as_deref() != self.views[pane].site.as_deref()
+        }) {
+            return false;
+        }
         self.field_time_status(pane, layer)
             .is_none_or(|(_, _, _, aligned)| aligned)
+    }
+
+    fn show_mrms_loop_frame(&mut self, layer: crate::render::FieldLayer) {
+        let Some(frame) = self.mrms_loops.iter().find(|loop_state| loop_state.layer == layer)
+            .and_then(|loop_state| loop_state.frames.get(loop_state.index)).cloned() else { return; };
+        let upload = self.field_upload(layer, frame.field());
+        if let Some(state) = self.fields.get_mut(&layer) {
+            state.pending = Some(upload);
+            state.metadata = Some((frame.grid.clone(), frame.stamp.clone()));
+            state.frame = Some(frame);
+        }
+    }
+
+    fn step_mrms_loop(&mut self, layer: crate::render::FieldLayer, delta: isize) {
+        let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| loop_state.layer == layer) else { return; };
+        let len = loop_state.frames.len();
+        if len == 0 { return; }
+        loop_state.index = (loop_state.index as isize + delta).rem_euclid(len as isize) as usize;
+        loop_state.last_step = Instant::now();
+        self.show_mrms_loop_frame(layer);
+    }
+
+    /// Request the adjacent six-frame public archive window without clearing the displayed field.
+    fn request_mrms_adjacent_window(&mut self, layer: crate::render::FieldLayer, direction: isize,
+        keep_playing: bool) -> bool {
+        let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == layer) else { return false; };
+        if loop_state.requested_at.is_none() || loop_state.loading || direction == 0 { return false; }
+        if direction > 0 {
+            let Some(last) = loop_state.frames.last().map(|frame| frame.stamp.valid_time) else { return false; };
+            if last >= Utc::now() - chrono::Duration::minutes(3) {
+                loop_state.playing = false;
+                return false;
+            }
+            loop_state.requested_at = Some((last + chrono::Duration::minutes(13)).min(Utc::now()));
+            loop_state.follow_from = Some(last);
+            loop_state.backward_from = None;
+        } else {
+            let Some(first) = loop_state.frames.first().map(|frame| frame.stamp.valid_time) else { return false; };
+            loop_state.requested_at = Some(first - chrono::Duration::seconds(1));
+            loop_state.backward_from = Some(first);
+            loop_state.follow_from = None;
+        }
+        loop_state.playing = keep_playing;
+        loop_state.loading = true;
+        loop_state.error = None;
+        loop_state.last_step = Instant::now();
+        self.fields.entry(layer).or_default().last_fetch = None;
+        true
     }
 
     /// The field's source time, selected analysis time, tolerance, and alignment result.
@@ -17126,26 +18614,32 @@ impl HookEchoApp {
             .field_state(pane, layer)
             .and_then(|state| state.metadata.as_ref())
             .map(|(_, stamp)| stamp)?;
+        if !self.views[pane].show_radar
+            && self.mrms_loops.iter().any(|loop_state| loop_state.layer == layer) {
+            let tolerance = field_time_tolerance(layer);
+            return Some((stamp.valid_time, stamp.valid_time, tolerance, true));
+        }
         let selected_time = if layer.is_native_abi() {
             let view = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
             if view.satellite.follow_radar { view.displayed_time().or(view.timeline.selected_time()) } else { view.satellite.time }
         } else {
             self.views[pane].displayed_time().or(self.views[pane].timeline.selected_time())
         };
-        // A live MRMS mosaic is independent of the site's last completed scan. That scan can
-        // lag by ten minutes even while the national field is fresh; archive scrubs still use
-        // their selected instant.
-        let analysis_time = if layer == crate::render::FieldLayer::Mrms {
-            mrms_reference_time(self.views[pane].timeline.following, selected_time, Utc::now())?
-        } else {
-            selected_time?
-        };
+        // Live MRMS fields are independent of the site's last completed scan. That scan can
+        // lag while the national field is fresh; archive scrubs still use their selected instant.
         let tolerance = self
             .settings
             .alignment_tolerance_minutes
             .map_or_else(|| field_time_tolerance(layer), |minutes| {
                 chrono::Duration::minutes(i64::from(minutes))
             });
+        let live_mrms = matches!(layer, crate::render::FieldLayer::Mrms | crate::render::FieldLayer::MrmsCatalog(_) | crate::render::FieldLayer::HailSwath);
+        let analysis_time = if live_mrms {
+            let reference = mrms_reference_time(self.views[pane].timeline.following, selected_time, Utc::now())?;
+            if self.views[pane].timeline.following {
+                accept_near_future_mrms_time(reference, stamp.valid_time, tolerance)
+            } else { reference }
+        } else { selected_time? };
         let available = [wxdata::timecoord::TimedFrame {
             valid: stamp.valid_time,
             value: (),
@@ -17284,6 +18778,7 @@ impl HookEchoApp {
                 bbox_max,
                 center,
                 globe: cam.globe_uniform(vp),
+            planar: cam.planar_uniform(vp),
                 scale,
                 dt: self.wind_dt,
                 // Pixels per world unit is the camera's own scale factor; the particle step is
@@ -17369,6 +18864,7 @@ impl HookEchoApp {
             .map(|stroke| crate::casefile::CaseStroke {
                 points: stroke.points.clone(),
                 rgba: stroke.color.to_srgba_unmultiplied(),
+                width: stroke.width,
             })
             .collect();
         crate::casefile::CaseManifest::new(
@@ -18188,6 +19684,31 @@ impl HookEchoApp {
                 if ui.button("Export field verification…").clicked() {
                     self.export_forecast_verification();
                 }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if ui.button("Download screenshot (PNG)").clicked() {
+                        self.panel_open = false;
+                        self.request_capture(ui.ctx(), ShotDest::Download);
+                    }
+                    if ui
+                        .add_enabled(self.loop_export.is_none() && !self.video_export_pending, egui::Button::new("Download loop (GIF)"))
+                        .on_hover_text("Capture the loaded radar timeline as an animated GIF")
+                        .clicked()
+                    {
+                        self.panel_open = false;
+                        self.start_loop_export(crate::loopexport::LoopFormat::Gif);
+                    }
+                    if ui
+                        .add_enabled(self.loop_export.is_none() && !self.video_export_pending, egui::Button::new("Download video (MP4 / WebM)"))
+                        .on_hover_text("Export the loaded radar timeline; the browser selects a supported video format")
+                        .clicked()
+                    {
+                        self.panel_open = false;
+                        self.start_loop_export(crate::loopexport::LoopFormat::Mp4);
+                    }
+                    toggle(ui, &mut self.settings.share_card, "Caption shared images")
+                        .on_hover_text("Stamp the site, product, valid time and source onto the downloaded image");
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     if ui.button("Save screenshot…").clicked() {
@@ -18317,6 +19838,8 @@ impl HookEchoApp {
             center: lonlat_to_world(lon, lat),
             zoom,
             globe: v.camera.globe,
+            pitch_deg: v.camera.pitch_deg,
+            bearing_deg: v.camera.bearing_deg,
         };
         v.camera_placed = true;
         if let Some(t) = time {
@@ -18606,7 +20129,7 @@ impl HookEchoApp {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .diagnostics();
-        let (cache, degraded, storage_error) = wxdata::object_cache::known_stats();
+        let (cache, cache_stats_ready, storage_error) = wxdata::object_cache::known_stats();
         let cache: Vec<_> = cache
             .into_iter()
             .map(|row| serde_json::json!({
@@ -18652,7 +20175,8 @@ impl HookEchoApp {
             "sources": sources,
             "cache": {
                 "families": cache,
-                "degraded": degraded,
+                "stats_ready": cache_stats_ready,
+                "degraded": storage_error.is_some(),
                 "storage_error": storage_error.map(|_| "storage unavailable"),
             },
             "performance_counters": counters,
@@ -18662,6 +20186,18 @@ impl HookEchoApp {
                 "radar_payload_highwater_bytes":self.radar_memory_highwater,
                 "radar_cache_evictions":self.radar_cache_evictions,
                 "radar_payload_over_budget":encoded_scan_bytes > radar_payload_budget(),
+                "visual_quality_degraded":crate::ui::motion::degraded(),
+                "adaptive_quality_reduced":self.adaptive.reduced,
+                "ui_cpu_p95_ms":self.adaptive.p95_ms(),
+                "ui_setup_cpu_p95_ms":self.adaptive.setup_p95_ms(),
+                "chrome_cpu_p95_ms":self.adaptive.chrome_p95_ms(),
+                "primary_chrome_cpu_p95_ms":self.adaptive.primary_chrome_p95_ms(),
+                "window_chrome_cpu_p95_ms":self.adaptive.window_chrome_p95_ms(),
+                "secondary_chrome_cpu_p95_ms":self.adaptive.secondary_chrome_p95_ms(),
+                "pane_sync_cpu_p95_ms":self.adaptive.sync_p95_ms(),
+                "map_build_cpu_p95_ms":self.adaptive.map_p95_ms(),
+                "ui_tail_cpu_p95_ms":self.adaptive.tail_p95_ms(),
+                "gesture_cadence_p95_ms":self.adaptive.cadence_p95_ms(),
                 "scope":"Map draw timing excludes uploads and wind advection. Memory excludes metadata, allocator and driver overhead and framework resources.",
             },
         }))
@@ -18816,8 +20352,12 @@ impl HookEchoApp {
                                 stroke.rgba[2],
                                 stroke.rgba[3],
                             ),
+                            width: stroke.width,
                         })
                         .collect();
+                    self.draw_undo.clear();
+                    self.draw_redo.clear();
+                    self.draw_gesture_active = false;
                     for bookmark in case.bookmarks {
                         if !self.settings.bookmarks.contains(&bookmark) {
                             self.settings.bookmarks.push(bookmark);
@@ -18909,11 +20449,18 @@ impl HookEchoApp {
             LoopFormat::Gif => ("hookecho-loop.gif", "gif"),
             LoopFormat::Mp4 => ("hookecho-loop.mp4", "mp4"),
         };
-        let Some(path) = crate::dialog::save_path(name, ext) else {
-            return;
-        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let Some(path) = crate::dialog::save_path(name, ext) else { return; };
+        #[cfg(target_arch = "wasm32")]
+        let path = std::path::PathBuf::from(name);
+        #[cfg(target_arch = "wasm32")]
+        let _ = ext;
         let v = &mut self.views[self.active];
-        let slots = v.timeline.frames.len(); // observed frames only (skip forecast tail)
+        let slots = if v.timeline.following {
+            v.timeline.frames.len().min(v.timeline.live_window.max(1))
+        } else {
+            v.timeline.frames.len()
+        };
         if slots == 0 {
             log::warn!("loop export: no timeline frames");
             self.toast(
@@ -18923,19 +20470,30 @@ impl HookEchoApp {
             return;
         }
         let speed = v.timeline.speed;
+        let return_live = v.timeline.following;
+        let resume_playing = v.timeline.playing;
+        let prior_playhead = v.timeline.playhead;
         let (lon, lat) =
             crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
         if v.timeline.cut_playback {
             v.timeline.enable_cut_playback(false);
             v.cut_selection = None;
         }
+        let first = if v.timeline.following { v.timeline.frames.len() - slots } else { 0 };
         v.timeline.go_begin();
+        v.timeline.playhead = first;
         self.loop_export = Some(LoopExport {
+            view_index: self.active,
             dest: path,
             format,
+            return_live,
+            resume_playing,
+            prior_playhead,
             frames: Vec::with_capacity(slots),
             remaining: slots,
+            requested_count: slots,
             settle: LOOP_SETTLE_FRAMES,
+            wait_started: wxdata::clock::Instant::now(),
             capturing: false,
             fps: speed,
             site: v.site.clone(),
@@ -18953,11 +20511,38 @@ impl HookEchoApp {
 
     /// Advance the loop export: wait for the stepped radar to settle, then request a screenshot.
     fn drive_loop_export(&mut self, ctx: &egui::Context) {
+        if self.loop_export.as_ref().is_some_and(|le| le.view_index != self.active) {
+            self.cancel_loop_export();
+            return;
+        }
         let Some(le) = &mut self.loop_export else {
             return;
         };
         if le.capturing {
             return; // waiting for the screenshot event
+        }
+        let view = &self.views[self.active];
+        let requested = view.timeline.current().map(|frame| frame.name());
+        let ready = requested.is_some_and(|name| {
+            view.volume.as_ref().is_some_and(|volume| volume.name == name)
+        });
+        if !ready {
+            let unavailable = requested.is_some_and(|name| view.failed_frame.as_deref() == Some(name));
+            if unavailable || le.wait_started.elapsed() > std::time::Duration::from_secs(30) {
+                log::warn!("loop export skipped unavailable radar frame: {}", requested.unwrap_or("unknown"));
+                le.remaining -= 1;
+                if le.remaining > 0 {
+                    self.views[self.active].timeline.step(1);
+                    le.settle = LOOP_SETTLE_FRAMES;
+                    le.wait_started = wxdata::clock::Instant::now();
+                    ctx.request_repaint();
+                } else {
+                    self.finish_loop_export(ctx);
+                }
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
+            return;
         }
         if le.settle > 0 {
             le.settle -= 1;
@@ -18965,12 +20550,17 @@ impl HookEchoApp {
             return;
         }
         le.capturing = true;
-        self.screenshot_pending = Some(ShotDest::Loop);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        self.request_capture(ctx, ShotDest::Loop);
     }
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
-    fn record_loop_frame(&mut self, image: &egui::ColorImage) {
+    fn record_loop_frame(&mut self, ctx: &egui::Context, image: &egui::ColorImage) {
+        // Screenshot events arrive before drive_loop_export runs. If the user switched
+        // panes while a capture was in flight, do not append that pane's image to this clip.
+        if self.loop_export.as_ref().is_some_and(|le| le.view_index != self.active) {
+            self.cancel_loop_export();
+            return;
+        }
         let source = self.views[self.active]
             .timeline
             .current()
@@ -18984,6 +20574,13 @@ impl HookEchoApp {
             buf.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
         }
         if let Some(img) = image::RgbaImage::from_raw(w, h, buf) {
+            #[cfg(target_arch = "wasm32")]
+            let img = if w > 960 {
+                let scaled_h = ((h as f64 * 960.0 / w as f64).round() as u32).max(1);
+                image::imageops::resize(&img, 960, scaled_h, image::imageops::FilterType::Triangle)
+            } else {
+                img
+            };
             le.frames.push(img);
             if let Some(source) = source {
                 le.sources.push(source);
@@ -18995,57 +20592,167 @@ impl HookEchoApp {
             self.views[self.active].timeline.step(1);
             if let Some(le) = &mut self.loop_export {
                 le.settle = LOOP_SETTLE_FRAMES;
+                le.wait_started = wxdata::clock::Instant::now();
             }
         } else {
-            let le = self.loop_export.take().unwrap();
-            use crate::loopexport::LoopFormat;
-            let res = match le.format {
-                #[cfg(not(target_arch = "wasm32"))]
-                LoopFormat::Gif => crate::loopexport::encode_gif(
-                    &le.frames,
-                    (1000.0 / le.fps.max(0.1)) as u16,
-                    &le.dest,
-                ),
-                // Unreachable on the web: an export needs a destination path and there is none in
-                // a browser, so `start_loop_export` returns before a capture ever begins.
-                #[cfg(target_arch = "wasm32")]
-                LoopFormat::Gif => Err(anyhow::anyhow!("GIF export needs a filesystem")),
-                // The scrubber's slider is 1..=15 fps, which is also what the encoder accepts.
-                LoopFormat::Mp4 => crate::loopexport::encode_mp4(
-                    &le.frames,
-                    le.fps.round().clamp(1.0, 15.0) as u32,
-                    &le.dest,
-                ),
+            self.finish_loop_export(ctx);
+        }
+    }
+
+    fn finish_loop_export(&mut self, _ctx: &egui::Context) {
+        let le = self.loop_export.take().unwrap();
+        self.restore_loop_timeline(&le);
+        if le.frames.is_empty() {
+            self.toast(ToastKind::Error, "Loop export failed: no radar frames were available");
+            return;
+        }
+        use crate::loopexport::LoopFormat;
+        #[cfg(target_arch = "wasm32")]
+        if le.format == LoopFormat::Mp4 {
+            match crate::loopexport::begin_browser_video(&le.frames, le.fps) {
+                Ok(promise) => {
+                    let tx = self.video_export_tx.clone();
+                    let repaint = _ctx.clone();
+                    self.video_export_pending = true;
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let outcome = wasm_bindgen_futures::JsFuture::from(promise).await
+                            .map(|value| value.as_string().unwrap_or_else(|| "Video saved".to_string()))
+                            .map_err(|error| error.as_string().unwrap_or_else(|| format!("{error:?}")));
+                        let _ = tx.send(outcome);
+                        repaint.request_repaint();
+                    });
+                    self.toast(ToastKind::Info, "Encoding video…");
+                }
+                Err(error) => self.toast(ToastKind::Error, format!("Video export failed: {error}")),
             }
-            .and_then(|()| {
-                crate::loopexport::write_manifest(
-                    &le.dest,
-                    &crate::loopexport::Manifest {
-                        site: le.site.as_deref(),
-                        product: &le.product,
-                        units: le.units,
-                        tilt: le.tilt,
-                        fps: le.fps,
-                        center: le.center,
-                        zoom: le.zoom,
-                    },
-                    &le.sources,
-                )
+            return;
+        }
+        let res = match le.format {
+            #[cfg(not(target_arch = "wasm32"))]
+            LoopFormat::Gif => crate::loopexport::encode_gif(
+                &le.frames,
+                (1000.0 / le.fps.max(0.1)) as u16,
+                &le.dest,
+            ),
+            #[cfg(target_arch = "wasm32")]
+            LoopFormat::Gif => crate::loopexport::encode_gif_bytes(
+                &le.frames,
+                (1000.0 / le.fps.max(0.1)) as u16,
+            )
+            .and_then(|bytes| match crate::dialog::save_bytes("hookecho-loop.gif", "gif", &bytes) {
+                crate::dialog::Saved::Where(_) => Ok(()),
+                crate::dialog::Saved::Failed(e) => Err(anyhow::anyhow!(e)),
+                crate::dialog::Saved::Cancelled => Err(anyhow::anyhow!("download cancelled")),
+            }),
+            // The scrubber's slider is 1..=15 fps, which is also what the encoder accepts.
+            #[cfg(not(target_arch = "wasm32"))]
+            LoopFormat::Mp4 => crate::loopexport::encode_mp4(
+                &le.frames,
+                le.fps.round().clamp(1.0, 15.0) as u32,
+                &le.dest,
+            ),
+            #[cfg(target_arch = "wasm32")]
+            LoopFormat::Mp4 => unreachable!("browser video export returned above"),
+        }
+        .and_then(|()| {
+            #[cfg(target_arch = "wasm32")]
+            { return Ok(()); }
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::loopexport::write_manifest(
+                &le.dest,
+                &crate::loopexport::Manifest {
+                    site: le.site.as_deref(),
+                    product: &le.product,
+                    units: le.units,
+                    tilt: le.tilt,
+                    fps: le.fps,
+                    center: le.center,
+                    zoom: le.zoom,
+                },
+                &le.sources,
+            )
+        });
+        match res {
+            Ok(()) => {
+                log::info!(
+                    "loop saved: {} ({} frames)",
+                    le.dest.display(),
+                    le.frames.len()
+                );
+                let msg = if le.frames.len() == le.requested_count {
+                    format!("Loop saved ({} frames)", le.frames.len())
+                } else {
+                    format!("Loop saved ({} of {} frames; unavailable scans skipped)", le.frames.len(), le.requested_count)
+                };
+                self.toast(ToastKind::Success, msg);
+            }
+            Err(e) => {
+                log::warn!("loop encode failed: {e}");
+                self.toast(ToastKind::Error, format!("Loop export failed: {e}"));
+            }
+        }
+    }
+
+    fn restore_loop_timeline(&mut self, le: &LoopExport) {
+        let Some(view) = self.views.get_mut(le.view_index) else { return; };
+        let timeline = &mut view.timeline;
+        if le.return_live {
+            timeline.go_head();
+            if le.resume_playing && !timeline.playing { timeline.toggle_play(); }
+        } else {
+            timeline.playhead = le.prior_playhead.min(timeline.frames.len().saturating_sub(1));
+            timeline.playing = le.resume_playing;
+        }
+    }
+
+    fn cancel_loop_export(&mut self) {
+        let Some(le) = self.loop_export.take() else { return; };
+        self.restore_loop_timeline(&le);
+        if matches!(self.screenshot_pending.as_ref(), Some(ShotDest::Loop)) {
+            self.screenshot_pending = None;
+        }
+        if matches!(self.share_card.as_ref(), Some((ShotDest::Loop, _))) {
+            self.share_card = None;
+            self.share_card_capture_frames = 0;
+        }
+        self.toast(ToastKind::Info, "Loop export cancelled");
+    }
+
+    fn loop_export_progress(&mut self, ctx: &egui::Context) {
+        let Some(le) = self.loop_export.as_ref() else { return; };
+        // Screenshots are the source frames for the export. Hide this control while a
+        // screenshot is pending so the progress UI never becomes part of the image.
+        if le.capturing { return; }
+        let done = le.requested_count.saturating_sub(le.remaining);
+        let total = le.requested_count;
+        let fraction = done as f32 / total.max(1) as f32;
+        let mut cancel = false;
+        egui::Area::new(egui::Id::new("loop_export_progress"))
+            .order(egui::Order::Tooltip)
+            .fade_in(false)
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -16.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(9, 23, 39))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(95, 159, 218)))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric(12, 9))
+                    .show(ui, |ui| {
+                        ui.label(format!("Exporting radar loop · {done}/{total} scans"));
+                        ui.add(egui::ProgressBar::new(fraction).desired_width(220.0));
+                        cancel = ui.button("Cancel export").clicked();
+                    });
             });
-            match res {
-                Ok(()) => {
-                    log::info!(
-                        "loop saved: {} ({} frames)",
-                        le.dest.display(),
-                        le.frames.len()
-                    );
-                    let msg = format!("Loop saved ({} frames)", le.frames.len());
-                    self.toast(ToastKind::Success, msg);
-                }
-                Err(e) => {
-                    log::warn!("loop encode failed: {e}");
-                    self.toast(ToastKind::Error, format!("Loop export failed: {e}"));
-                }
+        if cancel { self.cancel_loop_export(); }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn poll_video_export(&mut self) {
+        if let Ok(result) = self.video_export_rx.try_recv() {
+            self.video_export_pending = false;
+            match result {
+                Ok(message) => self.toast(ToastKind::Success, message),
+                Err(error) => self.toast(ToastKind::Error, format!("Video export failed: {error}")),
             }
         }
     }
@@ -19230,36 +20937,77 @@ impl HookEchoApp {
         }
     }
 
-    /// The share card: a caption band across the bottom of the map naming what the picture shows,
+    /// The share card: a caption beneath the header naming what the picture shows,
     /// drawn only on the frames a capture is waiting for. A radar screenshot with no site, product
     /// or time on it is a pretty picture; this is the difference between that and a report.
     fn share_card_footer(&mut self, ctx: &egui::Context) {
-        let Some((_, frames)) = &mut self.share_card else {
+        if self.share_card.is_none() && self.share_card_capture_frames == 0 {
             return;
+        }
+        self.share_card_capture_frames = self.share_card_capture_frames.saturating_sub(1);
+        let fire = if let Some((_, frames)) = &mut self.share_card {
+            *frames = frames.saturating_sub(1);
+            *frames == 0
+        } else {
+            false
         };
-        *frames -= 1;
-        let fire = *frames == 0;
 
+        if self.views.len() > 1
+            && !chrome::compact(ctx)
+            && self.pane_bounds.len() == self.views.len()
+        {
+            self.draw_multi_share_cards(ctx);
+        } else {
+            self.draw_single_share_card(ctx);
+        }
+
+        if fire {
+            // Keep drawing the footer until the backend returns the captured frame.
+            let (dest, _) = self.share_card.take().expect("checked above");
+            self.share_card_capture_frames = 5;
+            self.screenshot_pending = Some(dest);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        ctx.request_repaint();
+    }
+
+    fn draw_single_share_card(&self, ctx: &egui::Context) {
         let v = &self.views[self.active];
-        let site = v.site.clone().unwrap_or_else(|| "no site".to_string());
-        let product = crate::products::info(v.moment).name.to_string();
+        let site = v.displayed_station().or(v.site.as_deref())
+            .unwrap_or("no site").to_string();
+        let product = v.custom_product.clone().unwrap_or_else(|| crate::products::info(v.moment).name.to_string());
         let time = v
-            .volume
-            .as_ref()
-            .map(|vol| crate::timefmt::fmt_date_clock(vol.time, self.active_tz()))
+            .displayed_time()
+            .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
             .unwrap_or_default();
+        let source = v.displayed_station().or(v.site.as_deref())
+            .and_then(data_attribution)
+            .unwrap_or("Radar data: NOAA/NWS");
         let accent = crate::theme::accent(self.settings.theme);
         let logo = crate::icon::texture(ctx, 64);
+        // The classic Views menu occupies the upper-left corner in exported frames. Keep the
+        // caption beside it so the site, time and source remain readable after GIF downscaling.
+        let caption_x = if self.chrome_rect.width() >= 760.0 { 236.0 } else { 16.0 };
         egui::Area::new(egui::Id::new("share_card"))
-            .order(egui::Order::Foreground)
+            // Export capture arrives within a couple of frames. The default Area fade-in
+            // leaves the card translucent at that point, especially after GIF quantization.
+            .order(egui::Order::Tooltip)
+            .fade_in(false)
             .constrain_to(self.chrome_rect)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -10.0))
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(caption_x, 88.0))
             .show(ctx, |ui| {
-                crate::ui::style::glass(ui, 245).show(ui, |ui| {
+                // GIF's 256-colour palette makes translucent, anti-aliased type disappear
+                // against detailed radar. A solid branded card survives that reduction.
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(9, 23, 39))
+                    .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(95, 159, 218)))
+                    .corner_radius(9.0)
+                    .inner_margin(egui::Margin::symmetric(12, 9))
+                    .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(&site)
-                                .size(crate::ui::style::FONT_BASE)
+                                .size(16.0)
                                 .strong()
                                 .color(accent),
                         );
@@ -19270,28 +21018,78 @@ impl HookEchoApp {
                         }
                         ui.label(
                             egui::RichText::new(line)
-                                .size(crate::ui::style::FONT_BASE)
+                                .size(16.0)
+                                .strong()
                                 .color(egui::Color32::from_gray(238)),
                         );
-                        // The mark rides with the caption: a shared loop travels without the app
-                        // around it, and the wordmark alone is not what anyone recognises.
-                        ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(16.0, 16.0)));
-                        ui.label(
-                            egui::RichText::new("HookEcho · data: NOAA/NWS")
-                                .size(crate::ui::style::FONT_SM)
-                                .color(egui::Color32::from_gray(160)),
-                        );
+                    });
+                    ui.horizontal(|ui| {
+                        // The mark rides with the caption when a shared loop leaves the app.
+                        ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(18.0, 18.0)));
+                        ui.label(egui::RichText::new(format!("HookEcho · {source}"))
+                            .size(13.0).color(egui::Color32::from_gray(230)));
                     });
                 });
             });
+    }
 
-        if fire {
-            // The band is on screen: take the picture, and keep the caption for this one frame.
-            let (dest, _) = self.share_card.take().expect("checked above");
-            self.screenshot_pending = Some(dest);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+    fn draw_multi_share_cards(&self, ctx: &egui::Context) {
+        let accent = crate::theme::accent(self.settings.theme);
+        let logo = crate::icon::texture(ctx, 64);
+        for (idx, (v, rect)) in self.views.iter().zip(&self.pane_bounds).enumerate() {
+            let linked_scan_hidden = idx != self.active && self.link_times
+                && v.show_radar
+                && !v.alignment_acceptable(self.settings.linked_time_limit_seconds);
+            let site = if linked_scan_hidden { v.site.as_deref() }
+                else { v.displayed_station().or(v.site.as_deref()) }
+                .unwrap_or("no site");
+            let product = v.custom_product.as_deref()
+                .unwrap_or_else(|| crate::products::info(v.moment).name);
+            let tilt = if linked_scan_hidden { String::new() } else {
+                v.volume.as_ref()
+                    .and_then(|volume| volume.elevations.get(v.tilt))
+                    .map_or_else(String::new, |angle| format!(" · {angle:.1}°"))
+            };
+            let time = if linked_scan_hidden {
+                match self.settings.linked_time_limit_seconds {
+                    Some(limit) => format!("No scan within {limit}s of linked time"),
+                    None => "No matching linked scan".to_string(),
+                }
+            } else {
+                v.displayed_time()
+                    .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
+                    .unwrap_or_else(|| "scan time unavailable".to_string())
+            };
+            let source = if linked_scan_hidden { "Radar hidden" } else {
+                v.displayed_station().or(v.site.as_deref())
+                    .and_then(data_attribution)
+                    .unwrap_or("Radar data: NOAA/NWS")
+            };
+            egui::Area::new(egui::Id::new(("share_pane_card", idx)))
+                .order(egui::Order::Tooltip)
+                .fade_in(false)
+                .interactable(false)
+                .pivot(egui::Align2::LEFT_BOTTOM)
+                .fixed_pos(rect.left_bottom() + egui::vec2(10.0, -10.0))
+                .constrain_to(*rect)
+                .show(ctx, |ui| {
+                    ui.set_max_width((rect.width() - 20.0).max(160.0));
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(9, 23, 39))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(95, 159, 218)))
+                        .corner_radius(7.0)
+                        .inner_margin(egui::Margin::symmetric(9, 7))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(format!("Pane {} · {site} · {product}{tilt}", idx + 1))
+                                .size(13.0).strong().color(accent));
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(15.0, 15.0)));
+                                ui.label(egui::RichText::new(format!("{time} · {source}"))
+                                    .size(11.0).color(egui::Color32::from_gray(230)));
+                            });
+                        });
+                });
         }
-        ctx.request_repaint();
     }
 
     /// If a screenshot was requested, save the delivered image event to the pending path.
@@ -19307,7 +21105,28 @@ impl HookEchoApp {
         });
         if let Some(image) = image {
             let dest = self.screenshot_pending.take().unwrap();
+            self.share_card_capture_frames = 0;
             match dest {
+                #[cfg(target_arch = "wasm32")]
+                ShotDest::Download => {
+                    use image::ImageEncoder;
+                    let (w, h) = (image.size[0] as u32, image.size[1] as u32);
+                    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+                    for px in &image.pixels {
+                        rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
+                    }
+                    let mut png = Vec::new();
+                    let result = image::codecs::png::PngEncoder::new(&mut png)
+                        .write_image(&rgba, w, h, image::ExtendedColorType::Rgba8);
+                    match result {
+                        Ok(()) => match crate::dialog::save_bytes("hookecho-view.png", "png", &png) {
+                            crate::dialog::Saved::Where(_) => self.toast(ToastKind::Success, "Screenshot downloaded"),
+                            crate::dialog::Saved::Failed(e) => self.toast(ToastKind::Error, format!("Screenshot download failed: {e}")),
+                            crate::dialog::Saved::Cancelled => {}
+                        },
+                        Err(e) => self.toast(ToastKind::Error, format!("Screenshot encode failed: {e}")),
+                    }
+                }
                 ShotDest::File(path) => {
                     let (w, h) = (image.size[0] as u32, image.size[1] as u32);
                     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
@@ -19332,12 +21151,28 @@ impl HookEchoApp {
                     log::info!("view copied to clipboard");
                     self.toast(ToastKind::Success, "View copied to clipboard");
                 }
-                ShotDest::Loop => self.record_loop_frame(&image),
+                ShotDest::Loop => self.record_loop_frame(ctx, &image),
                 ShotDest::Push(title) => self.push_snapshot(title, &image),
                 ShotDest::Widget(path) => self.save_widget_snapshot(&path, &image),
             }
         }
     }
+}
+
+/// RadarOmega's NORMAL radius is 230 km for the observed KFWS reflectivity and velocity sweeps;
+/// their FULL radii differ with gate depth. Keep the source texture intact and clip only the
+/// shader's displayed gate count, so switching modes needs no data fetch or texture rebuild.
+fn apply_coverage_range(upload: &mut RadarUpload, full_coverage: bool, nexrad: bool) {
+    if full_coverage || !nexrad {
+        return;
+    }
+    let first = upload.uniform[2];
+    let spacing = upload.uniform[3];
+    if !spacing.is_finite() || spacing <= 0.0 {
+        return;
+    }
+    let standard_gates = ((230.0 - first) / spacing).ceil().max(1.0);
+    upload.uniform[5] = standard_gates.min(upload.gate_count as f32);
 }
 
 /// Convert a binned sweep into a GPU upload with its world-space bounding box.
@@ -19411,6 +21246,7 @@ pub(crate) fn to_upload(
 
     RadarUpload {
         upload_token: 0,
+        cache_loop: false,
         sector_opacity: None,
         az_bins: s.az_bins as u32,
         gate_count: s.gate_count as u32,
@@ -19455,7 +21291,16 @@ fn map_input_at(ctx: &egui::Context, pos: egui::Pos2, occlusion: &[egui::Rect]) 
 fn map_gesture_on_map(ctx: &egui::Context, occlusion: &[egui::Rect]) -> bool {
     let (live, pos) = ctx.input(|i| (
         map_gesture_live(i),
-        i.multi_touch().map(|touch| touch.center_pos).or_else(|| i.pointer.interact_pos()),
+        i.multi_touch().map(|touch| touch.center_pos).or_else(|| {
+            // Keep a map-origin drag classified as a map gesture even when it crosses a
+            // floating control. Conversely, dragging a control over the map must not pause
+            // playback or starve map uploads.
+            if i.pointer.any_down() {
+                i.pointer.press_origin().or_else(|| i.pointer.interact_pos())
+            } else {
+                i.pointer.interact_pos()
+            }
+        }),
     ));
     live && pos.is_some_and(|pos| map_input_at(ctx, pos, occlusion))
 }
@@ -19851,6 +21696,16 @@ pub(crate) fn field_upload_indexed(
     layer: crate::render::FieldLayer,
     f: &wxdata::mrms::MrmsField,
 ) -> crate::render::MrmsUpload {
+    field_upload_indexed_filtered(layer, f, 0)
+}
+
+/// Apply an optional MESH size filter to the display texture only. The retained field keeps
+/// every native value for interrogation and a new threshold can reuse it without a network fetch.
+pub(crate) fn field_upload_indexed_filtered(
+    layer: crate::render::FieldLayer,
+    f: &wxdata::mrms::MrmsField,
+    hail_threshold_inches: u8,
+) -> crate::render::MrmsUpload {
     use crate::render::field_ramps::{ramp_for, FieldScale};
     use crate::render::FieldLayer as FL;
     // Lightning keeps its own mapping (density counts, not a physical scale).
@@ -19868,7 +21723,9 @@ pub(crate) fn field_upload_indexed(
             categorical_lut(&slots, r.alpha)
         }
     };
-    field_index_upload(f, |v| r.index(v), lut)
+    let threshold_mm = (layer == FL::HailSwath && hail_threshold_inches > 0)
+        .then_some(hail_threshold_inches.min(3) as f32 * 25.4);
+    field_index_upload(f, |v| if threshold_mm.is_some_and(|minimum| v < minimum) { 0 } else { r.index(v) }, lut)
 }
 
 impl HookEchoApp {
@@ -19887,7 +21744,7 @@ impl HookEchoApp {
         {
             mrms_upload(f, self.palettes.table(Moment::Reflectivity))
         } else {
-            field_upload_indexed(layer, f)
+            field_upload_indexed_filtered(layer, f, self.hail_threshold_inches)
         }
     }
 }
@@ -20591,6 +22448,8 @@ impl eframe::App for HookEchoApp {
 
         self.drive_snapshot_push(ctx);
         self.drive_widget_snapshot(ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.poll_video_export();
         self.save_pending_screenshot(ctx);
         self.load_marker_icons(ctx);
         self.drive_loop_export(ctx);
@@ -20609,6 +22468,7 @@ impl eframe::App for HookEchoApp {
         self.sync_fires(ctx);
         self.sync_aqi(ctx);
         self.sync_stations(ctx);
+        self.sync_dotcams(ctx);
         self.sync_dat(ctx);
         self.sync_mosaic(ctx);
         // River flood gauges (NWPS).
@@ -20680,14 +22540,24 @@ impl eframe::App for HookEchoApp {
             let wanted = self.field_wanted(layer)
                 || (layer == FL::Mrms && self.field_wanted(FL::MrmsReflectivityTrail))
                 || (layer == FL::PrecipType && self.settings.precip_tint);
+            let archive_at = self.mrms_loops.iter().find(|state| state.layer == layer)
+                .and_then(|state| state.requested_at);
             let stale = wanted
                 && self.fields.get(&layer).is_none_or(|s| {
                     s.last_fetch
-                        .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
+                        .is_none_or(|t| archive_at.is_none() && t.elapsed().as_secs() >= field_refresh_secs(layer))
                 });
             if stale {
                 self.fields.entry(layer).or_default().last_fetch = Some(Instant::now());
-                self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
+                let regional_loop = self.views.iter().any(|view|
+                    !view.show_radar && view.fields_on.contains(&layer))
+                    && matches!(product.split_once('/').map(|(region, _)| region),
+                        Some("ALASKA" | "HAWAII" | "GUAM" | "CARIB"));
+                if regional_loop {
+                    self.spawn_overlay(ctx, OverlaySource::MrmsHistory(layer, product, archive_at));
+                } else {
+                    self.spawn_overlay(ctx, OverlaySource::Field(layer, product));
+                }
             }
         }
         // Each pane owns ABI scene, requested instant and request generations.
@@ -21091,33 +22961,24 @@ impl eframe::App for HookEchoApp {
         self.recompute_derived(ctx);
         // Beam-blockage raster: rebuilt when the camera, site, or tilt moves (DEM tiles are cached).
         self.update_blockage(ctx);
-        // Gridded L3 products (DVL/EET): per-site, refetch on the L3 cadence or a site change.
-        let l3_site = self.views[self.active].site.clone();
-        let site_changed = self.l3grid_site != l3_site;
-        for layer in [FL::Vil, FL::EchoTops, FL::Hca] {
-            let on = self.field_wanted(layer);
-            if !on {
-                continue;
-            }
-            let stale = self.fields.get(&layer).is_some_and(|s| {
-                s.last_fetch
-                    .is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer))
-            });
-            if let Some(site) = &l3_site {
-                if stale || site_changed {
-                    if let Some(s) = self.fields.get_mut(&layer) {
-                        s.last_fetch = Some(Instant::now());
-                    }
-                    self.spawn_overlay(ctx, OverlaySource::L3Grid(layer, site.clone()));
+        // Each pane's Level III grid belongs to its own station. A station change clears the
+        // old frame before fetching so one pane cannot show another pane's precipitation.
+        for pane in 0..self.views.len() {
+            let site = self.views[pane].site.clone();
+            for layer in [FL::Vil, FL::EchoTops, FL::Hca, FL::Daa, FL::Oha, FL::Dsa] {
+                if !self.views[pane].fields_on.contains(&layer) { continue; }
+                let state = self.pane_fields.entry((pane, layer)).or_default();
+                state.select_site(site.as_deref());
+                let Some(site) = &site else {
+                    self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .cancel(&RequestLane::PaneField(pane, layer));
+                    continue;
+                };
+                if state.last_fetch.is_none_or(|t| t.elapsed().as_secs() >= field_refresh_secs(layer)) {
+                    state.last_fetch = Some(Instant::now());
+                    self.spawn_overlay(ctx, OverlaySource::L3Grid(pane, layer, site.clone()));
                 }
             }
-        }
-        if site_changed
-            && [FL::Vil, FL::EchoTops, FL::Hca]
-                .iter()
-                .any(|l| self.field_wanted(*l))
-        {
-            self.l3grid_site = l3_site;
         }
         // HRRR future radar: fetch when enabled and the forecast hour changed or the run refreshed
         // (~10-min throttle; a new run posts hourly).
@@ -21174,6 +23035,14 @@ impl eframe::App for HookEchoApp {
             self.spotters_last_fetch = Some(Instant::now());
             self.spawn_overlay(ctx, OverlaySource::Spotters);
         }
+        // NOAA publishes RDA state and last Level II receipt for the national network.
+        // A single cache-friendly request keeps map pins honest without polling per station.
+        if self.show_radar_sites
+            && self.radar_site_status_last_fetch.is_none_or(|t| t.elapsed().as_secs() >= 120)
+        {
+            self.radar_site_status_last_fetch = Some(Instant::now());
+            self.spawn_overlay(ctx, OverlaySource::RadarSiteStatus);
+        }
         // ProbSevere refresh (~2-min product cadence).
         if self.show_probsevere
             && self
@@ -21186,15 +23055,18 @@ impl eframe::App for HookEchoApp {
         // Sensors: fetch when the window is open and the site changed or the 10-min clock elapsed.
         if self.show_sensors {
             if let Some(site) = self.views[self.active].site.clone() {
-                let stale = self
-                    .sensor_last_fetch
-                    .is_none_or(|t| t.elapsed().as_secs() >= 600);
+                let retry_after = ui::sensor_window::retry_after_secs(self.sensor_data.as_ref());
+                let stale = self.sensor_last_fetch
+                    .is_none_or(|t| t.elapsed().as_secs() >= retry_after);
                 let site_changed = self.sensor_site.as_deref() != Some(site.as_str());
                 if stale || site_changed {
                     if let Some(s) = wxdata::sites::site_by_id(&site) {
                         if site_changed {
                             self.sensor_data = None; // show "loading" until the new site returns
                         }
+                        // Record the requested site now, not only when its response arrives.
+                        // Otherwise every frame queues another request during a station switch.
+                        self.sensor_site = Some(site.clone());
                         self.sensor_last_fetch = Some(Instant::now());
                         self.spawn_overlay(
                             ctx,
@@ -21252,13 +23124,22 @@ impl eframe::App for HookEchoApp {
         }
         self.sync_placefiles(ctx);
         self.sync_pf_icons(ctx);
+        self.refresh_open_webcam(ctx);
+        self.refresh_open_dotcam(ctx);
         // Bindings are polled once, globally: a hotkey works the same in OBS mode, on mobile, and
         // with the drawer open. `capture_key` suppresses the table while the Hotkeys tab is
         // listening for the next keypress.
-        if hotkeys::search_requested(ctx) {
+        // Modal dialogs, popups and the workspace drawer own keyboard input until dismissed.
+        // In particular, Escape must not also hide the entire map chrome underneath them.
+        let blocking_surface = ctx.memory(|m| m.top_modal_layer().is_some())
+            || egui::Popup::is_any_open(ctx)
+            || (self.settings.radar_workspace && ctx.data_mut(|d| {
+                d.get_temp::<bool>(egui::Id::new("omega_workspace_menu")).unwrap_or(false)
+            }));
+        if !blocking_surface && hotkeys::search_requested(ctx) {
             self.apply_action(BindableAction::CommandSearch, ctx);
         }
-        if !self.capture_key {
+        if !self.capture_key && !blocking_surface {
             // Space mirrors the transport button. A focused editor owns its spaces. Escape
             // closes a popup or panel before acting as the map-wide show/hide switch.
             if !ctx.memory(|m| m.focused().is_some())
@@ -21322,6 +23203,8 @@ impl eframe::App for HookEchoApp {
         self.chrome_rect = root.available_rect_before_wrap();
         // Before any chrome: everything below asks `motion::reduced()`, and the answer has to be
         // the same for every surface in a frame.
+        let setup_ms = ui_started.elapsed().as_secs_f32() * 1000.0;
+        let chrome_started = Instant::now();
         ui::motion::frame(ctx, self.settings.reduce_motion);
 
         // Chrome: touch-first on Android (top chips + bottom sheet + docked toolbar), desktop
@@ -21329,6 +23212,8 @@ impl eframe::App for HookEchoApp {
         // handling. The occlusion rects are rebuilt from scratch every frame; a stale rect would
         // keep swallowing gestures over a sheet that closed.
         self.mobile_occlusion.clear();
+        ctx.data_mut(|d| d.remove::<usize>(egui::Id::new("workspace_imagery_timebar_pane")));
+        let mut workspace_imagery_bar_handled = false;
         if !self.panel_open { self.drawer.resume(); }
         self.refresh_priority_overlays(ctx);
         self.drawer.begin_frame(ctx);
@@ -21357,7 +23242,16 @@ impl eframe::App for HookEchoApp {
                 // The analyst docks reserve map width. Center the transport and map chips in
                 // the remaining viewport rather than underneath either dock.
                 self.chrome_rect = root.available_rect_before_wrap();
-                self.scrubber(ctx);
+                // A comparison export labels each pane along its lower edge. Keep the
+                // playback transport out of those captures so neither the controls nor
+                // the captions obscure one another.
+                let comparison_capture = self.views.len() > 1
+                    && (self.share_card.is_some() || self.share_card_capture_frames > 0);
+                if !comparison_capture { self.scrubber(ctx); }
+                if self.settings.radar_workspace && !phone_layout {
+                    self.goes_time_bar(ctx);
+                    workspace_imagery_bar_handled = true;
+                }
                 if !phone_layout && !self.analyst_open && !self.drawer.is_open() {
                     self.priority_dock(ctx);
                     if self.active_workspace.as_deref() == Some("National overview") {
@@ -21381,9 +23275,12 @@ impl eframe::App for HookEchoApp {
                 crate::theme::accent(self.settings.theme),
             );
         }
+        let primary_chrome_ms = chrome_started.elapsed().as_secs_f32() * 1000.0;
+        let window_chrome_started = Instant::now();
 
         // Over everything, and only while a capture is pending.
         self.share_card_footer(ctx);
+        self.loop_export_progress(ctx);
 
         // The spotlight tour, over the chrome it points at. Paused under the first-run card and
         // the cheat sheet — all three draw on `Order::Foreground` and would fight for it.
@@ -21595,8 +23492,13 @@ impl eframe::App for HookEchoApp {
         }
         // The edge's geo-IP fix, if it beat the user to it: move the default view to the radar
         // that covers them. Skipped once they have panned or picked a site themselves.
-        while let Ok((lon, lat)) = self.ipgeo_rx.try_recv() {
-            if self.geocode_nav || self.views.len() > 1 {
+        while let Ok(((lon, lat), initial_center, initial_zoom, initial_site)) = self.ipgeo_rx.try_recv() {
+            let view = &self.views[self.active];
+            if self.geocode_nav.is_some() || self.views.len() > 1
+                || view.site != initial_site
+                || view.camera.center != initial_center
+                || view.camera.zoom != initial_zoom
+            {
                 continue;
             }
             if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
@@ -21604,25 +23506,30 @@ impl eframe::App for HookEchoApp {
             }
         }
         // Drain search-pill geocoding results.
-        while let Ok(res) = self.geocode_rx.try_recv() {
-            if std::mem::take(&mut self.geocode_nav) {
-                match res {
-                    Ok((name, lat, lon)) => {
-                        let cam = &mut self.views[self.active].camera;
-                        cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
-                        cam.zoom = cam.zoom.max(9.0);
-                        self.save_offer = Some((
-                            short_place_name(&name).to_string(),
-                            lat,
-                            lon,
-                            Instant::now(),
-                        ));
-                        self.place_status = Some((name, Instant::now()));
-                        self.place_query.clear();
-                    }
-                    Err(e) => self.place_status = Some((e, Instant::now())),
-                }
+        while let Ok((request_id, res)) = self.geocode_rx.try_recv() {
+            if self.geocode_nav.as_ref().is_none_or(|nav| nav.request_id != request_id) {
                 continue;
+            }
+            let nav = self.geocode_nav.take().unwrap();
+            if !nav.still_current(self.active, &self.views[self.active]) {
+                self.place_status = None;
+                continue;
+            }
+            match res {
+                Ok((name, lat, lon)) => {
+                    let cam = &mut self.views[self.active].camera;
+                    cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
+                    cam.zoom = cam.zoom.max(9.0);
+                    self.save_offer = Some((
+                        short_place_name(&name).to_string(),
+                        lat,
+                        lon,
+                        Instant::now(),
+                    ));
+                    self.place_status = Some((name, Instant::now()));
+                    self.place_query.clear();
+                }
+                Err(e) => self.place_status = Some((e, Instant::now())),
             }
         }
         while let Ok(res) = self.marker_geocode_rx.try_recv() {
@@ -21773,6 +23680,45 @@ impl eframe::App for HookEchoApp {
                 self.fetch_afd();
             }
         }
+        if let Some(rx) = &self.fire_weather_discussion_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.fire_weather_discussion_rx = None;
+                self.fire_weather_discussion.busy = false;
+                match result {
+                    Ok(discussion) => self.fire_weather_discussion.discussion = Some(discussion),
+                    Err(error) => self.fire_weather_discussion.error = Some(error),
+                }
+            }
+        }
+        if self.fire_weather_discussion.open && self.fire_weather_discussion.show(ctx, &mut self.drawer) {
+            self.fetch_fire_weather_discussion();
+        }
+        if let Some(rx) = &self.ero_discussion_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.ero_discussion_rx = None;
+                self.ero_discussion.busy = false;
+                match result {
+                    Ok(discussion) => self.ero_discussion.discussion = Some(discussion),
+                    Err(error) => self.ero_discussion.error = Some(error),
+                }
+            }
+        }
+        if self.ero_discussion.open && self.ero_discussion.show(ctx, &mut self.drawer) {
+            self.fetch_ero_discussion();
+        }
+        if let Some(rx) = &self.cpc_discussion_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.cpc_discussion_rx = None;
+                self.cpc_discussion.busy = false;
+                match result {
+                    Ok(discussion) => self.cpc_discussion.discussion = Some(discussion),
+                    Err(error) => self.cpc_discussion.error = Some(error),
+                }
+            }
+        }
+        if self.cpc_discussion.open && self.cpc_discussion.show(ctx, &mut self.drawer) {
+            self.fetch_cpc_discussion();
+        }
         // NHC text products: poll the fetch, then draw the reader.
         if let Some(rx) = &self.tropical_text_rx {
             if let Ok(res) = rx.try_recv() {
@@ -21873,6 +23819,27 @@ impl eframe::App for HookEchoApp {
             self.goto_view(&site, lon, lat, 8.5, time);
         }
         // Point forecast: drain the fetch, cache the win, then draw.
+        if let Some(rx) = &self.ndfd_probe_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.ndfd_probe_rx = None;
+                if let Some(detail) = self.detail.as_mut().filter(|detail| detail.title == "NDFD point forecast") {
+                    detail.body = match result {
+                        Ok((Some(value), label, unit, valid, lon, lat)) => format!(
+                            "{label} · valid {}\n{lat:.4}°, {lon:.4}°\n{value:.0}{unit}\nNOAA/NWS raster point value",
+                            valid.format("%a %b %-d %HZ")
+                        ),
+                        Ok((None, label, _, valid, lon, lat)) => format!(
+                            "{label} · valid {}\n{lat:.4}°, {lon:.4}°\nNo forecast value at this point",
+                            valid.format("%a %b %-d %HZ")
+                        ),
+                        Err(error) => {
+                            log::warn!("NDFD point lookup: {error}");
+                            "NOAA point value is temporarily unavailable. The map still shows the selected forecast; try again later or use Point forecast for a separate NWS forecast.".to_string()
+                        }
+                    };
+                }
+            }
+        }
         if let Some((key, rx)) = &self.forecast_rx {
             if let Ok(res) = rx.try_recv() {
                 let key = *key;
@@ -21963,7 +23930,9 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
-        self.goes_time_bar(ctx);
+        if !workspace_imagery_bar_handled {
+            self.goes_time_bar(ctx);
+        }
         if let Some(act) = self
             .event_window
             .show(ctx, &mut self.settings, &mut self.drawer)
@@ -22017,13 +23986,25 @@ impl eframe::App for HookEchoApp {
         if let Some((i, day, wfo)) = self.rules_window.backtest_request.take() {
             self.start_backtest(i, day, wfo);
         }
+        let window_chrome_ms = window_chrome_started.elapsed().as_secs_f32() * 1000.0;
+        let secondary_chrome_started = Instant::now();
         if let Some(detail) = &self.detail {
             let tex = detail
                 .image
                 .as_ref()
                 .and_then(|k| self.pf_icon_tex.get(k))
                 .and_then(|t| t.as_ref());
-            if !ui::detail_window::show(ctx, detail, tex, &mut self.popovers) {
+            let mut play_stream = None;
+            let mut open_ero_discussion = false;
+            let open = ui::detail_window::show(ctx, detail, tex, &mut self.popovers, &mut play_stream, &mut open_ero_discussion);
+            if let Some(url) = play_stream {
+                self.watch_stream(detail.title.clone(), url);
+            }
+            if open_ero_discussion {
+                self.ero_discussion.open = true;
+                self.fetch_ero_discussion();
+            }
+            if !open {
                 self.detail = None;
             }
         }
@@ -22045,7 +24026,7 @@ impl eframe::App for HookEchoApp {
         // A cell within 15 km of a ZDR column owns it — the column marks the updraft, and the
         // updraft belongs to the storm the table is already listing.
         let zdr_cells: std::collections::HashSet<String> = match &self.zdr_cache {
-            Some((_, hits, _)) if self.filters.show_zdr_columns => cells
+            Some((_, hits, _)) if self.cells_window.open && self.filters.show_zdr_columns => cells
                 .iter()
                 .filter(|c| {
                     hits.iter().any(|h| {
@@ -22074,7 +24055,11 @@ impl eframe::App for HookEchoApp {
             Some((_, hits)) => hits,
             None => &[],
         };
-        let cell_scores = wxdata::cellscore::score_all(cells, &self.probsevere, couplets);
+        let cell_scores = if self.cells_window.open {
+            wxdata::cellscore::score_all(cells, &self.probsevere, couplets)
+        } else {
+            Vec::new()
+        };
         if let Some(id) = ui::cells_window::show(
             &mut self.cells_window,
             ctx,
@@ -22082,6 +24067,7 @@ impl eframe::App for HookEchoApp {
             &cell_scores,
             &zdr_cells,
             &self.cell_trends,
+            &self.settings.priority_rules,
             crate::theme::accent(self.settings.theme),
             &mut self.drawer,
         ) {
@@ -22110,7 +24096,7 @@ impl eframe::App for HookEchoApp {
                 .is_some_and(|(_, c, _)| c.id == cell.id);
             let tz = self.active_tz();
             let (open, toggled, to_3d) =
-                ui::cell_window::show(ctx, cell, trend, following, tz, &mut self.popovers);
+                ui::cell_window::show(ctx, cell, trend, following, tz, &self.settings.priority_rules, &mut self.popovers);
             // Crop the volume to this storm before opening it: the full 300 km box is a wall of
             // echo you would then have to hunt through by hand. The clip is computed here, where
             // the cell is still borrowed, and applied below.
@@ -22198,7 +24184,7 @@ impl eframe::App for HookEchoApp {
                 } else {
                     self.warning_popup = None;
                     self.detail = Some(Detail { title:f.title.clone(), body:f.detail.clone(),
-                        color:f.stroke, image:None, link:None });
+                        color:f.stroke, image:None, link:None, stream:None });
                 }
             }
         }
@@ -22219,13 +24205,20 @@ impl eframe::App for HookEchoApp {
                 frame(crate::render::FieldLayer::GlobalTemp2m),
             );
         }
-        if self.show_sensors
-            && !ui::sensor_window::show(
+        if self.show_sensors {
+            let (open, refresh) = ui::sensor_window::show(
                 ctx, self.sensor_data.as_ref(),
                 Some(&self.sensor_history), tz, &mut self.drawer,
-            )
-        {
-            self.show_sensors = false;
+            );
+            self.show_sensors = open;
+            if refresh {
+                self.sensor_last_fetch = None;
+                self.sensor_data = None;
+                ctx.request_repaint();
+            }
+        }
+        if self.show_stream_dashboard {
+            self.show_public_streams(ctx);
         }
         if self.show_hodo
             && !ui::hodograph_window::show(
@@ -22313,6 +24306,9 @@ impl eframe::App for HookEchoApp {
         // selected; otherwise four-pane Analyst eagerly decodes three invisible radar volumes.
         let phone_solo = self.views.len() > 1 && chrome::compact(ctx);
         // Turn this frame's UI mutations into uploads/fetches before painting the map.
+        let secondary_chrome_ms = secondary_chrome_started.elapsed().as_secs_f32() * 1000.0;
+        let chrome_ms = chrome_started.elapsed().as_secs_f32() * 1000.0;
+        let sync_started = Instant::now();
         for idx in 0..self.views.len() {
             if !phone_solo || idx == self.active {
                 self.sync_pane(idx, ctx);
@@ -22326,6 +24322,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.sync_overlay();
+        let sync_ms = sync_started.elapsed().as_secs_f32() * 1000.0;
 
         // OBS-mode hint so the chrome-free view is still escapable.
         if self.obs_mode {
@@ -22348,6 +24345,7 @@ impl eframe::App for HookEchoApp {
                 });
         }
 
+        let map_started = Instant::now();
         let placefile_labels = self.placefile_labels_cached();
         // Visibility history spans the frame; each clipped pane starts a fresh collision pass.
         self.labels.begin();
@@ -22363,6 +24361,7 @@ impl eframe::App for HookEchoApp {
             } else {
                 pane_rects(full, n)
             };
+            self.pane_bounds = rects.clone();
 
             // If cameras are linked, mirror the active pane's camera to the others.
             if self.link_cameras {
@@ -22376,26 +24375,26 @@ impl eframe::App for HookEchoApp {
             if self.link_times {
                 let active = self.active.min(n - 1);
                 let leader = &self.views[active].timeline;
-                if let Some(source) = leader.current().cloned() {
-                    let selected_cut = self.views[active].selected_cut_ms();
-                    let lock_loaded_source = self.lock_source_frame && self.views[active].volume.as_ref().is_some_and(|v| v.name == source.name());
-                    if let Some(time) = selected_cut
-                        .and_then(chrono::DateTime::from_timestamp_millis)
-                        .or_else(|| self.views[active].displayed_time())
-                        .or_else(|| source.date_time())
-                    {
-                        let (following, playing) = (leader.following, leader.playing);
-                        for (i, view) in self.views.iter_mut().enumerate() {
-                            if i != active { view.timeline.alignment_target = Some(time); }
-                            if i != active
-                                && (selected_cut.is_some()
-                                    || !lock_loaded_source
-                                    || !view.timeline.align_to_source(
-                                        &source, following, playing,
-                                    ))
-                            {
-                                view.timeline.align_to(time, following, playing);
-                            }
+                let source = leader.current().cloned();
+                let source_loaded = source.as_ref().is_some_and(|source| {
+                    self.views[active].volume.as_ref().is_some_and(|volume| volume.name == source.name())
+                });
+                let selected_cut = source_loaded && self.views[active].selected_cut_ms().is_some();
+                let pending_seek = leader.seek_target.is_some();
+                if let Some(time) = self.views[active].linked_requested_time() {
+                    let (following, playing) = (leader.following, leader.playing);
+                    for (i, view) in self.views.iter_mut().enumerate() {
+                        if i != active { view.timeline.alignment_target = Some(time); }
+                        if i != active
+                            && (selected_cut
+                                || pending_seek
+                                || !self.lock_source_frame
+                                || !source_loaded
+                                || source.as_ref().is_none_or(|source| !view.timeline.align_to_source(
+                                    source, following, playing,
+                                )))
+                        {
+                            view.timeline.align_to(time, following, playing);
                         }
                     }
                 }
@@ -22476,6 +24475,8 @@ impl eframe::App for HookEchoApp {
                 }
             }
         });
+        let map_ms = map_started.elapsed().as_secs_f32() * 1000.0;
+        let tail_started = Instant::now();
 
         // Dirty-diff persistence: one write per actual change, from any mutation site. The
         // comparison walks the whole settings tree (palettes, placefiles, markers), so it runs at
@@ -22630,6 +24631,15 @@ impl eframe::App for HookEchoApp {
         }
         let moving = self.gesture_live && ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO
             || i.smooth_scroll_delta != egui::Vec2::ZERO || (i.zoom_delta() - 1.0).abs() > f32::EPSILON);
+        self.adaptive.observe_phases([
+            setup_ms, chrome_ms, sync_ms, map_ms,
+            tail_started.elapsed().as_secs_f32() * 1000.0,
+        ]);
+        self.adaptive.observe_chrome_sections([
+            primary_chrome_ms,
+            window_chrome_ms,
+            secondary_chrome_ms,
+        ]);
         self.adaptive.observe_cadence(ctx.input(|i| i.unstable_dt) * 1000.0, moving);
         self.adaptive.observe(ui_started.elapsed().as_secs_f32() * 1000.0,
             self.settings.map_quality == crate::settings::MapQuality::Auto);
@@ -22989,6 +24999,132 @@ mod field_lut_tests {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn coverage_range_uses_observed_full_gate_depth_per_product() {
+        use super::RadarUpload;
+        assert!(wxdata::sites::is_nexrad("KFWS"));
+        let mut upload = RadarUpload {
+            upload_token: 0,
+            cache_loop: false,
+            sector_opacity: None,
+            az_bins: 720,
+            gate_count: 1824,
+            data: Vec::new(),
+            data16: None,
+            uniform: [0.0; 20],
+            lut: Vec::new(),
+            precip_flag: Vec::new(),
+            world_min: [0.0; 2],
+            world_max: [0.0; 2],
+            lut_only: false,
+        };
+        upload.uniform[2] = 2.125;
+        upload.uniform[3] = 0.25;
+        upload.uniform[5] = 1824.0;
+        super::apply_coverage_range(&mut upload, false, true);
+        assert_eq!(upload.uniform[5], 912.0);
+        upload.gate_count = 1184;
+        upload.uniform[5] = 1184.0;
+        super::apply_coverage_range(&mut upload, false, true);
+        assert_eq!(upload.uniform[5], 912.0);
+        upload.uniform[5] = 1184.0;
+        super::apply_coverage_range(&mut upload, true, true);
+        assert_eq!(upload.uniform[5], 1184.0);
+        super::apply_coverage_range(&mut upload, false, false);
+        assert_eq!(upload.uniform[5], 1184.0);
+    }
+
+    #[test]
+    fn manual_storm_track_uses_clicked_horizon_and_edited_motion() {
+        let mut track = super::ManualStormTrack::default();
+        let origin = [-97.0, 35.0];
+        let expected_end = crate::geo::destination_point(origin, 90.0, 30.0 * 1.852);
+        track.click(origin);
+        assert!(!track.endpoint_set);
+        track.click(expected_end);
+        assert!(track.endpoint_set);
+        assert!((track.speed_kt - 30.0).abs() < 0.1);
+        assert!((track.bearing_deg - 90.0).abs() < 0.1);
+        let halfway = track.point_at(30).unwrap();
+        let (km, _) = crate::geo::great_circle(origin, halfway);
+        assert!((km - 15.0 * 1.852).abs() < 0.1);
+        track.speed_kt = 40.0;
+        let (km, _) = crate::geo::great_circle(origin, track.point_at(60).unwrap());
+        assert!((km - 40.0 * 1.852).abs() < 0.1);
+        track.click([-98.0, 36.0]);
+        assert!(!track.endpoint_set);
+        assert_eq!(track.origin, Some([-98.0, 36.0]));
+    }
+
+    #[test]
+    fn place_lookup_does_not_override_a_later_map_navigation() {
+        let camera = crate::render::mercator::Camera::at_lonlat(-97.44, 35.22, 8.0);
+        let mut view = crate::view::MapView::new(Some("KTLX".to_owned()), camera);
+        let pending = super::GeocodeNavigation {
+            request_id: 7,
+            view_index: 0,
+            camera,
+            site: view.site.clone(),
+        };
+        assert!(pending.still_current(0, &view));
+        assert!(!pending.still_current(1, &view), "switching panes supersedes the lookup");
+        view.camera.center = crate::render::mercator::lonlat_to_world(-96.0, 36.0);
+        assert!(!pending.still_current(0, &view), "panning supersedes the lookup");
+        view.camera.center = camera.center;
+        view.camera.zoom += 1.0;
+        assert!(!pending.still_current(0, &view), "zooming supersedes the lookup");
+        view.camera.zoom = camera.zoom;
+        view.camera.bearing_deg = 15.0;
+        assert!(!pending.still_current(0, &view), "rotating supersedes the lookup");
+        view.camera.bearing_deg = camera.bearing_deg;
+        view.site = Some("KFWS".to_owned());
+        assert!(!pending.still_current(0, &view), "changing radar supersedes the lookup");
+    }
+
+    #[test]
+    fn hail_swath_size_filters_use_native_mesh_millimetres() {
+        let field = wxdata::mrms::MrmsField {
+            values: vec![20.0, 25.4, 50.7, 50.8, 76.19, 76.2],
+            nx: 6,
+            ny: 1,
+            lon_west: -100.0,
+            lon_east: -99.0,
+            lat_north: 40.0,
+            lat_south: 39.0,
+            time: chrono::Utc::now(),
+        };
+        use crate::render::FieldLayer::HailSwath;
+        let all = super::field_upload_indexed_filtered(HailSwath, &field, 0);
+        assert!(all.data.iter().all(|&index| index >= 2));
+        let one = super::field_upload_indexed_filtered(HailSwath, &field, 1);
+        assert_eq!(one.data[0], 0);
+        assert!(one.data[1] >= 2);
+        let two = super::field_upload_indexed_filtered(HailSwath, &field, 2);
+        assert_eq!(&two.data[..3], &[0, 0, 0]);
+        assert!(two.data[3] >= 2);
+        let three = super::field_upload_indexed_filtered(HailSwath, &field, 3);
+        assert_eq!(&three.data[..5], &[0, 0, 0, 0, 0]);
+        assert!(three.data[5] >= 2);
+        assert_eq!(field.values[0], 20.0, "display filtering must not rewrite native values");
+        let shear = wxdata::mrms::MrmsField { values: vec![-20.0], nx: 1, ..field };
+        let unfiltered = super::field_upload_indexed(crate::render::FieldLayer::AzShear, &shear);
+        let with_hail_choice = super::field_upload_indexed_filtered(crate::render::FieldLayer::AzShear, &shear, 3);
+        assert_eq!(with_hail_choice.data, unfiltered.data, "hail choice cannot hide negative shear");
+    }
+
+    #[test]
+    fn scan_chime_sounds_once_per_new_volume_and_resets_on_station_change() {
+        let mut last = None;
+        let time = chrono::Utc::now();
+        assert!(!super::advance_scan_chime(&mut last, "KEAX", time));
+        assert!(!super::advance_scan_chime(&mut last, "KEAX", time));
+        assert!(!super::advance_scan_chime(&mut last, "KEAX", time - chrono::Duration::minutes(1)));
+        assert!(super::advance_scan_chime(&mut last, "KEAX", time + chrono::Duration::minutes(4)));
+        assert!(!super::advance_scan_chime(&mut last, "KFWS", time + chrono::Duration::minutes(6)));
+        assert!(!super::advance_scan_chime(&mut last, "KFWS", time + chrono::Duration::minutes(6)));
+        assert!(super::advance_scan_chime(&mut last, "KFWS", time + chrono::Duration::minutes(10)));
+    }
+
+    #[test]
     fn severe_chime_preserves_other_and_emergency_sound_choices() {
         use crate::settings::{AlertSound, Settings};
         let settings = Settings {
@@ -23076,6 +25212,32 @@ mod tests {
     }
 
     #[test]
+    fn live_mrms_accepts_only_near_future_posted_times() {
+        use wxdata::timecoord::{align, TimePolicy, TimedFrame};
+        let now = chrono::Utc::now();
+        let tolerance = super::field_time_tolerance(crate::render::FieldLayer::MrmsCatalog(0));
+        let near = now + chrono::Duration::minutes(1);
+        let far = now + tolerance + chrono::Duration::seconds(1);
+        let near_reference = super::accept_near_future_mrms_time(now, near, tolerance);
+        let far_reference = super::accept_near_future_mrms_time(now, far, tolerance);
+        assert!(align(&[TimedFrame { valid: near, value: () }], near_reference, TimePolicy::NearestPast, tolerance).is_some());
+        assert!(align(&[TimedFrame { valid: far, value: () }], far_reference, TimePolicy::NearestPast, tolerance).is_none());
+    }
+
+    #[test]
+    fn live_hail_swath_allows_short_posting_delay_but_not_stale_data() {
+        use wxdata::timecoord::{align, TimePolicy, TimedFrame};
+        let now = chrono::Utc::now();
+        let tolerance = super::field_time_tolerance(crate::render::FieldLayer::HailSwath);
+        assert_eq!(tolerance, chrono::Duration::minutes(30));
+        let live = super::mrms_reference_time(true, Some(now - chrono::Duration::hours(2)), now).unwrap();
+        let recent = TimedFrame { valid: now - chrono::Duration::minutes(17), value: () };
+        let stale = TimedFrame { valid: now - chrono::Duration::minutes(31), value: () };
+        assert!(align(&[recent], live, TimePolicy::NearestPast, tolerance).is_some());
+        assert!(align(&[stale], live, TimePolicy::NearestPast, tolerance).is_none());
+    }
+
+    #[test]
     fn storm_labels_show_only_the_strongest_indicator() {
         let cell = wxdata::level3::Cell {
             id: "A1".into(),
@@ -23132,6 +25294,35 @@ mod tests {
     }
 
     #[test]
+    fn drag_pause_follows_its_origin_across_floating_controls() {
+        let menu = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(300.0, 400.0));
+        let map = egui::pos2(600.0, 300.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![button(map, true)],
+            ..Default::default()
+        }, |ui| assert!(super::map_gesture_on_map(ui.ctx(), &[menu])));
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(menu.center())],
+            ..Default::default()
+        }, |ui| assert!(super::map_gesture_on_map(ui.ctx(), &[menu]), "a map drag stays paused across a control"));
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![button(menu.center(), false), button(menu.center(), true)],
+            ..Default::default()
+        }, |ui| assert!(!super::map_gesture_on_map(ui.ctx(), &[menu])));
+        let _ = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(map)],
+            ..Default::default()
+        }, |ui| assert!(!super::map_gesture_on_map(ui.ctx(), &[menu]), "a control drag stays outside the map"));
+    }
+
+    #[test]
     fn wheel_and_trackpad_zoom_count_as_live_gestures() {
         let mut input = egui::InputState::default();
         assert!(!super::map_gesture_live(&input));
@@ -23184,6 +25375,17 @@ mod tests {
         assert_eq!(super::cached_loop_tail(&frames, 4, |name| name.ends_with("170000") || name.ends_with("170300")), 1);
         assert_eq!(super::cached_loop_tail(&frames, 4, |name| name.ends_with("170200") || name.ends_with("170300")), 2);
         assert_eq!(super::cached_loop_tail(&frames, 4, |_| true), 4);
+    }
+
+    #[test]
+    fn web_loop_limit_tracks_scan_payload_without_exceeding_budget() {
+        let mib = 1024 * 1024;
+        let budget = 192 * mib;
+        assert_eq!(super::web_loop_window_for_bytes(0, budget), 4);
+        assert_eq!(super::web_loop_window_for_bytes(8 * mib, budget), 22);
+        assert_eq!(super::web_loop_window_for_bytes(mib / 2, budget), 250);
+        assert_eq!(super::web_loop_window_for_bytes(30 * mib, budget), 4);
+        assert_eq!(super::web_loop_window_for_bytes(64 * mib, budget), 4);
     }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,
@@ -23371,6 +25573,11 @@ mod tests {
         );
         // AlertService writes a site-less notification link; that must keep working.
         assert_eq!(parse_goto(",-97.3,35.3,9").unwrap().site, "");
+        // Coordinates can come from a weather alert or shared place whose ID is an airport,
+        // not a radar. Keep the camera but select an actual station before fetching volumes.
+        let alaska = parse_goto("PANC,-149.9,61.2,6").unwrap();
+        assert_eq!(alaska.site, "PAHG");
+        assert_eq!((alaska.lon, alaska.lat, alaska.zoom), (-149.9, 61.2, 6.0));
         // Archive links carry a time.
         let g = parse_goto("KTLX,-97.3,35.3,9,2013-05-20T20:00:00Z").unwrap();
         assert_eq!(g.time.unwrap().to_rfc3339(), "2013-05-20T20:00:00+00:00");
@@ -23410,6 +25617,9 @@ mod tests {
             moment: Some(moment),
             tilt: Some(tilt),
             basemap: None,
+            globe: None,
+            pitch_deg: None,
+            bearing_deg: None,
             threshold,
             srv: false,
         };
@@ -23436,6 +25646,16 @@ mod tests {
         // A view with the threshold switched off shares as "nothing to say", not as `thr:off` —
         // overriding the recipient's own setting with a default nobody chose.
         assert!(!goto_link(&base(Moment::Reflectivity, 0, Some(None))).contains("thr:"));
+
+        let mut oriented = base(Moment::Reflectivity, 0, None);
+        oriented.globe = Some(false);
+        oriented.pitch_deg = Some(42.5);
+        oriented.bearing_deg = Some(273.0);
+        let link = goto_link(&oriented);
+        let round = parse_goto(&link).unwrap();
+        assert_eq!((round.globe, round.pitch_deg, round.bearing_deg),
+            (Some(false), Some(42.5), Some(273.0)));
+        assert_eq!(parse_goto("KFWS,-97.3,32.5,8").unwrap().pitch_deg, None);
     }
 
     #[test]
@@ -23467,16 +25687,18 @@ mod tests {
         let red = DRAW_COLORS[0];
         let cyan = DRAW_COLORS[2];
         let mut strokes = Vec::new();
-        draw_append(&mut strokes, [-97.0, 35.0], red, true);
-        draw_append(&mut strokes, [-97.1, 35.1], red, false);
+        draw_append(&mut strokes, [-97.0, 35.0], red, 4.0, true);
+        draw_append(&mut strokes, [-97.1, 35.1], red, 4.0, false);
         // A repeated point (a still finger during a drag) adds nothing.
-        draw_append(&mut strokes, [-97.1, 35.1], red, false);
+        draw_append(&mut strokes, [-97.1, 35.1], red, 4.0, false);
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].points.len(), 2);
+        assert_eq!(strokes[0].width, 4.0);
 
-        draw_append(&mut strokes, [-98.0, 36.0], cyan, true);
+        draw_append(&mut strokes, [-98.0, 36.0], cyan, 7.0, true);
         assert_eq!(strokes.len(), 2);
         assert_eq!(strokes[1].color, cyan);
+        assert_eq!(strokes[1].width, 7.0);
 
         strokes.pop(); // Undo
         assert_eq!(strokes.len(), 1);
@@ -23484,10 +25706,59 @@ mod tests {
     }
 
     #[test]
+    fn eraser_hits_screen_segments_and_leaves_other_strokes() {
+        let cam = crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let vp = (800.0, 600.0);
+        let middle = cam.world_to_screen(crate::render::mercator::lonlat_to_world(-97.0, 35.0), vp);
+        let mut strokes = vec![
+            Stroke2d { points: vec![[-97.1, 35.0], [-96.9, 35.0]], color: DRAW_COLORS[0], width: 4.0 },
+            Stroke2d { points: vec![[-98.0, 36.0], [-97.9, 36.0]], color: DRAW_COLORS[2], width: 2.5 },
+        ];
+        let before = strokes.clone();
+        assert!(erase_strokes_at(&mut strokes, &cam, vp, middle));
+        assert_eq!(strokes.len(), 3, "the touched line is split on both sides of the eraser");
+        assert_eq!(strokes[0].color, before[0].color);
+        assert_eq!(strokes[1].color, before[0].color);
+        assert_eq!(strokes[0].width, before[0].width);
+        assert_eq!(strokes[1].width, before[0].width);
+        assert_eq!(strokes[2], before[1]);
+        assert_eq!(strokes[0].points.first(), before[0].points.first());
+        assert_eq!(strokes[1].points.last(), before[0].points.last());
+        let radius = |point: [f64; 2]| {
+            let p = cam.world_to_screen(crate::render::mercator::lonlat_to_world(point[0], point[1]), vp);
+            ((p.0 - middle.0).powi(2) + (p.1 - middle.1).powi(2)).sqrt()
+        };
+        assert!((radius(*strokes[0].points.last().unwrap()) - 11.0).abs() < 0.2);
+        assert!((radius(strokes[1].points[0]) - 11.0).abs() < 0.2);
+        assert!(!erase_strokes_at(&mut strokes, &cam, vp, middle));
+    }
+
+    #[test]
+    fn eraser_fast_drag_covers_the_path_between_samples() {
+        let cam = crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let vp = (800.0, 600.0);
+        let center = cam.world_to_screen(crate::render::mercator::lonlat_to_world(-97.0, 35.0), vp);
+        let mut strokes = vec![Stroke2d {
+            points: vec![[-97.1, 35.0], [-96.9, 35.0]],
+            color: DRAW_COLORS[0],
+            width: 2.5,
+        }];
+        assert!(erase_strokes_along(
+            &mut strokes,
+            &cam,
+            vp,
+            Some((center.0, center.1 - 40.0)),
+            (center.0, center.1 + 40.0),
+        ));
+        assert_eq!(strokes.len(), 2);
+    }
+
+    #[test]
     fn drawn_annotations_export_coordinates_and_style_as_geojson() {
         let strokes = vec![Stroke2d {
             points: vec![[-97.5, 35.2], [-97.4, 35.3]],
             color: egui::Color32::from_rgba_unmultiplied(255, 80, 80, 128),
+            width: 6.0,
         }];
         let json: serde_json::Value =
             serde_json::from_str(&annotations_geojson(&strokes).unwrap()).unwrap();
@@ -23495,9 +25766,11 @@ mod tests {
         assert_eq!(json["features"][0]["geometry"]["coordinates"][1][0], -97.4);
         assert_eq!(json["features"][0]["properties"]["stroke"], "#ff5050");
         assert_eq!(json["features"][0]["properties"]["stroke-opacity"], 128.0 / 255.0);
+        assert_eq!(json["features"][0]["properties"]["stroke-width"], 6.0);
         assert!(annotations_geojson(&[Stroke2d {
             points: vec![[f64::NAN, 35.0], [-97.0, 35.0]],
             color: egui::Color32::WHITE,
+            width: 2.5,
         }])
         .unwrap_err()
         .to_string()
@@ -23745,10 +26018,27 @@ mod nowcast_tests {
 #[cfg(test)]
 mod request_book_tests {
     use super::{
-        field_refresh_secs, registered_display_field, retry_once, HealthState, RequestBook,
-        RequestLane, SourceHealth,
+        field_refresh_secs, overlay_result_error, registered_display_field, retry_once,
+        HealthState, OverlayMsg, RequestBook, RequestLane, SourceHealth,
     };
     use crate::render::FieldLayer;
+
+    #[test]
+    fn failed_sensor_payload_counts_as_feed_failure() {
+        let result = Ok(OverlayMsg::Obs("KTLX".into(), Err("station unavailable".into())));
+        assert_eq!(overlay_result_error(&result), Some("station unavailable"));
+        assert_eq!(overlay_result_error(&Err("network down".into())), Some("network down"));
+        assert_eq!(overlay_result_error(&Ok(OverlayMsg::Spotters(Vec::new()))), None);
+
+        let mut book = RequestBook::default();
+        let lane = RequestLane::Feed("Nearest station observations");
+        let generation = book.start(lane.clone(), 1).unwrap();
+        assert!(book.finish(&lane, generation, overlay_result_error(&result), None));
+        let health = book.health(&lane);
+        assert_eq!(health.state(), HealthState::Failed);
+        assert_eq!(health.failures, 1);
+        assert_eq!(health.successes, 0);
+    }
 
     #[test]
     fn late_frame_completion_and_phase_updates_follow_the_current_selection() {
@@ -23778,6 +26068,45 @@ mod request_book_tests {
         assert!(!book.finish(&a, old_a, None, None));
         assert!(book.finish(&b, current_b, None, None));
         assert!(book.is_current(&a, current_a));
+    }
+
+    #[test]
+    fn snow_and_ice_forecasts_finish_independently() {
+        use wxdata::winter_prob::Kind;
+        let snow = super::OverlaySource::WinterProb(1, Kind::Snow).lane();
+        let ice = super::OverlaySource::WinterProb(1, Kind::Ice).lane();
+        assert_ne!(snow, ice);
+        let mut book = RequestBook::default();
+        let snow_generation = book.start(snow.clone(), 1).unwrap();
+        let ice_generation = book.start(ice.clone(), 2).unwrap();
+        assert!(book.finish(&ice, ice_generation, None, None));
+        assert!(book.finish(&snow, snow_generation, None, None));
+    }
+
+    #[test]
+    fn level3_site_changes_invalidate_only_that_panes_request_and_field() {
+        let mut book = RequestBook::default();
+        let first = super::OverlaySource::L3Grid(0, FieldLayer::Daa, "KTLX".into());
+        let second = super::OverlaySource::L3Grid(1, FieldLayer::Daa, "KFWS".into());
+        let a = first.lane();
+        let b = second.lane();
+        assert_ne!(a, b);
+        let old_a = book.start(a.clone(), first.identity()).unwrap();
+        let current_b = book.start(b.clone(), second.identity()).unwrap();
+        let changed = super::OverlaySource::L3Grid(0, FieldLayer::Daa, "KOUN".into());
+        let new_a = book.start(a.clone(), changed.identity()).unwrap();
+        assert!(!book.finish(&a, old_a, None, None));
+        assert!(book.is_current(&a, new_a));
+        assert!(book.finish(&b, current_b, None, None));
+
+        let mut state = super::FieldState::default();
+        state.select_site(Some("KTLX"));
+        state.last_fetch = Some(std::time::Instant::now());
+        state.select_site(Some("KTLX"));
+        assert!(state.last_fetch.is_some());
+        state.select_site(Some("KOUN"));
+        assert_eq!(state.requested_site.as_deref(), Some("KOUN"));
+        assert!(state.last_fetch.is_none());
     }
 
     #[test]
@@ -23936,6 +26265,7 @@ mod request_book_tests {
             data_age: None,
             last_failure: failure.map(std::time::Duration::from_secs),
             error,
+            freshness_window: cadence,
             cadence,
             successes: u64::from(success.is_some()),
             failures: u64::from(failure.is_some()),
@@ -23954,5 +26284,18 @@ mod request_book_tests {
             health(false, None, None, None).state(),
             HealthState::Waiting
         );
+    }
+
+    #[test]
+    fn level3_health_allows_volume_scan_latency_without_slower_polling() {
+        let lane = RequestLane::PaneField(1, FieldLayer::Daa);
+        assert_eq!(lane.cadence().as_secs(), 120);
+        assert_eq!(lane.freshness_window().as_secs(), 720);
+        let mut health = RequestBook::default().health(&lane);
+        health.last_success = Some(std::time::Duration::from_secs(1));
+        health.data_age = Some(std::time::Duration::from_secs(5 * 60));
+        assert_eq!(health.state(), HealthState::Fresh);
+        health.data_age = Some(std::time::Duration::from_secs(13 * 60));
+        assert_eq!(health.state(), HealthState::Stale);
     }
 }

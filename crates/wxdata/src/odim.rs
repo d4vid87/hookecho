@@ -292,14 +292,38 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
 
     let data = format!("{path}/data");
     let ds = f.dataset(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let floating = matches!(ds.dtype, hdf5lite::Datatype::Float { .. });
     let word_bits = match ds.dtype.size_of() {
         1 => 8u8,
         2 => 16,
+        4 | 8 if floating => 16,
         n => anyhow::bail!("{path}: {n}-byte gates"),
     };
+    let signed = matches!(ds.dtype, hdf5lite::Datatype::Int { signed: true, .. });
     let values = f.read_f64(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
     if values.len() < gates {
         anyhow::bail!("{path}: {} gates, expected {gates}", values.len());
+    }
+
+    if floating {
+        // Spain publishes already-calibrated floating-point gates. The model stores at most 16
+        // bits per gate, so retain 0.01-unit resolution over a ±327-unit span. Codes 0/1 remain
+        // reserved for missing/folded data; these files declare their own nodata/undetect values.
+        let gain = num(&what, "gain").unwrap_or(1.0);
+        let physical_offset = num(&what, "offset").unwrap_or(0.0);
+        let undetect = num(&what, "undetect");
+        let nodata = num(&what, "nodata");
+        let mut raw = Vec::with_capacity(gates * 2);
+        for &v in &values[..gates] {
+            let code = if !v.is_finite() || Some(v) == undetect || Some(v) == nodata {
+                0u16
+            } else {
+                ((v.mul_add(gain, physical_offset) * 100.0 + 32768.0).round())
+                    .clamp(2.0, u16::MAX as f64) as u16
+            };
+            raw.extend_from_slice(&code.to_be_bytes());
+        }
+        return Ok(Some(Moment { slot, raw, scale: 100.0, offset: 32768.0, word_bits: 16 }));
     }
 
     // The model decodes a gate as `(raw − offset) / scale`; ODIM packs it as `gain × raw + off`.
@@ -308,7 +332,11 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
     if gain == 0.0 {
         anyhow::bail!("{path}: zero gain");
     }
-    let (scale, offset) = (1.0 / gain, -num(&what, "offset").unwrap_or(0.0) / gain);
+    // MomentData reserves codes 0 and 1 and interprets every other code as unsigned. Swedish
+    // ODIM uses signed int16 gates with -32768/-32767 as nodata/undetect: biasing by 32768 maps
+    // those sentinels to 0/1 and keeps valid negative velocities on the correct side of zero.
+    let bias = if signed { 1i32 << (word_bits - 1) } else { 0 };
+    let (scale, offset) = (1.0 / gain, bias as f64 - num(&what, "offset").unwrap_or(0.0) / gain);
 
     // Raw 0 means below threshold to the model, which is exactly ODIM's `undetect`. `nodata` has
     // no separate representation, so it collapses onto the same level.
@@ -323,7 +351,7 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
         let v = if Some(v) == undetect || Some(v) == nodata || v.is_nan() {
             0
         } else {
-            v as u32
+            (v as i32 + bias) as u32
         };
         if word_bits == 8 {
             raw.push(v as u8);
@@ -406,6 +434,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn signed_swedish_velocity_retains_its_sign() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../hdf5lite/tests/data/seang.h5");
+        let (_, scan) = decode(std::fs::read(p).expect("seang.h5 fixture")).expect("decode");
+        let sweep = &scan.sweeps()[0];
+        let negative = sweep.radials()[2].velocity().unwrap().values()[1];
+        let positive = sweep.radials()[1].velocity().unwrap().values()[1];
+        assert!(matches!(negative, MomentValue::Value(v) if (v + 0.24069).abs() < 0.001), "{negative:?}");
+        assert!(matches!(positive, MomentValue::Value(v) if (v - 0.48138).abs() < 0.001), "{positive:?}");
+        assert_eq!(sweep.radials()[0].velocity().unwrap().values()[0], MomentValue::BelowThreshold);
+        let binned = crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, 0).unwrap();
+        assert!(binned.data.iter().filter(|&&v| v >= 2).count() > 1_000);
+    }
+
+    #[test]
+    fn floating_spanish_gates_keep_physical_values_and_missing_code() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/esahr.h5");
+        let (_, scan) = decode(std::fs::read(p).expect("esahr.h5 fixture")).expect("decode");
+        assert_eq!(scan.sweeps().len(), 2);
+        let radial = &scan.sweeps()[0].radials()[0];
+        let reflectivity = radial.reflectivity().expect("DBZH").values();
+        let velocity = radial.velocity().expect("VRADH").values();
+        assert_eq!(reflectivity[0], MomentValue::BelowThreshold);
+        assert_eq!(reflectivity[3], MomentValue::Value(-24.0));
+        assert!(matches!(velocity[3], MomentValue::Value(v) if (v - 2.20).abs() < 0.02), "{:?}", velocity[3]);
+        assert!(matches!(velocity[4], MomentValue::Value(v) if (v - 5.03).abs() < 0.02), "{:?}", velocity[4]);
     }
 
     #[test]

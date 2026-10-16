@@ -1,0 +1,1752 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-10-14",
+  "project": "HookEcho Radar Workspace",
+  "overall_status": "partial independent implementation; not a one-to-one clone",
+  "scope": "All 61 bounded groups from the research inventory, not a claim to exhaust every provider feature. A second standalone launcher/profile and optional existing-app mode share HookEcho implementation.",
+  "status_definitions": {
+    "implemented-related": "Related independently implemented capability exists and is wired; does not mean visual, numerical, coverage or behavioral equivalence.",
+    "partial": "Related implementation exists with a known material gap.",
+    "missing": "Specific equivalent not established in audited source; nearest related feature does not satisfy it.",
+    "external-service": "Primary unmet capability depends on unavailable provider service/data/authorization/backend.",
+    "not-verified": "Insufficient evidence to map the observed feature to an actual working equivalent."
+  },
+  "status_counts": {
+    "partial": 33,
+    "implemented-related": 26,
+    "not-verified": 0,
+    "external-service": 2,
+    "missing": 0
+  },
+  "research_artifacts": {
+    "paths_relative_to": "original REA research workspace; artifacts are not bundled into this repository",
+    "inventory": "outputs/ro-parity/feature-inventory.json",
+    "source_audit": "outputs/ro-parity/hookecho-coverage.json",
+    "basemap_plan": "outputs/ro-parity/basemap-plan.json",
+    "live_evidence_index": "outputs/ro-parity/live-evidence-index.json",
+    "transport_ledger": "outputs/ro-parity/transport-implementation-ledger.json",
+    "original_artifact_findings": "outputs/RadarOmega-5.5.3-findings.json",
+    "eccc_browser_acceptance": "outputs/ro-parity/eccc-browser-accepted/results.json",
+    "web_delivery_smoke": "outputs/ro-parity/web-delivery-smoke/results.json",
+    "native_delivery_smoke": "outputs/ro-parity/native-final/launch-evidence.json"
+  },
+  "rea_evidence": [
+    {
+      "name": "ro-shot",
+      "evidence_id": "ev_bf9d7760e0d04ac53c2594d5532a17946fd6eb8c36e92f554dee85df5b8bc7f0",
+      "captured_at": "2026-10-14T15:31:41.147Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "bb33552f07e23bcf954fd55e28a07108d65a13311598ab0b8af962481b2e2a76"
+    },
+    {
+      "name": "ro-sidebar",
+      "evidence_id": "ev_42f005059240a45abaad37405a4cc2bfd3bab25488a9c3e3809ee01ffdfee7ee",
+      "captured_at": "2026-10-14T15:32:25.499Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "fdc312b15490bf62041f123e5eef06970aa09412ba2953b7ac351e4f6c5ce8f4"
+    },
+    {
+      "name": "ro-display",
+      "evidence_id": "ev_f4fc167477152e72bba97f1fc648599ce7ee50df9ea6e8c65cbb7dbb38c05b9e",
+      "captured_at": "2026-10-14T15:33:00.753Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "2fa2d6db96d6b430a842816e6a8e2ed028bf13588e8a7056ad0747d4e2ec6146"
+    },
+    {
+      "name": "ro-modes",
+      "evidence_id": "ev_57fd94e566ba98dc5b7a4a4a0abc3e55b388915da71085a9c6cdd0b1eb320002",
+      "captured_at": "2026-10-14T15:33:44.539Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "2f40bd385c9c319b5f8a24cc7c69fa96b6dccb107d84e694f561aa2d87e88a07"
+    },
+    {
+      "name": "ro-radarmodes",
+      "evidence_id": "ev_c5a14d07a9b7e49a86171eab05342f3794fb02b0a6298ac12ce89536bbbb49d8",
+      "captured_at": "2026-10-14T15:33:53.775Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "fa63935dcbbf9bba5f824d6c27372f365de88aceff518db91150d2b65f48cdb2"
+    },
+    {
+      "name": "ro-overlays",
+      "evidence_id": "ev_c7107f76b5bba82d546d639c408d246a489dd115820760cae5756031fd059204",
+      "captured_at": "2026-10-14T15:39:28.638Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "2fd756237c4cced409495cfc8cbfd95a8e7b2623f39cc343f3c9800ba2b9730c"
+    },
+    {
+      "name": "ro-spotters",
+      "evidence_id": "ev_445a6809cb1df1e744164211c79536c7f01140c2edab5c1a8146c7c616e827be",
+      "captured_at": "2026-10-14T15:39:39.413Z",
+      "viewport": {
+        "width": 920,
+        "height": 1028
+      },
+      "artifact_sha256": "edc5f84cf3fe27b081d8c3c43b22154abb19cbb8280f1cca2b964b24bd2395f3"
+    }
+  ],
+  "artifact_identity": {
+    "name": "RadarOmega-5.5.3-x86_64.AppImage",
+    "sha256": "c8f3b2bbb56ed37d1c2fb815b4d851e0083e073d07f038942571a615f828b845",
+    "limitation": "Hosted viewer changes independently from AppImage. Screenshot evidence explicitly does not bind its artifact identity; original static artifact identity is separate."
+  },
+  "validation": {
+    "completed": [
+      "Native library cargo check after transport helper refactor.",
+      "Wasm library cargo check after transport helper refactor; unrelated warnings present.",
+      "Two settings-profile tests: fresh standalone/default ordinary and complete saved-preference preservation.",
+      "Two path tests: native profile config/data/cache separation and preserved Android private layout.",
+      "Full library suites: 635 HookEcho tests and 431 wxdata tests passed; 24 and 38 ignored respectively.",
+      "Explicit hardware GPU checks: perspective raster/field/radar/stroke alignment and wind advection passed.",
+      "All five camera WGSL shaders validate and translate every entrypoint to GLSL ES300/WebGL2.",
+      "ECCC local proxy HTTP 200; production parser accepted 31 advertised frames from captured layer-filtered capabilities.",
+      "TDWR defaults and authoritative registry marker filtering: two tests passed.",
+      "Final delivery web build after status/layout corrections: 4,488,523 gzip bytes under explicitly revised 4,500,000 budget; Lite 74,040 under unchanged 80,000 budget.",
+      "Final browser checks: search arrow caret, numeric tilt/bearing, radar/legend visibility and TDWR persistence, MRMS 7 fps restored after reload.",
+      "Native public NWS station observation chain and DWD DEOF 0.5-degree reflectivity GPU render passed.",
+      "Live ECCC browser imagery: one capabilities and 30 PNG HTTP 200 responses; current 16:54 UTC rain frame visibly rendered.",
+      "REA process-wrapped timing: nine valid hardware trials per app (idle/wheel/pan); no cross-app speed ranking. RadarOmega evidence ev_c44344280cedd8a5616f140cae54c6df58e51b601dc0a414b3f3a6adff943338; HookEcho evidence ev_415308d773bfafe35ae519c6ecab212286c4be0fa39087664ce95268b10dde38. Measured build predates final transport wording and imagery-bar placement fixes.",
+      "Final-source raw WASM: layouts passed at 1120×900 and 800×600; ECCC Previous/Latest navigation 17:24 → 17:18 → 17:24 UTC verified, one capabilities request and 42 PNG HTTP 200 responses, no page/request errors. Final optimized delivery is a separate artifact.",
+      "Caltrans browser public catalogs: all 12 districts HTTP 200; station lookup did not complete, so no camera still/timestamp verified. No media-parity claim.",
+      "Final optimized web smoke: live ECCC imagery and separated controls at both desktop sizes; all observed loaded code files HTTP 200 and served hashes match build. No page errors. Optional local /geo.json returned 404; not a zero-resource-error claim. Complete basemap loading not an acceptance gate.",
+      "Final standalone AppImage built (101,935,608 bytes), version 0.12.0-beta.2; live KEAX radar/map rendered on RX 580/Vulkan, correct standalone window/class and isolated profile files, normal exit 0. SHA256 3d3fe1d2ed1d09847159a2ec1ee334f21fb906cf0e0e62afa4352d2201e523a5. Unrelated system notification partly obscures screenshot; no complete interactive acceptance claim.",
+      "Subsequent 3D slice: 641 native library tests passed; optimized main web bundle 4,495,210 gzip bytes (4,500,000 budget) and Lite 74,040 (80,000 budget). Local browser loaded a live KEAX scan in 3D and displayed height-based downtown Chicago vector buildings at zoom 13.1; no browser warnings/errors. These checks do not requalify the earlier standalone AppImage or establish reference parity."
+    ],
+    "pending": [
+      "Complete feature-by-feature live data and pixel/behavior equivalence; presented-frame performance with matched scene/data and native AppImage timing."
+    ],
+    "rule": "Each bounded check states its coverage. Compile, unit and smoke results do not establish complete observed-feature equivalence."
+  },
+  "features": [
+    {
+      "id": "UI01",
+      "category": "shell",
+      "title": "Map-first desktop layout",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Top-left navigation/profile/mode/search, full-width top color scale, top-center site/VCP/2D control, top-right alert count, bottom frame/time card, central tool strip, bottom-right product/elevation card.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "New optional desktop workspace adds source control, station/projection card, drawer and centered transport.",
+      "remaining_gaps": [
+        "Pixel layout, spacing, branding, responsive transitions and all interaction states are not equivalent; compact phone UI remains HookEcho."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI01",
+      "acceptance": "At matched viewport all regions remain usable with legend, time, product, site and selected tool visible.",
+      "runtime_verification": "Final-source raw browser acceptance at 1120×900 and 800×600 verified separate imagery/transport/alerts controls, no duplicate active-pane timestamp and a clear install prompt. Initial standalone package launched with live KEAX data; final package smoke recorded in global validation. This does not establish pixel equivalence."
+    },
+    {
+      "id": "UI02",
+      "category": "shell",
+      "title": "Grouped navigation drawer",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "General and Settings groups with category disclosure, dimmed/blurred map backdrop.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "The grouped workspace drawer routes supported controls to existing actions. Its Notifications entry opens HookEcho alert-delivery settings directly on the Notify me page. A Weather Products section now exposes public-data routes for mesoscale discussions, convective/fire/winter/rainfall/climate outlook controls, tropical cyclones, METARs, fronts, reports, GLM lightning, spotters, and ODIN power outages. Outlook menu entries scroll the shared control page to their severe, climate, fire, rainfall, or winter section. A fixed Outlooks header keeps Back and Close visible when a lower forecast section is in view; Back opens the full controls catalog.",
+      "remaining_gaps": [
+        "The menu still differs from RadarOmega's complete vendor catalog, including subscription-only services; several outlook routes share HookEcho's Outlooks control page rather than opening distinct vendor pages."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI02",
+      "acceptance": "Open and close navigation; access every registered destination without overlap.",
+      "runtime_verification": "In the optimized local browser build, opening the workspace drawer and clicking Notifications opened Settings directly on Alerts → Notify me, with notification controls visible. Other drawer destinations and full layout equivalence remain unverified. Native UI/action compile and 680 active library tests passed on 2026-10-15 after adding public-data Weather Products routes. Optimized local browser build passed; Weather Products expanded in the workspace drawer, and Hydrological outlooks opened the shared Outlooks controls with public NOAA rainfall choices visible. In the optimized local browser, Fire, Rainfall, Winter, and Climate menu routes each opened Outlooks with their matching NOAA controls visible. 2026-10-15 optimized-browser run verified Winter opens with its controls and a fixed Back/Close header, Close dismisses it, Back opens the full categorized controls catalog, and Severe returns to the page top after visiting a lower section."
+    },
+    {
+      "id": "UI03",
+      "category": "shell",
+      "title": "Data mode selection",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Single-site Radar, MRMS, Satellite, Forecasts and grouped Models entries.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Source chooser groups Radar, MRMS, Satellite and Forecasts using existing registered fields.",
+      "remaining_gaps": [
+        "No complete vendor model/product/entitlement catalog; selected source replaces other source products while Layer manager permits combinations."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI03",
+      "acceptance": "Changing mode updates active dataset, product selector, legend and timestamp.",
+      "runtime_verification": "Browser candidate source search and selection passed, including MRMS selection and persisted hidden radar/legend across reload. All 84 MRMS choices are catalogued; individual live product correctness is not established."
+    },
+    {
+      "id": "UI04",
+      "category": "shell",
+      "title": "Search and location",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Search control is exposed beside mode selector; Location Settings entry is exposed in display settings.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Site/place search and location workflows are available. Place lookups carry request IDs, and a result is applied only if the initiating pane, camera center, zoom, projection, orientation and site remain current. Selecting a radar site cancels pending place navigation and clears its status. Startup recovery now precedes user-directed environment, notification and browser-fragment navigation, so a saved camera cannot overwrite a shared link; geo-IP fallback does not replace a valid recovered session. A delayed default geo-IP fix only applies if camera/site still have startup values. Choosing Fly to clears search and closes the wide controls panel. Compact and wide search rank radar-site IDs and city matches; selecting a site centers that radar while preserving map orientation.",
+      "remaining_gaps": [
+        "Search-result ranking versus RadarOmega, geocoder coverage, and GPS/follow transitions have not been compared end to end.",
+        "The out-of-order lookup guard and later-navigation guard have focused tests, but delayed-response interaction in the browser remains to verify."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/recovery.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/ui/marker_window.rs",
+        "crates/hookecho/src/workspace.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI04",
+      "acceptance": "Search place/site, navigate map and configure location following.",
+      "runtime_verification": "2026-10-14: The final native library suite passed with 657 tests and 30 ignored; cargo check passed after the lookup-ID and geo-IP guards. The final optimized web build passed at 4,537,718 gzipped bytes (4,540,000 budget). In the local browser, a Norman place search moved the map, and after the refinement a Tulsa search closed the panel and moved the map to Tulsa. A focused site-ranking test passed for NEXRAD and TDWR IDs. The final optimized browser build passed at 4,538,850 gzipped bytes (4,540,000 budget). In the wide search panel, entering KTLX exposed the Oklahoma City station row; selecting it closed the panel, selected KTLX and centered its radar marker. Out-of-order response delivery and GPS hardware transitions remain unverified. 2026-10-15: with a saved Oklahoma session, a newly opened Sydney #goto link initially displayed the restored Oklahoma camera and replaced the address-bar fragment; applying the same fragment after startup worked. After the startup-order fix, a fresh Sydney tab rendered Sydney on first load and kept its Sydney fragment after permalink synchronization. The optimized main/lite build and 663 HookEcho library tests passed. This verifies browser link precedence against saved recovery, not every notification/deep-link route. 2026-10-14: A focused regression test confirmed a pending place lookup no longer applies after pane switch, pan, zoom, rotation or site change; the native library suite passed with 660 tests and the optimized web build passed. A delayed-response browser interaction is still pending."
+    },
+    {
+      "id": "UI05",
+      "category": "shell",
+      "title": "Dual and quad panels",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Dual/quad display options, pane-local product choice and synchronized frame stepping are present.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Independent products, basemaps and timestamps; camera/time links, offsets, named panes, persistent workspaces. The RadarOmega-style sidebar now exposes Radar and comparison views, 2/4-pane selection, linked map/time switches, a configurable maximum radar-time difference and inspector visibility. New settings default the linked time guard to 120 seconds; a saved explicit off choice remains off. A leader's newly requested frame or archive seek now drives follower requests immediately, even while its prior scan remains loaded; an already-loaded selected source still links by actual displayed cut time.",
+      "remaining_gaps": [
+        "The pane controls remain HookEcho-specific. Linked camera motion, default-limit hiding of a 13-minute-misaligned follower, and one KTLX linked frame-step arrival were verified. A user can disable the limit; other sites, providers, date transitions and repeated playback need further controlled checks. Exact vendor split-view layout and interactions are not established."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/mobile/navigation.rs",
+        "crates/hookecho/src/view.rs",
+        "crates/hookecho/src/workspace.rs",
+        "docs/rea-next-improvements.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI05",
+      "acceptance": "Two/four panes preserve independent products and explicitly synchronize camera/time.",
+      "runtime_verification": "2026-10-14: cargo check passed and the optimized web build passed at 4,539,340 gzipped bytes (4,540,000 budget). In the local browser, Compare radar products opened four panes whose inspector listed independent VEL, spectrum-width and ZDR products. The new sidebar switched to two panes, enabled both Link map positions and Link timelines, returned to one Radar pane, and reopened comparison in two panes with both link switches retained. On 2026-10-15, a drag in the left pane moved the KTLX marker roughly 40 pixels in the same direction in both panes, verifying linked camera motion. A linked archive step changed the requested time, but the inspector temporarily showed different loaded scan times (02:13 versus 02:00 UTC); this does not prove frame-step display synchronization. The existing maximum-time-difference guard is now exposed beside Link timelines, with a 120-second default when enabled. The final optimized browser build passed at 4,539,943 gzipped bytes (4,540,000 budget); the browser showed the switch and slider, and the sidebar retained its original width. The focused loaded-scan alignment-limit test passed. On 2026-10-15, the guard became enabled by default for fresh or legacy-missing settings; a focused settings test confirmed explicit null still disables it. All 682 active library tests passed and the optimized main bundle measured 4,656,690/4,662,000 gzip bytes. In a fresh local browser comparison at KTLX, the inspector showed 23:09 UTC reflectivity in the leader and 22:56 UTC velocity in the follower. Turning on Link timelines showed the 120-second limit already checked and hid the follower radar while labeling its out-of-window offset. A subsequent 2026-10-15 update made the newly requested leader frame/seek the follower target before loading. With two KTLX panes linked, one archive step first showed loading and then the inspector reported 23:03 UTC in both REF and VEL panes, with both radar fields visible. The pending-seek precedence and loaded-scan fallback regression tests passed; all 683 active library tests passed, and the optimized main bundle measured 4,656,811/4,662,000 gzip bytes. This verifies one KTLX frame-step arrival, not every provider or repeated playback."
+    },
+    {
+      "id": "UI06",
+      "category": "shell",
+      "title": "Keyboard shortcuts",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Dedicated shortcut module includes playback speed increase/decrease behavior.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing keyboard shortcuts and Help remain available.",
+      "remaining_gaps": [
+        "Every vendor binding, focus rule and shortcut name has not been matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#UI06",
+      "acceptance": "Publish accessible shortcut list; shortcuts work unless typing in a field.",
+      "runtime_verification": "Browser verified search-caret arrow keys and numeric tilt/bearing input, with popup/modal Escape returning to the map without hiding controls. Other shortcuts and platform variations remain unverified."
+    },
+    {
+      "id": "MAP01",
+      "category": "basemap",
+      "title": "Base map choices",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Observed choices begin Dark Presentation, Grey Presentation, Green Presentation, Blank White, Satellite, Basic, Blue Map, Road Network, Dark Roadmap; extracted control string truncates after Te.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Independent vector and public raster styles include a Presentation palette with black land and restrained geography. A separate Blank White choice is a tile-free white canvas under radar, station markers, and weather overlays; it suppresses geographic map labels and retains the existing Blank Dark/None behavior. Blue Map is a keyless, independently authored vector palette. Its land, water, vegetation, road, boundary and label colors were tuned against a live RadarOmega Blue Map session. Its roads and casings are narrowed, and the regional view suppresses built-up land-use fill and delays smaller road classes until closer zoom levels without changing other palettes. At regional zoom below 9, Blue Map now suppresses route shields while retaining city names; shields return at close zoom. This keeps the weather canvas quieter without changing label behavior on other palettes.",
+      "remaining_gaps": [
+        "No vendor style, font/sprite asset or tile content reuse; full style catalog, tile schema, imagery and label placement differ. A local browser comparison at the saved KTLX regional center verified quieter Blue Map labeling at zoom 7 and route shields returning at zoom 9. The reference screenshot and browser run have different viewport sizes, weather times and tile sources, so land-cover, label placement, and pixel equivalence remain unverified."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/basemap_style.rs",
+        "crates/hookecho/src/vector_tiles.rs",
+        "crates/hookecho/src/tiles.rs",
+        "crates/hookecho/src/ui/basemap_picker.rs",
+        "crates/hookecho/src/app.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP01",
+      "acceptance": "Selectable styles preserve map position, data overlays and readable labels.",
+      "runtime_verification": "Native style tests confirmed Blank White's stable key and Blue Map's slug, picker category, keyless vector palette and stable key. A live RadarOmega Blue Map session was captured at 920x600 over Oklahoma after its style loaded. Its background was hsl(216,38%,14%), water hsl(197,48%,6%) and road-simple colors hsl(211,17%,37-40%); these measurements informed HookEcho's independent palette. HookEcho's Blue Map was browser-captured before and after at the same 920x600 viewport. A later regional-detail pass was checked in the local browser with the app proxy: the map rendered roads, land cover, labels, warnings and station markers, with fewer primary roads and residential fills at zoom 7. All 679 active library tests passed, including the new zoom gate test; the optimized browser bundle measured 4,653,983 bytes at gzip -9, within the 4,662,000-byte budget. Earlier reference and HookEcho screenshots are in outputs/ro-parity/basemap-blue/. On 2026-10-15 the optimized local browser rendered KTLX Blue Map around -96.4510, 36.1809 at zoom 7 with no route shields, while city names and road geometry remained visible. Navigating to -97.28, 35.34 at zoom 9 showed highway shields again. The saved RadarOmega Blue Map reference at zoom 7.03 around -96.4510, 36.1809 likewise presents subdued roads and no visible route shields in the unobscured map areas; the comparison is visual and not pixel matched because the viewport, weather scan and tile schemas differ. Reference: outputs/ro-parity/basemap-blue/reference-blue-map-settled.png and reference-state.json. Full native suite passed 680/712 (32 ignored); optimized web main WASM measured 4,654,781/4,662,000 gzip bytes, Lite 74,707/80,000."
+    },
+    {
+      "id": "MAP02",
+      "category": "basemap",
+      "title": "State/province boundaries",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Visibility toggle, color swatch and line-thickness slider.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Display modal adds state/province visibility, color and width for supported vector maps.",
+      "remaining_gaps": [
+        "Administrative geometry and classifications depend on the independent tile schema; raster styles cannot expose individual vector styling."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP02",
+      "acceptance": "Boundary visibility, color and thickness update and persist.",
+      "runtime_verification": "2026-10-15 local browser at KBIS Blue Map zoom 8 isolated the North Dakota/South Dakota border with city/road detail, counties and weather alerts hidden. The state toggle removed/restored the border. Raw OpenFreeMap z8/y91 tiles contain continuous admin_level 4 line geometry across adjacent tiles; a 0.8 px stroke appeared segmented, while a 2.0 px stroke was continuous. Blue Map now defaults administrative strokes to at least 1.0 px. A fresh local browser session displayed the 1.00 px default and a visible border with warnings hidden. Custom width overrides remain available, and exact vendor rendering remains unverified."
+    },
+    {
+      "id": "MAP03",
+      "category": "basemap",
+      "title": "County/local-region boundaries",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Independent visibility toggle, color swatch and thickness slider.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Display modal adds county visibility, color and width for supported vector maps.",
+      "remaining_gaps": [
+        "Complete local-region equivalence and all zoom transitions are not verified; raster styles cannot expose individual styling."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP03",
+      "acceptance": "County controls are independent of state controls.",
+      "runtime_verification": "2026-10-15 local browser at KBIS Blue Map zoom 8 confirmed the county toggle is independent of the state toggle and that the fresh-session default width is 1.00 px after the Blue Map minimum-width change. County-line continuity across tile boundaries and vendor equivalence remain unverified."
+    },
+    {
+      "id": "MAP04",
+      "category": "basemap",
+      "title": "City/road layer behavior",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Show Always, Show only when towers are OFF, No City & Road Layer choices.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Vector display settings add always/when radar stations hidden/hidden city-and-road modes. All transportation strokes and casings now render once above the radar layer, while labels remain in the later egui pass.",
+      "remaining_gaps": [
+        "Independent label collision, road placement and exact vendor zoom transitions still differ. The local browser verified visibility modes at one regional zoom; other zooms, raster basemaps, comparison panes and long-session transition smoothness remain unverified."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/basemap_style.rs",
+        "crates/hookecho/src/tiles.rs",
+        "crates/hookecho/src/ui/basemap_picker.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP04",
+      "acceptance": "All three label behaviors work without disabling radar data.",
+      "runtime_verification": "2026-10-15 optimized local browser at KTLX Blue Map zoom 8: Always showed city names and roads; Hidden removed them while preserving radar, warnings and administrative basemap geometry. With When radar stations are hidden selected, the map stayed stripped while station markers were on and restored city/road detail immediately when radar station markers were turned off. These checks verify the control behavior in one pane and one zoom, not vendor label-placement parity."
+    },
+    {
+      "id": "MAP05",
+      "category": "basemap",
+      "title": "Tower visibility and status",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "Map shows labeled radar towers; Show TDWR Towers toggle is visible.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Existing radar-site markers and range rings are exposed by Display Settings. Persisted show_tdwr_sites (default true) independently filters TDWR marker drawing, hover and click hit-testing by registry Network::Tdwr; selected station data and full site picker remain available. At city zoom (8+), unselected TDWRs use an outlined cyan pin instead of a faint small dot. A public NWS radar-stations feed now colors delayed, stale, and non-operating station pins and labels the RDA state/Level II receipt category in the radar lens. The classic lens and workspace station tooltip explicitly identify pin color as NOAA network status and show the selected site's displayed scan age separately. A missing station or report older than five minutes reverts to unknown rather than claiming an outage.",
+      "remaining_gaps": [
+        "NOAA receipt/status categories are independent public-data signals and are not proven equivalent to RadarOmega's tower colors. A displayed scan can be older than NOAA's latest receipt; the lens now shows its age separately, but full station-to-scan provenance and every international tower catalog remain incomplete."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/settings_window.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/wxdata/src/radar_status.rs",
+        "crates/wxdata/src/lib.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP05",
+      "acceptance": "Tower filtering and selected-site status are distinct; site can be selected from map.",
+      "runtime_verification": "Two focused settings/filter tests passed: legacy default compatibility and saved false roundtrip; registry-based TDWR-only exclusion retains the full catalog. On the optimized browser build at TDFW (33.065, -96.918), clicking the visible TDWR marker selected TDFW. Turning TDWR stations off removed its marker while retaining the selected TDFW in the top control. With KFWS selected at the same map center, clicking the hidden TDFW location left KFWS selected. The site picker still listed TDFW and selecting that row activated it while the marker toggle remained off. A subsequent optimized build showed prominent cyan TDFW and TDAL pins at zoom 11 with the toggle on and neither pin with it off; screenshots: outputs/ro-parity/map05/tdwr-selected-on.png, tdwr-selected-hidden.png, tdwr-picker-hidden.png, tdwr-picked-while-hidden.png, tdwr-prominent-on.png and tdwr-prominent-off.png. The NOAA parser test covers stale RDA timestamps and all native app tests passed; the optimized web build stayed within budget. The final local browser showed KMRX's recent Level II receipt without claiming the RDA was operating, while its separate Level III view could not load. Complete network/status-color equivalence remains unverified."
+    },
+    {
+      "id": "MAP06",
+      "category": "basemap",
+      "title": "Zoom/pan behavior",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Captured Mapbox wrapper sets fadeDuration 0, zoom rate 0.02, wheel zoom rate 0.004444.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Cursor anchored easing, drag inertia, direct pinch, detail hysteresis, retained geography and bounded gesture work. Each wheel event is capped at two zoom levels so a browser Page-unit scroll cannot jump directly from a regional map to world scale. Overlapping wheel inputs retain separate cursor anchors through their easing, avoiding reanchoring unfinished zoom to a later pointer position. Completed vector tiles outside the current view and its parent/child fallback hierarchy no longer consume the GPU upload budget, including completions that arrive just after a gesture. The intentional one-tile speculative preload remains eligible. Upload and offscreen-skip counts are exposed in Performance counters.",
+      "remaining_gaps": [
+        "No claim of equal smoothness: prior cross-app measurements do not rank engines and matched fresh performance trials remain needed."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/camera_motion.rs",
+        "crates/hookecho/src/labelplace.rs",
+        "crates/hookecho/src/map_work.rs",
+        "crates/hookecho/src/vector_tiles.rs",
+        "crates/wxdata/src/stats.rs",
+        "docs/map-motion-refinements.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP06",
+      "acceptance": "Measure matched pan/wheel tasks for frame time, interaction latency, label stability and tile completion.",
+      "runtime_verification": "REA-wrapped hardware browser trials: three idle, three wheel and three pan trials per app at 1280×720, retained in outputs/ro-parity/performance. Different data, engine and event-delivery durations prevent speed ranking. A later HookEcho browser regression reproduced an oversized Page-unit scroll jumping from California zoom 7 toward world scale; after the two-level per-event cap, the same scroll settled at zoom 5 near California with no console errors. In a local 1196×720 browser trial on 2026-10-14, the original gesture-only filter recorded 167 vector uploads and zero skips after rapid pans. Revised current-view filtering recorded one offscreen skip and 51 uploads after returning from the U.S. East Coast to KEAX, then 60 uploads and one cumulative skip after three more pans; the in-app rolling UI CPU and gesture-cadence p95 read 17.3 and 17.1 ms at the last observation. This demonstrates that the filter activates, not a speed improvement: the runs had different camera paths and cache states, and GPU timing was unsupported. Focused tests preserve visible, parent/child and speculative tiles; 657 native tests and the full web build pass (4,535,196 gzipped bytes against a 4,540,000-byte budget). On October 15, a new two-anchor motion regression passed with all 686 active library tests; the optimized web bundle passed at 4,665,450/4,675,000 gzip bytes. A local browser took two Page-unit zoom inputs at separate map points, settled at Sacramento zoom 13 from zoom 9, and logged no browser warnings or errors. REA process captures ev_d83968f78694b35599b9d98072e15007bc306802cb416508dc59bfa4733a4d80 and ev_71e70698e2d591f93d6796ffb6f3026db881246f637446899cf45daf5a85a5f2 show the RadarOmega AppImage exited with SIGSEGV before its debugger endpoint became available; the system coredump is truncated, so no cause or matched current timing is established. Matched cross-app presented-frame and input-latency trials remain needed."
+    },
+    {
+      "id": "MAP07",
+      "category": "basemap",
+      "title": "2D/3D display",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "2D/3D toggle observed at runtime; selecting 3D visibly raises the radar surface. Retained client source uses building height/base_height for gray extrusion and a separate polar radar mesh whose height follows squared normalized value; this depicts radar values rather than atmospheric altitude.",
+      "observation_type": "runtime-screenshot+static-client",
+      "hookecho_implementation": "Independent Mercator perspective tilt (0–60 degrees) and compass bearing, plus existing orthographic globe. Shared CPU/GPU transforms cover tiles, radar, gridded fields, vectors, picking, labels and wind. Workspace snapshots and new share links save orientation; legacy links preserve the recipient's current orientation. At tilted close zoom, OpenMapTiles render_height and render_min_height now raise building roofs and walls in the vector foreground. Pitched non-globe panes now render single-site reflectivity as an independent squared-normalized-value polar surface. It reuses R8/R16 sweep textures, palettes, filtering and sector opacity, resolves self-occlusion in a per-pane depth target, and caches unchanged views. The 2D path is retained.",
+      "remaining_gaps": [
+        "Radar surface is reflectivity-only in the UI, with an independent visual height scale and a bounded 360-by-256-cell mesh that can omit small echoes. No claim of matching reference geometry, exact heights, all products or volumetric radar. Globe surface shader is not exposed by the application and is not behaviorally verified.",
+        "Surface depth resolves its own folds only; buildings, roads, labels and overlays retain existing map draw ordering without shared depth occlusion. Building extrusion is painter ordered and still needs matched visual acceptance.",
+        "Interrogation still uses the ground-plane geographic point, not ray picking of the raised mesh. Full-world edge cases, live/browser surface interaction and all overlay combinations need broader acceptance."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/render/mercator.rs",
+        "crates/hookecho/src/shaders/radar.wgsl",
+        "docs/rea-integration.md",
+        "crates/hookecho/src/shaders/overlay.wgsl",
+        "crates/hookecho/src/vector_tiles.rs",
+        "crates/hookecho/src/workspace.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/permalink.rs",
+        "crates/hookecho/src/render/radar_surface.rs",
+        "crates/hookecho/src/shaders/radar_surface_composite.wgsl",
+        "crates/hookecho/src/headless.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6",
+        "ev_a2c7326cb52673cd05789cbb0cae8b884b2f7dbe602aa920911a075ef41a0478"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#MAP07",
+      "acceptance": "Switch display with preserved site/product/time and verify overlay placement.",
+      "runtime_verification": "16 camera and 9 motion tests, tile-cover/workspace tests, WGSL/WebGL2 translation and hardware GPU raster/field/radar/stroke alignment plus wind regression passed. Browser tilt/bearing controls and persistence verified using a local radar fixture. Height-field synthetic tile test and hardware GPU roof-lift/flat-cull test pass for building extrusion. Three hardware GPU synthetic surface tests passed: visible displacement, unchanged-frame cache, independent panes/exact 2D restoration, R8/R16 height consistency, alpha preservation, and transparent missing/range-fold/filtered data. 39 focused renderer tests including WGSL/WebGL2 translation and the combined 641-test native library suite passed; strict native clippy and wasm library check passed. Optimized web build passed at 4,495,210 gzip bytes (4,500,000 budget), Lite at 74,040 (80,000 budget). Local browser loaded live KEAX reflectivity in 3D at zoom 9 and showed extruded downtown Chicago buildings at zoom 13.1, with no browser warnings/errors; screenshot: outputs/ro-parity/radar-surface/browser-chicago-3d.png. A later 2026-10-14 optimized browser build at 4,536,078 gzipped bytes (4,540,000 budget) applied live #goto links without a reload: a KEAX link set 35° pitch/45° bearing and selected 3D, a second restored 0°/0° and 2D, and a third selected Globe. The incoming fragment survived the one-second poll and no browser errors were logged. Evidence: outputs/ro-parity/radar-surface/implementation.json. Retained reference screenshot ev_a2c7326cb52673cd05789cbb0cae8b884b2f7dbe602aa920911a075ef41a0478 establishes raised geometry, not visual equality; the reference debug endpoint was unavailable during implementation."
+    },
+    {
+      "id": "RAD01",
+      "category": "radar",
+      "title": "Single-site product and elevation choice",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Active Hi-Res Reflectivity product and elevation visible; product groups and per-site tilt catalogs are defined.",
+      "observation_type": "runtime-controls+static-client",
+      "hookecho_implementation": "Shared product/elevation chooser includes supported moments, favorites, SRV and custom products.",
+      "remaining_gaps": [
+        "Full vendor product catalog, labels, site-dependent availability and elevation branches are not equivalent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD01",
+      "acceptance": "Site, product and actual elevation are always visible and selecting each loads matching data.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD02",
+      "category": "radar",
+      "title": "Reflectivity",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Hi-Res Reflectivity and extended tilts",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Public radar reflectivity, available tilts and high-precision display exist.",
+      "remaining_gaps": [
+        "Provider resolution, gate masks, preprocessing and all international feeds are not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD02",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD03",
+      "category": "radar",
+      "title": "Velocity",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Hi-Res Velocity, storm-relative velocity and spectrum width",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Native velocity/spectrum width and storm-relative velocity exist.",
+      "remaining_gaps": [
+        "Storm-motion estimates and provider processing may produce different SRV; no numerical equivalence validation."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD03",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD04",
+      "category": "radar",
+      "title": "Dual polarization",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Correlation coefficient, differential reflectivity and specific differential phase",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Native correlation coefficient, differential reflectivity and specific differential phase exist where available.",
+      "remaining_gaps": [
+        "Availability, calibration, processing and provider-specific high-resolution products need numerical comparison."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD04",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD05",
+      "category": "radar",
+      "title": "Accumulated precipitation",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Digital Accumulation Array, one-hour and storm-total precipitation",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing national MRMS QPE remains available. Selected-site NEXRAD Level III product 170 (DAA, one-hour digital accumulation) and product 172 (DSA, digital storm total) are fetched from the public NWS feed, decoded with each product header's scale/offset and no-data flags, and projected to a 0.005-degree display grid. Product 169 (OHA, one-hour precipitation total) decodes its AF1F 16-level radial packet and header category thresholds at a coarser 0.01-degree display grid. All three are exposed as separate Radar site fields with millimeter legends; OHA values represent color-band lower bounds rather than exact measured totals. Level III requests, CPU fields, and GPU textures are keyed by pane and product, and a pane's old field is cleared when its selected station changes. The Layers panel gives the six site-scoped Level III grids a browsable Site radar products category. Health separates two-minute polling from a 12-minute Level III observation freshness window; the inspector summarizes the station and product while retaining the exact public source URL in expanded provenance.",
+      "remaining_gaps": [
+        "The relationship of the reference client's OST label to NWS OHA has not been established; the three public products must not be presented as exact reference-client algorithm equivalents.",
+        "The reference product-menu grouping, palettes, and accumulation algorithms are not verified equivalents; these are public NWS product renderings, not the reference client's internal implementation.",
+        "A matched visual and numerical comparison against the reference client's accumulation display remains pending."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/app/chrome/registry.rs",
+        "crates/hookecho/src/app/chrome/workbench.rs",
+        "crates/hookecho/src/app/request_book.rs",
+        "crates/hookecho/src/ui/layers_panel.rs",
+        "crates/wxdata/src/level3.rs",
+        "crates/nexrad-level3/src/lib.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD05",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "Public KTLX product 169/170/172 captures decoded in golden tests; geographic field projection tested for each product. Per-pane request invalidation, GPU-key, and volume-scan freshness tests passed within 649 native library tests (28 existing ignored). Optimized main web bundle passed at 4,532,977 gzip bytes against the 4,540,000-byte cap, and Lite at 74,707 bytes against its 80,000-byte cap. A local browser check enabled DAA in separate KTLX and KFWS Analysis panes: each showed its own rain legend, and the inspector reported distinct site-specific public Level III source files and valid times. The optimized bundle displayed a Site radar products category with DAA, DSA, OHA, VIL, echo tops, and hydrometeor class. A later browser build displayed concise DAA · NWS Level III · KTLX/KFWS headings with valid times and Fresh states in both panes instead of raw URLs and Unknown · Stale. This verifies independent routing, visible product activation, and product discoverability, not numerical or visual equivalence to the reference client."
+    },
+    {
+      "id": "RAD06",
+      "category": "radar",
+      "title": "Derived radar products",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "VIL, Hi-Res VIL, Echo Tops, Hi-Res Echo Tops, probable rotational threat and hydrometeor classification",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Level 3/derived VIL, echo tops, hydrometeor and hail-related fields exist.",
+      "remaining_gaps": [
+        "No matching probable rotational threat algorithm or complete provider-derived product suite; public/locally derived fields can differ."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD06",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD07",
+      "category": "radar",
+      "title": "TDWR and international sites",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Catalog variations for TDWR, Canada, Germany, Australia and other limited-product sites",
+      "observation_type": "static-client",
+      "hookecho_implementation": "US NEXRAD/TDWR, live German DWD site volumes, ODIM file import, Canadian ECCC rain/snow WMS composites and a public RainViewer worldwide precipitation composite provide alternatives. The Australian BOM official viewer link remains available. Site changes request WSR-88D storm-cell Level 3 products only for NEXRAD sites; TDWR selection requests its own tilt volume. TDWR sweep radials carry the decoded Level 3 product timestamp, falling back to the timestamped object key if the header time is unavailable, so gate interrogation reports the actual scan time. Timestamped public TDWR low-tilt objects now populate the shared archive timeline; historical product sets are assembled for frame stepping and playback. Historical fetches address the listed low-tilt key directly and list the other products only in the anchor hour unless a prior-hour fallback is needed, reducing browser proxy pressure during long-loop backfill. Live TDWR product keys are selected at or before the low-tilt frame key within a ten-minute window, so a newer tilt file cannot leak into an older named frame; current-hour listings run concurrently and only missing products fall back to the prior hour. A separate product-key revision detects later tilt arrivals under the same low-tilt frame name; the head poll updates the shared scan cache, invalidates its older binned loop copy and keeps the active loop playhead in place. Reuse of a recently shown frame also requires the same shared scan allocation, so an older on-screen copy cannot be cached after the revision and displace it on the next lap. The RainViewer map reads advertised opaque frame paths, caps raster requests at its zoom-7 ceiling, limits tile requests to 80/minute per app session and displays linked source credit. Ten live Swedish EUMETNET/OPERA sites now assemble single-elevation SCAN objects into reflectivity and velocity volumes; the ODIM reader handles their 4-byte HDF5 addresses and signed 16-bit velocity gates. Twelve Norwegian EUMETNET/OPERA single-site volumes now pair reflectivity with their matching velocity scans; eleven publish velocity about one minute later and Rissa includes it at the same timestamp. Eleven Finnish EUMETNET/OPERA sites now use the same five-elevation SCAN assembly, with their local Helsinki timezone. SCAN assembly now renumbers each radial together with its sweep, so higher elevation cuts remain selectable in the viewer. Four Swiss, two Estonian and two Lithuanian EUMETNET SCAN sites now provide live reflectivity and velocity. Malta Gudja provides its public reflectivity-only PVOL. Twenty-three active French EUMETNET sites assemble their staggered five-minute SCAN cycles into reflectivity and velocity volumes; the three French database sites without recent objects are excluded. Nine active Spanish sites expose two-cut dual-moment PVOL scans; the ODIM decoder now quantizes their floating-point gates to 0.01-unit 16-bit values. Four Slovak sites assemble separate reflectivity and velocity PVOL objects only after the pair is complete. Dublin assembles eight public reflectivity SCAN cuts across each five-minute cycle and adds all ten velocity elevations from its separate 15-minute PVOL; the tilt picker shows only cuts available for the selected product. The pane clock and freshness labels follow the selected moment’s own radial time.",
+      "remaining_gaps": [
+        "User accepted public providers with different coverage. ECCC composites do not provide Canadian individual-site velocity/tilts. Advertised-window discovery is implemented; TDFW reflectivity and velocity, historical frame transitions and a four-frame loop rendered in the browser. A 21-frame TDFW browser loop now reached 21 consecutive Ready scans after removing redundant historical low-tilt listing requests. Long-session cadence and other TDWR sites remain to verify; a real same-name late-tilt arrival has not yet been caught in browser playback. Decoded Level 3 product-header times can run ahead of object-key times by tens of seconds.",
+        "No live Australian BOM/Furuno/private-network adapter or Australian single-site velocity/tilts/gate interrogation. The embedded RainViewer precipitation composite covers Australia, but provider terms restrict large-scale or commercial usage without separate arrangements. Long-session frame cadence and broader Australian weather cases remain to verify.",
+        "The Swedish SCAN integration has browser-verified reflectivity and velocity at SEANG, but the other nine sites, longer-session cadence and independent calibration remain to verify. Longer-session cadence and independent calibration remain to verify across the European SCAN publishers.",
+        "Norwegian NOAND passed live reflectivity/velocity assembly, but the other eleven sites remain to verify. Norwegian 0.5° cuts lack velocity; velocity samples on other cuts are about one minute later than the reflectivity volume timestamp.",
+        "All eleven Finnish sites passed live reflectivity and velocity assembly, but their long-session cadence and independent calibration remain to verify.",
+        "Swiss/Baltic sites and Malta passed live native assembly. The optimized browser rendered live Swiss reflectivity and selected velocity cuts, Estonian velocity, Lithuanian reflectivity and Maltese reflectivity with current scan times and EUMETNET credit. Longer-session cadence and independent calibration remain to verify. Malta currently publishes no velocity in the sampled public feed.",
+        "All 23 offered French sites passed live assembly and both-moment binning at every elevation. The optimized browser rendered FRABB reflectivity at 0.4° and loaded velocity at the same scan time; velocity returns were sparse. Long-session cadence, visual velocity cases and independent calibration remain to verify.",
+        "Nine Spanish and four Slovak sites passed live reflectivity/velocity binning at every offered tilt. The optimized browser rendered ESAHR and SKJAV reflectivity and velocity; long-session cadence, all-site visual checks and independent calibration remain unverified.",
+        "Dublin IEDUB passed live eight-cut reflectivity and ten-cut velocity assembly, with product-specific tilt choices and nearest-valid-tilt switching. The optimized browser rendered velocity at 24.4° with its own 10:53 AM IST time, then switched to the nearest reflectivity cut at 10.0° with its own 11:02 AM IST time; the reflectivity menu excluded velocity-only cuts. Longer-session cadence and independent calibration remain to verify."
+      ],
+      "hookecho_sources": [
+        "crates/wxdata/src/lib.rs",
+        "crates/wxdata/src/tdwr.rs",
+        "crates/wxdata/src/level3.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/view.rs",
+        "docs/DATA.md",
+        "crates/wxdata/src/dwd.rs",
+        "crates/wxdata/src/odim.rs",
+        "crates/hookecho/src/tiles.rs",
+        "docs/public-data-alternatives.md",
+        "crates/hookecho/src/ui/basemap_picker.rs",
+        "crates/wxdata/src/opera.rs",
+        "crates/hdf5lite/src/read.rs",
+        ".cargo/config.toml",
+        "crates/hdf5lite/src/header.rs",
+        "crates/hdf5lite/tests/data/chalb.h5"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD07",
+      "acceptance": "Display only available products; validate units, palette, timestamp, elevation and no-data behavior.",
+      "runtime_verification": "2026-10-14: existing native release headless DEOF REF tilt 0 passed; actual volume 20261014164020, elevation 0.50°, 720 × 720 grid / 423,586 echo gates, inspected 768 × 768 PNG. Live TDFW browser switching exposed erroneous WSR-88D p59hi/p62ss storm-cell requests and Level 3 decode warnings. The site-switch request now uses the same NEXRAD-only guard as periodic polling; a fresh browser switch produced no new p59hi/p62ss warnings. With the station's Radar source selected, live TDFW VCP 80 reflectivity and velocity both rendered at the 0.4° cut. Before timestamp repair, gate interrogation reported 1970-01-01 and an age of 1792009136s. After repair, reflectivity interrogation reported 2026-10-14 20:23:56 UTC and age 35s; velocity interrogation reported the same product time and age 44s. A live public-bucket test listed TDFW low-tilt frames and decoded reflectivity and velocity from two different historical frames. In the browser, four-frame mode loaded distinct 3:30, 3:31, 3:32 and live 3:33 PM CDT scans; stepping changed scan time and pixels, and Play advanced from an archive frame back to live. DWD WMS WN now uses advertised five-minute availability instead of a guessed lag. A captured full capabilities document passed production parsing for RV and WN; a live native WN fetch returned recent frames. In the optimized local browser, WN over Germany displayed 2:10 AM CEST, Previous displayed 2:05 AM, and Latest restored 2:10 AM; GetMap returned PNG for an advertised frame. 2026-10-15: TDWR live product selection now respects the low-tilt object-key frame boundary. A live TOKC test decoded a scan and checked each sweep timestamp within the frame window, allowing the observed 42-second Level 3 header offset; two distinct TDFW historical frames still decoded both reflectivity and velocity. The key-selection regression test, WASM compile check and optimized web build passed; the optimized WASM measured 4,641,800 bytes gzip against a 4,644,000-byte budget. 2026-10-15: a source-path audit found that same-name TDWR frames were skipped before checking later tilt keys. The live head now compares a six-product key revision, and the loop cache drops an older binned copy when a revised scan arrives. A live TOKC revision probe passed; the 26 focused view tests passed, including same-name scan replacement, shared-allocation cache reuse, and clearing the revision on station switch. The optimized local browser loaded live TDFW VCP80 at 0.4° and displayed a recent scan age; its bundle measured 4,639,934 bytes gzip against a 4,644,000-byte budget. Browser capture of an actual late-tilt arrival remains pending. Longer-loop cadence, other products/elevations, calibration and independent geolocation remain unverified. Evidence: outputs/ro-parity/provider-runtime/results.json and outputs/ro-parity/tdwr-time/{before-1970,after-current,velocity-current,archive-1530,archive-1531}.png. 2026-10-15: optimized browser build displayed RainViewer global radar at 1:30 AM CDT over Oklahoma; Previous selected 1:20 AM and visibly changed pixels. Deep-link navigation to Sydney showed worldwide tiles and precipitation nearby, with linked on-map credit. Browser console showed no RainViewer errors. A separate FAA webcam request outside its service area returned 502; a coarse North American request gate was then added and unit-tested, with final optimized-browser verification pending. Longer-session RainViewer cadence and source failure states remain unverified. 2026-10-15: live Swedish SEANG index and nine-angle SCAN assembly test passed for reflectivity and velocity. A real Swedish HDF5 fixture passed golden parsing and signed-gate velocity tests. The optimized local browser displayed live SEANG 0.5° reflectivity and velocity with EUMETNET credit. A deep link carrying thr:16 initially masked velocity; thr:off revealed returns, confirming product-specific threshold behavior. Other Swedish sites and long-session behavior remain unverified. 2026-10-15: all twelve Norwegian sites published current DBZH volumes; eleven published VRADH at a one-minute delay and Rissa at the same time. Live NOAND assembly test passed reflectivity and velocity on matching elevations. The browser render and other-site cadence remain unverified. The optimized local browser rendered live NOAND 0.5° reflectivity and 1.0° velocity with EUMETNET credit. The unavailable 0.5° velocity cut correctly reported no moment, but its error badge persisted after selecting the valid 1.0° cut; elevation controls now clear that stale error, rebuilt-browser verification passed: 0.5° showed Unavailable, then 1.0° rendered velocity and cleared the status. The complete paired volume was marked Stale at a 20-minute age. 2026-10-15: all eleven Finnish SCAN sites were listed in the current hour. Their station coordinates and heights were read from live ODIM files; names were checked against the EUMETNET OPERA radar database. An ignored live test fetched and assembled all eleven sites, confirming at least five sweeps plus reflectivity and velocity. Browser rendering remains pending. A Finnish browser probe exposed a higher-tilt mismatch: the sweep was renumbered during SCAN assembly but its radials retained elevation 1, causing a false “no sweep carries requested moment” error at 0.7°. The assembler now renumbers both. Live all-site Finnish checks bin all five tilts for both moments, and a Swedish live check bins every tilt; the repaired optimized browser rendered FIKAN 0.7° reflectivity and velocity with no false Unavailable status. 2026-10-15: live files for four Swiss, two Estonian and two Lithuanian radars exposed 2, 7 and 8 individual SCAN cuts respectively. Their names were checked against the EUMETNET OPERA database and coordinates read from live ODIM files. The initial Swiss native fetch failed because its numeric HDF5 attributes are big-endian; a real Albis fixture now matches h5py in the extended reader. A live test then fetched all eight sites and binned reflectivity and velocity at every advertised elevation. Malta Gudja live PVOL passed with eleven reflectivity-only sweeps. The optimized local browser rendered CHALB reflectivity at 2.5°; Swiss velocity selected at 2.5° and 1.0° without source errors, though returns were sparse. EEHAR velocity showed returns around Harku/Tallinn at 0.5°. LTLAU reflectivity loaded at 0.5° with sparse returns near the Baltic coast, and MTGUD reflectivity loaded at 0.0° with no rain in range. All four showed recent live scan times and EUMETNET credit; longer-session cadence and independent calibration remain unverified. French Abbeville SCAN inspection on 2026-10-15 found a five-minute cycle whose elevations have distinct minute stamps, so the existing equal-timestamp selector cannot assemble France; its sampled 0.4° ODIM file contains DBZH, TH and VRADH. A cycle-aware selector now requires all five minute slots and anchors the displayed time to the final low cut. All 23 active sites passed live reflectivity and velocity binning at every elevation; FRABB rendered live reflectivity in the optimized browser, and velocity loaded at the same 0.4° cut with sparse returns. The optimized wasm measured 4,603,457 bytes gzip. Spain and Slovakia added thirteen live PVOL sites. A real ESAHR fixture verified floating-point gate quantization, including missing values and physical reflectivity/velocity. Spain alternates two-cut dual-moment and three-cut reflectivity-only strategies, so the selector chooses the newest dual-moment volume. Slovakia publishes moments separately, so selection waits for matching velocity. All thirteen sites passed live binning at every tilt. The optimized browser visibly rendered ESAHR reflectivity and velocity near Málaga and SKJAV reflectivity and velocity near Bratislava, with live times and EUMETNET credit. The extended optimized wasm measured 4,607,631 bytes gzip. A current OPERA bucket inventory found IEDUB as the only active non-German site absent from the table; four previously listed sites had no objects today. Dublin publishes eight DBZH SCAN cuts in minutes 0–2 of a five-minute cycle, plus a separate 15-minute velocity PVOL with different elevations. Live native assembly and reflectivity binning passed for all eight cuts; the latest 0.5° velocity cut is appended as a separate sweep with its original radial timestamps. A product-specific view clock, transport age, broadcast label and health readout now use the selected moment time. Live native assembly and binning passed; the optimized browser displayed 10:40 AM IST reflectivity and 10:33 AM IST velocity, with 5- and 12-minute ages and visible returns. Switching back restored the reflectivity time. The extended optimized wasm measured 4,610,447 bytes gzip. On 2026-10-15, direct and local-proxy S3 hour listings both exposed recent TDFW TZ0 keys, and the live native archive test decoded two distinct frames. An optimized browser run initially saw a false low-tilt-unavailable state under long-loop backfill; after historical fetches used the frame-named TZ0 object directly and lazy-listed other tilt hours, a later browser diagnostics export showed 21 consecutive Ready frames and active playback at TDFW with zero cache evictions. Evidence: outputs/ro-parity/tdwr-loop-21/hookecho-diagnostics.json. A separate local-proxy replay of a TDWR TZ1 object with a browser Range header returned HTTP 200 and the full 99,899-byte object; local and edge proxies now ignore resume ranges on ordinary feeds while keeping bounded model ranges. The full HookEcho library suite passed 679/710 with 31 ignored; optimized web passed at 4,655,462/4,662,000 main WASM gzip bytes and 74,707/80,000 Lite bytes."
+    },
+    {
+      "id": "RAD08",
+      "category": "radar",
+      "title": "Radar range and ring",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Radar display settings expose Full Coverage Radar and Show Range Ring. The client maps the switch to NORMAL/FULL and selects sweep.radius versus sweep.radius_full when supplied. In a separate signed-in KFWS debug session, HRF reflectivity exposed radius 230000 m, radius_full 458125 m, gate_depth 1824, first gate 2125 m and gate spacing 250 m; HVL velocity exposed radius 230000 m, radius_full 298125 m and gate_depth 1184 with the same first-gate and spacing. The 50% wording is therefore not a reliable universal multiplier. Real-time range rings are a separate toggle from the static map ring.",
+      "observation_type": "static-client + live-runtime",
+      "hookecho_implementation": "Fixed 50–200 km distance rings and azimuth spokes remain separate from the blue live scan boundary. The Full coverage radar switch now displays every decoded NEXRAD gate when on and clips only the rendered gate count to 230 km when off, keeping the source sweep loaded. It appears in product settings and the RadarOmega-style Display Settings; the boundary labels the active display extent.",
+      "remaining_gaps": [
+        "The 230 km Normal clip is verified in the observed KFWS reflectivity and velocity sweeps; other stations, products, and radar networks still need direct runtime checks. The implementation deliberately leaves TDWR and other networks at their decoded extent until their range rules are measured. Other-product and long-session browser comparisons remain pending."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/products.rs",
+        "crates/hookecho/src/view.rs",
+        "crates/wxdata/src/level2.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_0de0005531cca51c333f3a1e58f4798fba676c570907cdf4ed1adf82b2aa942a",
+        "ev_7a4dbc2829784f76d5cfcb052a14202586910415384e4c9ce8b11359c7cd6bd4"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD08",
+      "acceptance": "Toggle coverage/ring while clearly indicating actual available scan extent.",
+      "runtime_verification": "2026-10-14: REA live Radar Settings confirmed both Full Coverage Radar and Show Range Ring controls. A controlled KTLX FULL→NORMAL→FULL comparison completed, but pixel difference at 920×1028 was limited to the setting switch at this viewport; it does not establish the behavior on supported towers. HookEcho cargo check and selected-cut range unit test passed. In the local HookEcho browser at KEAX, zoom 8, REF 0.4°, enabling Map reference → Range rings displayed labeled 50/100/150 km circles and the blue selected-sweep boundary. Switching to VEL 0.4° retained the rings and live product display. This verifies the integrated ring toggle, not Normal/Full parity. 2026-10-14: The optimized web build passed at 4,541,899/4,550,000 gzip bytes (Lite 74,707/80,000). At KTLX in the local browser, the live boundary labeled Scan extent 300 km appeared at a wide zoom. Toggling Range rings separately added/removed the fixed grey distance rings; toggling Live scan boundary removed the blue 300 km circle while leaving fixed rings available. The overlay-toggle slug round-trip test passed. 2026-10-15: A separate RadarOmega debug session measured KFWS HRF at 230/458.125 km NORMAL/FULL and HVL at 230/298.125 km, with respective 1824/1184 gate depths and 2.125 km first gate at 0.25 km spacing (outputs/ro-parity/kfws-full-coverage-observation.json). In the local optimized HookEcho browser at KFWS, the Full setting showed a live 460 km decoded boundary; switching it off changed the displayed boundary to 230 km and visibly trimmed the radar. The gate-depth unit test and native cargo check passed. The clean optimized web build passed at 4,590,841/4,596,000 gzip bytes (Lite 74,707/80,000); its KFWS Normal boundary showed 230 km with no diagnostic text."
+    },
+    {
+      "id": "RAD09",
+      "category": "radar",
+      "title": "Gate filtering",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Reflectivity minimum/maximum filter with -10 to 85 dBZ slider range and visible warning for aggressive filtering.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing native-value minimum/maximum filtering remains available.",
+      "remaining_gaps": [
+        "Filtering/smoothing algorithm and exact visual output differ; new workspace is not a numerical reconstruction."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/radar_appearance.rs",
+        "crates/hookecho/src/shaders/radar.wgsl",
+        "docs/rea-integration.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD09",
+      "acceptance": "Adjust min/max without modifying underlying sample values; legend reflects filtered range.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD10",
+      "category": "radar",
+      "title": "Color tables",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Built-in palette choices and .pal upload for reflectivity/velocity.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing palettes and custom palette import remain available.",
+      "remaining_gaps": [
+        "Vendor palettes, upload quotas, storage and account sync are not reproduced."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/colormap.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/shaders/radar.wgsl",
+        "docs/rea-integration.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD10",
+      "acceptance": "Select/import valid palette, reject malformed files and restore default.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD11",
+      "category": "radar",
+      "title": "Rapid updates and scan progress",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "RapidSweep enable, sweep bar and range-ring controls; streaming pipeline seen statically only.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Public Unidata chunk ingestion and changed-row GPU uploads already exist.",
+      "remaining_gaps": [
+        "Public incremental chunks are an independent implementation; RapidSweep service, latency, ordering and entitlement behavior are not reproduced."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/view.rs",
+        "docs/DATA.md",
+        "docs/rea-integration.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD11",
+      "acceptance": "Observe incremental scan arrival, progress display and fallback to completed scans.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "RAD12",
+      "category": "radar",
+      "title": "Velocity units and audible new scan",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Velocity unit selector and new-scan audible alert.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Velocity readouts convert internal m/s to knots, m/s or mph using the saved selection. A configurable scan sound is gated by mute/quiet hours and enabled only for a new live volume on the active pane; the first volume for each selected station is silent, and duplicate/backfilled volumes are ignored.",
+      "remaining_gaps": [
+        "RadarOmega's exact velocity-unit choices and audio waveform have not been verified against a live reference session; HookEcho audio output has not been exercised on hardware."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#RAD12",
+      "acceptance": "Unit conversion affects display consistently; alert occurs once per new scan and can be disabled.",
+      "runtime_verification": "Focused scan-transition test confirms silence on initial/site-switched volume, one decision per newer volume, and rejection of duplicate/older volumes. Unit conversion tests exist in settings.rs. Audible hardware output and reference equivalence remain unverified."
+    },
+    {
+      "id": "TIME01",
+      "category": "playback",
+      "title": "Frame count",
+      "priority": 0,
+      "status": "partial",
+      "observed_scope": "7,14,21,30,50,75,100,150,200,250 frame choices in captured selector.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Workspace frame choices are 7/14/21/30/50/75/100/150/200/250 on desktop and in the browser; choices above the measured browser limit are shown disabled. The browser live-loop ceiling remains at least four and can rise to 250 for small scans based on the current decoded scan's measured gate payload and the 192 MiB payload budget, reserving space for two other volumes; before a scan is measured the limit remains four. The transport reports how many consecutive recent frames are currently decoded when fewer than the requested loop length are ready. During multi-frame playback, the renderer now keeps up to 24 recent GPU radar sweeps per pane within a 32 MiB gate/flag/LUT shadow budget, matches full gate and flag bytes before reuse, and rewrites only uniforms and LUT for a revisited scan; normal live updates continue using the existing sparse-row upload path. Diagnostics include cache hits and cached GPU/shadow memory.",
+      "remaining_gaps": [
+        "One two-minute TDFW browser run verified ten consecutive decoded frames. A later optimized-browser run decoded all 21 consecutive TDFW frames with playback active. A further multi-minute 21-frame run remained playing with 22 Ready scans and zero cache evictions, and the automatic visual-quality guard engaged. Retaining display bins reduced re-binning; the later bounded GPU texture cache kept the visual-quality guard off across a further 77-second local loop segment. Multi-hour cadence, full browser heap/driver memory and cross-device behavior remain unmeasured. Native allows 252 decoded cache entries. One 250-copy stress run measured retention of a real TDFW scan under the 512 MiB encoded-payload budget, but 250 distinct historical downloads, rendering/playback latency, variation between scans and long-session eviction behavior remain unverified."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/examples/tdwr_cache_profile.rs",
+        "crates/hookecho/src/radar_memory.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME01",
+      "acceptance": "Configured frame count maps to available frames with explicit loading/missing states.",
+      "runtime_verification": "TDFW browser four-frame mode loaded distinct historical scans and Play advanced through them on 2026-10-14. On 2026-10-15 the optimized local web build loaded a live KTLX VCP212 scan and the selector showed a four-frame ceiling after measurement. A separate live TDFW VCP80 session selected ten frames and ran playback for 120 seconds. At the end, exported diagnostics listed 436 available frame names with exactly the newest ten consecutive entries Ready, playing=true, following_live=true, 12,787,200 encoded scan payload bytes against a 201,326,592-byte budget and zero radar-cache evictions. Start/end screenshots displayed different scan times; 234 radar-related HTTP responses and no HTTP errors were counted during the run. This measures encoded payload only, not browser heap/GPU memory or a longer session. The native decoded-cache entry cap was subsequently raised from 30 to 252, while its 512 MiB payload trimmer remains in place. A native stress run fetched one live TDFW volume, cloned it into 250 independent decoded allocations, retained all 250 with 250/250 cache hits, and measured 319,680,000 encoded payload bytes, 514,408,448 process RSS bytes, 321 ms clone/insert time and 84 microseconds for one full cache pass. This is a representative cache measurement, not 250 distinct historical fetches or full playback latency. Evidence: outputs/ro-parity/tdwr-loop-measure/results.json, playing-start.png, playing-after-120s.png, hookecho-diagnostics.json and outputs/ro-parity/native-loop-profile/results.json. On October 15 the optimized browser displayed the full 7/14/21/30/50/75/100/150/200/250 selector with memory-gated choices; 21 Frames was selectable for live TDFW. The first attempt reported a false low-tilt-unavailable error during browser backfill. After the historical fetch stopped re-listing its already-named TZ0 object, a second optimized-browser run completed 21 consecutive TDFW frames with playback active. Exported diagnostics recorded 26,853,120 encoded payload bytes, zero cache evictions and all newest 21 timeline slots Ready; evidence: outputs/ro-parity/tdwr-loop-21/hookecho-diagnostics.json. A further multi-minute browser run captured at 2026-10-15T20:24:01Z remained playing at TDFW with 22 Ready scans, zero skipped unavailable frames, 28,131,840 encoded payload bytes against the 201,326,592-byte budget, 45,598,453 nominal GPU bytes, and zero radar-cache evictions. The visual-quality guard engaged, so sustained frame cadence needs diagnosis. Its diagnostic cache.degraded=true was a false label for the cache-stats-ready flag, with no storage error; the export schema now separates stats_ready from actual storage degradation and reports the visual-quality guard. A rebuilt-browser export confirmed cache.degraded=false, stats_ready=false before its asynchronous refresh, no storage error, and visual_quality_degraded=true; evidence: outputs/ro-parity/tdwr-loop-sustained/hookecho-diagnostics.json and diagnostics-schema-verified.json. The optimized main WASM measured 4,656,018/4,662,000 gzip bytes. In a later 21-frame TDFW playback capture, UI CPU p95 reached 44.0 ms and 417 sweeps were binned; switching off alert geometry left p95 at 43.9 ms, while pausing reduced it to 29.3 ms. The previous two-volume browser retention forced re-binning during playback. The pane now retains up to 24 prior volumes within a 32 MiB binned-byte cap, covering a small 21-frame loop without unbounded growth. Its optimized-browser capture had 21 Ready frames, 22 sweeps binned and 34.0 ms UI CPU p95; 79 seconds later it had 22 Ready frames and only one additional sweep binned. CPU p95 then rose to 41.8 ms and the visual-quality guard still engaged, so other UI/map work remains to profile. Evidence: outputs/ro-parity/tdwr-loop-cpu/playing-all-layers.json, playing-alerts-off.json, paused-alerts-off.json, retained-bins-first.json and retained-bins-later.json. The new 21-frame retention test and full native suite passed 680/711 with 31 ignored; optimized main WASM measured 4,655,868/4,662,000 gzip bytes. These browser runs do not measure total heap/GPU allocation or full-session latency. The full native library suite passed 679/710 with 31 ignored; optimized web measured 4,658,207/4,662,000 main WASM gzip bytes and 74,707/80,000 Lite bytes. A further live 21-frame TDFW browser export (2026-10-15T21:11:53Z) measured UI CPU p95 34.7 ms, broken into setup 0.3 ms, chrome 25.1 ms, pane sync 0.1 ms, map construction 10.8 ms, and tail 0.2 ms. These are separate rolling p95 values and are not additive. It reported 21 sweeps binned, 0 radar-cache evictions, 26,853,120 encoded payload bytes, visual_quality_degraded=true, and playing=true. This localizes the remaining CPU pressure primarily to chrome but does not yet identify a single control. The closed storm-attributes window now skips per-cell severity scoring and ZDR-column proximity matching; its before/after performance has not yet been measured. Evidence: outputs/ro-parity/ui-frame-phases/initial-phases.json and detailed-phases.json. The full native library suite passed 680/711 (31 ignored); the optimized web build measured 4,654,793/4,662,000 gzip bytes for main WASM and 74,707/80,000 for Lite after this change. In another local TDFW 21-frame browser run with alert overlays active, a finer UI phase split found 34.0 ms p95 in primary chrome, 0.1 ms in auxiliary windows, and 0.1 ms in secondary chrome, with 52.8 ms total UI CPU p95 and 14.9 ms map-build p95. Closing the radar-products panel during the same playback lowered primary chrome to 26.0 ms and total UI CPU to 35.5 ms. The primary controls had recomputed the priority dock alert ranking by polygon distance every frame; the dock now caches count and top bulletin until overlay generation, reference point, display minute, or priority rules change. The product panel also clones alert features only when its alerts section is shown. After rebuilding, a panel-open 21-frame TDFW run measured primary chrome p95 15.3 ms and total UI CPU p95 26.7 ms, versus 34.0 and 52.8 ms before; all three captures had 21 Ready frames, zero cache evictions and active playback. Map-build p95 varied (14.9 before, 13.6 after), so these local runs do not establish a general frame-rate ratio. The visual-quality guard still engaged in the after capture. Evidence: outputs/ro-parity/ui-chrome-phases/panel-open-before.json, panel-closed-before.json, panel-open-after.json. The full native library suite passed 680/711 (31 ignored), and optimized WASM measured 4,654,637/4,662,000 gzip bytes for main and 74,707/80,000 for Lite. A bounded per-pane GPU sweep cache was then verified by an ignored hardware-backed test: rendering synthetic A/B/A returned byte-identical A pixels, one cache hit and less than one sweep of upload traffic on the revisit. The existing sparse-row live-update test still uploaded 9,272 bytes versus 75,073 bytes for a fresh sweep. In the optimized local TDFW 21-frame browser run, the first diagnostics export at 2026-10-15T21:52:58Z showed 21 Ready frames, 434 logical radar uploads, 413 GPU cache hits, 10,284,309 radar upload bytes, 61,412,593 nominal GPU bytes, 8,951,061 CPU shadow bytes, 26.2 ms UI CPU p95, visual_quality_degraded=false, and zero radar-cache evictions. A second export 77 seconds later remained playing with 21 Ready frames, 709 uploads, 688 hits, 11,129,109 uploaded bytes, the same GPU/shadow estimates, 20.0 ms UI CPU p95, and the guard still off. The pre-cache panel-open run had 387 uploads and 166,143,745 uploaded bytes with the guard on; the runs have different durations and scan times, so this is direct cache/use verification rather than an exact speed ratio. Evidence: outputs/ro-parity/gpu-loop-cache/after-first.json and after-later.json. Optimized main WASM measured 4,654,431/4,662,000 gzip bytes, Lite 74,707/80,000."
+    },
+    {
+      "id": "TIME02",
+      "category": "playback",
+      "title": "Transport, scrub and timestamp",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Visible play transport, frame/time card and scrubber variables/handlers.",
+      "observation_type": "runtime-screenshot+static-client",
+      "hookecho_implementation": "New radar transport shares existing frame-status track and step/play/pause/GoLive semantics. The separate timed-imagery bar now has pane-local Play/Pause, frame-ready advancement, a bounded recent/archive loop, and manual Previous/Next/Latest across the advertised catalog.",
+      "remaining_gaps": [
+        "Current fixture interaction verification pending; exact competitor scrubber, missing-frame and forecast-tail behavior not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_e3be9d7714e658ec74d7b9f76444c9581198494ad78898a63cb84023d693d4f6"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME02",
+      "acceptance": "Play/pause, step and scrub maintain matching timestamp/data; live/archive state is clear.",
+      "runtime_verification": "Optimized local browser: DWD WN Play advanced from 1:50 AM CEST through later five-minute frames, wrapped within the recent loop, and Pause held 2:05 AM for six seconds. An earlier unbounded 48-frame attempt crossed the archive boundary and reset the catalog; the bounded loop eliminated that observed failure. The optimized local browser later verified ECCC rain Play from 7:54 PM EDT through later six-minute frames and Pause holding 8:30 PM; a saved DWD manual time no longer leaves ECCC blank after source migration. The optimized browser also verified GOES-East infrared Play moving through distinct ten-minute frames, wrapping in its recent loop, and Pause holding 6:20 PM CDT for five seconds. Radar scrubber equivalence and other imagery products remain unverified."
+    },
+    {
+      "id": "TIME03",
+      "category": "playback",
+      "title": "Speed by data type",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Separate animation speed setting for Single Site Radar, MRMS, Satellite, NDFD and Models.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Four persisted source-family animation speeds (Radar/MRMS/Satellite/Forecasts), finite-clamped 0.5–20 fps. Workspace source transitions save previous family speed and restore selected family; Display Settings updates the active shared timeline immediately. Mixed source families retain the current shared speed.",
+      "remaining_gaps": [
+        "Uses the existing shared pane timeline, not independent field-time animation engines. Vendor NDFD/Models distinctions are not separate HookEcho source families."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME03",
+      "acceptance": "Set speeds per mode; changing mode restores appropriate speed.",
+      "runtime_verification": "Browser verified separate source speeds and a History speed change to 7 fps restored after reload for MRMS. Complete playback pacing across every provider and frame count remains unmeasured."
+    },
+    {
+      "id": "TIME04",
+      "category": "playback",
+      "title": "Hold to pause animation",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Toggle pauses animation while zooming or panning.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "The pause-while-panning preference is exposed in Display Settings. A pointer drag now keeps its map/control origin while held: crossing a floating control after starting on the map keeps playback paused, while dragging a control over the map does not pause it.",
+      "remaining_gaps": [
+        "Pan/zoom pause and resume behavior still needs final integrated fixture verification, including wheel inertia, touch and repeated playback. The map/control drag-origin regression is covered by a focused egui input test."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/camera_motion.rs",
+        "crates/hookecho/src/labelplace.rs",
+        "crates/hookecho/src/map_work.rs",
+        "crates/hookecho/src/vector_tiles.rs",
+        "docs/map-motion-refinements.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME04",
+      "acceptance": "Pointer interaction temporarily pauses playback and resumes correctly without jumping state.",
+      "runtime_verification": "2026-10-15: A new egui input regression passes for a map-origin pointer drag crossing a floating control and a control-origin drag crossing onto the map. All 685 active HookEcho library tests passed; the optimized browser build passed at 4,661,804/4,662,000 gzipped bytes. This verifies input classification and build integration, not a timed live-playback browser run."
+    },
+    {
+      "id": "TIME05",
+      "category": "playback",
+      "title": "UTC/local time",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Time Display Format segmented control shows UTC and Local.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Display Settings exposes UTC and site-local time using existing formatting.",
+      "remaining_gaps": [
+        "All timestamps, timezone edge cases and DST transitions have not been compared in this run."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME05",
+      "acceptance": "All visible valid/scan timestamps agree with chosen format including daylight-saving boundaries.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "TIME06",
+      "category": "playback",
+      "title": "Historical radar navigation",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Client has archive transition hooks and storm-report action to load historical radar data.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Shared archive date controls, cut playback, browser offline packs and explicit Return to live are retained.",
+      "remaining_gaps": [
+        "Data retention and unavailable historical-product coverage differ; provider history links are not fully mapped."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/timeline.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#TIME06",
+      "acceptance": "Select historical time, navigate frames, and explicitly return to live without silently switching.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA01",
+      "category": "settings",
+      "title": "Data opacity",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Data-opacity slider 0–100%.",
+      "observation_type": "runtime-screenshot",
+      "hookecho_implementation": "Radar opacity control updates the active pane appearance.",
+      "remaining_gaps": [
+        "Not every non-radar data type shares identical opacity controls; final rendering verification pending."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_6c600c1ae75f831d00976423e398e9d6411bfc896243bbe4a2823949ec5b3b3c"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA01",
+      "acceptance": "Adjust data overlay opacity without fading labels, warnings or other controls.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA02",
+      "category": "other-data",
+      "title": "MRMS regions/products/settings",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "CONUS, Alaska, Hawaii region selection; product catalog comes from data; General/Color Tables settings.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing CONUS NOAA MRMS fields remain selectable through the source registry. Public Alaska, Hawaii, Guam and Caribbean composite-reflectivity products are registered as additional map fields, appended after the existing catalog entries to preserve saved layer IDs. Choosing a regional field in the workspace source menu centers the camera over its published coverage. In field-only mode, regional sources fetch six timestamped public mosaics per selected layer and expose a scrubber, previous/next, latest-frame jump and speed-aware play/pause controls. Separate regional layers retain their own loop state across comparison panes. A date and minute-of-day slider can seek to a six-frame public archive window anywhere in the selected UTC day, with adjacent earlier/later six-frame navigation, loading and unavailable states and a return-to-latest action. Other fields retain latest-frame status without station-scan controls. Opt-in archive playback crosses six-frame window boundaries in either direction and resumes at the nearest newer or older frame while retaining the current mosaic during the request. Manual Previous and Next at an archived loop boundary also load adjacent windows rather than wrapping.",
+      "remaining_gaps": [
+        "The complete vendor region/product catalog is unmatched. Twelve public regional fields are registered across Alaska, Hawaii, Guam and the Caribbean; the rest of the MRMS catalog still shows its latest field only. Day seeking, bidirectional boundary stepping and opt-in playback in both directions use six-frame windows rather than a preloaded day index; longer retained loops, complete gap recovery and the vendor settings layout remain unmatched."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/wxdata/src/mrms.rs",
+        "crates/wxdata/examples/mrms_region_probe.rs",
+        "crates/wxdata/examples/mrms_history_probe.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA02",
+      "acceptance": "Region/product selection, animation, legend and no-data states match available independent feed.",
+      "runtime_verification": "2026-10-15: Anonymous listing of NOAA's public MRMS object store found ALASKA, HAWAII, GUAM and CARIB composite-reflectivity product trees. The production GRIB decoder fetched the latest grid from each: Alaska 5000×2200, Hawaii 2600×2200, Guam 2000×1800 and Caribbean 3000×1500, all with nonempty finite data and geographic bounds. The MRMS registration tests and optimized web build passed at 4,640,256/4,644,000 main WASM gzip bytes. In the local browser, search found Alaska composite reflectivity, toggling it raised active layers from 10 to 11, and regional reflectivity rendered over southern Alaska. A subsequent source-picker change centers the map on the chosen regional grid; six source-menu tests passed and the optimized main web bundle measured 4,640,201/4,644,000 gzip bytes. Browser verification of the Hawaii source showed the camera moving from Kansas City to -157.5,20.5 at zoom 6.1, the basemap rendering Hawaii, and the live composite field loading with a timestamp and visible reflectivity. The follow-up browser build hid the irrelevant station picker and station range guides in MRMS-only mode while preserving the map projection control; six workspace tests passed and the optimized main WASM measured 4,640,003/4,644,000 gzip bytes. The same local browser selected Guam and Caribbean from the MRMS picker, moved to 145.0,13.5 at zoom 6.3 and -75.0,17.5 at zoom 5.1 respectively, loaded each public field, and displayed valid-time status and live reflectivity. The compact field-only transport was browser-verified for Caribbean; outputs/ro-parity/caribbean-mrms-browser.jpg records its valid status and latest-field-only label. That run exposed a mosaic posted one minute ahead of local now that NearestPast initially hid. Live catalog MRMS now uses the live clock and accepts only future stamps within the field tolerance; two live-MRMS tests passed and the optimized main web bundle measured 4,640,708/4,644,000 gzip bytes. A live Caribbean history probe decoded four distinct 3000×1500 frames at 17:10:57, 17:12:58, 17:14:58 and 17:16:58 UTC with nonempty data, proving public replay material is available. Thirteen MRMS tests passed. The local optimized browser loaded six Caribbean mosaics. Play moved the displayed valid time from 12:26 to 12:18 PM CDT through the loop; after pause, Next advanced it from 12:16 to 12:18 PM CDT and moved the scrubber. The same source-backed replay path serves Alaska, Hawaii and Guam but those regions were not individually browser-verified after this change. The final speed-aware optimized browser again loaded six Caribbean mosaics and Previous changed the valid time from 12:34 to 12:32 PM CDT; outputs/ro-parity/caribbean-mrms-playback-browser.jpg records that state. The full optimized web build passed with main WASM 4,650,476/4,655,000 gzip bytes and Lite 74,685/80,000; the native library suite passed 678 tests with 31 ignored. A later two-pane browser check kept Caribbean and Guam mosaics loaded simultaneously: switching between panes restored each six-frame transport, and stepping Caribbean from 12:44 to 12:42 PM CDT left Guam at 12:44 PM CDT. outputs/ro-parity/caribbean-guam-mrms-dual-browser.jpg records the distinct fields and Caribbean replay state. The full native suite again passed 678 tests (31 ignored), and the optimized web build passed at 4,651,140/4,655,000 main and 74,685/80,000 Lite gzip bytes. A later live S3 check found Caribbean dated objects for today, yesterday, two, five, ten and thirty days earlier. A keyed GRIB probe for 2026-10-10 12:00 UTC decoded four nonempty 3000×1500 mosaics ending at 11:58:56 UTC. The browser archive picker loaded six October 10 mosaics ending at 11:59 UTC; the displayed frame stepped from 6:58 to 6:56 AM CDT while Guam remained live in the other pane. Returning to latest restored the October 15 Caribbean field. An empty 1900-01-01 request showed Archive unavailable and retained the prior mosaic, then also recovered via Return to latest. Evidence: outputs/ro-parity/caribbean-mrms-archive-browser.jpg. The final optimized browser again loaded the 2026-10-10 11:58 UTC Caribbean mosaic while Guam remained live, showed a concise no-mosaics message for an empty date, and recovered to the current field. The optimized web build passed at 4,653,737/4,662,000 main WASM gzip bytes and 74,707/80,000 Lite. Adjacent archive-window navigation passed a local optimized-browser check: Earlier six moved Caribbean from 18:16 to 18:04 UTC, and Later six returned it to 18:14 UTC while the Guam comparison pane retained its independent field. The optimized main WASM measured 4,653,784/4,662,000 gzip bytes and Lite 74,707/80,000. On October 15, the public S3 catalog listed current-day PrecipRate_00.00 and RadarOnly_QPE_01H_00.00 objects for Alaska, Hawaii, Guam and the Caribbean. Native keyed GRIB probes decoded four nonempty Caribbean precipitation-rate grids (3000×1500, 918,016 finite values each) and four Guam one-hour radar-only rainfall grids (2000×1800, 2,191,966 finite values each), with distinct two-minute valid times. All 13 MRMS tests and the regional source-camera test passed. The other six new products were only catalog-checked, not individually decoded or browser-verified. The optimized local browser source picker searched 96 MRMS choices, found Caribbean precipitation rate as one result, loaded its 18:30 UTC public object, and showed a six-frame history transport and matching source in the inspector while Guam reflectivity remained in the other pane. The full native suite then found the precipitation-rate catalog lacked a ramp; after mapping it to the existing rate scale, 678 HookEcho tests passed with 31 ignored. The final optimized browser showed Caribbean rate pixels over Cuba, a Rain rate (mm/hr) legend, the six-frame transport and the 18:38 UTC public object, while Guam reflectivity remained independent. This verifies one new product on the map, not all eight regional feeds. The final optimized main WASM passed at 4,654,141/4,662,000 gzip bytes; Lite passed at 74,707/80,000. The final optimized browser used a full-width UTC minute-of-day slider to seek Caribbean precipitation rate from 18:56 to 07:40 UTC on October 15; the requested six-frame archive loaded, reopening History preserved 07:40 on the slider, and the Guam comparison pane retained its independent live field. The control fetched on click/release rather than during every drag movement. Full native tests passed 678/709 with 31 ignored; optimized web passed at 4,654,303/4,662,000 main WASM gzip bytes and 74,707/80,000 Lite bytes. This is day-wide window seeking, not seamless all-day playback. Opt-in archive continuation was verified in the optimized local browser with Caribbean precipitation rate. Play advanced a 07:20 UTC six-frame window into later windows rather than wrapping; after pausing, the transport showed frame 2/6 at 07:48 UTC in a window ending 07:57 UTC, the History popup followed to 07:57, and Guam reflectivity remained independent. An earlier run continued through several additional windows to 08:10 UTC. The current mosaic remained visible during fetches. End-of-data and network-failure behavior were not browser-tested. Full native tests passed 678/709 with 31 ignored; optimized web passed at 4,654,577/4,662,000 main WASM gzip bytes and 74,707/80,000 Lite bytes. Manual boundary stepping passed in the optimized local browser: from Caribbean precipitation rate at 07:20 UTC (frame 6/6), Next fetched a newer window and selected 07:22 UTC (frame 1/6); Previous then fetched the older window and returned to 07:20 UTC (frame 6/6). The prior mosaic stayed on the map while each request loaded, and Guam reflectivity remained independent. The full native library suite passed 678/709 with 31 ignored; optimized web passed at 4,653,859/4,662,000 main WASM gzip bytes and 74,707/80,000 Lite bytes. Reverse automatic playback passed in the optimized local browser on October 15: starting from a Caribbean reflectivity archive window ending 07:00 UTC, Play backward with continuous archive playback crossed multiple earlier six-frame windows, showed a 05:26 UTC window with a 05:16 UTC selected mosaic, and kept the Play state active until paused. The previous mosaic remained visible during fetches. The full native library suite passed 679/710 with 31 ignored; optimized web passed at 4,659,548/4,662,000 main WASM gzip bytes and 74,707/80,000 Lite bytes. Exhausted-history and network-failure states were not exercised in this browser run."
+    },
+    {
+      "id": "DATA03",
+      "category": "other-data",
+      "title": "Satellite sectors and bands",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Regional/subregional/full disk/global composite groups; GOES mesoscale/Himawari targets; derived and ABI visible, IR and water-vapor groups.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Timed satellite layers, native ABI scenes, national MRMS fields and radar-linked clocks.",
+      "remaining_gaps": [
+        "Complete vendor satellite/sector/ABI/derived catalog, geolocation, scan history and region coverage not mapped."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA03",
+      "acceptance": "Satellite, sector and product choice preserve correct geolocation, units, scan time and animation.",
+      "runtime_verification": "Optimized local browser over north Texas: GOES-East Band 13 infrared imagery displayed with radar and alert overlays, Play traversed distinct ten-minute frames and wrapped in the recent window, and Pause held 6:20 PM CDT for five seconds. Other bands, sectors, archive ranges, native ABI scenes and geolocation remain unverified."
+    },
+    {
+      "id": "DATA04",
+      "category": "other-data",
+      "title": "Numerical models",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "HRRR, RRFS, NAM3KM, NAM12KM, RAP, GFS, ECMWF, HWRF, HMON selectors.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "HRRR/RAP/GFS/ECMWF, sounding and model fields, forecast radar, time/source provenance.",
+      "remaining_gaps": [
+        "RRFS/NAM/HWRF/HMON and every parameter/member/region are not established as covered; existing global/open fields are not the full vendor model service."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA04",
+      "acceptance": "Model/run/forecast-hour/product selectors display valid time and units.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "DATA05",
+      "category": "other-data",
+      "title": "NDFD forecasts and severe forecast mode",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "National Digital Forecast Database and HAZCAST Severe Outlook entries.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Public NOAA/NWS NDFD WMS rain-chance (12-hour), daytime-high-temperature, overnight-low-temperature, wind-gust, and wind-speed forecast maps for CONUS, Alaska, and Hawaii are selectable in Forecasts and the map picker. The app reads each layer's advertised valid times, requests those times through the allowlisted proxy, provides forecast animation controls and valid-time labels, and attributes NOAA/NWS. Resident NDFD tiles are revalidated at the next hourly window for a revised issue of the same valid time; the prior map remains visible while replacement bytes load, and native disk paths include the refresh window. Desktop and compact/phone map legends fetch NOAA's matching labeled PNG scales on demand through the public wxmap_legendImage endpoint. The compact header switches forecast products and displays forecast validity wording, while forecast-only views hide the radar transport. NWS/Open-Meteo forecasts and public model products provide related guidance. Forecast-only map interrogation now requests NOAA's selected raster point value and rejects responses whose hour differs from the displayed VTIT. A hidden radar no longer emits a gate tooltip over the forecast map.",
+      "remaining_gaps": [
+        "NDFD has additional products and issue-time context that are not yet exposed in this viewer. The phone-width web layout was browser-verified; a native Android build was not available in this environment.",
+        "HAZCAST's backend/model contract is unavailable; provider-specific severe forecasts require an independently authorized service or a clearly labeled public-data alternative."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/tiles.rs",
+        "crates/hookecho/src/ui/ndfd_legend.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/app/chrome/scrubber.rs",
+        "crates/hookecho/src/app/mobile/navigation.rs",
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#DATA05",
+      "acceptance": "Independently available forecast products display valid time and attribution; add issue time when the public service supplies it.",
+      "runtime_verification": "2026-10-15: NOAA's live NDFD WMS capabilities advertised current/future valid times for the three selected products; direct GetMap probes returned PNG imagery. Local browser verification showed rain chance, high temperature, and low temperature rendering over the map with NOAA/NWS attribution and valid-time controls; rain-chance animation advanced the forecast. The NOAA viewer's wxmap_legendImage endpoint returned labeled PNG scales for all three products, including through HookEcho's local proxy. A browser-safe clock fix followed an initial WebAssembly panic; the corrected browser build rendered all three legends without that crash. The final optimized build rendered the high-temperature scale and map at desktop and 390×844 phone width. The compact browser header selected NDFD rain chance, presented NOAA validity wording, and placed the legend below the controls; forecast-only mode removed the radar transport and moved forecast controls above bottom navigation. Native Android runtime was not available for this check. HookEcho's 671 passing library tests, worker proxy tests, and the optimized web build passed; main WASM measured 4,632,979 bytes gzip against a 4,636,000-byte cap. HAZCAST, the wider NDFD catalog and point values remain unimplemented. On 2026-10-15, NOAA's graphical-viewer raster-point endpoint returned 87°F for a Sacramento high-temperature frame; WMS GetFeatureInfo was not usable because the relevant WMS layers advertise queryable=0. In the optimized local browser, selecting the NDFD high-temperature source and tapping 38.1929°N, 96.7910°W showed 68°F for the displayed 2026-10-16 00Z frame. The endpoint intermittently returned HTTP 504 during the same session, so the UI now leaves the value unavailable on failure. The final optimized browser build passed its 4,640,000-byte main WASM gate at 4,637,836 gzip bytes; 671 active Rust library tests and the NDFD parser test passed. After reload, the high-temperature card returned 68°F for 2026-10-16 00Z with no hidden-radar gate tooltip. Switching to rain chance returned 68% for its displayed 00Z frame and low temperature returned 42°F for its displayed 12Z frame at 38.1756°N, 96.8130°W. The low-temperature card remained legible in a 390×844 phone-width browser viewport; native Android runtime remains unverified. On 2026-10-15, NOAA’s live Alaska and Hawaii capabilities each advertised maxt, mint and pop12 VTIT frames; regional GetMap requests returned 256×256 PNGs, regional legends returned 600×30 PNGs, and the point endpoint returned 46°F for Anchorage and 87°F for Honolulu at the selected 2026-10-16 00Z maxt frame. HookEcho adds six regional styles with separate frame catalogs, tile/cache keys, legends and point-query regions. The native library suite passed 671 tests; the optimized main web bundle measured 4,639,631 gzip bytes under the deliberate 4,644,000-byte budget, while Lite measured 74,707 under 80,000. The regional legend regression passed. The optimized local browser rendered Alaska and Hawaii high-temperature tiles, their regional legends, validity labels and NOAA/NWS attribution at Anchorage and Kauai. The Forecasts picker displayed all nine NDFD styles; selecting Alaska high removed the radar controls. At 61.1152°N, 147.3951°W a map tap returned 44°F for Oct 16 00Z; the next advertised frame loaded on Oct 17 00Z and the same tap returned 42°F. A Hawaii tap at 21.2636°N, 158.5642°W returned 82°F for Oct 16 00Z. The continuous-follow and one-time-jump controls were relabeled Auto-follow and Jump to next after the browser test showed their former wording was ambiguous; the final optimized browser displayed both. Its main WASM measured 4,639,683 gzip bytes under the 4,644,000-byte gate, with Lite at 74,698 under 80,000. Native Android runtime remains pending. In the same local browser, PANC (an airport code used as a radar ID by the test deep link) produced a genuine no-volumes radar issue in Radar mode. After the display fix, switching that pane to forecast-only Alaska high immediately removed the active Radar issues badge while retaining the forecast map; returning to Radar showed the error. The display fix passed its focused issue-log test and the optimized web size gate at 4,639,759/4,644,000 main and 74,707/80,000 Lite gzip bytes. A registry-backed fallback now replaces invalid station IDs in coordinate deep links with the nearest radar while retaining the requested camera. The focused test resolved PANC to PAHG without changing -149.9°, 61.2°, zoom 6.0; the optimized browser rewrote the PANC URL to PAHG with those coordinates and showed the Alaska forecast map. The final web build passed at 4,639,242/4,644,000 main and 74,698/80,000 Lite gzip bytes. On 2026-10-15, NOAA live GetCapabilities advertised windgust VTIT frames for CONUS, Alaska and Hawaii; a CONUS raster-point request returned 13 mph and the 600×30 legend returned PNG. The optimized local browser rendered all three regional wind-gust maps and matching legends; a CONUS map tap returned 26 mph and a Hawaii tap returned 30 mph. A stale NDFD point card persisted across a fragment-only region link in the first candidate; after clearing it in apply_goto, the final optimized browser closed that card when the new Alaska link applied. The optimized web build and 671 active HookEcho library tests passed. NOAA live GetCapabilities also advertised windspd VTIT frames for CONUS, Alaska and Hawaii; the public point endpoint returned 8 mph and the selected legend returned a PNG. The optimized local browser rendered all three regional wind-speed maps with NOAA legends, and a CONUS map tap returned 17 mph for the selected frame. The main WASM measured 4,639,746 gzipped bytes under the 4,644,000-byte gate; 671 active HookEcho library tests passed. A later cache audit confirmed NOAA says VTIT selects the most recently issued forecast for that valid time, while the old tile identity and disk path were permanent. A focused cache test now proves the hourly refresh releases only resident NDFD requests, preserves the old map until replacement, and uploads replacement pixels under the same GPU identity. The full suite passed 672 active tests; the optimized browser still loaded the live NDFD wind-speed map at 4,639,130/4,644,000 gzipped main WASM bytes. The edge proxy can add up to five minutes of age at the hourly boundary; a live full-hour rollover was not observed."
+    },
+    {
+      "id": "OV01",
+      "category": "overlays",
+      "title": "Weather alerts",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Weather Alerts.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Live/archive warning polygons, bulletin reader, severity/proximity filters, alert channels and speech.",
+      "remaining_gaps": [
+        "Exact warning coverage, reader presentation and subscription notification behavior differ."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV01",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV02",
+      "category": "overlays",
+      "title": "Mesoscale discussions",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Mesoscale Discussions.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "SPC mesoscale discussions are documented as an existing public overlay.",
+      "remaining_gaps": [
+        "Polygon styling, all popup contents and issue/expiry workflow are not fully compared."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV02",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV03",
+      "category": "overlays",
+      "title": "Severe weather outlooks",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Severe Weather.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "SPC Day 1–3 outlooks and hazard controls exist.",
+      "remaining_gaps": [
+        "Full vendor outlook catalog and probability/day presentation not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV03",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV04",
+      "category": "overlays",
+      "title": "Tropical weather",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Tropical Weather.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "NHC positions, cones, tracks, storm surge and reconnaissance feeds exist.",
+      "remaining_gaps": [
+        "Complete vendor tropical menus, spaghetti-model coverage and product history not mapped."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV04",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV05",
+      "category": "overlays",
+      "title": "Hydrological outlooks",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Captured RadarOmega renderer supports Hydrological Outlook Day selection, risk polygons (marginal, slight, moderate, high), configurable fill opacity and line width, feature popup, and forecast discussion.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "NOAA WPC Excessive Rainfall Outlook Days 1–5 render as selectable risk polygons with a searchable control entry. A day-aware NOAA discussion reader uses the Excessive Rainfall Discussion for Days 1–3 and the broader Extended Forecast Discussion for Days 4–5. Rainfall polygon fill opacity and border width can be adjusted independently, and selecting a current polygon offers a direct action to open its discussion. A published WPC archive index provides dated Day 1–5 shapefiles with stored issue and valid times; archived polygons are labeled, a published no-risk issue has an explicit empty state, and current discussions are hidden for them. River-gauge layers provide related hydrology context.",
+      "remaining_gaps": [
+        "The optimized local browser showed Day 1 ERO polygons, 0% fill opacity with outlines retained, 0 px border width hiding only the ERO outline, and 6 px producing a wider outline. A selected marginal-risk polygon opened the current NOAA Excessive Rainfall Discussion. Dated WPC archive selection is implemented for the issues exposed by the public directory; older coverage, archived discussion linkage, popup layout and exact vendor width choices remain different or unverified.",
+        "RadarOmega component request format and full historical coverage were not available in the captured renderer; exact service parity remains unverified. The WPC archive is a public-data alternative, not the vendor service."
+      ],
+      "hookecho_sources": [
+        "crates/wxdata/src/ero.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/overlay_build.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/app/chrome/registry.rs",
+        "crates/hookecho/src/ui/ero_discussion_window.rs",
+        "crates/hookecho/src/serve.rs",
+        "web/_worker.js/proxy-core.js"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV05",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "2026-10-14: NOAA public MapServer advertises Day 1–5 layers. wxdata live network test fetched and parsed current WPC Excessive Rainfall and Extended Forecast Discussions. Optimized web build passed. In an isolated local browser/server, the searchable outlook opened, Day 1 was selected, and the WPC discussion text and NOAA source link rendered through the allowlisted proxy. Day 4–5 reader UI was not separately exercised, though its live source fetch and parser passed."
+    },
+    {
+      "id": "OV06",
+      "category": "overlays",
+      "title": "Fire weather",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "REA retained client code exposes separate fire-weather conditions and dry-thunderstorm day selectors, styled elevated/critical/extreme and isolated/scattered polygons, and a forecast-discussion popup.",
+      "observation_type": "shipped-client-code-and-runtime-controls",
+      "hookecho_implementation": "Public NOAA SPC fire-weather MapServer polygons for days 1–8, with conditions/dry-thunderstorm choices, NOAA category colors, on-map polygon details and source/valid/expiry metadata. The layer controls report request loading, failure, stale source, empty selection and loaded states using the shared feed tracker. A forecast-discussion reader fetches official SPC Day 1, Day 2 or combined Day 3–8 text on demand, with refresh and NOAA source link.",
+      "remaining_gaps": [
+        "The public NOAA discussion reader uses SPC's Day 1, Day 2 and combined Day 3–8 products; its popup hierarchy differs from RadarOmega's hosted discussion view.",
+        "Loading/failure/stale-source messaging is implemented but the failure and stale states still need live browser verification. When NWS alert polygons overlap an outlook, alerts take click priority; users can temporarily hide alerts to inspect the outlook."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/ui/fire_weather_discussion_window.rs",
+        "crates/wxdata/src/fire_weather.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV06",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "Focused parser tests and integrated native library check pass. On 2026-10-14, the official NOAA Day 2 conditions endpoint returned a California Elevated polygon. The optimized browser build rendered it and opened its issue/valid/expiry/source detail after overlapping NWS alert polygons were hidden, with no console errors. Issue time was correctly derived from the public source ID. Screenshot: outputs/ro-parity/fire-weather/browser-day2-detail.png. 2026-10-14: Fire-weather layer status was wired to RequestBook and cargo check -p hookecho --lib passed; the focused request-health state test passed. In the local browser, Day 2 Conditions displayed the green loaded status; switching to Day 2 Dry thunderstorms displayed the yellow no-areas status. The public SPC discussion URLs for Day 1, Day 2 and Days 3–8 were fetched and their forecast text confirmed; the discussion parser test and integrated cargo check passed. The full optimized web build passed: main WASM 4,541,248/4,550,000 and Lite 74,707/80,000 gzipped bytes. In the local browser, the Outlooks control opened an in-app NOAA reader and visibly loaded the Day 1 and combined Day 3–8 discussions with source links. Failure and stale status copy remain unverified in a live browser."
+    },
+    {
+      "id": "OV07",
+      "category": "overlays",
+      "title": "Winter weather",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "The retained RadarOmega client exposes separate Day 1–3 probability selectors for at least 4 inches of snow in 24 hours and at least 0.25 inches of ice in 24 hours, with slight/moderate/high polygon categories, plus WSSI Day 1, Day 2, Day 3, and combined Days 1–3 impact layers.",
+      "observation_type": "captured-client-code-and-runtime-controls",
+      "hookecho_implementation": "Public NOAA WPC probabilistic winter precipitation MapServer layers now provide independent Day 1–3 snow ≥4 in and ice ≥0.25 in selections, slight/moderate/high colors, polygon details with issue/valid/source metadata, and on-demand refresh. WSSI now includes the combined Days 1–3 overall-impact layer in addition to individual days. Snowfall analysis remains available separately. Snow and ice have independent request lanes and source-health messages, so both can be displayed together without one reply invalidating the other.",
+      "remaining_gaps": [
+        "RadarOmega polygon opacity/border-width settings, popup hierarchy and source-specific timing behavior are not fully matched.",
+        "Winter probability ice polygons were not present in the live public response at ≥10% during browser verification; the selector and parser are implemented, but an actual ice-polygon click remains unverified. Failure and stale-source messaging is implemented but still needs live failure/stale browser verification."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/app/chrome/registry.rs",
+        "crates/wxdata/src/winter_prob.rs",
+        "crates/wxdata/src/wssi.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771",
+        "ev_5ac47b0bf904707a7507f15130801c84061c85d0a249a1b0214f91ad5c4acf91"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV07",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "2026-10-14: The official NOAA WPC service metadata exposed Day 1–3 snow ≥4 in layers 1/6/11, ice ≥0.25 in layers 4/9/14, and WSSI combined Days 1–3 layer 4. A live Day 1 snow GeoJSON query returned seven records including slight-risk polygons with issue and valid times; combined WSSI returned five polygons. Focused winter probability and WSSI unit tests plus integrated cargo check passed. The optimized web build passed at 4,543,874/4,550,000 main WASM and 74,707/80,000 Lite gzip bytes. In the local browser, the separate winter selectors and combined WSSI choice appeared; Day 1 snow polygons rendered over the central Rockies, and a click opened the WPC category/issue/valid/source detail. The ice layers currently contain only a below-10% category and yielded no colored polygons to inspect. REA analyzed the captured renderer directory (SHA-256 634eb919f478896f7851821fb70f2bae22ffbfe18a138b93d16f2347948d3058); analysis coverage was partial, so the source inspection and live browser checks carry the specific feature conclusions. A concurrent browser check exposed and then verified a request-generation fix: separate snow and ice lanes now show snow polygons and a green “outlook loaded” state alongside ice’s yellow “no ≥10% area forecast” state. The focused independent-lane regression test passed. Final optimized web build passed at 4,544,913/4,550,000 main and 74,707/80,000 Lite gzip bytes."
+    },
+    {
+      "id": "OV08",
+      "category": "overlays",
+      "title": "Climatological outlooks",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Extracted RadarOmega client exposes temperature and precipitation toggles for 6–10 day, 8–14 day, 3–4 week, 1 month, and 3 month outlooks, plus display opacity controls. Private backend request uses type and period keys.",
+      "observation_type": "static-client-code + runtime-controls",
+      "hookecho_implementation": "NOAA CPC public ArcGIS GeoJSON polygons for 6–10 day, 8–14 day, monthly, and first-season (3-month) temperature and precipitation outlooks, plus NOAA's public KML polygons for Week 3–4. Selector and 0–100% opacity control are in Outlooks layer options; polygon detail shows category, probability, issue and valid dates, and source. The panel shows loading, loaded, empty-result, overdue-refresh and failed-refresh states from the request health and selected feature count. The selected period has an in-app NOAA forecast-discussion reader with refresh and a source link.",
+      "remaining_gaps": [
+        "The extracted client uses radio-like toggle logic, so only one period/variable displays at a time; HookEcho matches that selection behavior. The public NOAA discussion reader is independent of RadarOmega's private popup hierarchy.",
+        "RadarOmega's exact private categories and geometry styling have not been matched; NOAA CPC feed is an independently styled public-data alternative. Loading and loaded states were browser-verified; empty, overdue and failure labels are implemented but still need controlled runtime fault injection. The source-health age measures refresh cadence rather than each polygon's forecast expiration."
+      ],
+      "hookecho_sources": [
+        "crates/wxdata/src/cpc.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/cpc_discussion_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV08",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "All eight NOAA ArcGIS endpoints, both public Week 3–4 KML products and all five period discussion requests checked live on 2026-10-14. The optimized browser build rendered 6–10 day Temperature and both Week 3–4 variants; polygon detail showed category, probability, issue/valid dates and source. The in-app discussion reader displayed Week 3–4 and long-lead seasonal NOAA text with source link, and showed loading state when switching periods. The Week 3–4 opacity slider was checked at 100% and 0% in the browser; at 0%, both fill and outline disappeared and clicking the former polygon location opened no detail popup. The new CPC source-status line displayed loading then loaded while the Week 3–4 polygons arrived. Screenshots: outputs/ro-parity/cpc/browser-week34-temperature.png, browser-week34-precipitation.png, browser-discussion-week34.png, browser-discussion-seasonal.png, browser-opacity-100.png, browser-opacity-0.png and browser-source-loaded.png. After restarting the local preview server, no new browser warning or error occurred."
+    },
+    {
+      "id": "OV09",
+      "category": "overlays",
+      "title": "Surface observations",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: METARS.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "METAR station plots and nearest-station observations exist.",
+      "remaining_gaps": [
+        "Observation styling, filters, history and every station popup not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV09",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "Native public NWS nearby-station chain selected KLXT from KEAX and parsed 72 observations, retaining absent gust/pressure fields. This validates one station chain, not sensor-dashboard presentation, stale/error recovery or all surface-observation overlays."
+    },
+    {
+      "id": "OV10",
+      "category": "overlays",
+      "title": "Marine tools",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Marine Tools.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "NDBC buoys, coastal observations and tropical products provide related marine data.",
+      "remaining_gaps": [
+        "Full marine tool suite, forecasts and display settings are not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV10",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV11",
+      "category": "overlays",
+      "title": "Surface fronts",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Sidebar destination observed: Surface Fronts.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "WPC surface-front bulletin integration exists.",
+      "remaining_gaps": [
+        "All symbols, issue history and regional coverage not compared."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/fielddiff.rs",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/ui/sounding_window.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV11",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV12",
+      "category": "overlays",
+      "title": "Lightning detection",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Lightning Detection.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Public GOES GLM lightning integration exists.",
+      "remaining_gaps": [
+        "GLM detections are not a licensed ground-strike network; vendor strike type, coverage, latency and archives are not reproduced."
+      ],
+      "hookecho_sources": [
+        "ROADMAP.md",
+        "crates/hookecho/src/render/mod.rs",
+        "crates/hookecho/src/satellite_time.rs",
+        "docs/DATA.md"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV12",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV13",
+      "category": "overlays",
+      "title": "Power outages",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Sidebar destination observed: Power Outages.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Existing ODIN power-outage overlay is registered.",
+      "remaining_gaps": [
+        "Provider coverage, update cadence, county summaries and history may differ; no current live provider validation."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/notify.rs",
+        "crates/hookecho/src/spoken_alerts.rs",
+        "crates/hookecho/src/ui/alert_panel.rs",
+        "crates/hookecho/src/ui/warning_window.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV13",
+      "acceptance": "Enable layer, inspect a feature, show issuance/validity/source, configure display and handle empty/stale states.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV14",
+      "category": "overlays",
+      "title": "Local storm reports",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Live/Archive modes; event filters, range, sound, marker icons/values, clustering, date search and report details.",
+      "observation_type": "runtime-menu+static-client",
+      "hookecho_implementation": "Public live/archive local storm reports and report inspection exist.",
+      "remaining_gaps": [
+        "Vendor event categories, clustering, magnitude labels, report sounds and linked archive UX are not all matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/cell_window.rs",
+        "crates/hookecho/src/ui/cells_window.rs",
+        "crates/wxdata/src/level3.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV14",
+      "acceptance": "Filter reports; inspect event time/location/magnitude; archive search and linked historical radar work.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "OV15",
+      "category": "overlays",
+      "title": "Spotter Network",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Layer toggle and active time windows 5/15/30/60 minutes; detail popup has last-updated and supplied profile fields.",
+      "observation_type": "runtime-menu+static-client",
+      "hookecho_implementation": "A public Spotter Network feed supplies positions and source timestamps. The Weather layers catalog exposes the toggle and a separate settings action for All/5/15/30/60-minute active windows and radar-centered distance filtering; older positions are visually muted, and marker cards show available status and update time.",
+      "remaining_gaps": [
+        "Reporting/login, vendor profile fields and spotter-linked live video are absent. The public feed is not proof of exact vendor filtering or update cadence equivalence.",
+        "User accepted separate public weather/highway camera alternatives, not a claim of spotter-linked live video. A Caltrans still and independent camera pin were browser-verified; chaser-linked live video remains absent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/omega_display.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/omega_workspace.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/wxdata/src/spotters.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV15",
+      "acceptance": "Filter active spotters, inspect allowed details and make stale positions visibly distinct.",
+      "runtime_verification": "Local browser verified Weather layers > Observations > Spotter Network settings opens the control panel, and choosing 15 min changes the selected window. Native tests verify age boundaries and future reports are excluded. The live public feed rendered spotter markers; exact vendor parity remains unverified."
+    },
+    {
+      "id": "OV16",
+      "category": "overlays",
+      "title": "NEXRAD hail history",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Retained Nexrad History client offers 1/2/3-inch-plus hail categories and 30-minute/1/3/6/12/24-hour intervals. Its report popup carries storm id, valid time, magnitude in inches and VIL.",
+      "observation_type": "runtime-menu+static-client",
+      "hookecho_implementation": "Independent public MRMS MESH maximum-estimated-hail-size swaths support 30-minute, 1-, 2-, 6- and 24-hour windows. The active swath has a compact transport menu for all, 1+, 2+ or 3+ inch estimated-size display filters and window selection. A size change uses the retained native grid without refetching or altering native values; point interrogation shows the native magnitude, accumulation window and valid time. Existing hail attributes and storm-track tools remain separate.",
+      "remaining_gaps": [
+        "MRMS rolling-max swaths are a public-data alternative to the observed NEXRAD event layer, not its storm-id reports or exact 3- and 12-hour intervals. The grid does not identify the exact time of the maximum at a point, and historical VIL from the same hail event is not joined. A nonzero live MESH swath and its map appearance remain unverified in the browser."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/layer_options.rs",
+        "crates/wxdata/src/mrms.rs",
+        "crates/hookecho/src/ui/cell_window.rs",
+        "crates/hookecho/src/ui/cells_window.rs",
+        "crates/wxdata/src/level3.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#OV16",
+      "acceptance": "Filter historical hail tracks and inspect magnitude, VIL and time.",
+      "runtime_verification": "Focused native-value threshold and 30-minute field-time-tolerance tests passed; 644 native library tests and strict Clippy passed. Optimized web build passed at 4,503,536/4,515,000 gzip bytes. Browser showed a valid public MRMS hail-swath frame, selected 1+ inch and 6-hour menu states, and no console errors or warnings; the 40-minute-old frame was correctly hidden against the 30-minute live tolerance, so nonzero swath pixels were not visually accepted. Screenshot: outputs/ro-parity/hail-history/browser-hail-controls.png. 2026-10-15 optimized browser regression: a newer MRMS frame became available and the hail scale displayed at a 14-minute lag. Stepping the KTLX radar timeline to 10:05 PM CDT made the field 204 minutes newer than the selected radar frame; the map displayed the hidden-data status and removed the hail scale. Restoring the live MRMS time brought the scale back. This verifies truthful legend alignment, not hail-pixel magnitude or event history. The main and lite optimized bundles passed their size gates; 663 HookEcho library tests passed."
+    },
+    {
+      "id": "AN01",
+      "category": "analysis",
+      "title": "Storm tracks",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Initial point, track line, track cone, time points; speed units mph/kph/knots.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Automatic SCIT tracks and a separate manual two-click storm-track tool are available. The manual tool draws an editable path, angular cone and 15-minute points with kt/mph/km/h motion controls. Automatic tracks now have independently persisted Initial Point, Track Line, Track Cone and Time Points switches plus mph/km/h/kt speed units; the selected-cell cone expands with forecast distance, and speed units carry through the map label and cell detail views.",
+      "remaining_gaps": [
+        "RadarOmega's custom/cellular cone geometry, time-point editing, ETA city overlays and vendor projection algorithm are not matched. The manual HookEcho cone is an explicitly user-defined angular estimate, not an official storm forecast.",
+        "The captured RadarOmega client persists display settings; its track save/load methods are placeholders. No saved-track equivalence claim is made."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/app/chrome/chips.rs",
+        "crates/hookecho/src/app/chrome/omega_transport.rs",
+        "crates/hookecho/src/app/chrome/registry.rs",
+        "crates/hookecho/src/app/mobile/mod.rs",
+        "crates/hookecho/src/ui/cell_window.rs",
+        "crates/hookecho/src/ui/cells_window.rs",
+        "crates/wxdata/src/level3.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/ui/priority.rs",
+        "crates/hookecho/src/ui/settings_window.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN01",
+      "acceptance": "Create/inspect track with speed, direction, forecast time and configurable geometry.",
+      "runtime_verification": "2026-10-14: The automatic-track component/unit implementation passed the full native library suite (662 tests, 30 ignored) and optimized web build (4,551,143 gzipped bytes under the 4,552,000-byte budget). The settings persistence/conversion test passed. A local two-pane browser run loaded the updated build and active projected storm tracks, but no selected storm cell was available to visually exercise the new cone and per-component switches. Previous manual-tool two-click browser verification remains valid."
+    },
+    {
+      "id": "AN02",
+      "category": "analysis",
+      "title": "Data probe",
+      "priority": 0,
+      "status": "implemented-related",
+      "observed_scope": "Probe reports sample value/unit/product/tilt, distance/bearing from site and estimated beam height.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Workspace inspector button routes to native radar interrogation.",
+      "remaining_gaps": [
+        "Exact pin/card, beam-height/bearing presentation and all derived product probes need workflow comparison."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/legend.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN02",
+      "acceptance": "Probe sample agrees with source bins; distance/bearing/beam estimate clearly distinguished from measured values.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN03",
+      "category": "analysis",
+      "title": "Distance/bearing measurement",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Measurement HUD, line/circle and endpoint appearance, units and behavior settings.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Workspace ruler routes to existing distance/bearing measurement.",
+      "remaining_gaps": [
+        "Vendor endpoint/circle styling options and every measurement interaction are not fully matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/ui/legend.rs",
+        "crates/hookecho/src/view.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN03",
+      "acceptance": "Measure two known locations and verify distance/bearing, units and clear action.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN04",
+      "category": "analysis",
+      "title": "Drawing",
+      "priority": 1,
+      "status": "partial",
+      "observed_scope": "Pencil, eraser, undo, redo, clear, color and size controls. The retained drawing-mapbox.js constructs a DrawingBoard canvas with Color and Size controls and a default size of 6.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Workspace drawing chip offers pencil with four quick colors plus a custom color picker, a 1–12 px pen-size control (6 px initial size), segment eraser, 16-step drawing undo/redo, clear and GeoJSON export. Each geographic stroke retains its own color and width through erasing, export and case-file round trips; older case files default to 2.5 px. Freehand annotations stay anchored to geographic coordinates during pan and zoom. An eraser drag cuts only the portion inside an 11-pixel screen-radius brush, splitting surviving strokes at the brush boundary; each draw or erase drag is one history step.",
+      "remaining_gaps": [
+        "RadarOmega's exact Size dropdown choices, canvas eraser brush size, history depth and export format have not been verified as equivalent. HookEcho's geographic vector annotations differ from the reference canvas drawing board."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs",
+        "crates/hookecho/src/app/chrome/chips.rs",
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/casefile.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN04",
+      "acceptance": "Create annotations, undo/redo/clear and exit without unintended map actions.",
+      "runtime_verification": "2026-10-14: targeted native unit tests verify partial-stroke clipping at an 11-pixel screen radius, preservation of an untouched stroke, continuous erasure along a fast pointer movement, stroke width retention, GeoJSON width export and backward-compatible case-file import. The optimized browser build passed at 4,529,399/4,530,000 gzip bytes. In the local browser UI, the Pen menu opened, blue selection visibly updated, the slider changed from 6.0 to 9.0 px, a thick blue stroke appeared across the map, and an eraser drag removed its middle while both ends remained visible. Exact reference brush mechanics and export equivalence remain unverified."
+    },
+    {
+      "id": "AN05",
+      "category": "analysis",
+      "title": "Broadcast presentation",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Warning counters and simplified site/product/elevation/time/legend presentation.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Existing broadcast overlay supports presentation.",
+      "remaining_gaps": [
+        "Exact warning counters, metadata layout and mode transitions not matched."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN05",
+      "acceptance": "Presentation mode preserves data attribution/time and can restore ordinary controls.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "AN06",
+      "category": "analysis",
+      "title": "Screenshot/video/GIF export",
+      "priority": 2,
+      "status": "partial",
+      "observed_scope": "Share sheet includes Screenshot, Record Video, Record Gif and Save Screenshot.",
+      "observation_type": "static-client",
+      "hookecho_implementation": "Desktop PNG screenshot, clipboard copy and archive-loop GIF/MP4 exports remain available. The browser Share panel downloads a PNG using eframe's screenshot event and an in-memory Blob helper, closing the panel before capture. The optional caption card names site, product, valid time and NOAA/NWS attribution beneath the header. Browser Share also exports the loaded live-window or archive timeline as a 960-pixel-wide animated GIF; it waits for each requested radar volume, skips unavailable public archive scans, and restores the previous playback state afterward. Optional caption cards now appear on every browser GIF frame as well as PNG captures; they use the actual displayed cut time, active product, and radar-network attribution. A solid blue card is positioned clear of the Views menu and rendered without egui fade-in so the exported palette keeps its contrast. During loop export, a compact progress card shows captured/total scan slots and allows cancellation; cancelling or switching panes restores the original timeline and drops pending capture state. The card is excluded from captured frames. Browser Share also downloads an annotated video of the captured timeline through the browser MediaRecorder: MP4/H.264 when supported, otherwise a WebM format selected by runtime capability; the extension follows the actual container. The recorder is a content-hashed shell asset. It now presents a Save MP4/WebM button after encoding, so the download starts from a fresh user click and the completion toast says the video is ready rather than claiming it was saved. Multi-pane screenshot and loop exports caption each pane independently with its actual displayed station, active product, tilt, displayed valid time, and radar-network attribution. When a linked follower has no radar scan inside the configured time limit, its caption states that radar is hidden instead of quoting the stale loaded scan.",
+      "remaining_gaps": [
+        "WebM fallback remains unverified in a non-MP4 browser. Legend composition, full-screen video export layout, and the vendor sharing workflow remain open. Four-pane independent-timeline MP4 was verified, but linked multi-pane MP4 frame synchronization still needs a completed provider-backed run. A same-site KTLX linked GIF now verifies REF/VEL/SW/ZDR synchronization at 01:05, 01:12 and 01:18 UTC after clearing stale seek targets during rewind/step. At 01:25 UTC the followers correctly hide radar and state that no scan is within the 120-second limit. A two-scan same-site KTLX linked MP4 now verifies four-pane time alignment; other stations/providers and the WebM fallback still need completed verification. The local in-app browser did not leave a file after clicking Save, although its direct link could be downloaded through the browser API, so the ordinary UI save flow remains unverified there. GIF and video exports skip unavailable public archive scans rather than capturing stale imagery."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/app.rs",
+        "crates/hookecho/src/dialog.rs",
+        "crates/hookecho/src/loopexport.rs",
+        "crates/hookecho/src/app/chrome/clearview.rs",
+        "crates/hookecho/src/app/chrome/overlay.rs",
+        "crates/hookecho/src/app/chrome/radar_identity.rs"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#AN06",
+      "acceptance": "Export includes correct map/data/time/attribution and reports capture errors.",
+      "runtime_verification": "2026-10-15: In a local browser, Share > Download screenshot produced a 1280×720 PNG with the optional site/product/time/NOAA-NWS caption card. The final browser build passed its 4,590,000-byte main-WASM budget at 4,584,053 gzipped bytes (lite 74,707/80,000). Share > Download loop (GIF) produced an actual 960×540, 758,833-byte file from KTLX. ImageMagick identified three distinct frames timed at 250 ms each; adjacent-frame pixel differences were 12,610 and 13,017. The fourth public archive scan was unavailable, was logged as skipped, and no stale image was captured in its place. The viewer returned to live. Browser MP4 and other layouts remain unverified. 2026-10-15 follow-up: an actual local-browser export after disabling egui Area fade-in yielded a 960×540, 4-frame, 819,065-byte GIF at outputs/ro-parity/share/captioned-loop-final.gif. Frame 0 visibly shows a solid blue KTLX/reflectivity/valid-time/NOAA-NWS card clear of the Views menu; the previous translucent captures failed this visual check. The optimized main WASM was 4,658,243 gzipped bytes, within the 4,662,000-byte budget. 2026-10-15 progress check: in a 1280×720 local browser, the progress card displayed 0/4 scans; clicking Cancel removed it, showed a cancellation toast, and returned the transport to Live. A subsequent export completed as a 960×540 three-frame GIF; its saved first frame had the caption but no progress card. The optimized main WASM was 4,659,109/4,662,000 gzipped bytes. 2026-10-15 browser video check: Share > Download video produced outputs/ro-parity/share/browser-loop-final.mp4. ffprobe identified an H.264 MP4, 960×540, 92,941 bytes, four encoded frames at 0.0000/0.2477/0.4998/0.7500 seconds, and 0.7833-second duration. Three distinct radar scans were captured; the last encoded frame holds the final image for its intended interval. The first decoded frame visibly contains the KTLX/reflectivity/valid-time/NOAA-NWS card and no export progress UI. 2026-10-15 four-pane browser screenshot check: outputs/ro-parity/share/four-pane-captions.png shows four distinct caption cards on a REF/VEL/SW/ZDR analysis workspace. The REF pane reports 00:48 UTC while VEL/SW/ZDR report 00:38 UTC, matching the Inspector valid times. The bottom cards paint over the transport in that first exported image. A follow-up capture at outputs/ro-parity/share/four-pane-captions-clean.png excludes the playback transport only during capture: all four cards are unobscured, and the normal transport is visible again immediately afterward. The follow-up REF pane reports 00:56 UTC while VEL/SW/ZDR report 00:45 UTC, matching Inspector. Optimized web build passed at 4,659,608/4,662,000 gzipped bytes. 2026-10-15 four-pane GIF check: outputs/ro-parity/share/four-pane-independent-loop.gif contains three 960×540 frames at 250 ms each. With Link timelines off, REF advances through 00:24, 00:31 and 00:38 UTC while VEL/SW/ZDR retain 00:45 UTC, as their captions indicate. A linked-timeline trial showed follower archive requests failing; the prior caption could report a stale hidden scan. The corrected build screenshot at outputs/ro-parity/share/linked-missing-scan-caption.png shows a KTLX REF leader and three KICT followers 233 seconds outside the 120-second limit. All three follower cards now say no scan within 120 seconds and radar hidden. Optimized web build passed at 4,661,784/4,662,000 gzipped bytes. 2026-10-15 four-pane MP4 check: the prior async programmatic download produced no file in the local browser despite the encoder completing. After switching to an explicit Save MP4 button, one click produced outputs/ro-parity/share/four-pane-browser-loop.mp4. ffprobe found H.264, 960×540, 99,391 bytes, four encoded frames at 0.0000/0.2354/0.4874/0.7538 seconds, and 0.7871-second duration. The first decoded frame at outputs/ro-parity/share/four-pane-browser-loop-first-frame.png visibly shows four pane-specific cards, REF at 00:52 UTC and VEL/SW/ZDR at 01:12 UTC, with no transport or progress card. A later decoded frame advances REF to 01:05 UTC while the independent followers retain 01:12 UTC. The optimized build passed at 4,661,784/4,662,000 gzipped bytes; the JS changed without increasing WASM size. 2026-10-15 same-site linked GIF audit: outputs/ro-parity/share/four-pane-linked-loop.gif is a 960×540 saved local-browser export. Its three distinct frames show REF captions 00:24, 00:31 and 00:38 UTC while all three followers stay at 00:45 UTC despite Link timelines being enabled. This is a failed synchronization check, not parity. Rewind and step left a pending seek target intact; go_begin() and step() now clear it, and the focused navigation test plus all 684 active library tests pass. The optimized browser build passed at 4,661,749/4,662,000 gzipped bytes. A fresh-origin local-browser repeat saved outputs/ro-parity/share/four-pane-linked-after-seek-fix.gif (960×540, four frames, 1,030,842 bytes). In frames 0–2, all four pane captions and the Inspector agree on 01:05, 01:12 and 01:18 UTC respectively; the follower labels report +0.000s offset. Frame 3 shows REF at 01:25 UTC while the three followers have no scan within 120s, with radar hidden and truthful captions. This verifies linked GIF behavior for the tested KTLX public archive window, while other sources and MP4 remain open. 2026-10-15 linked MP4 audit: after changing the save control to a direct blob download link, the fresh-origin browser encoded a two-scan MP4; two other public archive slots failed and were skipped. The browser API downloaded outputs/ro-parity/share/four-pane-linked-direct.mp4 from that link. ffprobe confirmed a 960×540, 152,072-byte H.264 MP4 with 0.506-second duration and encoded frames at 0.000, 0.223 and 0.473 seconds. Decoded content frames show REF/VEL/SW/ZDR all at 01:18 and then all at 01:25 UTC; the last frame holds the final image. Clicking the visible Save link reported a download request but did not leave an ordinary browser download file on this run, so UI-save completion is not claimed. JavaScript syntax and the optimized web build passed; the main WASM remains within its 4,662,000-byte budget."
+    },
+    {
+      "id": "LOC01",
+      "category": "personalization",
+      "title": "Custom locations and notification controls",
+      "priority": 1,
+      "status": "implemented-related",
+      "observed_scope": "Custom Locations and NotifyontheFly sidebar entries.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Markers, saved camera/layout/appearance/workspaces and recovery persistence.",
+      "remaining_gaps": [
+        "No vendor account sync or NotifyontheFly backend; notification service behavior is independent."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/recovery.rs",
+        "crates/hookecho/src/settings.rs",
+        "crates/hookecho/src/ui/marker_window.rs",
+        "crates/hookecho/src/workspace.rs"
+      ],
+      "observation_evidence_ids": [
+        "ev_5b0f9720d9011bfb63b4c3bdd3f220e73d38ad8e89edc22dc1f778e19b473771"
+      ],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#LOC01",
+      "acceptance": "Create/edit/delete location and configure notification scope without ambiguous save state.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    },
+    {
+      "id": "IOT01",
+      "category": "devices-media",
+      "title": "Device and streaming dashboard",
+      "priority": 2,
+      "status": "external-service",
+      "observed_scope": "Device Settings; dashboard buttons All Streaming, Inside Warnings, Refresh, Close dashboard.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "Public NWS/METAR station dashboards and FAA/Caltrans/optional keyed Windy cameras are accepted substitutes. Caltrans cameras have independent pins and still/source detail cards on the Weather & highway cameras layer, separate from station cards. A Public camera streams dashboard lists public HLS cameras in the current map view, filters to cameras inside current NWS warning polygons, refreshes the catalog, and opens each camera's existing still/live card. It loads the catalog without turning on the map's camera-pin layer and is reachable from the RadarOmega-style Storm Chasers menu and the shared command registry. An open card checks its JPEG about once per minute with a shared minute URL key and 60-second proxy TTL. The card's Watch live action routes published HLS streams to the native ffmpeg player or an on-demand browser hls.js player. The local and edge camera proxies now supply the fixed FAA viewer Referer only for its allowlisted API host. An open FAA card retains its still through catalog refresh and rechecks the latest frame after ten minutes, retrying an unloaded card after one minute.",
+      "remaining_gaps": [
+        "User accepted public-data alternatives. In the optimized local browser on October 15, the public-stream dashboard showed 291 live-capable Caltrans cameras in a Sacramento view and 41 inside current warning polygons; selecting a row opened its JPEG card and Watch live played a public HLS stream. A fresh local browser session then opened the dashboard in Sacramento with the camera-pin layer off; 291 stream rows loaded while the map remained free of camera pins. A Caltrans still/independent map card, one working native/browser HLS stream and one KEDU sensor dashboard were also verified; the open camera card advanced to a newer JPEG without a reload. The sensor dashboard now flags observations at least two hours old, offers manual refresh, retries errors after one minute and stalled loads after thirty seconds, and records the requested site before spawning a fetch to prevent repeated per-frame requests. A controlled optimized-browser outage showed the correct unavailable/retry UI, and a three-hour-old station fixture showed its timestamp and Stale observation warning. A focused test confirms failed observation payloads count as source-health failures under the Nearest station observations label; recovery across other locations and long sessions remains unverified. A repaired local proxy returned 24 FAA Sacramento-area sites, a latest-image record and a 640×480 JPEG on October 15. The earlier bare metadata probe returned 401 and the earlier local proxy returned 502; the proxy path is now live-verified, and the optimized local browser displayed a Sacramento Mather Airport FAA pin and its JPEG in a detail card. Deployed edge behavior, other camera stills, the timed FAA-card refresh and longer-session stream recovery remain unverified.",
+        "CyclonePORT device control/telemetry relationships and moving-spotter video associations are not implemented; fixed weather cameras are not equivalent chaser video."
+      ],
+      "hookecho_sources": [
+        "crates/hookecho/src/ui/sensor_window.rs",
+        "crates/wxdata/src/stations.rs",
+        "crates/wxdata/src/obs.rs",
+        "crates/wxdata/src/metar.rs",
+        "crates/wxdata/src/webcams.rs",
+        "crates/wxdata/src/dotcams.rs",
+        "docs/public-data-alternatives.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#IOT01",
+      "acceptance": "Authorized device/stream list, warning filter, refresh and playback errors work.",
+      "runtime_verification": "2026-10-14 16:49 UTC: existing native release --headless-obs KEAX passed; selected KLXT with 72 observations, latest clock label 16:30Z, temperature/dewpoint/RH/wind parsed and missing gust/pressure retained. Observation date not printed. At 20:51 UTC, the optimized browser build showed independent Caltrans pins over Sacramento with station cards off. Selecting Hwy 5 at Pocket displayed an actual JPEG through the local proxy; the image displayed 13:51:07 PDT on-image capture time. FAA metadata failed with a 502 proxy response. At 20:55 UTC, the browser Sensors window displayed KEDU/University Airport with an observed 1:40 PM PDT time/15-minute age, 73°F, 19% humidity, 5 mph NNE wind, 1019 mb pressure, and dashes for absent gust/sea-level pressure. The Hwy 5 at Pocket HLS URL decoded as H.264 640×480 with ffprobe; the native HookEcho live-stream test received ten decoded frames, and the optimized browser player reached readyState 4, played past 20 seconds with changing video pixels, and tore down on Close. At 21:39–21:42 UTC, the final optimized browser card remained open while its still advanced from 14:39:05 to 14:41:06 PDT without a reload. On 2026-10-15, the 669-test HookEcho library suite and the focused sensor retry test passed; the optimized web bundle passed its 4,629,000-byte budget at 4,624,093 bytes gzip. A local browser Sensors window displayed the Refresh observations control and loaded KLXT with a 22-minute-old observation; clicking Refresh retained a healthy dashboard. Stale/error-state recovery, other stations and streams, and long-session recovery remain unverified. Evidence: outputs/ro-parity/provider-runtime/results.json and outputs/ro-parity/caltrans-independent/{camera-detail,camera-detail-final,sensors-top,sensors-fields,hls-frame-b,hls-frame-c,open-card-final-a,open-card-final-c}.png. On 2026-10-15, after the local proxy Referer repair, the optimized browser map showed a Sacramento Mather Airport FAA pin; opening it loaded an actual 640×480 night JPEG and credited FAA WeatherCams. The deployed edge path was not tested. A subsequent source change retained the open FAA still through catalog refresh and scheduled a ten-minute replacement fetch; 671 active Rust library tests and the optimized web build passed, with WASM 4,632,160 gzip bytes under the 4,636,000-byte gate. The ten-minute transition was not observed in the browser."
+    },
+    {
+      "id": "ACCOUNT01",
+      "category": "account",
+      "title": "Account, subscription, add-ons, support",
+      "priority": 2,
+      "status": "external-service",
+      "observed_scope": "Profile and Manage Subscription, Manage Add-ons, Support, Latest Update Info, keyboard shortcuts and guides entries.",
+      "observation_type": "runtime-controls",
+      "hookecho_implementation": "HookEcho has no user accounts; optional own-provider settings sync.",
+      "remaining_gaps": [
+        "No vendor authentication, subscription, billing or entitlement backend; client observations cannot reconstruct those services."
+      ],
+      "hookecho_sources": [
+        "README.md",
+        "docs/sync.md"
+      ],
+      "observation_evidence_ids": [],
+      "research_inventory_ref": "outputs/ro-parity/feature-inventory.json#ACCOUNT01",
+      "acceptance": "Use HookEcho account/help destinations with clear provider-specific feature availability.",
+      "runtime_verification": "pending final integrated verification; source presence is not behavioral equivalence"
+    }
+  ],
+  "accepted_alternatives": {
+    "decision": "User accepted public-data alternatives for CyclonePORT/device telemetry, chaser video and international feeds.",
+    "status": "accepted scope; provider refinements implemented; native NWS chain, one DWD reflectivity render, ECCC browser rain navigation, Caltrans still images and one native/browser HLS stream passed; remaining media/product acceptance explicit",
+    "documentation": "docs/public-data-alternatives.md",
+    "evidence": "outputs/ro-parity/public-provider-probes.json",
+    "evidence_paths_relative_to": "original REA research workspace",
+    "mappings": {
+      "IOT01": "Public NWS/METAR station dashboards and FAA/Caltrans/optional keyed Windy cameras; no proprietary device control or chaser associations.",
+      "OV15": "Public spotter positions remain separate from fixed weather/highway cameras.",
+      "RAD07": "Live German DWD volumes, Canadian ECCC composites and RainViewer worldwide precipitation tiles with advertised frame paths; official Australian BOM viewer link remains. No embedded BOM single-site volume adapter. Ten Swedish EUMETNET/OPERA single-site reflectivity and velocity volumes are available. Twelve Norwegian single-site volumes are included, with source-specific velocity timing. Eleven Finnish live single-site volumes are included. Four Swiss and four Baltic live single-site feeds, Malta reflectivity, 23 active French, nine Spanish, and four Slovak reflectivity/velocity sites, plus Dublin reflectivity and all ten velocity elevations, are included."
+    },
+    "completion_claim": false,
+    "refinements": {
+      "eccc": "Layer-filtered advertised WMS time availability intersects requested interval; no guessed fallback on failure; source-specific imagery labels.",
+      "caltrans": "Fifteen-minute metadata expiry for a stationary view, retaining changed-view refresh and retry cooldown; an open card checks for a new JPEG about once per minute with shared minute URL keys and 60-second proxy TTL.",
+      "australia": "External official BOM viewer link plus embedded RainViewer worldwide precipitation composite. Optimized browser rendered Sydney-area coverage and latest/prior frames; no BOM single-site velocity, tilts or gate interrogation.",
+      "verification": "Camera expiry and native/edge cache TTL tests passed; ECCC availability tests passed (3/3), production parser accepted captured proxy XML (31 frames), native and wasm compilation passed. Native NWS KEAX-to-KLXT observations and DWD DEOF REF 0.50° render passed. Final-source raw browser ECCC rain Current/Previous/Latest navigation passed with 42 PNG HTTP 200 responses. All 12 Caltrans district catalogs loaded in an initial browser probe whose station lookup failed; later independent pins showed a still and a newer JPEG after reload. One Caltrans HLS stream decoded frames in native HookEcho and played past 20 seconds in the browser. The final optimized browser build also replaced one open camera card's 14:39:05 PDT JPEG with its 14:41:06 PDT capture without a reload. ECCC rain Play/Pause later passed in the optimized local browser after source-time reset. The optimized browser also loaded and stepped RainViewer frames and rendered coverage around Sydney. Snow, other DWD moments/elevations, other camera streams, long-session recovery and feed-error acceptance remain unverified."
+    },
+    "proxy_validation_evidence": "outputs/ro-parity/eccc-proxy-validation.json",
+    "native_provider_validation_evidence": "outputs/ro-parity/provider-runtime/results.json",
+    "browser_imagery_validation_evidence": "outputs/ro-parity/eccc-browser-accepted/results.json",
+    "browser_camera_validation_evidence": "outputs/ro-parity/caltrans-browser/results.json"
+  }
+}

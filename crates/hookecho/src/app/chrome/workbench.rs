@@ -178,19 +178,29 @@ impl HookEchoApp {
                 .rev()
                 .find(|layer| view.fields_on.contains(layer));
             let field = layer.and_then(|layer| self.field_state(i, layer)?.frame.as_ref());
-            let health = layer.and_then(|layer| if layer.is_native_abi() { Some(self.request_health(RequestLane::PaneField(i, layer))) } else { self.palette_health(PaletteAction::ToggleField(layer)) })
+            let health = layer.and_then(|layer| if layer.is_pane_field() { Some(self.request_health(RequestLane::PaneField(i, layer))) } else { self.palette_health(PaletteAction::ToggleField(layer)) })
                 .map(|health| format!(" · {}", crate::ui::layers_panel::health_look(health.state()).0))
                 .unwrap_or_default();
-            let source = field.map(|frame| format!(
-                "{} · {} · valid {} · {}",
-                frame.descriptor.short_name,
-                frame.stamp.source_identity,
-                frame.stamp.valid_time.format("%H:%M UTC"),
-                frame.stamp.quality.label(),
-            )).or_else(|| view.volume.as_ref().map(|volume| {
-                let time = view.selected_cut_ms()
-                    .and_then(chrono::DateTime::from_timestamp_millis)
-                    .unwrap_or(volume.time);
+            let source = field.map(|frame| {
+                let identity = if layer.is_some_and(crate::render::FieldLayer::is_l3_grid) {
+                    format!("NWS Level III · {site}")
+                } else {
+                    frame.stamp.source_identity.clone()
+                };
+                let quality = if frame.stamp.quality != wxdata::field::QualitySummary::Unknown {
+                    format!(" · {}", frame.stamp.quality.label())
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{} · {} · valid {}{}",
+                    frame.descriptor.short_name,
+                    identity,
+                    frame.stamp.valid_time.format("%H:%M UTC"),
+                    quality,
+                )
+            }).or_else(|| view.volume.as_ref().map(|volume| {
+                let time = view.displayed_time().unwrap_or(volume.time);
                 let displayed = view.displayed_station().unwrap_or("Unknown radar");
                 format!("{displayed} · {product} · valid {}", time.format("%H:%M UTC"))
             })).unwrap_or_else(|| format!("{site} · {product} · waiting for data")) + &health;

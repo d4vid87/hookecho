@@ -87,6 +87,9 @@ pub(crate) fn csv_buttons(
 pub mod a11y;
 pub mod about_window;
 pub mod afd_window;
+pub mod cpc_discussion_window;
+pub mod fire_weather_discussion_window;
+pub mod ero_discussion_window;
 pub mod alert_panel;
 pub mod priority;
 pub mod basemap_picker;
@@ -108,6 +111,7 @@ pub mod layer_options;
 pub mod layer_window;
 pub mod layers_panel;
 pub mod legend;
+pub mod ndfd_legend;
 /// Material 3 design tokens for the mobile chrome.
 pub mod m3;
 pub mod marker_popup;

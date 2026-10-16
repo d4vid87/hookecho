@@ -72,11 +72,13 @@ pub fn matrix_url(homeserver: &str, room: &str, txn: u128) -> String {
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub fn desktop(title: &str, body: &str) {
     use notify_rust::Notification;
-    let res = Notification::new()
-        .summary(title)
-        .body(body)
-        .appname("HookEcho")
-        .show();
+    let mut notification = Notification::new();
+    notification.summary(title).body(body).appname(crate::paths::application_name());
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if crate::paths::is_radar_workspace() {
+        notification.hint(notify_rust::Hint::DesktopEntry(crate::paths::application_id().into()));
+    }
+    let res = notification.show();
     if let Err(e) = res {
         log::warn!("desktop notification failed: {e}");
     }
@@ -88,7 +90,10 @@ pub fn desktop_summary(title: &str, body: &str) {
     static SUMMARY_ID: std::sync::Mutex<u32> = std::sync::Mutex::new(0);
     let Ok(mut id) = SUMMARY_ID.lock() else { return };
     let mut notification = notify_rust::Notification::new();
-    notification.summary(title).body(body).appname("HookEcho");
+    notification.summary(title).body(body).appname(crate::paths::application_name());
+    if crate::paths::is_radar_workspace() {
+        notification.hint(notify_rust::Hint::DesktopEntry(crate::paths::application_id().into()));
+    }
     if *id != 0 { notification.id(*id); }
     match notification.show() {
         Ok(handle) => *id = handle.id(),

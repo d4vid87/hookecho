@@ -11,6 +11,8 @@ pub struct Detail {
     /// `(label, url)` for a "see this on its own site" button. Windy's webcam terms require every
     /// image to link back to the camera's page, so for those this is not decoration.
     pub link: Option<(String, String)>,
+    /// Published live camera URL. The caller routes it to the platform's stream player.
+    pub stream: Option<String>,
 }
 
 /// Show the detail window. Returns `false` when it should close. `image` is the resolved texture
@@ -20,6 +22,8 @@ pub fn show(
     detail: &Detail,
     image: Option<&egui::TextureHandle>,
     popovers: &mut crate::ui::popover::Popovers,
+    play_stream: &mut Option<String>,
+    open_ero_discussion: &mut bool,
 ) -> bool {
     let mut open = true;
     let mut close = false;
@@ -130,6 +134,24 @@ pub fn show(
                     egui::Label::new(if mesoscale { text } else { text.monospace() }).wrap(),
                 );
             });
+            if detail.title.starts_with("ERO D") && !detail.body.starts_with("Archived")
+                && ui.button("Read NOAA rainfall discussion").clicked() {
+                *open_ero_discussion = true;
+            }
+            if let Some(url) = &detail.stream {
+                ui.add_space(6.0);
+                let label = if cfg!(target_os = "android") {
+                    "Open live stream"
+                } else {
+                    "Watch live"
+                };
+                if ui.button(label).clicked() {
+                    *play_stream = Some(url.clone());
+                }
+                if cfg!(target_os = "android") {
+                    ui.weak("Live HLS opens in an external player on Android.");
+                }
+            }
             // A button rather than `ui.hyperlink_to`: Android needs the JNI ACTION_VIEW path in
             // platform::open_url, which egui's own hyperlink does not go through.
             if let Some((label, url)) = &detail.link {

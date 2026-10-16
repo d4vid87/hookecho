@@ -7,7 +7,7 @@
 # assemble a bare AppDir and package it with appimagetool — no linuxdeploy, since everything we
 # would auto-bundle is on the AppImage excludelist anyway.
 #
-# Usage: packaging/build-appimage.sh
+# Usage: packaging/build-appimage.sh [--radar-workspace]
 # Output: dist/HookEcho-x86_64.AppImage
 set -euo pipefail
 
@@ -15,8 +15,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 ARCH=x86_64
-APPDIR="$ROOT/target/appimage/HookEcho.AppDir"
-OUT="$ROOT/dist/HookEcho-${ARCH}.AppImage"
+variant=HookEcho
+desktop=hookecho
+metadata=io.hookecho.HookEcho
+assets="$ROOT/packaging"
+if [[ "${1:-}" == --radar-workspace ]]; then
+  variant=HookEcho-Radar-Workspace
+  desktop=hookecho-radar-workspace
+  metadata=io.hookecho.RadarWorkspace
+  assets="$ROOT/packaging/radar-workspace"
+elif [[ $# -ne 0 ]]; then
+  echo "Usage: $0 [--radar-workspace]" >&2
+  exit 2
+fi
+APPDIR="$ROOT/target/appimage/$variant.AppDir"
+OUT="$ROOT/dist/${variant}-${ARCH}.AppImage"
 TOOL="$ROOT/packaging/appimagetool-${ARCH}.AppImage"
 
 echo "==> building release binary"
@@ -32,26 +45,30 @@ mkdir -p "$APPDIR/usr/lib/hookecho/piper"
 cp -a "$ROOT/target/piper/linux-x86_64/." "$APPDIR/usr/lib/hookecho/piper/"
 
 # Desktop entry (top level + the canonical applications dir).
-cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/hookecho.desktop"
+cp "$assets/$desktop.desktop" "$APPDIR/$desktop.desktop"
 mkdir -p "$APPDIR/usr/share/applications"
-cp "$ROOT/packaging/hookecho.desktop" "$APPDIR/usr/share/applications/hookecho.desktop"
+cp "$assets/$desktop.desktop" "$APPDIR/usr/share/applications/$desktop.desktop"
+if [[ "$desktop" == hookecho-radar-workspace ]]; then
+  cp "$assets/launcher" "$APPDIR/usr/bin/$desktop"
+  chmod +x "$APPDIR/usr/bin/$desktop"
+fi
 
 # Icon: the app logo, rendered by the binary we just built. Every hicolor size gets its own file
 # so the desktop picks one rather than scaling a 256 px PNG down to a 48 px slot itself.
 echo "==> rendering icons"
-"$APPDIR/usr/bin/hookecho" --headless-icon "$APPDIR/hookecho.png" 256
+"$APPDIR/usr/bin/hookecho" --headless-icon "$APPDIR/$desktop.png" 256
 for px in 48 64 128 256 512; do
   dir="$APPDIR/usr/share/icons/hicolor/${px}x${px}/apps"
   mkdir -p "$dir"
-  "$APPDIR/usr/bin/hookecho" --headless-icon "$dir/hookecho.png" "$px"
+  "$APPDIR/usr/bin/hookecho" --headless-icon "$dir/$desktop.png" "$px"
 done
 
 # AppStream metadata, so software centres have something to show.
 mkdir -p "$APPDIR/usr/share/metainfo"
-cp "$ROOT/packaging/io.hookecho.HookEcho.metainfo.xml" "$APPDIR/usr/share/metainfo/"
+cp "$assets/$metadata.metainfo.xml" "$APPDIR/usr/share/metainfo/"
 
 # AppRun adds the bundled voice engine to the process environment.
-cp "$ROOT/packaging/AppRun" "$APPDIR/AppRun"
+cp "$assets/AppRun" "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"
 
 # Fetch appimagetool if we don't have it.

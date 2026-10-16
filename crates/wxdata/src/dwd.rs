@@ -197,9 +197,20 @@ pub(crate) fn assemble(mut parts: Vec<(f32, Sweep)>) -> Vec<Sweep> {
     parts
         .into_iter()
         .enumerate()
-        // ponytail: the radials are cloned because nexrad-model exposes sweeps by reference only;
-        // it is one ~4 MB copy per volume, in a background task.
-        .map(|(i, (_, sweep))| Sweep::new(i as u8 + 1, sweep.radials().to_vec()))
+        // Each SCAN file numbers its own rays as elevation 1. Reindex both the sweep and rays;
+        // the viewer discards a cut when those numbers disagree. Preserve every moment and gate.
+        .map(|(i, (_, sweep))| {
+            let number = i as u8 + 1;
+            let radials = sweep.radials().iter().map(|r| Radial::new(
+                r.collection_timestamp(), r.azimuth_number(), r.azimuth_angle_degrees(),
+                r.azimuth_spacing_degrees(), r.radial_status(), number,
+                r.elevation_angle_degrees(), r.reflectivity().cloned(), r.velocity().cloned(),
+                r.spectrum_width().cloned(), r.differential_reflectivity().cloned(),
+                r.differential_phase().cloned(), r.correlation_coefficient().cloned(),
+                r.clutter_filter_power().cloned(),
+            )).collect();
+            Sweep::new(number, radials)
+        })
         .collect()
 }
 
@@ -598,6 +609,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
+        assert!(sweeps.iter().all(|s| s.radials().iter().all(|r| r.elevation_number() == s.elevation_number())));
     }
 
     /// The `-LATEST-` symlinks are DWD's convention, not a standard, and they are what makes this

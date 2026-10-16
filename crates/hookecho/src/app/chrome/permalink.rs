@@ -29,6 +29,14 @@ impl HookEchoApp {
     pub(crate) fn sync_permalink(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
+            let Some(win) = web_sys::window() else { return };
+            // A pasted fragment is an incoming navigation. The one-second deep-link poll has
+            // not necessarily seen it yet; rewriting the address bar from the old camera here
+            // would erase the destination before that poll can apply it.
+            if win.location().hash().ok().is_some_and(|hash|
+                hash.starts_with("#goto=") && self.last_goto_hash.as_deref() != Some(hash.as_str())) {
+                return;
+            }
             let Some(frag) = self.permalink_fragment() else {
                 return;
             };
@@ -39,7 +47,6 @@ impl HookEchoApp {
             if !self.permalink_due() {
                 return;
             }
-            let Some(win) = web_sys::window() else { return };
             // The rest of the URL is left exactly as it is — the recovery reload's `?relaunched`
             // lives in the query, and stamping over it would spend the retry it is tracking.
             if let Ok(h) = win.history() {
@@ -75,6 +82,9 @@ impl HookEchoApp {
             moment: Some(v.moment),
             tilt: Some(v.tilt),
             basemap: Some(v.basemap.slug().to_string()),
+            globe: Some(v.camera.globe),
+            pitch_deg: Some(v.camera.pitch_deg),
+            bearing_deg: Some(v.camera.bearing_deg),
             threshold: v.threshold_enabled[v.moment.index()]
                 .then(|| v.thresholds[v.moment.index()]),
             srv: v.srv,

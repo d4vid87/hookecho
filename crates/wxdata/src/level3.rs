@@ -67,6 +67,54 @@ pub static HCA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     supports_contours: false,
     supports_difference: false,
 };
+pub static DAA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.level3.daa"),
+    source: "NEXRAD Level III",
+    family: FieldFamily::Radar,
+    display_name: "Digital Accumulation Array",
+    short_name: "DAA",
+    search_aliases: &["radar one-hour precipitation", "digital rain accumulation"],
+    units: "mm",
+    value_kind: ValueKind::Scalar,
+    palette_key: "radar.level3.daa",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
+pub static OHA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.level3.oha"),
+    source: "NEXRAD Level III",
+    family: FieldFamily::Radar,
+    display_name: "One-Hour Precipitation Total",
+    short_name: "OHA",
+    search_aliases: &["one-hour accumulation", "radar precipitation total"],
+    units: "mm",
+    value_kind: ValueKind::Scalar,
+    palette_key: "radar.level3.oha",
+    sampling: SamplingPolicy::Nearest,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
+pub static DSA_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
+    id: FieldId("radar.level3.dsa"),
+    source: "NEXRAD Level III",
+    family: FieldFamily::Radar,
+    display_name: "Digital Storm Total Precipitation",
+    short_name: "DSA",
+    search_aliases: &["radar storm total", "storm rainfall"],
+    units: "mm",
+    value_kind: ValueKind::Scalar,
+    palette_key: "radar.level3.dsa",
+    sampling: SamplingPolicy::Bilinear,
+    missing: MissingData::Nan,
+    time_policy: None,
+    supports_contours: false,
+    supports_difference: false,
+};
 use std::collections::HashMap;
 
 const BUCKET: &str = "https://unidata-nexrad-level3.s3.amazonaws.com";
@@ -760,12 +808,20 @@ pub fn radial_to_field(
     bin_km: f64,
     decode_level: impl Fn(u8, &[i16; 16]) -> Option<f32>,
 ) -> Option<crate::mrms::MrmsField> {
+    radial_to_field_at_resolution(p, bin_km, 0.01, decode_level)
+}
+
+fn radial_to_field_at_resolution(
+    p: &Level3Product,
+    bin_km: f64,
+    resolution_deg: f64,
+    decode_level: impl Fn(u8, &[i16; 16]) -> Option<f32>,
+) -> Option<crate::mrms::MrmsField> {
     let ra = p.radial.as_ref()?;
     if ra.radials.is_empty() {
         return None;
     }
     let bin_km = if bin_km > 0.0 { bin_km } else { 1.0 };
-    const RES_DEG: f64 = 0.01;
     let (lat0, lon0) = (p.lat as f64, p.lon as f64);
     let max_range_km = (ra.first_bin + ra.nbins) as f64 * bin_km;
     let coslat = lat0.to_radians().cos().max(0.05);
@@ -773,8 +829,8 @@ pub fn radial_to_field(
     let dlon = max_range_km / (111.0 * coslat);
     let (lat_north, lat_south) = (lat0 + dlat, lat0 - dlat);
     let (lon_west, lon_east) = (lon0 - dlon, lon0 + dlon);
-    let nx = ((2.0 * dlon / RES_DEG).ceil() as usize).max(1);
-    let ny = ((2.0 * dlat / RES_DEG).ceil() as usize).max(1);
+    let nx = ((2.0 * dlon / resolution_deg).ceil() as usize).max(1);
+    let ny = ((2.0 * dlat / resolution_deg).ceil() as usize).max(1);
 
     // 720-slot azimuth LUT (0.5° each): each slot → the radial covering it.
     let mut az_lut = [usize::MAX; 720];
@@ -792,10 +848,10 @@ pub fn radial_to_field(
     let mut values = vec![f32::NAN; nx * ny];
     for gy in 0..ny {
         // Row 0 = north (matches MrmsField convention).
-        let lat = lat_north - (gy as f64 + 0.5) * RES_DEG;
+        let lat = lat_north - (gy as f64 + 0.5) * resolution_deg;
         let dy_km = (lat - lat0) * 111.0;
         for gx in 0..nx {
-            let lon = lon_west + (gx as f64 + 0.5) * RES_DEG;
+            let lon = lon_west + (gx as f64 + 0.5) * resolution_deg;
             let dx_km = (lon - lon0) * 111.0 * coslat;
             let range_km = (dx_km * dx_km + dy_km * dy_km).sqrt();
             let bin = (range_km / bin_km) as i64 - ra.first_bin as i64;
@@ -829,7 +885,7 @@ pub fn radial_to_field(
     })
 }
 
-fn product_time(p: &Level3Product) -> Option<chrono::DateTime<chrono::Utc>> {
+pub(crate) fn product_time(p: &Level3Product) -> Option<chrono::DateTime<chrono::Utc>> {
     if p.seconds_since_midnight >= 86_400 {
         return None;
     }
@@ -911,6 +967,40 @@ pub async fn fetch_hhc_frame(http: &reqwest::Client, site: &str) -> Option<Field
     field_frame(field, &HCA_DESCRIPTOR, source, received)
 }
 
+async fn fetch_accumulation_frame(
+    http: &reqwest::Client,
+    site: &str,
+    directory: &str,
+    code: i16,
+    descriptor: &'static FieldDescriptor,
+) -> Option<FieldFrame> {
+    let (p, source, received) =
+        fetch_tgftp_with_metadata(http, &l3_site(site).to_lowercase(), directory).await?;
+    if p.code != code { return None; }
+    // 0.005° (~0.5 km) keeps the 250 m gates legible without a multi-million-cell texture.
+    let field = radial_to_field_at_resolution(&p, 0.25, 0.005, nexrad_level3::accumulation_mm)?;
+    field_frame(field, descriptor, source, received)
+}
+
+/// Public NWS product 170: high-resolution, unbiased rolling one-hour accumulation.
+pub async fn fetch_daa_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
+    fetch_accumulation_frame(http, site, "170aa", 170, &DAA_DESCRIPTOR).await
+}
+
+/// Public NWS product 169: coarser 16-band one-hour precipitation total.
+pub async fn fetch_oha_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
+    let (p, source, received) =
+        fetch_tgftp_with_metadata(http, &l3_site(site).to_lowercase(), "169oh").await?;
+    if p.code != 169 { return None; }
+    let field = radial_to_field(&p, 2.0, nexrad_level3::accumulation_band_mm)?;
+    field_frame(field, &OHA_DESCRIPTOR, source, received)
+}
+
+/// Public NWS product 172: high-resolution accumulation since the radar's storm reset.
+pub async fn fetch_dsa_frame(http: &reqwest::Client, site: &str) -> Option<FieldFrame> {
+    fetch_accumulation_frame(http, site, "172dt", 172, &DSA_DESCRIPTOR).await
+}
+
 fn field_frame(
     field: crate::mrms::MrmsField,
     descriptor: &'static FieldDescriptor,
@@ -946,12 +1036,16 @@ async fn fetch_tgftp_with_metadata(
     ds: &str,
 ) -> Option<(Level3Product, String, chrono::DateTime<chrono::Utc>)> {
     let url = format!("{TGFTP}/DS.{ds}/SI.k{}/sn.last", site.to_lowercase());
+    // NOAA redirects a missing sn.last to a directory URL. The browser proxy rejects that
+    // redirect; native clients may follow it to an HTML error. Neither is radar data.
     let bytes = http
         .get(crate::net::fetch_url(&url))
         .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", crate::alerts::USER_AGENT)
         .send()
         .await
+        .ok()?
+        .error_for_status()
         .ok()?
         .bytes()
         .await
@@ -979,6 +1073,32 @@ fn last_key(xml: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_accumulation_samples_project_to_geographic_fields() {
+        for (bytes, code) in [
+            (&include_bytes!("../../nexrad-level3/tests/data/daa_tlx.l3")[..], 170),
+            (&include_bytes!("../../nexrad-level3/tests/data/dsa_tlx.l3")[..], 172),
+        ] {
+            let product = decode(bytes).expect("public Level III sample");
+            assert_eq!(product.code, code);
+            let field = radial_to_field_at_resolution(&product, 0.25, 0.005, nexrad_level3::accumulation_mm)
+                .expect("project accumulation grid");
+            assert!(field.nx > 800 && field.ny > 800);
+            assert!(field.values.iter().any(|v| v.is_finite() && *v > 0.0));
+            assert!(field.values.iter().all(|v| v.is_nan() || *v >= 0.0));
+        }
+    }
+
+    #[test]
+    fn public_oha_categories_project_to_a_coarser_field() {
+        let product = decode(include_bytes!("../../nexrad-level3/tests/data/oha_tlx.l3"))
+            .expect("public OHA 169");
+        let field = radial_to_field(&product, 2.0, nexrad_level3::accumulation_band_mm)
+            .expect("project OHA bands");
+        assert!(field.nx > 400 && field.ny > 400);
+        assert!(field.values.iter().any(|v| v.is_finite() && *v > 0.0));
+    }
 
     #[test]
     fn key_time_parses_the_s3_naming() {

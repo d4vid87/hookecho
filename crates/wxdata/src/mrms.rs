@@ -125,6 +125,18 @@ descriptor!(REFLECTIVITY_06_00_KM_DESCRIPTOR, "mrms.reflectivity-6-km", "Reflect
 descriptor!(REFLECTIVITY_06_50_KM_DESCRIPTOR, "mrms.reflectivity-6-5-km", "Reflectivity at 6.5 km MSL", "Reflectivity 6.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
 descriptor!(REFLECTIVITY_07_00_KM_DESCRIPTOR, "mrms.reflectivity-7-km", "Reflectivity at 7.0 km MSL", "Reflectivity 7.0 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
 descriptor!(REFLECTIVITY_07_50_KM_DESCRIPTOR, "mrms.reflectivity-7-5-km", "Reflectivity at 7.5 km MSL", "Reflectivity 7.5 km", "dBZ", Scalar, "reflectivity", Bilinear, true, ["constant altitude", "vertical level", "capppi"]);
+descriptor!(ALASKA_REFLECTIVITY_DESCRIPTOR, "mrms.alaska-composite-reflectivity", "Alaska composite reflectivity", "Alaska MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["alaska", "ak", "mosaic"]);
+descriptor!(HAWAII_REFLECTIVITY_DESCRIPTOR, "mrms.hawaii-composite-reflectivity", "Hawaii composite reflectivity", "Hawaii MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["hawaii", "hi", "mosaic"]);
+descriptor!(GUAM_REFLECTIVITY_DESCRIPTOR, "mrms.guam-composite-reflectivity", "Guam composite reflectivity", "Guam MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["guam", "gu", "mosaic"]);
+descriptor!(CARIB_REFLECTIVITY_DESCRIPTOR, "mrms.caribbean-composite-reflectivity", "Caribbean composite reflectivity", "Caribbean MRMS", "dBZ", Scalar, "reflectivity", Bilinear, true, ["caribbean", "puerto rico", "pr", "mosaic"]);
+descriptor!(ALASKA_PRECIP_RATE_DESCRIPTOR, "mrms.alaska-precip-rate", "Alaska precipitation rate", "Alaska Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["alaska", "rain rate"]);
+descriptor!(HAWAII_PRECIP_RATE_DESCRIPTOR, "mrms.hawaii-precip-rate", "Hawaii precipitation rate", "Hawaii Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["hawaii", "rain rate"]);
+descriptor!(GUAM_PRECIP_RATE_DESCRIPTOR, "mrms.guam-precip-rate", "Guam precipitation rate", "Guam Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["guam", "rain rate"]);
+descriptor!(CARIB_PRECIP_RATE_DESCRIPTOR, "mrms.caribbean-precip-rate", "Caribbean precipitation rate", "Caribbean Rain Rate", "mm/hr", Scalar, "precip-rate", Bilinear, true, ["caribbean", "puerto rico", "rain rate"]);
+descriptor!(ALASKA_RADAR_QPE_01H_DESCRIPTOR, "mrms.alaska-radar-qpe-1h", "Alaska radar-only one-hour precipitation", "Alaska Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["alaska", "rainfall", "radar only"]);
+descriptor!(HAWAII_RADAR_QPE_01H_DESCRIPTOR, "mrms.hawaii-radar-qpe-1h", "Hawaii radar-only one-hour precipitation", "Hawaii Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["hawaii", "rainfall", "radar only"]);
+descriptor!(GUAM_RADAR_QPE_01H_DESCRIPTOR, "mrms.guam-radar-qpe-1h", "Guam radar-only one-hour precipitation", "Guam Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["guam", "rainfall", "radar only"]);
+descriptor!(CARIB_RADAR_QPE_01H_DESCRIPTOR, "mrms.caribbean-radar-qpe-1h", "Caribbean radar-only one-hour precipitation", "Caribbean Radar QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["caribbean", "puerto rico", "rainfall", "radar only"]);
 
 pub struct CatalogProduct {
     pub descriptor: &'static FieldDescriptor,
@@ -143,7 +155,7 @@ impl CatalogProduct {
     }
 }
 
-pub static CATALOG: [CatalogProduct; 63] = [
+pub static CATALOG: [CatalogProduct; 75] = [
     CatalogProduct { descriptor: &ECHO_TOP_30_DESCRIPTOR, product: "CONUS/EchoTop_30_00.50", slug: "mrms-echo-top-30", description: "Height of the 30 dBZ storm top above ground" },
     CatalogProduct { descriptor: &ECHO_TOP_50_DESCRIPTOR, product: "CONUS/EchoTop_50_00.50", slug: "mrms-echo-top-50", description: "Height of the 50 dBZ core for storm-severity analysis" },
     CatalogProduct { descriptor: &ECHO_TOP_60_DESCRIPTOR, product: "CONUS/EchoTop_60_00.50", slug: "mrms-echo-top-60", description: "Height of the strongest 60 dBZ core" },
@@ -207,6 +219,19 @@ pub static CATALOG: [CatalogProduct; 63] = [
     CatalogProduct { descriptor: &REFLECTIVITY_06_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_06.50", slug: "mrms-reflectivity-6-5-km", description: "Quality-controlled reflectivity at 6.5 km MSL" },
     CatalogProduct { descriptor: &REFLECTIVITY_07_00_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.00", slug: "mrms-reflectivity-7-km", description: "Quality-controlled reflectivity at 7.0 km MSL" },
     CatalogProduct { descriptor: &REFLECTIVITY_07_50_KM_DESCRIPTOR, product: "CONUS/MergedReflectivityQC_07.50", slug: "mrms-reflectivity-7-5-km", description: "Quality-controlled reflectivity at 7.5 km MSL" },
+    // Append regional entries to preserve existing MrmsCatalog indices in saved workspaces.
+    CatalogProduct { descriptor: &ALASKA_REFLECTIVITY_DESCRIPTOR, product: "ALASKA/MergedReflectivityQCComposite_00.50", slug: "mrms-alaska-reflectivity", description: "NOAA MRMS composite reflectivity over Alaska" },
+    CatalogProduct { descriptor: &HAWAII_REFLECTIVITY_DESCRIPTOR, product: "HAWAII/MergedReflectivityQCComposite_00.50", slug: "mrms-hawaii-reflectivity", description: "NOAA MRMS composite reflectivity over Hawaii" },
+    CatalogProduct { descriptor: &GUAM_REFLECTIVITY_DESCRIPTOR, product: "GUAM/MergedReflectivityQCComposite_00.50", slug: "mrms-guam-reflectivity", description: "NOAA MRMS composite reflectivity over Guam" },
+    CatalogProduct { descriptor: &CARIB_REFLECTIVITY_DESCRIPTOR, product: "CARIB/MergedReflectivityQCComposite_00.50", slug: "mrms-caribbean-reflectivity", description: "NOAA MRMS composite reflectivity over the Caribbean" },
+    CatalogProduct { descriptor: &ALASKA_PRECIP_RATE_DESCRIPTOR, product: "ALASKA/PrecipRate_00.00", slug: "mrms-alaska-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over Alaska" },
+    CatalogProduct { descriptor: &HAWAII_PRECIP_RATE_DESCRIPTOR, product: "HAWAII/PrecipRate_00.00", slug: "mrms-hawaii-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over Hawaii" },
+    CatalogProduct { descriptor: &GUAM_PRECIP_RATE_DESCRIPTOR, product: "GUAM/PrecipRate_00.00", slug: "mrms-guam-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over Guam" },
+    CatalogProduct { descriptor: &CARIB_PRECIP_RATE_DESCRIPTOR, product: "CARIB/PrecipRate_00.00", slug: "mrms-caribbean-precip-rate", description: "Instantaneous NOAA MRMS precipitation rate over the Caribbean" },
+    CatalogProduct { descriptor: &ALASKA_RADAR_QPE_01H_DESCRIPTOR, product: "ALASKA/RadarOnly_QPE_01H_00.00", slug: "mrms-alaska-radar-qpe-1h", description: "One-hour radar-only precipitation over Alaska" },
+    CatalogProduct { descriptor: &HAWAII_RADAR_QPE_01H_DESCRIPTOR, product: "HAWAII/RadarOnly_QPE_01H_00.00", slug: "mrms-hawaii-radar-qpe-1h", description: "One-hour radar-only precipitation over Hawaii" },
+    CatalogProduct { descriptor: &GUAM_RADAR_QPE_01H_DESCRIPTOR, product: "GUAM/RadarOnly_QPE_01H_00.00", slug: "mrms-guam-radar-qpe-1h", description: "One-hour radar-only precipitation over Guam" },
+    CatalogProduct { descriptor: &CARIB_RADAR_QPE_01H_DESCRIPTOR, product: "CARIB/RadarOnly_QPE_01H_00.00", slug: "mrms-caribbean-radar-qpe-1h", description: "One-hour radar-only precipitation over the Caribbean" },
 ];
 descriptor!(ROTATION_DESCRIPTOR, "mrms.rotation-track", "Rotation track", "Rotation Track", "s⁻¹", Accumulation, "rotation", Nearest, false, ["rotation", "azimuthal shear"]);
 descriptor!(QPE_01H_DESCRIPTOR, "mrms.qpe-1h", "One-hour quantitative precipitation estimate", "QPE 1h", "mm", Accumulation, "qpe-1h", Nearest, false, ["rain", "precipitation"]);
@@ -220,7 +245,7 @@ descriptor!(PRECIP_RATE_DESCRIPTOR, "mrms.precip-rate", "Surface precipitation r
 descriptor!(PRECIP_TYPE_DESCRIPTOR, "mrms.precip-type", "Surface precipitation type", "Precip Type", "category", Categorical, "precip-type", Nearest, false, ["rain", "snow", "sleet"]);
 descriptor!(FLASH_ARI30_DESCRIPTOR, "mrms.flash-ari30", "30-minute flash-flood recurrence interval", "FLASH ARI", "yr", Scalar, "flash-flood", Bilinear, false, ["flood", "ari"]);
 
-pub static DESCRIPTORS: [&FieldDescriptor; 82] = [
+pub static DESCRIPTORS: [&FieldDescriptor; 94] = [
     &REFLECTIVITY_DESCRIPTOR,
     &LOW_LEVEL_REFLECTIVITY_DESCRIPTOR,
     &LIGHTNING_DESCRIPTOR,
@@ -303,6 +328,18 @@ pub static DESCRIPTORS: [&FieldDescriptor; 82] = [
     &PRECIP_RATE_DESCRIPTOR,
     &PRECIP_TYPE_DESCRIPTOR,
     &FLASH_ARI30_DESCRIPTOR,
+    &ALASKA_REFLECTIVITY_DESCRIPTOR,
+    &HAWAII_REFLECTIVITY_DESCRIPTOR,
+    &GUAM_REFLECTIVITY_DESCRIPTOR,
+    &CARIB_REFLECTIVITY_DESCRIPTOR,
+    &ALASKA_PRECIP_RATE_DESCRIPTOR,
+    &HAWAII_PRECIP_RATE_DESCRIPTOR,
+    &GUAM_PRECIP_RATE_DESCRIPTOR,
+    &CARIB_PRECIP_RATE_DESCRIPTOR,
+    &ALASKA_RADAR_QPE_01H_DESCRIPTOR,
+    &HAWAII_RADAR_QPE_01H_DESCRIPTOR,
+    &GUAM_RADAR_QPE_01H_DESCRIPTOR,
+    &CARIB_RADAR_QPE_01H_DESCRIPTOR,
 ];
 
 /// Source object path for a registered MRMS field.
@@ -669,6 +706,108 @@ pub async fn fetch_latest_frame(
     ))
 }
 
+/// List the most recent public objects for a product, oldest to newest.
+///
+/// MRMS publishes timestamped objects under a UTC day prefix. A normal day has fewer than the
+/// 2,000 keys requested here. Include yesterday around midnight so the loop does not collapse
+/// to a single frame when the date changes. This deliberately performs a full listing rather
+/// than using the incremental latest-key cursor, which would omit earlier loop frames.
+pub async fn recent_keys(
+    http: &reqwest::Client,
+    product: &str,
+    count: usize,
+) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(descriptor_for_product(product).is_some(), "unregistered MRMS product {product}");
+    anyhow::ensure!(count <= 32, "MRMS history is limited to 32 frames");
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let today = chrono::Utc::now().date_naive();
+    let yesterday = today.pred_opt().unwrap_or(today);
+    let mut keys = Vec::new();
+    for day in [today, yesterday] {
+        let prefix = format!("{product}/{}/", day.format("%Y%m%d"));
+        let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000");
+        let xml = http
+            .get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        keys.extend(listed_keys(&xml).into_iter().filter(|key| {
+            key.starts_with(&prefix) && key.ends_with(".grib2.gz")
+        }));
+        if keys.len() >= count {
+            break;
+        }
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    anyhow::ensure!(!keys.is_empty(), "no MRMS history found for {product}");
+    Ok(keys.into_iter().rev().take(count).collect::<Vec<_>>().into_iter().rev().collect())
+}
+
+/// Return up to `count` objects at or before a selected UTC instant, oldest first.
+///
+/// Listing is bounded to the selected UTC day and its predecessor. A request near midnight can
+/// therefore still build a complete short loop, without scanning the bucket's full archive.
+pub async fn history_keys_before(
+    http: &reqwest::Client,
+    product: &str,
+    at: chrono::DateTime<chrono::Utc>,
+    count: usize,
+) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(descriptor_for_product(product).is_some(), "unregistered MRMS product {product}");
+    anyhow::ensure!(count <= 32, "MRMS history is limited to 32 frames");
+    if count == 0 { return Ok(Vec::new()); }
+    let day = at.date_naive();
+    let yesterday = day.pred_opt().unwrap_or(day);
+    let mut keys = Vec::new();
+    for day in [day, yesterday] {
+        let prefix = format!("{product}/{}/", day.format("%Y%m%d"));
+        let url = format!("{BUCKET}/?list-type=2&prefix={prefix}&max-keys=2000");
+        let xml = http.get(crate::net::fetch_url(&url))
+            .timeout(crate::net::FEED_TIMEOUT).send().await?.error_for_status()?.text().await?;
+        keys.extend(listed_keys(&xml).into_iter().filter(|key| {
+            key.starts_with(&prefix) && key.ends_with(".grib2.gz")
+                && key_time(key).is_some_and(|time| time <= at)
+        }));
+        if keys.len() >= count { break; }
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    anyhow::ensure!(!keys.is_empty(), "no MRMS frames found before {} for {product}", at.to_rfc3339());
+    Ok(keys.into_iter().rev().take(count).collect::<Vec<_>>().into_iter().rev().collect())
+}
+
+/// Fetch one object selected from [`recent_keys`] through the same decoder and cache as live MRMS.
+pub async fn fetch_frame_key(
+    http: &reqwest::Client,
+    product: &str,
+    key: &str,
+) -> anyhow::Result<FieldFrame> {
+    let descriptor = descriptor_for_product(product)
+        .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
+    anyhow::ensure!(
+        key.starts_with(&format!("{product}/")) && key.ends_with(".grib2.gz"),
+        "MRMS key does not belong to {product}"
+    );
+    let (field, received_time) = fetch_key(http, product, key).await?;
+    let valid_time = field.time;
+    Ok(FieldFrame::new(descriptor, field, DataStamp {
+        source_identity: key.to_owned(),
+        issue_time: None,
+        run_time: None,
+        valid_time,
+        received_time,
+        class: DataClass::Analysis,
+        quality: QualitySummary::Unknown,
+        available_members: None,
+    }))
+}
+
 /// Registry metadata for a currently supported MRMS object path.
 pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor> {
     Some(match product {
@@ -953,6 +1092,19 @@ fn last_key(xml: &str) -> Option<String> {
     })
 }
 
+fn listed_keys(xml: &str) -> Vec<String> {
+    xml.split("<Key>")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("</Key>").map(|(key, _)| key.to_owned()))
+        .collect()
+}
+
+fn key_time(key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let suffix = key.rsplit_once('_')?.1.strip_suffix(".grib2.gz")?;
+    chrono::NaiveDateTime::parse_from_str(suffix, "%Y%m%d-%H%M%S")
+        .ok().map(|time| time.and_utc())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,6 +1134,16 @@ mod tests {
             Some("a/current.grib2.gz")
         );
         assert_eq!(listing_result("<ListBucketResult/>", None), None);
+    }
+
+    #[test]
+    fn history_listing_extracts_keys_in_order() {
+        let xml = "<ListBucketResult><Contents><Key>p/20261015/a.grib2.gz</Key></Contents><Contents><Key>p/20261015/b.grib2.gz</Key></Contents></ListBucketResult>";
+        assert_eq!(listed_keys(xml), ["p/20261015/a.grib2.gz", "p/20261015/b.grib2.gz"]);
+        assert!(listed_keys("<ListBucketResult/>").is_empty());
+        assert_eq!(key_time("p/MRMS_x_20261015-171258.grib2.gz")
+            .unwrap().format("%Y-%m-%d %H:%M:%S").to_string(), "2026-10-15 17:12:58");
+        assert!(key_time("p/unexpected.grib2.gz").is_none());
     }
 
     #[test]
@@ -1124,6 +1286,24 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), DESCRIPTORS.len());
+    }
+
+    #[test]
+    fn regional_products_preserve_saved_catalog_indices() {
+        assert_eq!(CATALOG[62].slug, "mrms-reflectivity-7-5-km");
+        for (index, region) in ["ALASKA", "HAWAII", "GUAM", "CARIB"].iter().enumerate() {
+            let entry = &CATALOG[63 + index];
+            assert!(entry.product.starts_with(&format!("{region}/")));
+            assert_eq!(product_for_id(entry.descriptor.id.0, 30, 60, 120), Some(entry.product));
+        }
+        for (offset, suffix) in [(0, "PrecipRate_00.00"), (4, "RadarOnly_QPE_01H_00.00")] {
+            for (index, region) in ["ALASKA", "HAWAII", "GUAM", "CARIB"].iter().enumerate() {
+                let entry = &CATALOG[67 + offset + index];
+                assert_eq!(entry.product, format!("{region}/{suffix}"));
+                assert_eq!(product_for_id(entry.descriptor.id.0, 30, 60, 120), Some(entry.product));
+                assert_eq!(descriptor_for_product(entry.product).map(|descriptor| descriptor.id), Some(entry.descriptor.id));
+            }
+        }
     }
 
     #[test]

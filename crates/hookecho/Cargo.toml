@@ -62,9 +62,8 @@ bytemuck.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger = "0.11"
-# `ico` is added native-only below, and so is `gif`: both are encoder-only formats here — the loop
-# exporter cannot write a file from a browser tab, so its codec was pure weight on the web.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Browser and desktop loop exports share GIF encoding; ICO and WebP remain native-only.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 chrono.workspace = true
 # Deep links arrive percent-encoded from browsers and chat clients; reqwest already builds this.
 percent-encoding = "2.3"
@@ -107,9 +106,8 @@ rodio = { version = "0.19", default-features = false, features = ["wav", "mp3", 
 # Already compiled as rodio's mp3 backend; named directly so the weather-radio player can decode a
 # live stream, which rodio's own `Decoder` can't (it needs `Seek`).
 symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
-# `--headless-icon` (main.rs) is the only ico writer, and there is no bin on the web; the loop
-# exporter is the only gif writer, and it needs a filesystem.
-image = { version = "0.25", default-features = false, features = ["ico", "gif", "webp"] }
+# `--headless-icon` (main.rs) is the only ICO writer; web builds need neither ICO nor WebP.
+image = { version = "0.25", default-features = false, features = ["ico", "webp"] }
 
 # The web build. wgpu's backends are feature-unioned per platform below, and wasm has to name its
 # own: without these the browser build compiles and then finds zero adapters at runtime. WebGPU

@@ -31,7 +31,12 @@ pub struct CasePane {
 pub struct CaseStroke {
     pub points: Vec<[f64; 2]>,
     pub rgba: [u8; 4],
+    /// Pixels at the exported viewport; older case files used the 2.5 px default.
+    #[serde(default = "default_stroke_width")]
+    pub width: f32,
 }
+
+fn default_stroke_width() -> f32 { 2.5 }
 
 impl CaseManifest {
     pub fn new(
@@ -136,8 +141,8 @@ impl CaseManifest {
                 && self
                     .annotations
                     .iter()
-                    .all(|stroke| stroke.points.len() <= 100_000),
-            "case contains too many annotation points"
+                    .all(|stroke| stroke.points.len() <= 100_000 && stroke.width.is_finite() && (1.0..=12.0).contains(&stroke.width)),
+            "case contains too many annotation points or an invalid pen width"
         );
         anyhow::ensure!(
             self.bookmarks.len() <= 2048,
@@ -181,6 +186,7 @@ mod tests {
             vec![CaseStroke {
                 points: vec![[-97.3, 35.3], [-97.2, 35.4]],
                 rgba: [255, 80, 80, 255],
+                width: 2.5,
             }],
             Vec::new(),
         )
@@ -189,6 +195,9 @@ mod tests {
             CaseManifest::from_json(&manifest.to_json().unwrap()).unwrap(),
             manifest
         );
+        let mut legacy: serde_json::Value = serde_json::from_str(&manifest.to_json().unwrap()).unwrap();
+        legacy["annotations"][0].as_object_mut().unwrap().remove("width");
+        assert_eq!(CaseManifest::from_json(&legacy.to_string()).unwrap().annotations[0].width, 2.5);
         let report = manifest.to_markdown().unwrap();
         assert!(report.contains("# May 25 outbreak"));
         assert!(report.contains("`KTLX20240526_013000_V06`"));

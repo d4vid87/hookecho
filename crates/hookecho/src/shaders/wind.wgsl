@@ -29,6 +29,7 @@ struct Wind {
     opacity: f32,
     point_px: f32,
     globe: vec4<f32>,
+    planar: vec4<f32>,
     trail: vec4<f32>,
 };
 
@@ -174,6 +175,14 @@ fn vs_points(
     );
     let px = w.point_px * w.world_per_px * w.scale * 0.5;
     out.clip = vec4<f32>(base + corner[vi] * px, 0.0, 1.0);
+    if (w.globe.z == 0.0) {
+        let q = (world - w.center) / w.world_per_px * vec2<f32>(1.0, -1.0);
+        let r = vec2<f32>(w.planar.x * q.x - w.planar.y * q.y,
+            w.planar.y * q.x + w.planar.x * q.y);
+        let cw = 1.0 + r.y * w.planar.w;
+        let clip_scale = w.scale * w.world_per_px * vec2<f32>(1.0, -1.0);
+        out.clip = vec4<f32>(r * vec2<f32>(1.0, w.planar.z) * clip_scale + corner[vi] * px * cw, 0.0, cw);
+    }
 
     // The shared WIND ramp, baked into a 256x1 LUT: 0..60 m/s across the table.
     let t = clamp(length(wind_at(p)) / 60.0, 0.0, 0.999);

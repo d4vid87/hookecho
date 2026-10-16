@@ -147,7 +147,7 @@ pub fn compass(deg: f32) -> &'static str {
 pub fn paint_path(painter: &egui::Painter, camera: &crate::render::mercator::Camera, rect: egui::Rect, points: &[[f64; 2]], stroke: egui::Stroke) {
     let vp = (rect.width(), rect.height());
     let world = |ll: [f64; 2]| crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
-    if !camera.globe {
+    if !camera.globe && camera.pitch_deg == 0.0 {
         let points = points.iter().map(|&ll| {
             let p = camera.world_to_screen(world(ll), vp);
             rect.min + egui::vec2(p.0, p.1)
@@ -166,7 +166,7 @@ pub fn paint_path(painter: &egui::Painter, camera: &crate::render::mercator::Cam
 pub fn project_ring(camera: &crate::render::mercator::Camera, rect: egui::Rect, points: &[[f64; 2]]) -> Vec<egui::Pos2> {
     if points.len() < 3 { return Vec::new(); }
     let vp = (rect.width(), rect.height());
-    if !camera.globe {
+    if !camera.globe && camera.pitch_deg == 0.0 {
         return points.iter().map(|p| {
             let world = crate::render::mercator::lonlat_to_world(p[0],p[1]);
             let p = camera.world_to_screen(world,vp);
@@ -200,7 +200,7 @@ pub fn paint_image(painter: &egui::Painter, camera: &crate::render::mercator::Ca
                 let screen = camera.world_to_screen(world,vp);
                 (world, egui::epaint::Vertex { pos: rect.min + egui::vec2(screen.0,screen.1), uv: egui::pos2(uv.x,uv.y), color: egui::Color32::WHITE })
             });
-            if vertices.iter().all(|(world,_)| camera.world_visible(*world)) {
+            if vertices.iter().all(|(world,_)| camera.point_visible(*world, vp)) {
                 let base = mesh.vertices.len() as u32;
                 mesh.vertices.extend(vertices.map(|(_,vertex)| vertex));
                 mesh.add_triangle(base,base+1,base+2);

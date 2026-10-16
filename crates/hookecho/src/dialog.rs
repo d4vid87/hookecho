@@ -22,9 +22,8 @@ pub enum Saved {
 /// Save `bytes` under `default_name`. The whole-file form: the caller has the content in hand, so
 /// the browser can hand it to the user as a download and no call site needs a path at all.
 ///
-/// ponytail: byte-sized exports only. A screenshot or a loop export picks its destination before
-/// it has any content to write and streams into it, which is why those still go through
-/// [`save_path`] and stay native-only.
+/// Browser screenshots can be PNG-encoded in memory and use this download path; native loop
+/// exports still choose a destination before capture and write through [`save_path`].
 pub fn save_bytes(default_name: &str, ext: &str, bytes: &[u8]) -> Saved {
     #[cfg(target_arch = "wasm32")]
     {
@@ -394,9 +393,18 @@ mod web_save {
         a.set_href(&url);
         a.set_download(name);
         a.click();
-        // The click is synchronous, so by here the browser has taken what it needs. Holding the
-        // URL any longer pins the whole blob in memory for the life of the document.
-        web_sys::Url::revoke_object_url(&url)?;
+        // A large GIF is generated after the originating click and the browser may not take the
+        // Blob until a later task. Revoking here can silently cancel the download while `click()`
+        // still returns success. Release it after a bounded handoff window instead.
+        let revoke = Closure::once_into_js(move || {
+            let _ = web_sys::Url::revoke_object_url(&url);
+        });
+        web_sys::window()
+            .ok_or_else(|| JsValue::from_str("no window"))?
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                revoke.unchecked_ref(),
+                60_000,
+            )?;
         Ok(())
     }
 }

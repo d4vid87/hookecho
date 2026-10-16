@@ -1,7 +1,6 @@
 //! Compact storm detail rail with the complete SCIT reading one click away.
 use crate::theme;
 use wxdata::level3::Cell;
-const KT_TO_MPH: f32 = 1.150_78;
 
 /// A SCIT projection must not use a genuinely future product or an old motion estimate. Level II
 /// is timestamped near volume start while SCIT arrives near volume end, so one normal volume of
@@ -36,6 +35,7 @@ pub fn show(
     trend: &[CellSample],
     following: bool,
     tz: Option<wxdata::tz::Tz>,
+    track_rules: &crate::settings::PriorityRules,
     popovers: &mut crate::ui::popover::Popovers,
 ) -> (bool, bool, bool) {
     let (mut open, mut follow, mut view3d) = (true, false, false);
@@ -83,7 +83,7 @@ pub fn show(
             );
             ui.add_space(16.0);
             let movement = match (cell.mvt_deg, cell.mvt_kt) {
-                (Some(d), Some(k)) => format!("{} · {:.0} mph", crate::geo::compass(d), k * KT_TO_MPH),
+                (Some(d), Some(k)) => format!("{} · {}", crate::geo::compass(d), track_rules.format_track_speed(k)),
                 _ => "—".into(),
             };
             metric(ui, "Motion", movement, match (cell.mvt_deg, cell.mvt_kt) {
@@ -108,7 +108,7 @@ pub fn show(
                 if error_km(cell).is_none() {
                     ui.weak("Unable to estimate arrival reliably: source error information unavailable.");
                 }
-                attributes(ui, cell, trend);
+                attributes(ui, cell, trend, track_rules);
                 ui.small("Source: radar SCIT · Motion estimates are not official warnings or forecasts.");
                 });
             ui.add_space(16.0);
@@ -160,9 +160,9 @@ fn value(ui: &mut egui::Ui, label: &str, value: String) {
     ui.add_space(5.0);
 }
 /// Shared with the selected detail pane; includes missing and populated fields.
-pub(crate) fn attributes(ui: &mut egui::Ui, c: &Cell, trend: &[CellSample]) {
+pub(crate) fn attributes(ui: &mut egui::Ui, c: &Cell, trend: &[CellSample], track_rules: &crate::settings::PriorityRules) {
     let movement = match (c.mvt_deg, c.mvt_kt) {
-        (Some(d), Some(k)) => format!("{} · {k:.0} kt", crate::geo::compass(d)),
+        (Some(d), Some(k)) => format!("{} · {}", crate::geo::compass(d), track_rules.format_track_speed(k)),
         _ => "—".into(),
     };
     let groups = [
@@ -197,7 +197,7 @@ pub(crate) fn attributes(ui: &mut egui::Ui, c: &Cell, trend: &[CellSample]) {
         (
             "MOTION & FEATURES",
             vec![
-                ("Speed", opt(c.mvt_kt.map(|k| k * KT_TO_MPH), " mph", 0)),
+                ("Speed", c.mvt_kt.map(|k| track_rules.format_track_speed(k)).unwrap_or_else(|| "—".into())),
                 ("Direction", opt(c.mvt_deg, "°", 0)),
                 (
                     "Hail probability",
@@ -321,7 +321,7 @@ mod tests {
             };
             let output = ctx.run_ui(input, |ui| {
                 assert_eq!(
-                    show(ui.ctx(), &cell, &[], false, None, &mut popovers),
+                    show(ui.ctx(), &cell, &[], false, None, &crate::settings::PriorityRules::default(), &mut popovers),
                     (true, false, false)
                 );
             });

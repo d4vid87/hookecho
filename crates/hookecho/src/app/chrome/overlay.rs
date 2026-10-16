@@ -7,6 +7,38 @@
 use super::*;
 use crate::ui::a11y::Named as _;
 
+fn matching_sites(query: &str, limit: usize) -> Vec<&'static wxdata::sites::SiteEntry> {
+    let needle = query.trim().to_ascii_lowercase();
+    if needle.is_empty() { return Vec::new(); }
+    let mut sites: Vec<_> = wxdata::sites::all().filter_map(|site| {
+        let id = site.id.to_ascii_lowercase();
+        let city = site.city.to_ascii_lowercase();
+        let state = site.state.to_ascii_lowercase();
+        let rank = if id == needle { 0 }
+            else if id.starts_with(&needle) { 1 }
+            else if city.starts_with(&needle) { 2 }
+            else if id.contains(&needle) { 3 }
+            else if city.contains(&needle) { 4 }
+            else if state == needle { 5 }
+            else { return None; };
+        Some((rank, site))
+    }).collect();
+    sites.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(b.1.id)));
+    sites.into_iter().take(limit).map(|(_, site)| site).collect()
+}
+
+#[cfg(test)]
+mod site_search_tests {
+    use super::matching_sites;
+
+    #[test]
+    fn exact_site_id_leads_mixed_network_search() {
+        assert_eq!(matching_sites("tdfw", 3)[0].id, "TDFW");
+        assert_eq!(matching_sites("KEAX", 3)[0].id, "KEAX");
+        assert!(matching_sites("Kansas City", 6).iter().any(|site| site.id == "KEAX"));
+    }
+}
+
 /// The floating panel's geometry: left margin, top offset, width.
 const PANEL_X: f32 = 10.0;
 // Keep the menu/search pill visible above the panel so there is always a way back.
@@ -66,6 +98,7 @@ impl HookEchoApp {
             "Open Details beside a row to learn what it does \u{2014} including what the \
              abbreviation means",
         );
+        let spotter_options_was = (self.settings.spotter_range_km, self.settings.spotter_max_age_minutes);
         let accent = crate::theme::accent(self.settings.theme);
         let entries = self.palette_entries();
         let mut query = std::mem::take(&mut self.layers_query);
@@ -83,15 +116,39 @@ impl HookEchoApp {
         let settings_page_was = settings_page;
         let (alert_count, _) = self.alert_badge();
         let bounds = self.view_bounds();
-        let feats = self.active_alert_features().to_vec();
+        let feats = if alerts_tab {
+            self.active_alert_features().to_vec()
+        } else {
+            Vec::new()
+        };
         let mut muted = self.settings.mute_alerts;
         let mut alert_hit = None;
         let mut export_alerts = false;
         // Read before the panel closure: the Layer options callback runs inside a `&mut self`
         // borrow and can only touch plain fields, not `&self` methods.
-        let l3_site = self.l3grid_site.clone();
+        let l3_site = self.views[self.active].site.clone();
         let tz = self.active_tz();
         let mosaic = self.mosaic_status();
+        let cpc_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("CPC outlook"));
+        let cpc_feature_count = self.cpc_features.len();
+        let fire_weather_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("SPC fire weather"));
+        let fire_weather_feature_count = self.fire_weather_features.len();
+        let winter_snow_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("Winter snow probability"));
+        let winter_ice_health = self.overlay_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health(&RequestLane::Feed("Winter ice probability"));
+        let winter_snow_feature_count = self.winter_snow_features.len();
+        let winter_ice_feature_count = self.winter_ice_features.len();
         let analysis_point = crate::render::mercator::world_to_lonlat(
             self.views[self.active].camera.center.0,
             self.views[self.active].camera.center.1,
@@ -168,14 +225,7 @@ impl HookEchoApp {
                     if query.trim().is_empty() {
                         ui.weak("Type a place, radar site, product, or tool");
                     } else {
-                        let needle = query.trim().to_ascii_lowercase();
-                        let sites: Vec<_> = wxdata::sites::all()
-                            .filter(|site| {
-                                site.id.to_ascii_lowercase().contains(&needle)
-                                    || site.city.to_ascii_lowercase().contains(&needle)
-                            })
-                            .take(6)
-                            .collect();
+                        let sites = matching_sites(&query, 6);
                         if !sites.is_empty() { ui.label("Radar sites"); }
                         for site in sites {
                             if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}, {}", site.id, site.city, site.state))).clicked() {
@@ -191,7 +241,7 @@ impl HookEchoApp {
                             hide = true;
                         }
                         let hits = crate::ui::layers_panel::matches(&entries, &query);
-                        for (group, category) in [("Radar sites and products", "Radar"), ("Layers", "National"), ("Severe weather", "Severe"), ("Tools", "Tools")] {
+                        for (group, category) in [("Radar sites and products", "Radar"), ("Site radar products", "Radar site"), ("Layers", "National"), ("Severe weather", "Severe"), ("Tools", "Tools")] {
                             let group_hits: Vec<_> = hits.iter().copied().filter(|&i| entries[i].category == category).take(8).collect();
                             if !group_hits.is_empty() { ui.label(group); }
                             for i in group_hits {
@@ -203,7 +253,7 @@ impl HookEchoApp {
                             }
                         }
                         // Remaining catalog families stay reachable without adding another menu.
-                        for i in hits.into_iter().filter(|&i| !["Radar", "National", "Severe", "Tools"].contains(&entries[i].category)).take(8) {
+                        for i in hits.into_iter().filter(|&i| !["Radar", "Radar site", "National", "Severe", "Tools"].contains(&entries[i].category)).take(8) {
                             if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(format!("{} · {}", entries[i].category, entries[i].label))).clicked() {
                                 chosen = Some(entries[i].action);
                                 focus_search = false;
@@ -287,6 +337,8 @@ impl HookEchoApp {
                                 ui.ctx().data_mut(|d| d.remove::<&'static str>(section_id));
                             } else {
                                 settings_page = None;
+                                all_controls = true;
+                                selected_card = Some(PanelSection::Tools);
                             }
                         }
                         ui.label(
@@ -307,23 +359,31 @@ impl HookEchoApp {
                     ui.add_space(10.0);
                     if page == "Map settings" {
                         self.map_rows(ui, &mut opts);
-                    } else if page == "Outlooks" {
+                    } else if page == "Outlooks" || page == "Spotters" {
                         ui.ctx().data_mut(|d| {
-                            d.insert_temp(ui.id().with("layer_settings_section"), "Outlooks")
+                            d.insert_temp(ui.id().with("layer_settings_section"), page)
                         });
                         let glm_options = self.show_glm
                             || self.views[self.active]
                                 .fields_on
                                 .contains(&crate::render::FieldLayer::GlmFed);
+                        let ero_archive_empty = self.filters.ero_archive.is_some()
+                            && self.ero_loaded.as_ref()
+                                == Some(&(self.filters.ero_day, self.filters.ero_archive.clone()))
+                            && self.ero_features.is_empty();
                         crate::ui::layer_options::show(
                             ui,
                             &mut self.filters,
+                            &self.ero_issues,
+                            ero_archive_empty,
+                            &mut self.settings.priority_rules,
                             &mut self.fields,
                             &self.views[self.active].fields_on.clone(),
                             &mut self.rotation_minutes,
                             &mut self.reflectivity_trail_minutes,
                             &mut self.reflectivity_trail_threshold,
                             &mut self.hail_minutes,
+                            &mut self.hail_threshold_inches,
                             &mut self.hrrr_fcst_hour,
                             &mut self.refs_fcst_hour,
                             &mut self.refs_dbz_threshold,
@@ -355,10 +415,19 @@ impl HookEchoApp {
                             self.show_spotters,
                             self.show_local_tracks,
                             &mut self.settings.spotter_range_km,
+                            &mut self.settings.spotter_max_age_minutes,
                             &mut self.settings.detectors,
                             Some(mosaic.as_str()),
                             self.gefs_distribution.as_ref(),
                             self.gefs_postage.as_ref(),
+                            &cpc_health,
+                            cpc_feature_count,
+                            &fire_weather_health,
+                            fire_weather_feature_count,
+                            &winter_snow_health,
+                            &winter_ice_health,
+                            winter_snow_feature_count,
+                            winter_ice_feature_count,
                             &mut opts,
                         );
                     } else {
@@ -399,6 +468,9 @@ impl HookEchoApp {
                 }
                 // A drag rewrites the order in place, so persist it when it moves.
                 let order_was = self.settings.layer_order.clone();
+                let site_query_before = query.clone();
+                let site_hits = if split_library { matching_sites(&query, 3) } else { Vec::new() };
+                let site_hits_present = !site_hits.is_empty();
                 let optional_action = ui::layers_panel::body(
                     ui,
                     &entries,
@@ -408,7 +480,12 @@ impl HookEchoApp {
                     // height. In the sheet there is no height to read yet — it scrolls — so
                     // the tree takes half the screen and the rest scrolls past it.
                     if split_library {
-                        (ctx.content_rect().height() - 330.0).clamp(280.0, 600.0)
+                        let available = ctx.content_rect().height() - 330.0;
+                        if !site_hits_present {
+                            available.clamp(280.0, 600.0)
+                        } else {
+                            (available - 100.0).clamp(180.0, 500.0)
+                        }
                     } else if sheets_layout {
                         chrome.height() * 0.5
                     } else {
@@ -428,15 +505,23 @@ impl HookEchoApp {
                                     || self.views[self.active]
                                         .fields_on
                                         .contains(&crate::render::FieldLayer::GlmFed);
+                                let ero_archive_empty = self.filters.ero_archive.is_some()
+                                    && self.ero_loaded.as_ref()
+                                        == Some(&(self.filters.ero_day, self.filters.ero_archive.clone()))
+                                    && self.ero_features.is_empty();
                                 crate::ui::layer_options::show(
                                     ui,
                                     &mut self.filters,
+                                    &self.ero_issues,
+                                    ero_archive_empty,
+                                    &mut self.settings.priority_rules,
                                     &mut self.fields,
                                     &self.views[self.active].fields_on.clone(),
                                     &mut self.rotation_minutes,
                                     &mut self.reflectivity_trail_minutes,
                                     &mut self.reflectivity_trail_threshold,
                                     &mut self.hail_minutes,
+                                    &mut self.hail_threshold_inches,
                                     &mut self.hrrr_fcst_hour,
                                     &mut self.refs_fcst_hour,
                                     &mut self.refs_dbz_threshold,
@@ -468,10 +553,19 @@ impl HookEchoApp {
                                     self.show_spotters,
                                     self.show_local_tracks,
                                     &mut self.settings.spotter_range_km,
+                                    &mut self.settings.spotter_max_age_minutes,
                                     &mut self.settings.detectors,
                                     Some(mosaic.as_str()),
                                     self.gefs_distribution.as_ref(),
                                     self.gefs_postage.as_ref(),
+                                    &cpc_health,
+                                    cpc_feature_count,
+                                    &fire_weather_health,
+                                    fire_weather_feature_count,
+                                    &winter_snow_health,
+                                    &winter_ice_health,
+                                    winter_snow_feature_count,
+                                    winter_ice_feature_count,
                                     &mut opts,
                                 );
                             });
@@ -486,6 +580,16 @@ impl HookEchoApp {
                 // matches rank first, and this row is the explicit "I meant a place" answer.
                 if !query.trim().is_empty() {
                     ui.add_space(4.0);
+                    if split_library {
+                        let sites = if query == site_query_before { site_hits } else { matching_sites(&query, 3) };
+                        if !sites.is_empty() { ui.label("Radar sites"); }
+                        for site in sites {
+                            if ui.add_sized([ui.available_width(), 34.0], egui::Button::new(format!("{} · {}, {}", site.id, site.city, site.state))).clicked() {
+                                picked_site = Some(site.id.to_string());
+                                hide = true;
+                            }
+                        }
+                    }
                     let w = ui.available_width();
                     if ui
                         .add(
@@ -504,6 +608,7 @@ impl HookEchoApp {
                         .clicked()
                     {
                         fly_to = Some(query.trim().to_string());
+                        hide = true;
                     }
                 }
                 if !split_library {
@@ -580,6 +685,7 @@ impl HookEchoApp {
                 });
             self.mobile_occlusion.push(panel.response.rect);
         } else {
+            let mut floating_scroll_offset = 0.0;
             let panel = egui::Area::new(egui::Id::new("panel"))
                 .constrain_to(chrome)
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(if context_bar { 16.0 } else { PANEL_X }, panel_top))
@@ -596,15 +702,50 @@ impl HookEchoApp {
                     if wide_library {
                         body(ui);
                     } else {
-                    egui::ScrollArea::vertical()
+                    let scroll = egui::ScrollArea::vertical()
                             .id_salt(("floating_panel_scroll", settings_page_was, section))
                         .max_height(max_h)
                         .show(ui, |ui| {
                             body(ui);
                         });
+                    floating_scroll_offset = scroll.state.offset.y;
                     }
                 });
             self.mobile_occlusion.push(panel.response.rect);
+            if settings_page_was == Some("Outlooks")
+                && settings_page == Some("Outlooks")
+                && floating_scroll_offset > 60.0
+            {
+                egui::Area::new("outlooks_sticky_header".into())
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(panel.response.rect.min)
+                    .show(ctx, |ui| {
+                        egui::Frame::new()
+                            .fill(egui::Color32::from_rgb(29, 36, 41))
+                            .stroke(ui.visuals().window_stroke)
+                            .inner_margin(egui::Margin::symmetric(12, 8))
+                            .show(ui, |ui| {
+                                ui.set_width(panel.response.rect.width() - 24.0);
+                                ui.horizontal(|ui| {
+                                    if ui.button("‹ All controls").clicked() {
+                                        settings_page = None;
+                                        all_controls = true;
+                                        selected_card = Some(PanelSection::Tools);
+                                    }
+                                    ui.heading("Outlooks");
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.button(egui_phosphor::regular::X)
+                                            .named("Close settings panel").clicked() {
+                                            hide = true;
+                                        }
+                                    });
+                                });
+                            });
+                    });
+            }
+        }
+        if spotter_options_was != (self.settings.spotter_range_km, self.settings.spotter_max_age_minutes) {
+            self.settings.save();
         }
         ctx.data_mut(|d| { d.insert_temp(settings_id, settings_page); d.insert_temp(all_id, all_controls); });
         self.panel_section = selected_card.unwrap_or(if home { PanelSection::Radar } else { section });
@@ -647,19 +788,32 @@ impl HookEchoApp {
             self.apply_palette(a, ctx);
         }
         if let Some(site) = picked_site {
-            self.views[self.active].site = Some(site);
+            self.geocode_nav = None;
+            self.place_status = None;
+            if let Some(entry) = wxdata::sites::site_by_id(&site) {
+                let zoom = self.views[self.active].camera.zoom.max(8.0);
+                self.goto_view(&site, entry.longitude as f64, entry.latitude as f64, zoom, None);
+            }
             self.layers_query.clear();
         }
         if let Some(place) = fly_to {
-            if sheets_layout { self.layers_query.clear(); }
-            self.geocode_nav = true;
+            self.layers_query.clear();
+            self.geocode_request_next = self.geocode_request_next.wrapping_add(1);
+            let request_id = self.geocode_request_next;
+            let view = &self.views[self.active];
+            self.geocode_nav = Some(super::GeocodeNavigation {
+                request_id,
+                view_index: self.active,
+                camera: view.camera,
+                site: view.site.clone(),
+            });
             self.save_offer = None; // a new search retires the previous offer
             self.place_status = Some(("Searching…".to_string(), Instant::now()));
             let http = self.http.clone();
             let tx = self.geocode_tx.clone();
             let ctx2 = ctx.clone();
             self.spawner.spawn(async move {
-                let _ = tx.send(wxdata::geocode::search(&http, &place).await);
+                let _ = tx.send((request_id, wxdata::geocode::search(&http, &place).await));
                 ctx2.request_repaint();
             });
         }
@@ -668,7 +822,12 @@ impl HookEchoApp {
     /// Fixed mode, section, and search controls remain reachable above the scrolling panel.
     pub(crate) fn search_pill(&mut self, ctx: &egui::Context) {
         if !phone(ctx) {
-            self.clearview_controls(ctx);
+            if self.settings.radar_workspace {
+                self.omega_workspace_controls(ctx);
+                self.omega_display_settings(ctx);
+            } else {
+                self.clearview_controls(ctx);
+            }
             return;
         }
         let mut switch_to = None;

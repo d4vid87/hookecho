@@ -18,9 +18,8 @@ impl HookEchoApp {
                 .as_deref()
                 .unwrap_or_else(|| view.moment.short_name());
             let valid = view
-                .volume
-                .as_ref()
-                .map(|volume| volume.time.format("%H:%MZ").to_string())
+                .displayed_time()
+                .map(|time| time.format("%H:%MZ").to_string())
                 .unwrap_or_else(|| "waiting".into());
             egui::Area::new("broadcast_source".into())
                 .anchor(egui::Align2::LEFT_TOP, egui::vec2(margin, margin))
@@ -268,6 +267,7 @@ impl HookEchoApp {
         // sentence of instructions as the only sign anything changed.
         let (glyph, name, hint) = match self.tool {
             MapTool::Measure => (ph::RULER, "Measure", "click two points"),
+            MapTool::StormTrack => (ph::PATH, "Storm track", "click storm center, then projected endpoint"),
             MapTool::RegionStats => (ph::SELECTION, "Area statistics", "click two corners"),
             MapTool::Marker => (ph::MAP_PIN, "Drop marker", "click the map"),
             MapTool::CrossSection => (ph::CHART_LINE, "Cross-section", "click two points"),
@@ -276,7 +276,7 @@ impl HookEchoApp {
             MapTool::Chase => (ph::CROSSHAIR, "Chase", "click your location"),
             MapTool::Route => (ph::PATH, "Route", "click start, waypoints, destination"),
             MapTool::Climatology => (ph::TORNADO, "Climatology", "click a point"),
-            MapTool::Draw => (ph::PENCIL_SIMPLE, "Draw", "drag to scribble"),
+            MapTool::Draw => (ph::PENCIL_SIMPLE, "Draw", "drag to draw or erase"),
             MapTool::AlertZone => (
                 ph::POLYGON,
                 "Watch zone",
@@ -305,7 +305,7 @@ impl HookEchoApp {
             )
             // The draw tool's chip carries buttons; the rest are read-only hints that must never
             // swallow a click meant for the map underneath.
-            .interactable(self.tool == MapTool::Draw)
+            .interactable(matches!(self.tool, MapTool::Draw | MapTool::StormTrack))
             .show(ctx, |ui| {
                 style::glass(ui, 238).show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -326,34 +326,57 @@ impl HookEchoApp {
                             return;
                         }
                         ui.separator();
-                        for c in DRAW_COLORS {
-                            let sel = self.draw_color == c;
-                            let (rect, resp) = ui
-                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
-                            let p = ui.painter_at(rect);
-                            p.circle_filled(rect.center(), 7.0, c);
-                            if sel {
-                                p.circle_stroke(
-                                    rect.center(),
-                                    8.5,
-                                    egui::Stroke::new(1.5, egui::Color32::WHITE),
-                                );
-                            }
-                            if resp.clicked() {
-                                self.draw_color = c;
-                            }
+                        if ui.selectable_label(!self.draw_eraser, "Pencil").clicked() {
+                            self.draw_eraser = false;
                         }
+                        if ui.selectable_label(self.draw_eraser, "Eraser").on_hover_text("Drag across a drawing to erase the touched portion").clicked() {
+                            self.draw_eraser = true;
+                        }
+                        ui.add_enabled_ui(!self.draw_eraser, |ui| {
+                            ui.menu_button("Pen", |ui| {
+                                ui.horizontal(|ui| {
+                                    for c in DRAW_COLORS {
+                                        let sel = self.draw_color == c;
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(24.0, 24.0), egui::Sense::click(),
+                                        );
+                                        let p = ui.painter_at(rect);
+                                        p.circle_filled(rect.center(), 8.0, c);
+                                        if sel {
+                                            p.circle_stroke(rect.center(), 10.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+                                        }
+                                        if resp.clicked() { self.draw_color = c; }
+                                    }
+                                });
+                                ui.label("Custom color");
+                                ui.color_edit_button_srgba(&mut self.draw_color);
+                                ui.add(egui::Slider::new(&mut self.draw_width, 1.0..=12.0).text("Size").suffix(" px"));
+                            });
+                        });
                         ui.separator();
                         if ui
-                            .add_enabled(!self.strokes.is_empty(), egui::Button::new("Undo"))
+                            .add_enabled(!self.draw_undo.is_empty(), egui::Button::new("Undo"))
                             .clicked()
                         {
-                            self.strokes.pop();
+                            if let Some(previous) = self.draw_undo.pop() {
+                                self.draw_redo.push(std::mem::replace(&mut self.strokes, previous));
+                            }
+                        }
+                        if ui
+                            .add_enabled(!self.draw_redo.is_empty(), egui::Button::new("Redo"))
+                            .clicked()
+                        {
+                            if let Some(next) = self.draw_redo.pop() {
+                                self.draw_undo.push(std::mem::replace(&mut self.strokes, next));
+                            }
                         }
                         if ui
                             .add_enabled(!self.strokes.is_empty(), egui::Button::new("Clear"))
                             .clicked()
                         {
+                            self.draw_undo.push(self.strokes.clone());
+                            if self.draw_undo.len() > 16 { self.draw_undo.remove(0); }
+                            self.draw_redo.clear();
                             self.strokes.clear();
                         }
                         if ui
@@ -367,6 +390,38 @@ impl HookEchoApp {
                             self.export_annotations();
                         }
                     });
+                    if self.tool == MapTool::StormTrack {
+                        ui.separator();
+                        ui.label("User-defined motion · click twice to place or replace the track");
+                        ui.horizontal(|ui| {
+                            ui.label("Direction");
+                            ui.add(egui::DragValue::new(&mut self.manual_storm_track.bearing_deg).range(0.0..=359.0).suffix("°"));
+                            ui.label("Horizon");
+                            ui.add(egui::Slider::new(&mut self.manual_storm_track.horizon_min, 15..=120).step_by(15.0).suffix(" min"));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Speed");
+                            let (factor, suffix) = match self.manual_storm_track.speed_unit {
+                                1 => (1.150_779, " mph"),
+                                2 => (1.852, " km/h"),
+                                _ => (1.0, " kt"),
+                            };
+                            let mut speed = self.manual_storm_track.speed_kt * factor;
+                            if ui.add(egui::DragValue::new(&mut speed).range(0.0..=150.0 * factor).suffix(suffix)).changed() {
+                                self.manual_storm_track.speed_kt = speed / factor;
+                            }
+                            egui::ComboBox::from_id_salt("storm_track_speed_unit")
+                                .selected_text(match self.manual_storm_track.speed_unit { 1 => "mph", 2 => "km/h", _ => "kt" })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 0, "kt");
+                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 1, "mph");
+                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 2, "km/h");
+                                });
+                            ui.label("Cone ±");
+                            ui.add(egui::DragValue::new(&mut self.manual_storm_track.cone_half_angle_deg).range(0.0..=45.0).suffix("°"));
+                            if ui.button("Clear").clicked() { self.manual_storm_track.origin = None; self.manual_storm_track.endpoint_set = false; }
+                        });
+                    }
                 });
             });
     }

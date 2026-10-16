@@ -31,6 +31,7 @@ pub struct Frame {
     pub bbox_max: [f32; 2],
     pub center: [f32; 2],
     pub globe: [f32; 4],
+    pub planar: [f32; 4],
     pub scale: [f32; 2],
     pub dt: f32,
     pub world_per_px: f32,
@@ -55,6 +56,7 @@ struct Uniform {
     opacity: f32,
     point_px: f32,
     globe: [f32; 4],
+    planar: [f32; 4],
     trail: [f32; 4],
 }
 
@@ -85,6 +87,8 @@ pub struct WindGpu {
     frames: u64,
 }
 
+type TrailCamera = ([f32; 2], [f32; 2], [f32; 4], [f32; 4]);
+
 struct Trails {
     /// The trail buffers themselves. Held rather than dropped in favour of the views below: a
     /// view outliving its texture is not a thing to find out about from a driver.
@@ -96,7 +100,7 @@ struct Trails {
     src_bg: [wgpu::BindGroup; 2],
     cur: usize,
     size: (u32, u32),
-    camera: Option<([f32; 2], [f32; 2], [f32; 4])>,
+    camera: Option<TrailCamera>,
 }
 
 const POS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -357,7 +361,7 @@ impl WindGpu {
     ) {
         self.frames += 1;
         self.ensure_trails(device, pane, f.viewport);
-        let camera = (f.center, f.scale, f.globe);
+        let camera = (f.center, f.scale, f.globe, f.planar);
         let trails = self.trails.get_mut(&pane).unwrap();
         let fade = if trails.camera == Some(camera) { 0.94 } else { 0.0 };
         trails.camera = Some(camera);
@@ -380,6 +384,7 @@ impl WindGpu {
                 opacity: f.opacity,
                 point_px: 2.0,
                 globe: f.globe,
+                planar: f.planar,
                 trail: [fade, 0.0, 0.0, 0.0],
             }),
         );
@@ -667,6 +672,7 @@ mod tests {
                 bbox_max,
                 center: [0.3, 0.4],
                 globe: [0.0; 4],
+                planar: [1.0, 0.0, 1.0, 0.0],
                 scale: [100.0, 100.0],
                 dt: 0.1,
                 world_per_px,
@@ -771,6 +777,7 @@ mod tests {
                     center,
                     scale,
                     globe: camera.globe_uniform(vp),
+                    planar: camera.planar_uniform(vp),
                     dt: 0.016,
                     world_per_px: camera.world_per_pixel() as f32,
                     opacity: 1.0,

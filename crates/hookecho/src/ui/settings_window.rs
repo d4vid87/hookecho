@@ -161,6 +161,7 @@ pub struct SettingsWindow {
     pub open: bool,
     tab: Tab,
     alert_tab: AlertTab,
+    requested_page: Option<(Tab, AlertTab)>,
     pub map_changed: bool,
     prev_open: bool,
     /// Cached `.pal` file stems in the color-tables folder; rescanned on window/tab open.
@@ -186,6 +187,12 @@ pub struct SettingsWindow {
 }
 
 impl SettingsWindow {
+    /// Open the notification controls from a workspace shortcut, even when Settings was closed.
+    pub fn open_notifications(&mut self) {
+        self.open = true;
+        self.requested_page = Some((Tab::Alerts, AlertTab::Notify));
+    }
+
     /// `palettes` is read-only here (for parse-error badges); edits go through `settings` and
     /// the app reloads tables via the settings dirty-diff.
     #[allow(clippy::too_many_arguments)] // Settings and live map filters have separate owners.
@@ -210,6 +217,10 @@ impl SettingsWindow {
             {
                 self.storage_rows = None; // and re-measure the caches, which move between visits
             }
+        }
+        if let Some((tab, alert_tab)) = self.requested_page.take() {
+            self.tab = tab;
+            self.alert_tab = alert_tab;
         }
         self.prev_open = self.open;
 
@@ -1163,6 +1174,9 @@ fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::U
 }
 
 fn appearance_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    settings_group(ui, "Desktop workspace", |ui| {
+        ui.checkbox(&mut settings.radar_workspace, "Radar workspace").on_hover_text("Source selector, slide-out tools and centered playback controls.");
+    });
     settings_group(ui, "Make Hook Echo yours", |ui| {
         egui::Grid::new("appearance_grid")
             .num_columns(2)
@@ -1248,6 +1262,11 @@ fn radar_defaults(ui: &mut egui::Ui, settings: &mut Settings) {
             if ui.text_edit_singleline(&mut site).changed() {
                 settings.default_site = site.to_ascii_uppercase();
             }
+            ui.end_row();
+
+            ui.label("Station markers");
+            ui.checkbox(&mut settings.show_tdwr_sites, "Show TDWR sites")
+                .on_hover_text("Hides only TDWR map markers. A selected TDWR continues to display radar data and remains available in the site picker.");
             ui.end_row();
 
             ui.label("Poll interval (s)");

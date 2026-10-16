@@ -184,7 +184,7 @@ pub fn kml(name: &str, text: &str) -> anyhow::Result<Placefile> {
     Ok(file)
 }
 
-fn xml_elements<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
+pub(crate) fn xml_elements<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
     let mut rest = text;
@@ -202,7 +202,7 @@ fn xml_elements<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
     out
 }
 
-fn xml_text(text: &str) -> String {
+pub(crate) fn xml_text(text: &str) -> String {
     text.trim()
         .replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -211,7 +211,7 @@ fn xml_text(text: &str) -> String {
         .replace("&apos;", "'")
 }
 
-fn xml_coordinates(text: &str) -> Vec<[f64; 2]> {
+pub(crate) fn xml_coordinates(text: &str) -> Vec<[f64; 2]> {
     xml_elements(text, "coordinates")
         .into_iter()
         .flat_map(kml_coordinates)
@@ -684,6 +684,20 @@ impl CrsTransform {
         // projected WKT for an unprojected layer.
         if (upper.starts_with("GEOGCS[") || upper.starts_with("GEOGCRS["))
             && (upper.contains("WGS_1984") || upper.contains("WGS 84"))
+        {
+            return Ok(Self::Wgs84);
+        }
+        // WPC's ERO archive declares a spherical EMEP geographic CRS. Its Shapefile coordinates
+        // are longitude/latitude degrees, so the angular positions need no projection here.
+        if upper.starts_with("GEOGCS[\"GCS_SPHERE_EMEP\"")
+            && upper.contains("SPHEROID[\"SPHERE_EMEP\",6371200.0,0.0]")
+        {
+            return Ok(Self::Wgs84);
+        }
+        // Some WPC Day-2 files switch to geographic NAD83. Their coordinate values are already
+        // angular degrees; treating NAD83 as WGS84 here incurs only its metre-scale datum offset.
+        if upper.starts_with("GEOGCS[\"GCS_NORTH_AMERICAN_1983\"")
+            && upper.contains("SPHEROID[\"GRS_1980\"")
         {
             return Ok(Self::Wgs84);
         }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.hookecho.RadarWorkspace</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>HookEcho Radar Workspace</name>
+  <summary>Map-centered weather radar workspace</summary>
+  <description><p>A standalone HookEcho workspace with source menus, radar playback, public weather data, and a separate settings profile.</p></description>
+  <launchable type="desktop-id">hookecho-radar-workspace.desktop</launchable>
+  <url type="homepage">https://hookecho.io</url>
+</component>

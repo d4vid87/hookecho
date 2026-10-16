@@ -37,6 +37,10 @@ pub struct Camera {
     pub zoom: f64,
     /// Orthographic sphere instead of the default Mercator plane.
     pub globe: bool,
+    /// Perspective tilt of the Mercator ground plane, 0–60 degrees.
+    pub pitch_deg: f64,
+    /// Clockwise compass bearing at the top of the map, in degrees.
+    pub bearing_deg: f64,
 }
 
 impl Camera {
@@ -45,12 +49,61 @@ impl Camera {
             center: lonlat_to_world(lon, lat),
             zoom,
             globe: false,
+            pitch_deg: 0.0,
+            bearing_deg: 0.0,
         }
     }
 
     /// Switch projections without changing the center or central ground scale.
     /// Both projections accept global zoom levels so returning from the globe does not jump.
     pub fn set_globe(&mut self, globe: bool) { self.globe = globe; }
+
+    /// Normalize external/UI values; the globe keeps its existing camera behavior.
+    pub fn set_orientation(&mut self, pitch_deg: f64, bearing_deg: f64) {
+        self.pitch_deg = if pitch_deg.is_finite() { pitch_deg.clamp(0.0, 60.0) } else { 0.0 };
+        self.bearing_deg = if bearing_deg.is_finite() { bearing_deg.rem_euclid(360.0) } else { 0.0 };
+    }
+
+    pub fn reset_orientation(&mut self) { self.set_orientation(0.0, 0.0); }
+
+    fn orientation(&self) -> (f64, f64, f64, f64) {
+        let pitch = if self.pitch_deg.is_finite() { self.pitch_deg.clamp(0.0, 60.0) } else { 0.0 }.to_radians();
+        let bearing = if self.bearing_deg.is_finite() { self.bearing_deg.rem_euclid(360.0) } else { 0.0 }.to_radians();
+        (bearing.cos(), bearing.sin(), pitch.cos(), pitch.sin())
+    }
+
+    fn focal_length(vp: (f32, f32)) -> f64 {
+        // 45-degree vertical FOV leaves the horizon above the viewport even at 60°.
+        vp.1.max(1.0) as f64 / (2.0 * (PI / 8.0).tan())
+    }
+
+    /// cos(bearing), sin(bearing), cos(pitch), sin(pitch)/focal-pixels.
+    /// Shared by every planar GPU pass. Homogeneous W must survive vertex interpolation.
+    pub fn planar_uniform(&self, vp: (f32, f32)) -> [f32; 4] {
+        if self.globe { return [1.0, 0.0, 1.0, 0.0]; }
+        let (cb, sb, cp, sp) = self.orientation();
+        [cb as f32, sb as f32, cp as f32, (sp / Self::focal_length(vp)) as f32]
+    }
+
+    fn planar_point(&self, world: (f64, f64), vp: (f32, f32)) -> (f64, f64, f64) {
+        let (cb, sb, cp, sp) = self.orientation();
+        let ppw = 1.0 / self.world_per_pixel();
+        let (x, y) = ((world.0 - self.center.0) * ppw, -(world.1 - self.center.1) * ppw);
+        let (rx, ry) = (cb * x - sb * y, sb * x + cb * y);
+        (rx, ry * cp, 1.0 + ry * sp / Self::focal_length(vp))
+    }
+
+    /// Move the geographic point under `to - delta` to `to` during a pointer drag.
+    pub fn pan_at(&mut self, delta: (f32, f32), to: (f32, f32), vp: (f32, f32)) {
+        if self.globe { self.pan_pixels(delta.0, delta.1, vp); return; }
+        let before = self.screen_to_world((to.0 - delta.0, to.1 - delta.1), vp);
+        let after = self.screen_to_world(to, vp);
+        if before.0.is_finite() && before.1.is_finite() && after.0.is_finite() && after.1.is_finite() {
+            self.center.0 += before.0 - after.0;
+            self.center.1 += before.1 - after.1;
+            self.settle(vp);
+        }
+    }
 
     /// World units covered by one screen pixel.
     pub fn world_per_pixel(&self) -> f64 {
@@ -65,6 +118,10 @@ impl Camera {
             let lon = self.center.0 * 360.0 - 180.0 - dx as f64 / radius / lat.to_radians().cos().max(0.05) * 180.0 / PI;
             self.center = lonlat_to_world(lon, (lat + dy as f64 / radius * 180.0 / PI).clamp(-MAX_LAT, MAX_LAT));
             self.settle(viewport_px);
+            return;
+        }
+        if self.pitch_deg != 0.0 || self.bearing_deg != 0.0 {
+            self.pan_at((dx, dy), (viewport_px.0 / 2.0 + dx, viewport_px.1 / 2.0 + dy), viewport_px);
             return;
         }
         let wpp = self.world_per_pixel();
@@ -87,6 +144,14 @@ impl Camera {
     fn settle(&mut self, viewport_px: (f32, f32)) {
         self.center.0 = self.center.0.rem_euclid(1.0);
         if self.globe { self.center.1 = self.center.1.clamp(0.0, 1.0); return; }
+        if self.pitch_deg != 0.0 || self.bearing_deg != 0.0 {
+            let (lo, hi) = self.visible_bounds(viewport_px);
+            let north = self.center.1 - lo.1;
+            let south = hi.1 - self.center.1;
+            self.center.1 = if north + south >= 1.0 { 0.5 }
+                else { self.center.1.clamp(north, 1.0 - south) };
+            return;
+        }
         let half = viewport_px.1 as f64 / 2.0 * self.world_per_pixel();
         self.center.1 = if half >= 0.5 {
             0.5
@@ -115,6 +180,7 @@ impl Camera {
             return;
         }
         let before = self.screen_to_world(cursor_px, viewport_px);
+        if !before.0.is_finite() || !before.1.is_finite() { return; }
         // 20 rather than the tile providers' 18: `tile_cover` clamps the tile z on its own, so the
         // last two levels overzoom the resident tiles instead of turning a spread-pinch into a
         // silent no-op — which is what it felt like at the old ceiling.
@@ -132,6 +198,18 @@ impl Camera {
     pub fn screen_to_world(&self, px: (f32, f32), viewport_px: (f32, f32)) -> (f64, f64) {
         if self.globe { return self.pick_world(px, viewport_px).unwrap_or((f64::NAN, f64::NAN)); }
         let wpp = self.world_per_pixel();
+        if self.pitch_deg != 0.0 || self.bearing_deg != 0.0 {
+            let (cb, sb, cp, sp) = self.orientation();
+            let f = Self::focal_length(viewport_px);
+            let u = px.0 as f64 - viewport_px.0 as f64 / 2.0;
+            let v = viewport_px.1 as f64 / 2.0 - px.1 as f64;
+            let d = f * cp - v * sp;
+            if d <= 1e-9 { return (f64::NAN, f64::NAN); }
+            let ry = v * f / d;
+            let rx = u * (1.0 + ry * sp / f);
+            return (self.center.0 + (cb * rx + sb * ry) * wpp,
+                self.center.1 - (-sb * rx + cb * ry) * wpp);
+        }
         let wx = self.center.0 + (px.0 as f64 - viewport_px.0 as f64 / 2.0) * wpp;
         let wy = self.center.1 + (px.1 as f64 - viewport_px.1 as f64 / 2.0) * wpp;
         (wx, wy)
@@ -149,10 +227,33 @@ impl Camera {
             return ((viewport_px.0 as f64 / 2.0 + radius * lat.cos() * dl.sin()) as f32,
                 (viewport_px.1 as f64 / 2.0 - radius * (lat0.cos() * lat.sin() - lat0.sin() * lat.cos() * dl.cos())) as f32);
         }
+        if self.pitch_deg != 0.0 || self.bearing_deg != 0.0 {
+            let (x, y, w) = self.planar_point(world, viewport_px);
+            if w <= 1e-6 || !w.is_finite() { return (-1.0e9, -1.0e9); }
+            return ((viewport_px.0 as f64 / 2.0 + x / w) as f32,
+                (viewport_px.1 as f64 / 2.0 - y / w) as f32);
+        }
         let ppw = 256.0 * 2f64.powf(self.zoom); // pixels per world unit
         let px = (world.0 - self.center.0) * ppw + viewport_px.0 as f64 / 2.0;
         let py = (world.1 - self.center.1) * ppw + viewport_px.1 as f64 / 2.0;
         (px as f32, py as f32)
+    }
+
+    /// Visibility with the perspective near plane as well as the globe hemisphere.
+    pub fn point_visible(&self, world: (f64, f64), vp: (f32, f32)) -> bool {
+        if self.globe { self.world_visible(world) }
+        else { self.planar_point(world, vp).2 > 1e-6 }
+    }
+
+    /// Unit screen direction of a local geographic heading (east/north), for billboard glyphs.
+    pub fn heading_on_screen(&self, world: (f64, f64), bearing_deg: f64, vp: (f32, f32)) -> (f32, f32) {
+        let angle = bearing_deg.to_radians();
+        let step = self.world_per_pixel();
+        let a = self.world_to_screen(world, vp);
+        let b = self.world_to_screen((world.0 + step * angle.sin(), world.1 - step * angle.cos()), vp);
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let length = dx.hypot(dy).max(1e-8);
+        (dx / length, dy / length)
     }
 
     pub fn globe_radius(&self) -> f64 {
@@ -171,13 +272,15 @@ impl Camera {
     /// Clip a short geographic edge to the visible hemisphere before projecting.
     pub fn project_segment(&self, mut a: (f64, f64), mut b: (f64, f64), vp: (f32, f32)) -> Option<((f32, f32), (f32, f32))> {
         if self.globe { b.0 = a.0 + (b.0 - a.0 + 0.5).rem_euclid(1.0) - 0.5; }
-        let (va, vb) = (self.world_visible(a), self.world_visible(b));
+        let visible = |world| if self.globe { self.world_visible(world) }
+            else { self.planar_point(world, vp).2 > 1e-6 };
+        let (va, vb) = (visible(a), visible(b));
         if !va && !vb { return None; }
         if va != vb {
             let (mut front, mut back) = if va { (a, b) } else { (b, a) };
             for _ in 0..32 {
                 let mid = ((front.0 + back.0) / 2.0, (front.1 + back.1) / 2.0);
-                if self.world_visible(mid) { front = mid; } else { back = mid; }
+                if visible(mid) { front = mid; } else { back = mid; }
             }
             if va { b = front; } else { a = front; }
         }
@@ -186,7 +289,10 @@ impl Camera {
 
     /// Reject sky clicks instead of assigning a fabricated geographic location.
     pub fn pick_world(&self, px: (f32, f32), vp: (f32, f32)) -> Option<(f64, f64)> {
-        if !self.globe { return Some(self.screen_to_world(px, vp)); }
+        if !self.globe {
+            let w = self.screen_to_world(px, vp);
+            return (w.0.is_finite() && w.1.is_finite()).then_some(w);
+        }
         let radius = self.globe_radius();
         let x = (px.0 as f64 - vp.0 as f64 / 2.0) / radius;
         let y = (vp.1 as f64 / 2.0 - px.1 as f64) / radius;
@@ -207,7 +313,15 @@ impl Camera {
     /// Conservative world bounds for fetching tiles/feeds, separate from picking.
     pub fn visible_bounds(&self, vp: (f32, f32)) -> ((f64, f64), (f64, f64)) {
         if !self.globe {
-            return (self.screen_to_world((0.0, 0.0), vp), self.screen_to_world(vp, vp));
+            let corners = [(0.0, 0.0), (vp.0, 0.0), vp, (0.0, vp.1)];
+            let mut lo = (f64::INFINITY, f64::INFINITY);
+            let mut hi = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for px in corners {
+                let w = self.screen_to_world(px, vp);
+                lo.0 = lo.0.min(w.0); lo.1 = lo.1.min(w.1);
+                hi.0 = hi.0.max(w.0); hi.1 = hi.1.max(w.1);
+            }
+            return (lo, hi);
         }
         let radius = self.globe_radius();
         let corner = ((vp.0 as f64 / 2.0).hypot(vp.1 as f64 / 2.0) / radius).min(1.0);
@@ -274,6 +388,8 @@ mod tests {
             center: (0.5, 0.5),
             zoom: 3.0,
             globe: false,
+            pitch_deg: 0.0,
+            bearing_deg: 0.0,
         };
         c.pan_pixels(0.0, 100_000.0, vp);
         let half = 400.0 / (256.0 * 8.0);
@@ -294,6 +410,8 @@ mod tests {
             center: (0.5, 0.1),
             zoom: 2.0,
             globe: false,
+            pitch_deg: 0.0,
+            bearing_deg: 0.0,
         };
         c.pan_pixels(0.0, 300.0, (2000.0, 2000.0));
         assert_eq!(c.center.1, 0.5);
@@ -308,6 +426,8 @@ mod tests {
             center: (0.999, 0.5),
             zoom: 8.0,
             globe: false,
+            pitch_deg: 0.0,
+            bearing_deg: 0.0,
         };
         c.zoom_at(-1.0, (799.0, 400.0), vp);
         assert!(
@@ -421,4 +541,83 @@ mod tests {
         assert!((world_before.0 - world_after.0).abs() < 1e-9);
         assert!((world_before.1 - world_after.1).abs() < 1e-9);
     }
+    #[test]
+    fn planar_orientation_roundtrips_and_bounds_cover_the_viewport() {
+        for vp in [(800.0,600.0),(375.0,900.0),(1600.0,400.0)] {
+            for (lon,lat) in [(0.0,0.0),(179.9,70.0),(-97.0,35.0)] {
+                for pitch in [0.0,30.0,60.0] { for bearing in [0.0,45.0,90.0,180.0,359.0] {
+                    let mut cam = Camera::at_lonlat(lon,lat,8.0);
+                    cam.set_orientation(pitch,bearing);
+                    let (lo,hi) = cam.visible_bounds(vp);
+                    for iy in 0..=8 { for ix in 0..=8 {
+                        let px = (vp.0 * ix as f32 / 8.0, vp.1 * iy as f32 / 8.0);
+                        let world = cam.pick_world(px,vp).expect("viewport is below the 60-degree horizon");
+                        let back = cam.world_to_screen(world,vp);
+                        assert!((back.0-px.0).abs()<0.001 && (back.1-px.1).abs()<0.001, "{pitch}/{bearing}: {px:?} -> {back:?}");
+                        assert!(world.0>=lo.0-1e-12 && world.0<=hi.0+1e-12 && world.1>=lo.1-1e-12 && world.1<=hi.1+1e-12);
+                    } }
+                } }
+            }
+        }
+    }
+
+    #[test]
+    fn pitched_zoom_and_pointer_drag_keep_the_geographic_anchor() {
+        let vp=(1000.0,700.0);
+        for pitch in [0.0,60.0] { for bearing in [0.0,90.0,235.0] {
+            let mut cam=Camera::at_lonlat(-97.0,35.0,8.0);
+            cam.set_orientation(pitch,bearing);
+            let cursor=(740.0,155.0);
+            let before=cam.pick_world(cursor,vp).unwrap();
+            cam.zoom_at(1.25,cursor,vp);
+            let after=cam.pick_world(cursor,vp).unwrap();
+            assert!((before.0-after.0).abs()<1e-10 && (before.1-after.1).abs()<1e-10);
+            let to=(cursor.0+43.0,cursor.1-21.0);
+            cam.pan_at((43.0,-21.0),to,vp);
+            let dragged=cam.world_to_screen(before,vp);
+            assert!((dragged.0-to.0).abs()<0.001 && (dragged.1-to.1).abs()<0.001);
+        } }
+    }
+
+    #[test]
+    fn planar_orientation_normalizes_and_clips_the_near_plane() {
+        let mut cam=Camera::at_lonlat(0.0,0.0,8.0);
+        cam.set_orientation(90.0,-270.0);
+        assert_eq!((cam.pitch_deg,cam.bearing_deg),(60.0,90.0));
+        let vp=(800.0,600.0);
+        let east=(cam.center.0+cam.world_per_pixel()*20.0,cam.center.1);
+        let screen=cam.world_to_screen(east,vp);
+        assert!((screen.0-400.0).abs()<0.001 && screen.1<300.0);
+        cam.set_orientation(60.0,0.0);
+        let back=(cam.center.0,cam.center.1+cam.world_per_pixel()*2000.0);
+        assert!(!cam.point_visible(back,vp));
+        assert!(cam.project_segment(back,(back.0+0.001,back.1),vp).is_none());
+        let crossing=cam.project_segment(cam.center,back,vp).unwrap();
+        assert!(crossing.1.0.is_finite() && crossing.1.1.is_finite());
+        assert!(cam.pick_world((400.0,-1000.0),vp).is_none());
+        cam.set_orientation(f64::NAN,f64::INFINITY);
+        assert_eq!(cam.planar_uniform(vp),[1.0,0.0,1.0,0.0]);
+        cam.set_orientation(60.0,120.0);cam.globe=true;
+        assert_eq!(cam.planar_uniform(vp),[1.0,0.0,1.0,0.0]);
+    }
+
+    #[test]
+    fn perspective_uniform_matches_cpu_and_retains_homogeneous_w() {
+        let vp=(900.0,600.0);
+        let mut cam=Camera::at_lonlat(0.0,0.0,6.0);
+        cam.set_orientation(60.0,42.0);
+        let (center,scale)=cam.world_to_clip_uniform(vp);
+        let [cb,sb,cp,k]=cam.planar_uniform(vp);
+        let wpp=cam.world_per_pixel() as f32;
+        for px in [(50.0,50.0),(700.0,580.0),(450.0,300.0)] {
+            let world=cam.pick_world(px,vp).unwrap();
+            let q=((world.0 as f32-center[0])/wpp,-(world.1 as f32-center[1])/wpp);
+            let r=(cb*q.0-sb*q.1,sb*q.0+cb*q.1);
+            let w=1.0+r.1*k;
+            let ndc=(r.0*scale[0]*wpp/w,-r.1*cp*scale[1]*wpp/w);
+            let gpu=((ndc.0+1.0)*vp.0/2.0,(1.0-ndc.1)*vp.1/2.0);
+            assert!((gpu.0-px.0).abs()<0.02 && (gpu.1-px.1).abs()<0.02);
+        }
+    }
+
 }

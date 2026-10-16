@@ -38,7 +38,8 @@ pub(crate) fn chunks(d: &[u8], root: u64, rank: usize) -> Result<Vec<Chunk>> {
         }
         let level = c.u8()?;
         let entries = c.u16()? as usize;
-        c.skip(8 * 2)?; // left and right sibling addresses
+        c.addr()?; // left sibling
+        c.addr()?; // right sibling
 
         // Keys and child pointers alternate: K0 C0 K1 C1 … Kn. Each key is the chunk's size,
         // filter mask, and (rank + 1) offsets — the trailing one is the element offset, always 0.
@@ -47,10 +48,12 @@ pub(crate) fn chunks(d: &[u8], root: u64, rank: usize) -> Result<Vec<Chunk>> {
             let _filter_mask = c.u32()?;
             let mut offset = Vec::with_capacity(rank);
             for _ in 0..rank {
+                // Chunk coordinates are fixed 64-bit integers even when the file chooses
+                // four-byte addresses and lengths in its superblock.
                 offset.push(c.u64()?);
             }
-            c.skip(8)?; // the extra element-index dimension
-            let child = c.u64()?;
+            c.u64()?; // the extra element-index dimension
+            let child = c.addr()?;
             if level == 0 {
                 out.push(Chunk {
                     addr: child,

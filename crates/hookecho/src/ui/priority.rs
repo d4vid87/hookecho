@@ -127,6 +127,7 @@ pub fn dock_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
 
 pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
     ui.strong("Estimated storm tracks");
+    track_display_controls(ui, rules);
     ui.add(egui::Slider::new(&mut rules.track_min_dbz, 50.0..=70.0).text("Minimum cell reflectivity (dBZ)"));
     ui.add(egui::Slider::new(&mut rules.track_age_min, 1..=60).text("Maximum scan age (min)"));
     ui.add(
@@ -141,6 +142,22 @@ pub fn track_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
             }
         });
     ui.weak("Tracks are relative to the cell's radar scan, not a forecast from the current minute. Reflectivity is a display filter, not an official severe-weather threshold; missing age, motion, or error keeps a track off the map.");
+}
+
+pub fn track_display_controls(ui: &mut egui::Ui, rules: &mut PriorityRules) {
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut rules.track_initial_point, "Initial point");
+        ui.checkbox(&mut rules.track_line, "Track line");
+        ui.checkbox(&mut rules.track_cone, "Track cone");
+        ui.checkbox(&mut rules.track_time_points, "Time points");
+    });
+    egui::ComboBox::from_label("Storm speed unit")
+        .selected_text(match rules.track_speed_unit { 1 => "km/h", 2 => "kt", _ => "mph" })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut rules.track_speed_unit, 0, "Miles per hour (mph)");
+            ui.selectable_value(&mut rules.track_speed_unit, 1, "Kilometers per hour (km/h)");
+            ui.selectable_value(&mut rules.track_speed_unit, 2, "Knots (kt)");
+        });
 }
 
 #[cfg(test)]

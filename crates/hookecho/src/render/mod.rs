@@ -3,8 +3,10 @@
 
 pub mod field_ramps;
 pub mod mercator;
+mod radar_surface;
+pub use radar_surface::radar_surface_supported;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
@@ -40,6 +42,8 @@ pub struct VisibleTile {
 /// A binned sweep plus the world-space quad covering its range disk.
 pub struct RadarUpload {
     pub upload_token: u64,
+    /// Animation may revisit recent scans; retain bounded GPU textures for that loop.
+    pub cache_loop: bool,
     pub az_bins: u32,
     pub gate_count: u32,
     pub data: Vec<u8>,
@@ -98,6 +102,12 @@ pub enum FieldLayer {
     Qpe6h,
     Qpe12h,
     Qpe24h,
+    /// Single-site Level III digital one-hour accumulation.
+    Daa,
+    /// Single-site Level III 16-band one-hour precipitation total.
+    Oha,
+    /// Single-site Level III digital storm-total accumulation.
+    Dsa,
     /// HRRR surface CAPE (environment suite).
     Cape,
     /// HRRR storm-relative helicity (environment suite).
@@ -217,7 +227,7 @@ impl FieldLayer {
     }
 
     /// Fixed bottom-to-top paint order within each band.
-    pub const BASE_DRAW_ORDER: [FieldLayer; 71] = [
+    pub const BASE_DRAW_ORDER: [FieldLayer; 74] = [
         // Below-radar context band (bottom to top). The global models sit at the very bottom:
         // they are the synoptic backdrop everything else is drawn against.
         FieldLayer::GoesC13,
@@ -273,6 +283,9 @@ impl FieldLayer {
         FieldLayer::Qpe6h,
         FieldLayer::Qpe12h,
         FieldLayer::Qpe24h,
+        FieldLayer::Daa,
+        FieldLayer::Oha,
+        FieldLayer::Dsa,
         FieldLayer::FlashFlood,
         FieldLayer::HailSwath,
         FieldLayer::CompositeLocal,
@@ -296,6 +309,14 @@ impl FieldLayer {
 
     pub fn is_native_abi(self) -> bool {
         matches!(self, Self::GoesC13 | Self::GoesWaterVapor | Self::GoesMidWaterVapor | Self::GoesLongwaveIr | Self::GoesVisible | Self::GoesTrueColor | Self::GoesCatalog(_))
+    }
+
+    pub fn is_l3_grid(self) -> bool {
+        matches!(self, Self::Vil | Self::EchoTops | Self::Hca | Self::Daa | Self::Oha | Self::Dsa)
+    }
+
+    pub fn is_pane_field(self) -> bool {
+        self.is_native_abi() || self.is_l3_grid()
     }
 
     pub fn draw_order() -> impl DoubleEndedIterator<Item = FieldLayer> {
@@ -338,6 +359,9 @@ impl FieldLayer {
             FieldLayer::Qpe6h => "qpe6h",
             FieldLayer::Qpe12h => "qpe12h",
             FieldLayer::Qpe24h => "qpe24h",
+            FieldLayer::Daa => "daa",
+            FieldLayer::Oha => "oha",
+            FieldLayer::Dsa => "dsa",
             FieldLayer::Cape => "cape",
             FieldLayer::Srh => "srh",
             FieldLayer::PrecipType => "preciptype",
@@ -413,6 +437,9 @@ impl FieldLayer {
             FL::Qpe6h => &wxdata::mrms::QPE_06H_DESCRIPTOR,
             FL::Qpe12h => &wxdata::mrms::QPE_12H_DESCRIPTOR,
             FL::Qpe24h => &wxdata::mrms::QPE_24H_DESCRIPTOR,
+            FL::Daa => &wxdata::level3::DAA_DESCRIPTOR,
+            FL::Oha => &wxdata::level3::OHA_DESCRIPTOR,
+            FL::Dsa => &wxdata::level3::DSA_DESCRIPTOR,
             FL::PrecipRate => &wxdata::mrms::PRECIP_RATE_DESCRIPTOR,
             FL::PrecipType => &wxdata::mrms::PRECIP_TYPE_DESCRIPTOR,
             FL::FlashFlood => &wxdata::mrms::FLASH_ARI30_DESCRIPTOR,
@@ -466,6 +493,19 @@ impl FieldLayer {
 #[cfg(test)]
 mod field_slug_tests {
     use super::FieldLayer;
+
+    #[test]
+    fn site_radar_grids_and_satellite_grids_have_pane_local_gpu_keys() {
+        for layer in [
+            FieldLayer::Vil, FieldLayer::EchoTops, FieldLayer::Hca,
+            FieldLayer::Daa, FieldLayer::Oha, FieldLayer::Dsa,
+        ] {
+            assert!(layer.is_l3_grid() && layer.is_pane_field());
+            assert!(!layer.is_native_abi());
+        }
+        assert!(FieldLayer::GoesC13.is_pane_field());
+        assert!(!FieldLayer::Mrms.is_pane_field());
+    }
 
     #[test]
     fn every_layer_has_a_slug_that_parses_back() {
@@ -599,6 +639,7 @@ pub struct MapCallback {
     pub camera_center: [f32; 2],
     pub camera_scale: [f32; 2],
     pub globe: [f32; 4],
+    pub planar: [f32; 4],
     pub world_per_pixel: f32,
     pub new_tiles: Vec<PendingTile>,
     pub visible: Vec<VisibleTile>,
@@ -609,6 +650,8 @@ pub struct MapCallback {
     pub vector_over_raster: bool,
     pub radar_upload: Option<RadarUpload>,
     pub draw_radar: bool,
+    /// Raised reflectivity-value visualization; never a meteorological altitude.
+    pub radar_surface: bool,
     /// `Some` only when the overlay geometry changed (else the last upload is reused).
     pub overlay_upload: Option<OverlayUpload>,
     pub draw_overlay: bool,
@@ -662,6 +705,7 @@ struct CameraUniform {
     // WebGL uniform bindings must occupy a multiple of 16 bytes.
     _pad: [f32; 2],
     globe: [f32; 4],
+    planar: [f32; 4],
 }
 
 struct TileGpu {
@@ -683,6 +727,24 @@ struct RadarGpu {
     lut_width: u32,
     gate_bytes: Vec<u8>,
     flag_bytes: Vec<u8>,
+}
+
+const RADAR_GPU_CACHE_ENTRIES: usize = 24;
+const RADAR_GPU_CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+impl RadarGpu {
+    fn shadow_bytes(&self) -> usize {
+        self.gate_bytes.len() + self.flag_bytes.len() + self.lut_width as usize * 12
+    }
+
+    fn matches_upload(&self, r: &RadarUpload, gates: &[u8], flags: &[u8]) -> bool {
+        self.dims == (r.gate_count, r.az_bins)
+            && self.flag_dims == flag_dims(r)
+            && self.precision == r.data16.is_some()
+            && self.lut_width as usize * 12 == r.lut.len()
+            && self.gate_bytes == gates
+            && self.flag_bytes == flags
+    }
 }
 
 struct OverlayGpu {
@@ -708,7 +770,7 @@ struct MrmsGpu {
 /// Per-pane GPU state: its own camera uniform, radar sweep, tile/radar quad buffers, and the
 /// draw lists staged during `prepare` and consumed during `paint`. (All `prepare`s run before
 /// any `paint`, so shared per-frame buffers would clobber across panes — hence per-pane.)
-type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool);
+type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool, [u32; 4]);
 
 struct PaneGpu {
     id: u32,
@@ -719,6 +781,8 @@ struct PaneGpu {
     tile_capacity: u64,
     radar_vbuf: wgpu::Buffer,
     radar: Option<RadarGpu>,
+    radar_cache: VecDeque<RadarGpu>,
+    surface: Option<radar_surface::Target>,
     /// Ids of the tiles this frame's quads draw, in quad order. Not the same as the visible list:
     /// a missing tile is stood in for by resident children or an ancestor.
     frame_visible: Vec<(TileKey, std::ops::Range<u32>)>,
@@ -738,10 +802,26 @@ struct PaneGpu {
     field_draws: Vec<FieldLayer>,
 }
 
+impl PaneGpu {
+    /// Keep recent sweeps for animation; return an evicted texture that can be rewritten.
+    fn cache_radar(&mut self, radar: RadarGpu) -> Option<RadarGpu> {
+        self.radar_cache.push_back(radar);
+        let mut bytes: usize = self.radar_cache.iter().map(RadarGpu::shadow_bytes).sum();
+        let mut reusable = None;
+        while self.radar_cache.len() > RADAR_GPU_CACHE_ENTRIES || bytes > RADAR_GPU_CACHE_BYTES {
+            let old = self.radar_cache.pop_front().unwrap();
+            bytes = bytes.saturating_sub(old.shadow_bytes());
+            reusable = Some(old);
+        }
+        reusable
+    }
+}
+
 /// Long-lived GPU resources, stored in egui's `CallbackResources` type-map.
 pub struct RenderResources {
     tile_pipeline: wgpu::RenderPipeline,
     radar_pipeline: wgpu::RenderPipeline,
+    surface_renderer: radar_surface::Renderer,
     overlay_pipeline: wgpu::RenderPipeline,
     mrms_pipeline: wgpu::RenderPipeline,
     camera_bgl: wgpu::BindGroupLayout,
@@ -824,7 +904,7 @@ impl RenderResources {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -834,7 +914,7 @@ impl RenderResources {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -844,7 +924,7 @@ impl RenderResources {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -856,7 +936,7 @@ impl RenderResources {
                 // and 1×1 when the tint is off.
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -1058,7 +1138,9 @@ impl RenderResources {
             ..Default::default()
         });
 
+        let surface_renderer = radar_surface::Renderer::new(device, target_format, &camera_bgl, &radar_bgl, &radar_shader);
         Self {
+            surface_renderer,
             tile_pipeline,
             radar_pipeline,
             overlay_pipeline,
@@ -1120,6 +1202,8 @@ impl RenderResources {
                 tile_capacity: 512 * 6,
                 radar_vbuf,
                 radar: None,
+                radar_cache: VecDeque::new(),
+                surface: None,
                 frame_visible: Vec::new(),
                 quads_key: None,
                 frame_visible_vector: Vec::new(),
@@ -1247,6 +1331,7 @@ impl RenderResources {
         queue: &wgpu::Queue,
         r: &RadarUpload,
         existing: Option<RadarGpu>,
+        cached_data: bool,
     ) -> Option<RadarGpu> {
         let flag_dims = flag_dims(r);
         let precision = r.data16.is_some();
@@ -1257,7 +1342,7 @@ impl RenderResources {
         // the only thing a bind group depends on here, so nothing else can go stale.
         if let Some(mut g) = existing {
             if g.dims == (r.gate_count, r.az_bins) && g.flag_dims == flag_dims && g.precision == precision && g.lut_width == lut_width {
-                if !r.lut_only {
+                if !r.lut_only && !cached_data {
                     write_texture_changes(queue, &g.tex, g.dims, bytes_per_gate, &mut g.gate_bytes, gate_data);
                     write_texture_changes(queue, &g.flag, g.flag_dims, 1, &mut g.flag_bytes, &flag_bytes(r, g.flag_dims));
                 }
@@ -1535,17 +1620,17 @@ impl RenderResources {
         // front of the user. Visible entries can't be evicted mid-frame: the caches only shrink
         // here, before any drawing.
         for layer in &cb.drop_fields {
-            self.fields.remove(&(layer.is_native_abi().then_some(cb.pane), *layer));
+            self.fields.remove(&(layer.is_pane_field().then_some(cb.pane), *layer));
         }
         for (layer, up) in &cb.field_uploads {
             let gpu = self.build_field_layer(device, queue, up);
-            self.fields.insert((layer.is_native_abi().then_some(cb.pane), *layer), gpu);
+            self.fields.insert((layer.is_pane_field().then_some(cb.pane), *layer), gpu);
         }
         // Draw only the requested layers that actually have GPU data. Opacity rides in the grid
         // uniform's first pad word, so it costs one 4-byte write per drawn layer — no LUT re-bake.
         let mut field_draws = Vec::new();
         for (layer, opacity) in &cb.field_draws {
-            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(cb.pane), *layer)) {
+            if let Some(f) = self.fields.get(&(layer.is_pane_field().then_some(cb.pane), *layer)) {
                 queue.write_buffer(&f.uni, 24, &opacity.to_le_bytes());
                 field_draws.push(*layer);
             }
@@ -1554,8 +1639,33 @@ impl RenderResources {
         // --- Per-pane state ---
         let new_radar = match cb.radar_upload.as_ref() {
             Some(r) => {
-                let existing = self.panes.get_mut(&cb.pane).and_then(|p| p.radar.take());
-                self.build_radar(device, queue, r, existing)
+                let (existing, cached_data) = if let Some(pane) = self.panes.get_mut(&cb.pane) {
+                    if !r.cache_loop {
+                        pane.radar_cache.clear();
+                        (pane.radar.take(), false)
+                    } else if r.lut_only {
+                        (pane.radar.take(), false)
+                    } else {
+                        let gates: &[u8] = r.data16.as_ref().map_or(r.data.as_slice(), |d| bytemuck::cast_slice(d));
+                        let flags = flag_bytes(r, flag_dims(r));
+                        if pane.radar.as_ref().is_some_and(|gpu| gpu.matches_upload(r, gates, &flags)) {
+                            (pane.radar.take(), true)
+                        } else {
+                            let hit = pane.radar_cache.iter()
+                                .position(|gpu| gpu.matches_upload(r, gates, &flags))
+                                .and_then(|idx| pane.radar_cache.remove(idx));
+                            let recycled = pane.radar.take().and_then(|gpu| pane.cache_radar(gpu));
+                            let cached_data = hit.is_some();
+                            (hit.or(recycled), cached_data)
+                        }
+                    }
+                } else {
+                    (None, false)
+                };
+                if cached_data {
+                    wxdata::stats::bump(wxdata::stats::Counter::RadarCacheHits);
+                }
+                self.build_radar(device, queue, r, existing, cached_data)
             }
             None => None,
         };
@@ -1572,6 +1682,7 @@ impl RenderResources {
             cb.camera_scale[1].to_bits(),
             cb.visible.len(),
             cb.globe[2] != 0.0,
+            cb.planar.map(f32::to_bits),
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
@@ -1591,6 +1702,7 @@ impl RenderResources {
                 ) as f32,
                 _pad: [0.0; 2],
                 globe: cb.globe,
+                planar: cb.planar,
             }),
         );
         if let Some(r) = &cb.radar_upload {
@@ -1819,7 +1931,7 @@ impl RenderResources {
             if layer.below_radar() != below || !pane.field_draws.contains(&layer) {
                 continue;
             }
-            if let Some(f) = self.fields.get(&(layer.is_native_abi().then_some(pane.id), layer)) {
+            if let Some(f) = self.fields.get(&(layer.is_pane_field().then_some(pane.id), layer)) {
                 pass.set_pipeline(&self.mrms_pipeline);
                 pass.set_bind_group(0, cam, &[]);
                 pass.set_bind_group(1, &f.bind_group, &[]);
@@ -1857,15 +1969,18 @@ impl RenderResources {
         self.draw_fields(pane, pass, true);
         if pane.frame_draw_radar {
             if let Some(radar) = &pane.radar {
-                pass.set_pipeline(&self.radar_pipeline);
-                pass.set_bind_group(0, cam, &[]);
-                pass.set_bind_group(1, &radar.bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.radar_vbuf.slice(..));
-                pass.draw(0..6, 0..1);
+                if let Some(surface) = &pane.surface {
+                    self.surface_renderer.draw(surface, pass);
+                } else {
+                    pass.set_pipeline(&self.radar_pipeline);
+                    pass.set_bind_group(0, cam, &[]);
+                    pass.set_bind_group(1, &radar.bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.radar_vbuf.slice(..));
+                    pass.draw(0..6, 0..1);
+                }
             }
         }
-        // Only the small major-road subset is repeated here. Town labels and route shields are
-        // painted by egui above this callback, so orientation survives an opaque radar core.
+        // All road strokes are drawn here above radar; labels and route shields follow in egui.
         self.draw_vector_foreground(pane, cam, pass);
         // Field layers over the radar (rotation/hail/shear/lightning signals).
         self.draw_fields(pane, pass, false);
@@ -1941,6 +2056,7 @@ impl RenderResources {
             self.gpu_timers.retain(|id, _| *id == visible);
         }
         self.upload_frame(device, queue, cb);
+        self.surface_renderer.prepare(device, queue, self.panes.get_mut(&cb.pane).unwrap(), cb);
         if let std::collections::hash_map::Entry::Vacant(entry) = self.gpu_timers.entry(cb.pane) {
             if let Some(timer) = crate::gpu_metrics::Timer::new(device) { entry.insert(timer); }
         }
@@ -1993,7 +2109,8 @@ impl RenderResources {
         let mut shadows = 0;
         for pane in self.panes.values() {
             gpu += pane.camera_buf.size() + pane.tile_vbuf.size() + pane.radar_vbuf.size();
-            if let Some(radar) = &pane.radar {
+            if let Some(surface) = &pane.surface { gpu += surface.memory_bytes(); }
+            for radar in pane.radar.iter().chain(pane.radar_cache.iter()) {
                 gpu += texture(&radar.tex)
                     + texture(&radar.flag)
                     + texture(&radar.lut)
@@ -2288,5 +2405,36 @@ mod dirty_radar_rows_tests {
         assert_eq!(changed_rows(&[0; 16], &[1; 16], 4), vec![0..4]);
         assert_eq!(changed_rows(&[], &[1; 16], 4), vec![0..4]);
         assert!(changed_rows(&[], &[1; 3], 4).is_empty());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod projection_shader_tests {
+    #[test]
+    fn camera_shaders_validate_with_the_same_uniform_layout() {
+        use wgpu::naga;
+        for (name,source) in [
+            ("tiles",include_str!("../shaders/tiles.wgsl")),
+            ("radar",include_str!("../shaders/radar.wgsl")),
+            ("overlay",include_str!("../shaders/overlay.wgsl")),
+            ("mrms",include_str!("../shaders/mrms.wgsl")),
+            ("wind",include_str!("../shaders/wind.wgsl")),
+        ] {
+            let module=naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{name}: {}",e.emit_to_string(source)));
+            let _info=naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            #[cfg(target_os = "linux")]
+            for entry in &module.entry_points {
+                let options=naga::back::glsl::Options {version:naga::back::glsl::Version::Embedded {version:300,is_webgl:true},..Default::default()};
+                let pipeline=naga::back::glsl::PipelineOptions {shader_stage:entry.stage,entry_point:entry.name.clone(),multiview:None};
+                let mut output=String::new();
+                naga::back::glsl::Writer::new(&mut output,&module,&_info,&options,&pipeline,Default::default()).unwrap().write().unwrap_or_else(|e| panic!("WebGL2 {name}/{}: {e:?}",entry.name));
+            }
+            let uniform=module.types.iter().find_map(|(_,ty)| {
+                if ty.name.as_deref()==Some(if name=="wind" { "Wind" } else { "Camera" }) {
+                    if let naga::TypeInner::Struct {span,..}=ty.inner { return Some(span); }
+                } None
+            }).unwrap();
+            assert_eq!(uniform,if name=="wind" {112} else {std::mem::size_of::<super::CameraUniform>() as u32},"{name}");
+        }
     }
 }

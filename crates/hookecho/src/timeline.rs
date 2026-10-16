@@ -103,9 +103,8 @@ impl Timeline {
 
     /// Time at the playhead, including a pending archive seek before its frame list arrives.
     pub fn selected_time(&self) -> Option<DateTime<Utc>> {
-        self.current()
-            .and_then(Identifier::date_time)
-            .or(self.seek_target)
+        self.seek_target
+            .or_else(|| self.current().and_then(Identifier::date_time))
     }
 
     /// Total scrub slots: observed frames plus the forecast tail (only when frames exist).
@@ -314,6 +313,7 @@ impl Timeline {
 
     /// Step `delta` slots (observed frames + forecast tail), un-pinning and pausing playback.
     pub fn step(&mut self, delta: i32) {
+        self.seek_target = None;
         self.seek_forecast_hour = None;
         self.replay_time_range = None;
         self.playing = false;
@@ -446,6 +446,7 @@ impl Timeline {
 
     /// Jump to the oldest frame.
     pub fn go_begin(&mut self) {
+        self.seek_target = None;
         self.seek_forecast_hour = None;
         self.replay_time_range = None;
         self.following = false;
@@ -662,6 +663,27 @@ mod tests {
         timeline.frames.clear();
         timeline.seek_target = Some(first);
         assert_eq!(timeline.selected_time(), Some(first));
+        timeline.frames = day("KTLX", 3);
+        let next_day = first + chrono::Duration::days(1);
+        timeline.seek_target = Some(next_day);
+        assert_eq!(timeline.selected_time(), Some(next_day), "a pending archive seek wins over retained frames");
+    }
+
+    #[test]
+    fn manual_loop_navigation_supersedes_pending_seek() {
+        let mut timeline = Timeline::default();
+        let date = timeline.date;
+        timeline.set_frames(day("KTLX", 3), ("KTLX".into(), date));
+        let stale_target = timeline.frames[2].date_time().unwrap();
+        timeline.seek_target = Some(stale_target);
+        timeline.go_begin();
+        assert_eq!(timeline.selected_time(), timeline.frames[0].date_time());
+        assert!(timeline.seek_target.is_none());
+
+        timeline.seek_target = Some(stale_target);
+        timeline.step(1);
+        assert_eq!(timeline.selected_time(), timeline.frames[1].date_time());
+        assert!(timeline.seek_target.is_none());
     }
 
     #[test]

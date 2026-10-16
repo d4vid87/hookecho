@@ -30,7 +30,10 @@ impl HookEchoApp {
             .site
             .clone()
             .unwrap_or_else(|| "Choose radar".into());
-        let product = self.views[self.active].moment.short_name();
+        let forecast_style = self.views[self.active].basemap.ndfd_layer()
+            .filter(|_| !self.views[self.active].show_radar)
+            .map(|_| self.views[self.active].basemap);
+        let product = forecast_style.map_or(self.views[self.active].moment.short_name(), |style| style.label());
         let (alert_count, _) = self.alert_badge();
         let signal_alert = if radar_focus {
             let (point, reference) = self.priority_reference();
@@ -150,24 +153,36 @@ impl HookEchoApp {
                             .corner_radius(12.0)
                             .inner_margin(egui::Margin::symmetric(6, 2));
                         badge().show(ui, |ui| {
-                            ui.label(RichText::new(format!("● {site} · {freshness}"))
-                                .size(10.0).color(freshness_color).strong());
+                            ui.label(RichText::new(if forecast_style.is_some() {
+                                format!("● {site} · Forecast")
+                            } else { format!("● {site} · {freshness}") })
+                                .size(10.0).color(if forecast_style.is_some() { Color32::from_rgb(111, 194, 255) } else { freshness_color }).strong());
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             badge().show(ui, |ui| {
-                                ui.label(RichText::new(format!("{product} · {}",
-                                    age.clone().unwrap_or_else(|| "waiting".to_owned()))).size(10.0));
+                                ui.label(RichText::new(if forecast_style.is_some() {
+                                    "NOAA/NWS · valid time below".to_owned()
+                                } else { format!("{product} · {}", age.clone().unwrap_or_else(|| "waiting".to_owned())) }).size(10.0));
                             });
                         });
                     });
                 } else {
-                    ui.colored_label(
-                        freshness_color,
-                        match age {
+                    if forecast_style.is_some() {
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(14, 38, 60))
+                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(78, 137, 179)))
+                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::symmetric(6, 2))
+                            .show(ui, |ui| {
+                                ui.colored_label(Color32::from_rgb(111, 194, 255),
+                                    "● NOAA/NWS forecast · valid time below");
+                            });
+                    } else {
+                        ui.colored_label(freshness_color, match age {
                             Some(ref age) => format!("● {freshness} · scan {age}"),
                             None => format!("● {freshness} · waiting for scan"),
-                        },
-                    );
+                        });
+                    }
                 }
                 if self.analyst_open {
                     ui.label(format!("Editing {} · {} | Maps {} · Times {}", crate::products::name(self.views[self.active].moment, self.views[self.active].srv), site, if self.link_cameras { "linked" } else { "independent" }, if self.link_times { "linked" } else { "independent" }));

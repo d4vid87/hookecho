@@ -21,6 +21,8 @@ pub enum Error {
     },
     #[error("bad product description block (divider {0}, expected -1)")]
     BadPdb(i16),
+    #[error("invalid {0} packet")]
+    InvalidPacket(&'static str),
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -265,6 +267,13 @@ fn parse_symbology(
                 r.pos = layer_end; // one radial-array packet per layer
                 break;
             }
+            // AF1F is the 16-level run-length radial packet used by the public OHA/STA
+            // accumulation products. Like packet 16 it has no generic length halfword.
+            if code == 0xaf1f {
+                *radial = parse_rle_radial(&mut r, layer_end).ok();
+                r.pos = layer_end;
+                break;
+            }
             let num_bytes = r.u16("packet len")? as usize;
             let data_start = r.pos;
             let data_end = (data_start + num_bytes).min(layer_end);
@@ -383,6 +392,45 @@ fn parse_digital_radial(r: &mut Reader, layer_end: usize) -> Result<RadialArray>
     })
 }
 
+/// NEXRAD packet AF1F: four-bit run length followed by four-bit data level in each byte.
+/// The radial's length field counts 16-bit halfwords, including a possible zero padding byte.
+fn parse_rle_radial(r: &mut Reader, layer_end: usize) -> Result<RadialArray> {
+    let first_bin = r.u16("first_bin")?;
+    let nbins = r.u16("nbins")?;
+    let _i_center = r.i16("i_center")?;
+    let _j_center = r.i16("j_center")?;
+    let _scale = r.i16("scale")?;
+    let nradials = r.u16("nradials")?;
+    if nbins == 0 || nbins > 460 || nradials == 0 || nradials > 400 {
+        return Err(Error::InvalidPacket("AF1F"));
+    }
+    let mut radials = Vec::with_capacity(nradials as usize);
+    for _ in 0..nradials {
+        if r.pos + 6 > layer_end { break; }
+        let halfwords = r.u16("radial halfwords")? as usize;
+        let start_deg = r.i16("start angle")? as f32 * 0.1;
+        let delta_deg = r.i16("angle delta")? as f32 * 0.1;
+        let bytes = r.take(halfwords * 2, "radial rle")?;
+        let mut levels = Vec::with_capacity(nbins as usize);
+        for &packed in bytes {
+            let run = (packed >> 4) as usize;
+            let level = packed & 0x0f;
+            if run > 0 {
+                levels.extend(std::iter::repeat_n(level, run.min(nbins as usize - levels.len())));
+            }
+            if levels.len() == nbins as usize { break; }
+        }
+        if levels.len() != nbins as usize {
+            return Err(Error::Short { what: "radial rle", need: nbins as usize, have: levels.len() });
+        }
+        radials.push(Radial { start_deg, delta_deg, levels });
+    }
+    if radials.len() != nradials as usize {
+        return Err(Error::Short { what: "radials", need: nradials as usize, have: radials.len() });
+    }
+    Ok(RadialArray { first_bin, nbins, radials })
+}
+
 /// Decode a 16-bit NEXRAD-ICD floating-point value (sign / 5-bit exponent, bias 16 / 10-bit
 /// fraction), matching MetPy's `float16`. Used for DVL threshold scales/offsets.
 pub fn icd_float16(val: u16) -> f32 {
@@ -450,6 +498,48 @@ pub fn n0b_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
 /// range-folding draws level 1 itself. Negative values are inbound (toward the radar).
 pub fn n0g_value(level: u8, thr: &[i16; 16]) -> Option<f32> {
     n0b_value(level, thr)
+}
+
+/// Decode DAA (170) or DSA (172) to millimetres. The header carries two big-endian IEEE-754
+/// floats: `scale` in HW31-32 and `offset` in HW33-34. The ICD defines the result as hundredths
+/// of an inch, and level zero as NO_DATA; the other levels use `(level - offset) / scale`.
+pub fn accumulation_mm(level: u8, thr: &[i16; 16]) -> Option<f32> {
+    let leading = thr[6].clamp(1, 255) as u8;
+    let max_level = thr[5].clamp(1, 255) as u8;
+    let trailing = thr[7].clamp(0, 254) as u8;
+    if level < leading || level > max_level.saturating_sub(trailing) {
+        return None;
+    }
+    let read_float = |a: i16, b: i16| {
+        f32::from_bits((u32::from(a as u16) << 16) | u32::from(b as u16))
+    };
+    let scale = read_float(thr[0], thr[1]);
+    let offset = read_float(thr[2], thr[3]);
+    if !scale.is_finite() || scale <= 0.0 || !offset.is_finite() {
+        return None;
+    }
+    let hundredths_inch = (f32::from(level) - offset) / scale;
+    (hundredths_inch >= 0.0 && hundredths_inch.is_finite()).then_some(hundredths_inch * 0.254)
+}
+
+/// Lower edge of a 16-level NWS one-hour/storm-total precipitation color band in millimetres.
+/// AF1F carries categories rather than the exact accumulation of digital products 170/172.
+pub fn accumulation_band_mm(level: u8, thr: &[i16; 16]) -> Option<f32> {
+    let word = *thr.get(level as usize)? as u16;
+    let high = (word >> 8) as u8;
+    let low = (word & 0xff) as u8;
+    if high & 0x80 != 0 {
+        // BLANK, below-threshold, no-data and range-folded codes are not rain values.
+        return None;
+    }
+    let divisor = if high & 0x40 != 0 { 100.0 }
+        else if high & 0x20 != 0 { 20.0 }
+        else if high & 0x10 != 0 { 10.0 }
+        else { 1.0 };
+    let inches = f32::from(low) / divisor;
+    // The `>0` band is a trace category. Give it a small positive display value so the
+    // precipitation layer remains visible while preserving its categorical provenance.
+    Some(if inches == 0.0 && high & 0x08 != 0 { 0.254 } else { inches * 25.4 })
 }
 
 /// Decode an Enhanced Echo Tops (product 135) data level to (kft, topped-flag), via the threshold

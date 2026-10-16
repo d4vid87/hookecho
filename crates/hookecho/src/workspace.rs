@@ -91,6 +91,11 @@ pub struct Chrome {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PaneSnap {
     pub site: Option<String>,
+    /// Keep source selection independent of the remembered radar station/product.
+    #[serde(default = "visible_by_default")]
+    pub show_radar: bool,
+    #[serde(default = "visible_by_default")]
+    pub show_legend: bool,
     pub moment: wxdata::level2::Moment,
     #[serde(default)]
     pub custom_product: Option<String>,
@@ -126,7 +131,13 @@ pub struct PaneSnap {
     pub smooth: Option<bool>,
     #[serde(default)]
     pub globe: bool,
+    #[serde(default)]
+    pub pitch_deg: f64,
+    #[serde(default)]
+    pub bearing_deg: f64,
 }
+
+fn visible_by_default() -> bool { true }
 
 impl PaneSnap {
     /// Snapshot a live pane.
@@ -135,6 +146,8 @@ impl PaneSnap {
             crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
         Self {
             site: v.site.clone(),
+            show_radar: v.show_radar,
+            show_legend: v.show_legend,
             moment: v.moment,
             custom_product: v.custom_product.clone(),
             tilt: v.tilt,
@@ -154,6 +167,8 @@ impl PaneSnap {
             abi_scene: v.abi_scene,
             smooth: Some(v.smooth),
             globe: v.camera.globe,
+            pitch_deg: v.camera.pitch_deg,
+            bearing_deg: v.camera.bearing_deg,
             thresholds: wxdata::level2::Moment::ALL
                 .iter()
                 .enumerate()
@@ -167,6 +182,8 @@ impl PaneSnap {
     /// data fetches through the normal poll path, which is also what a fresh pane does.
     pub fn apply(&self, v: &mut MapView) {
         v.site = self.site.clone();
+        v.show_radar = self.show_radar;
+        v.show_legend = self.show_legend;
         v.moment = self.moment;
         v.custom_product = self.custom_product.clone();
         v.tilt = self.tilt;
@@ -180,6 +197,7 @@ impl PaneSnap {
         v.basemap = crate::tiles::BasemapStyle::from_slug(&self.basemap);
         v.camera = crate::render::mercator::Camera::at_lonlat(self.lon, self.lat, self.zoom);
         v.camera.globe = self.globe;
+        v.camera.set_orientation(self.pitch_deg, self.bearing_deg);
         // The camera came from the saved layout, not from a site recenter — hold it through the
         // site change the restore just triggered.
         v.camera_placed = true;
@@ -199,6 +217,8 @@ impl PaneSnap {
 fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
     PaneSnap {
         site: None,
+        show_radar: true,
+        show_legend: true,
         moment,
         custom_product: None,
         tilt,
@@ -218,6 +238,8 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
                 abi_scene: None,
         smooth: None,
         globe: false,
+        pitch_deg: 0.0,
+        bearing_deg: 0.0,
     }
 }
 
@@ -254,6 +276,8 @@ pub fn starters() -> Vec<Workspace> {
             // One pane, no site, the MRMS mosaic under the warnings — what is happening anywhere.
             panes: vec![PaneSnap {
                 site: None,
+                show_radar: true,
+                show_legend: true,
                 moment: Moment::Reflectivity,
                 custom_product: None,
                 tilt: 0,
@@ -269,6 +293,8 @@ pub fn starters() -> Vec<Workspace> {
                 abi_scene: None,
                 smooth: None,
         globe: false,
+        pitch_deg: 0.0,
+        bearing_deg: 0.0,
             }],
             active: 0,
             link_cameras: false,
@@ -324,7 +350,7 @@ mod tests {
     #[test]
     fn independent_satellite_selections_survive_workspace_roundtrip() {
         let mut view = MapView::new(Some("KTLX".into()), crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 7.0));
-        view.satellite = crate::satellite_time::Selection { follow_radar: false, time: chrono::DateTime::from_timestamp(1_700_000_000, 0) };
+        view.satellite = crate::satellite_time::Selection { follow_radar: false, time: chrono::DateTime::from_timestamp(1_700_000_000, 0), source_slug: None };
         let snapshot = PaneSnap::capture(&view);
         let encoded = serde_json::to_string(&snapshot).unwrap();
         let decoded: PaneSnap = serde_json::from_str(&encoded).unwrap();
@@ -457,6 +483,8 @@ mod tests {
             name: "Two-site chase".into(),
             panes: vec![PaneSnap {
                 site: Some("KDMX".into()),
+                show_radar: true,
+                show_legend: true,
                 moment: wxdata::level2::Moment::CorrelationCoefficient,
                 custom_product: Some("Debris score".into()),
                 tilt: 1,
@@ -472,6 +500,8 @@ mod tests {
                 abi_scene: None,
                 smooth: None,
         globe: false,
+        pitch_deg: 0.0,
+        bearing_deg: 0.0,
             }],
             active: 0,
             link_cameras: true,
@@ -537,4 +567,59 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn pitched_camera_workspace_roundtrip_and_legacy_defaults() {
+        let mut v=MapView::new(None,crate::render::mercator::Camera::at_lonlat(-97.0,35.0,8.0));
+        v.camera.set_orientation(58.0,275.0);
+        let encoded=serde_json::to_string(&PaneSnap::capture(&v)).unwrap();
+        let decoded:PaneSnap=serde_json::from_str(&encoded).unwrap();
+        let mut restored=MapView::new(None,crate::render::mercator::Camera::at_lonlat(-97.0,35.0,8.0));decoded.apply(&mut restored);
+        assert_eq!((restored.camera.pitch_deg,restored.camera.bearing_deg),(58.0,275.0));
+        let mut old:serde_json::Value=serde_json::from_str(&encoded).unwrap();
+        old.as_object_mut().unwrap().remove("pitch_deg");old.as_object_mut().unwrap().remove("bearing_deg");
+        let old:PaneSnap=serde_json::from_value(old).unwrap();old.apply(&mut restored);
+        assert_eq!((restored.camera.pitch_deg,restored.camera.bearing_deg),(0.0,0.0));
+    }
+
+    #[test]
+    fn hidden_radar_and_legend_survive_source_snapshot_without_losing_product() {
+        use crate::render::{FieldLayer, mercator::Camera};
+        use wxdata::level2::Moment;
+        let mut pane = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.28, 35.33, 8.0));
+        pane.moment = Moment::Velocity;
+        pane.custom_product = Some("Storm motion".into());
+        pane.tilt = 2;
+        pane.show_radar = false;
+        pane.show_legend = false;
+        pane.fields_on.clear();
+        pane.fields_on.insert(FieldLayer::GoesC13);
+        let encoded = serde_json::to_string(&PaneSnap::capture(&pane)).unwrap();
+        let snapshot: PaneSnap = serde_json::from_str(&encoded).unwrap();
+        // The app restores these field IDs after applying the pane, so source selection must
+        // retain both halves: the chosen field and the hidden native-radar flag.
+        assert_eq!(snapshot.fields_on, Some(vec![FieldLayer::GoesC13.stable_id().to_string()]));
+        let mut restored = MapView::new(Some("KFWS".into()), Camera::at_lonlat(0.0, 0.0, 3.0));
+        assert!(restored.show_radar && restored.show_legend);
+        snapshot.apply(&mut restored);
+        assert!(!restored.show_radar);
+        assert!(!restored.show_legend);
+        assert_eq!(restored.site.as_deref(), Some("KTLX"));
+        assert_eq!(restored.moment, Moment::Velocity);
+        assert_eq!(restored.custom_product.as_deref(), Some("Storm motion"));
+        assert_eq!(restored.tilt, 2);
+    }
+
+    #[test]
+    fn legacy_snapshot_restores_visible_radar_and_legend_defaults() {
+        let legacy = r#"{"site":"KTLX","moment":"Reflectivity","tilt":0,"basemap":"dark","lon":-97.28,"lat":35.33,"zoom":8.0}"#;
+        let snapshot: PaneSnap = serde_json::from_str(legacy).unwrap();
+        assert!(snapshot.show_radar && snapshot.show_legend);
+        let mut restored = MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 3.0));
+        restored.show_radar = false;
+        restored.show_legend = false;
+        snapshot.apply(&mut restored);
+        assert!(restored.show_radar && restored.show_legend);
+        assert_eq!(restored.site.as_deref(), Some("KTLX"));
+    }
+
 }

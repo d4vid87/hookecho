@@ -35,6 +35,11 @@ export const ALLOWED_HOSTS = [
   "api.weather.gov",
   "tgftp.nws.noaa.gov",
   "mapservices.weather.noaa.gov",
+  "ftp.cpc.ncep.noaa.gov",
+  "www.cpc.ncep.noaa.gov",
+  "www.wpc.ncep.noaa.gov",
+  "digital.weather.gov",
+  "ftp-wpc.ncep.noaa.gov",
   "www.spc.noaa.gov",
   "www.nhc.noaa.gov",
   "www.ndbc.noaa.gov",
@@ -97,7 +102,9 @@ const RANGE_HOSTS = new Set([
 function modelRange(request, host) {
   const value = request.headers.get("range");
   if (!value) return null;
-  if (!RANGE_HOSTS.has(host)) return false;
+  // A browser may resume a small cached object with Range. Ordinary feeds do not need partial
+  // responses: strip that header and fetch the capped whole object, as the local proxy does.
+  if (!RANGE_HOSTS.has(host)) return null;
   const match = /^bytes=(\d+)-(\d*)$/.exec(value);
   if (!match) return false;
   const start = Number(match[1]);
@@ -124,6 +131,9 @@ export const LIVE_HOSTS = new Set([
 const ARCHIVE_BUCKET = "unidata-nexrad-level2.s3.amazonaws.com";
 
 export const cacheSeconds = (host, search = "") => {
+  // Caltrans still URLs are stable while the JPEG changes. Keep the proxy's cached copy no older
+  // than the open camera card's one-minute refresh interval.
+  if (host === "cwwp2.dot.ca.gov") return 60;
   // A bucket listing is how the app finds the newest volume — cache that like a live feed or the
   // loop stops advancing.
   if (search.includes("list-type=")) return 15;
@@ -153,6 +163,7 @@ export function contentType(upstream) {
       return "application/json";
     case "application/xml":
     case "text/xml":
+    case "application/vnd.google-earth.kml+xml":
       return "application/xml";
     case "text/plain":
       return "text/plain; charset=utf-8";
@@ -242,7 +253,13 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   try {
     // Only a validated model byte range is forwarded; all other client headers stay private.
     upstream = await fetch(target, {
-      headers: { "user-agent": USER_AGENT, ...(range ? { range } : {}) },
+      headers: {
+        "user-agent": USER_AGENT,
+        // The public FAA WeatherCams API checks its own site Referer. Never forward the
+        // viewer's Referer; use a fixed value for this one allowlisted host only.
+        ...(host === "weathercams.faa.gov" ? { referer: "https://weathercams.faa.gov/" } : {}),
+        ...(range ? { range } : {}),
+      },
       ...fetchInit(host, url.search, !!range),
       // An allowed upstream must not redirect this proxy to a host outside the allowlist.
       redirect: "manual",

@@ -73,7 +73,8 @@ for h5 in sorted(HERE.glob("*.h5")):
                 out["attrs"][p] = attrs_of(g)
         out["children"] = {p: sorted(f[p].keys()) for p in ["dataset1", "dataset1/data1"]}
         for p in ["dataset1/data1/data", "dataset5/data1/data"]:
-            out["datasets"][p] = summarize(np.asarray(f[p][()], dtype="float64"))
+            if p in f:
+                out["datasets"][p] = summarize(np.asarray(f[p][()], dtype="float64"))
     (HERE / (h5.stem + ".golden.json")).write_text(json.dumps(out, indent=1))
     print("wrote", h5.stem + ".golden.json")
 

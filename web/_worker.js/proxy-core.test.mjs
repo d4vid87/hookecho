@@ -53,6 +53,16 @@ test("the client's conditional headers are never forwarded upstream", async () =
   assert.deepEqual(Object.keys(calls[0].init.headers), ["user-agent"]);
 });
 
+test("FAA WeatherCams gets only its required fixed site Referer", async () => {
+  const calls = stubFetch(upstream());
+  await proxy(ask("weathercams.faa.gov/api/sites?zoom=10", { referer: "https://attacker.example/", cookie: "secret" }));
+  assert.equal(calls[0].init.headers.referer, "https://weathercams.faa.gov/");
+  assert.equal(calls[0].init.headers.cookie, undefined);
+  const imageCalls = stubFetch(upstream());
+  await proxy(ask("images.wcams-static.faa.gov/sample.jpg", { referer: "https://attacker.example/" }));
+  assert.equal(imageCalls[0].init.headers.referer, undefined);
+});
+
 test("upstream redirects cannot escape the host allowlist", async () => {
   const calls = stubFetch(new Response(null, {
     status: 302,
@@ -88,6 +98,7 @@ test("the TTL table is the one the app's cadences were chosen against", () => {
   assert.equal(cacheSeconds("maps.dwd.de", "?TIME=2026"), 300);
   assert.equal(cacheSeconds("maps.dwd.de", "?LAYERS=rv"), 15);
   assert.equal(cacheSeconds("tgftp.nws.noaa.gov", ""), 300);
+  assert.equal(cacheSeconds("cwwp2.dot.ca.gov", ""), 60);
 });
 
 test("the trust boundary is unchanged", async () => {
@@ -113,6 +124,13 @@ test("model byte ranges reach the upstream and remain partial responses", async 
   assert.equal(res.headers.get("content-range"), "bytes 0-3/100");
   assert.equal(await res.text(), "GRIB");
   assert.deepEqual(calls[0].init.headers, { "user-agent": calls[0].init.headers["user-agent"], range: "bytes=0-3" });
+});
+
+test("ordinary radar objects ignore browser resume ranges", async () => {
+  const calls = stubFetch(upstream({}, "TDWR"));
+  const res = await proxy(ask("unidata-nexrad-level3.s3.amazonaws.com/DFW_TZ1_2026_10_15_18_26_23", { range: "bytes=0-100" }));
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].init.headers.range, undefined);
 });
 
 test("RTMA host is permitted, but malformed or oversized ranges are refused", async () => {

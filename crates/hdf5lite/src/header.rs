@@ -21,50 +21,56 @@ pub enum Layout {
 /// The on-disk numeric type of a dataset's elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Datatype {
-    Int { size: usize, signed: bool },
-    Float { size: usize },
+    Int { size: usize, signed: bool, big_endian: bool },
+    Float { size: usize, big_endian: bool },
 }
 
 impl Datatype {
     /// Width of one element in bytes.
     pub fn size_of(self) -> usize {
         match self {
-            Datatype::Int { size, .. } | Datatype::Float { size } => size,
+            Datatype::Int { size, .. } | Datatype::Float { size, .. } => size,
         }
     }
 
     /// Read one element as `f64`.
     fn read(self, b: &[u8]) -> f64 {
+        let size = self.size_of();
+        if size > 8 || b.len() < size { return f64::NAN; }
+        let big_endian = match self {
+            Datatype::Int { big_endian, .. } | Datatype::Float { big_endian, .. } => big_endian,
+        };
+        let mut word = [0u8; 8];
+        word[..size].copy_from_slice(&b[..size]);
+        if big_endian { word[..size].reverse(); }
         match self {
-            Datatype::Float { size: 4 } => f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64,
-            Datatype::Float { size: 8 } => {
-                f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
-            }
-            Datatype::Int { size: 1, signed } => {
+            Datatype::Float { size: 4, .. } => f32::from_le_bytes(word[..4].try_into().unwrap()) as f64,
+            Datatype::Float { size: 8, .. } => f64::from_le_bytes(word),
+            Datatype::Int { size: 1, signed, .. } => {
                 if signed {
-                    b[0] as i8 as f64
+                    word[0] as i8 as f64
                 } else {
-                    b[0] as f64
+                    word[0] as f64
                 }
             }
-            Datatype::Int { size: 2, signed } => {
-                let v = u16::from_le_bytes([b[0], b[1]]);
+            Datatype::Int { size: 2, signed, .. } => {
+                let v = u16::from_le_bytes(word[..2].try_into().unwrap());
                 if signed {
                     v as i16 as f64
                 } else {
                     v as f64
                 }
             }
-            Datatype::Int { size: 4, signed } => {
-                let v = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            Datatype::Int { size: 4, signed, .. } => {
+                let v = u32::from_le_bytes(word[..4].try_into().unwrap());
                 if signed {
                     v as i32 as f64
                 } else {
                     v as f64
                 }
             }
-            Datatype::Int { size: 8, signed } => {
-                let v = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+            Datatype::Int { size: 8, signed, .. } => {
+                let v = u64::from_le_bytes(word);
                 if signed {
                     v as i64 as f64
                 } else {
@@ -257,8 +263,8 @@ fn messages_v1(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
             }
             if kind == MSG_CONTINUATION {
                 let mut cc = Cur::new(d, start, "continuation");
-                let caddr = cc.u64()? as usize;
-                let clen = cc.u64()? as usize;
+                let caddr = cc.addr()? as usize;
+                let clen = cc.length()? as usize;
                 queue.push((caddr, caddr.saturating_add(clen)));
             } else if kind != 0 {
                 // Type 0 is NIL — space freed by an edit, holding nothing.
@@ -332,8 +338,8 @@ fn messages_v2(d: &[u8], addr: u64) -> Result<Vec<Msg>> {
             }
             if kind == MSG_CONTINUATION {
                 let mut cc = Cur::new(d, start, "continuation");
-                let caddr = cc.u64()?;
-                let clen = cc.u64()?;
+                let caddr = cc.addr()?;
+                let clen = cc.length()?;
                 queue.push((caddr, Some(clen)));
             } else {
                 out.push(Msg { kind, start });
@@ -413,7 +419,7 @@ fn parse_dataspace(d: &[u8], at: usize) -> Result<Vec<u64>> {
     }
     let mut dims = Vec::with_capacity(rank);
     for _ in 0..rank {
-        dims.push(c.u64()?);
+        dims.push(c.length()?);
     }
     // Max dims follow when flagged; the current extent is what we read.
     let _ = flags;
@@ -436,16 +442,15 @@ fn parse_datatype(d: &[u8], at: usize) -> Result<Datatype> {
     let _flags2 = c.u8()?;
     let size = c.u32()? as usize;
     // Bit 0 of the first flags byte is the byte order: 0 little-endian, 1 big-endian.
-    if flags0 & 0x01 != 0 {
-        return Err(Error::Unsupported("big-endian datatype".into()));
-    }
+    let big_endian = flags0 & 0x01 != 0;
     match class {
         0 => Ok(Datatype::Int {
             size,
             // Bit 3 selects two's-complement (signed) over unsigned.
             signed: flags0 & 0x08 != 0,
+            big_endian,
         }),
-        1 => Ok(Datatype::Float { size }),
+        1 => Ok(Datatype::Float { size, big_endian }),
         other => Err(Error::Unsupported(format!("datatype class {other}"))),
     }
 }
@@ -481,14 +486,14 @@ fn parse_layout(d: &[u8], at: usize) -> Result<Layout> {
     let class = c.u8()?;
     match class {
         1 => {
-            let addr = c.u64()?;
-            let size = c.u64()?;
+            let addr = c.addr()?;
+            let size = c.length()?;
             Ok(Layout::Contiguous { addr, size })
         }
         2 => {
             // Dimensionality counts the chunk dims plus a trailing element-size entry.
             let rank = c.u8()? as usize;
-            let btree_addr = c.u64()?;
+            let btree_addr = c.addr()?;
             let mut dims = Vec::with_capacity(rank.saturating_sub(1));
             for _ in 0..rank.saturating_sub(1) {
                 dims.push(c.u32()?);

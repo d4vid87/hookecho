@@ -40,10 +40,10 @@ mod imp {
 
     impl ksni::Tray for HookEchoTray {
         fn id(&self) -> String {
-            "hookecho".into()
+            crate::paths::application_id().into()
         }
         fn title(&self) -> String {
-            "HookEcho".into()
+            crate::paths::application_name().into()
         }
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
             vec![self.icon.clone()]
@@ -92,7 +92,7 @@ mod imp {
             }
             items.extend([
                 StandardItem {
-                    label: "Show HookEcho".into(),
+                    label: format!("Show {}", crate::paths::application_name()),
                     activate: Box::new(|t: &mut HookEchoTray| {
                         let _ = t.tx.send(TrayCmd::Show);
                     }),
