@@ -287,13 +287,13 @@ mod tests {
         use wgpu::naga;
         let source = include_str!("../shaders/radar_surface_composite.wgsl");
         let module = naga::front::wgsl::parse_str(source).unwrap();
-        let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
+        let _info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
         #[cfg(target_os = "linux")]
         for entry in &module.entry_points {
             let options = naga::back::glsl::Options { version: naga::back::glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
             let pipeline = naga::back::glsl::PipelineOptions { shader_stage: entry.stage, entry_point: entry.name.clone(), multiview: None };
             let mut output = String::new();
-            naga::back::glsl::Writer::new(&mut output, &module, &info, &options, &pipeline, Default::default()).unwrap().write().unwrap();
+            naga::back::glsl::Writer::new(&mut output, &module, &_info, &options, &pipeline, Default::default()).unwrap().write().unwrap();
         }
     }
 

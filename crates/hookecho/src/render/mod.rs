@@ -2421,13 +2421,13 @@ mod projection_shader_tests {
             ("wind",include_str!("../shaders/wind.wgsl")),
         ] {
             let module=naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{name}: {}",e.emit_to_string(source)));
-            let info=naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let _info=naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
             #[cfg(target_os = "linux")]
             for entry in &module.entry_points {
                 let options=naga::back::glsl::Options {version:naga::back::glsl::Version::Embedded {version:300,is_webgl:true},..Default::default()};
                 let pipeline=naga::back::glsl::PipelineOptions {shader_stage:entry.stage,entry_point:entry.name.clone(),multiview:None};
                 let mut output=String::new();
-                naga::back::glsl::Writer::new(&mut output,&module,&info,&options,&pipeline,Default::default()).unwrap().write().unwrap_or_else(|e| panic!("WebGL2 {name}/{}: {e:?}",entry.name));
+                naga::back::glsl::Writer::new(&mut output,&module,&_info,&options,&pipeline,Default::default()).unwrap().write().unwrap_or_else(|e| panic!("WebGL2 {name}/{}: {e:?}",entry.name));
             }
             let uniform=module.types.iter().find_map(|(_,ty)| {
                 if ty.name.as_deref()==Some(if name=="wind" { "Wind" } else { "Camera" }) {
