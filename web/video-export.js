@@ -2,7 +2,7 @@
 // live canvas while its timeline is being fetched. MediaRecorder chooses the container the
 // current browser can actually write; the extension always follows the resulting MIME type.
 // Browsers may reject a programmatic download after asynchronous recording. Offer the finished
-// blob through a real button so the download begins with a fresh user gesture.
+// blob through a real download link so the browser handles a direct user click.
 globalThis.__hookechoExportVideo = async (frames, width, height, fps) => {
   if (!frames?.length || !width || !height) throw new Error("No video frames were captured");
   if (!globalThis.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) {
@@ -76,16 +76,14 @@ globalThis.__hookechoExportVideo = async (frames, width, height, fps) => {
     const title = document.createElement("div");
     title.textContent = `${ext.toUpperCase()} video ready · ${frames.length} frames`;
     title.style.cssText = "font-weight:700;margin-bottom:8px";
-    const save = document.createElement("button");
+    const save = document.createElement("a");
     save.textContent = `Save ${ext.toUpperCase()}`;
-    save.style.cssText = "background:#2872c3;color:white;border:1px solid #8abcf0;border-radius:6px;padding:7px 12px;cursor:pointer;font:inherit";
+    save.href = panel.videoUrl;
+    save.download = `hookecho-loop.${ext}`;
+    save.style.cssText = "display:inline-block;background:#2872c3;color:white;text-decoration:none;border:1px solid #8abcf0;border-radius:6px;padding:7px 12px;cursor:pointer;font:inherit";
     const status = document.createElement("div");
     status.style.cssText = "font-size:12px;margin-top:8px;color:#cadcf1";
     save.addEventListener("click", () => {
-      const link = document.createElement("a");
-      link.href = panel.videoUrl;
-      link.download = `hookecho-loop.${ext}`;
-      link.click();
       status.textContent = "Download requested. You can click Save again if needed.";
     });
     const close = document.createElement("button");
