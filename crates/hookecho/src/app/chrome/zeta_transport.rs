@@ -136,7 +136,10 @@ impl HookEchoApp {
         #[cfg(target_arch = "wasm32")]
         let mut load_pack = None;
         let accent = egui::Color32::from_rgb(255, 190, 42);
-        let area = egui::Area::new(egui::Id::new("zeta_transport"))
+        let expanded_id = egui::Id::new("zeta_transport_expanded");
+        let split = self.chrome_rect.width() >= 1100.0;
+        let mut expanded = !split || ctx.data_mut(|d| d.get_temp::<bool>(expanded_id).unwrap_or(false));
+        let area = if expanded { egui::Area::new(egui::Id::new("zeta_transport"))
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .show(ctx, |ui| {
@@ -429,13 +432,73 @@ impl HookEchoApp {
                         else if loading { load_label.into() }
                         else if skipped { "Skipped unavailable radar frame".into() }
                         else if !self.views[idx].timeline.following { self.views[idx].timeline.date.format("Archive · %Y-%m-%d").to_string() }
-                        else { age.unwrap_or_default() };
+                        else { age.clone().unwrap_or_default() };
                         if !status.is_empty() {
                             ui.add(egui::Label::new(egui::RichText::new(status).size(11.0).color(egui::Color32::from_gray(190))).wrap())
                                 .on_hover_text(format!("Displayed scan: {}\nRequested scan: {}", loaded_time.map_or_else(|| "unavailable".into(), |t| t.to_rfc3339()), requested_time.map_or_else(|| "unavailable".into(), |t| t.to_rfc3339())));
                         }
                     });
-            });
+            })
+        } else {
+            egui::Area::new(egui::Id::new("zeta_transport_compact"))
+                .order(egui::Order::Foreground)
+                .constrain_to(self.chrome_rect)
+                .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -18.0))
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgba_unmultiplied(8, 11, 17, 244))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(68)))
+                        .corner_radius(18.0)
+                        .inner_margin(egui::Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.spacing_mut().interact_size.y = 30.0;
+                            ui.horizontal(|ui| {
+                                if radar_visible {
+                                    if zeta_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
+                                    let playing = self.views[idx].timeline.playing;
+                                    if zeta_button(ui, if playing { ph::PAUSE } else { ph::PLAY }, if playing { "Pause" } else { "Play" }, playing).clicked() { self.views[idx].timeline.toggle_play(); }
+                                    if zeta_button(ui, ph::SKIP_FORWARD, "Next frame", false).clicked() { self.views[idx].timeline.step_cut(1); }
+                                    ui.separator();
+                                }
+                                if zeta_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
+                                if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
+                                if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
+                                if zeta_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
+                                if zeta_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
+                                if zeta_button(ui, ph::PENCIL_SIMPLE, "Draw on the map", self.tool == MapTool::Draw).clicked() { action = Some(PaletteAction::Tool(MapTool::Draw)); }
+                                if zeta_button(ui, ph::SLIDERS_HORIZONTAL, "Full playback controls", false).clicked() { expanded = true; }
+                            });
+                        });
+                })
+        };
+        if split {
+            let history = egui::Area::new(egui::Id::new("zeta_history_compact"))
+                .order(egui::Order::Foreground)
+                .constrain_to(self.chrome_rect)
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -18.0))
+                .show(ctx, |ui| {
+                    egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(8, 11, 17, 244))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(68)))
+                        .corner_radius(14.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                            if ui.button(format!("{} Frames  ·  {}", effective_loop, age.as_deref().unwrap_or("Waiting for scan")))
+                                .on_hover_text("Open full radar playback and history").clicked() { expanded = !expanded; }
+                        });
+                });
+            self.mobile_occlusion.push(history.response.rect);
+            let product = egui::Area::new(egui::Id::new("zeta_product_compact"))
+                .order(egui::Order::Foreground)
+                .constrain_to(self.chrome_rect)
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -18.0))
+                .show(ctx, |ui| {
+                    egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(8, 11, 17, 244))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(68)))
+                        .corner_radius(14.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                            self.radar_product_controls(ui, true);
+                        });
+                });
+            self.mobile_occlusion.push(product.response.rect);
+            ctx.data_mut(|d| d.insert_temp(expanded_id, expanded));
+        }
         if let (Some(layer), Some(index)) = (active_mrms, mrms_seek) {
             if let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| loop_state.layer == layer) {
                 loop_state.index = index;

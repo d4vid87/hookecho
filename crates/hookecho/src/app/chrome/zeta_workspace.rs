@@ -278,6 +278,7 @@ impl HookEchoApp {
         let mut notification_settings = false;
         let mut return_to_radar = false;
         let mut use_standard_layout = false;
+        let mut open_search = false;
         let mut compare_panes = None;
         let entries = self.palette_entries();
         let top = egui::Area::new("zeta_workspace_top".into())
@@ -295,10 +296,11 @@ impl HookEchoApp {
                         {
                             menu_open = !menu_open;
                         }
-                        ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(40.0, 40.0)))
-                            .on_hover_text("HookEcho");
+                        if ui.button(ph::POWER).on_hover_text("Return to live radar").clicked() {
+                            action = Some(PaletteAction::GoLive);
+                        }
                         egui::containers::menu::MenuButton::new(
-                            egui::RichText::new(format!("{} {}", source_label, ph::CARET_DOWN))
+                            egui::RichText::new(format!("{} {}", if source_label == "Radar" { "Single site" } else { source_label }, ph::CARET_DOWN))
                                 .size(16.0),
                         )
                         .config(
@@ -407,16 +409,14 @@ impl HookEchoApp {
                         })
                         .0
                         .named("Weather source mode");
-                        use_standard_layout = ui.button("Radar Zeta UI ✓")
-                            .named_toggle("Radar Zeta UI", true)
-                            .on_hover_text("Switch back to the standard layout")
+                        open_search = ui.button(ph::MAGNIFYING_GLASS)
+                            .named("Search places and tools")
                             .clicked();
                     });
                 });
             });
-        if use_standard_layout {
-            self.settings.radar_workspace = false;
-            self.settings.save();
+        if open_search {
+            self.apply_action(BindableAction::CommandSearch, ctx);
         }
         self.mobile_occlusion.push(top.response.rect);
         self.tour_anchors.menu = Some(top.response.rect);
@@ -569,6 +569,26 @@ impl HookEchoApp {
             });
         self.mobile_occlusion.push(station_area.response.rect);
 
+        if room_for_center {
+            let warning_count = self.active_alert_features().iter()
+                .filter(|feature| feature.kind == wxdata::overlay::FeatureKind::Warning)
+                .count();
+            let alerts = egui::Area::new("zeta_workspace_alerts".into())
+                .order(egui::Order::Foreground)
+                .constrain_to(self.chrome_rect)
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 24.0))
+                .show(ctx, |ui| {
+                    workspace_style(ui);
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = ACCENT;
+                    ui.visuals_mut().widgets.hovered.weak_bg_fill = ACCENT;
+                    if ui.button(egui::RichText::new(format!("{warning_count} ALERTS")).strong().color(egui::Color32::BLACK))
+                        .named("Open alerts").clicked() {
+                        action = Some(PaletteAction::ToggleOverlay(OverlayToggle::AlertPanel));
+                    }
+                });
+            self.mobile_occlusion.push(alerts.response.rect);
+        }
+
         if menu_open && !menu_was_open {
             let previous = (self.panel_open, self.drawer.is_open());
             ctx.data_mut(|d| {
@@ -631,6 +651,10 @@ impl HookEchoApp {
                                 .max_height((bounds.height() - 105.0).max(60.0))
                                 .show(ui, |ui| {
                                     section(ui, "VIEWS");
+                                    if menu_row(ui, "Radar Zeta UI ✓", true).on_hover_text("Switch back to the standard layout").clicked() {
+                                        use_standard_layout = true;
+                                        menu_open = false;
+                                    }
                                     if menu_row(ui, "Radar", !self.analyst_open).clicked() {
                                         return_to_radar = true;
                                     }
@@ -846,6 +870,10 @@ impl HookEchoApp {
                         });
                 });
             self.mobile_occlusion.push(side.response.rect);
+        }
+        if use_standard_layout {
+            self.settings.radar_workspace = false;
+            self.settings.save();
         }
         if return_to_radar {
             menu_open = false;
