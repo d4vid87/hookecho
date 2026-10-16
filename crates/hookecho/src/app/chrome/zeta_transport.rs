@@ -360,7 +360,13 @@ impl HookEchoApp {
                                     .unwrap_or_else(|| if t.listing { "Listing volumes…" } else if archived { "No volumes" } else { "Live only" }.into())
                             }) };
                             ui.label(egui::RichText::new(clock).size(12.0));
-
+                            if split {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button(format!("{} Minimal controls", ph::CARET_DOWN))
+                                        .on_hover_text("Collapse playback controls")
+                                        .clicked() { expanded = false; }
+                                });
+                            }
                         });
                         let t = &mut self.views[idx].timeline;
                         if !radar_visible {
@@ -471,7 +477,7 @@ impl HookEchoApp {
                         });
                 })
         };
-        if split {
+        if split && !expanded {
             let history = egui::Area::new(egui::Id::new("zeta_history_compact"))
                 .order(egui::Order::Foreground)
                 .constrain_to(self.chrome_rect)
@@ -497,8 +503,8 @@ impl HookEchoApp {
                         });
                 });
             self.mobile_occlusion.push(product.response.rect);
-            ctx.data_mut(|d| d.insert_temp(expanded_id, expanded));
         }
+        if split { ctx.data_mut(|d| d.insert_temp(expanded_id, expanded)); }
         if let (Some(layer), Some(index)) = (active_mrms, mrms_seek) {
             if let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| loop_state.layer == layer) {
                 loop_state.index = index;
@@ -606,5 +612,4 @@ fn zeta_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egu
         .corner_radius(16.0),
     )
     .named_toggle(label, active)
-    .on_hover_text(label)
 }
