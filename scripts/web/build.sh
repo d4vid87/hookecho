@@ -37,7 +37,8 @@ find web/dist/snippets -type f -name 'inline*.js' | while read -r snippet; do
   hash="$(sha256sum "$snippet" | cut -c1-8)"
   hashed="${snippet%.js}-$hash.js"
   cp "$snippet" "$hashed"
-  sed -i "s#${snippet#web/dist/}#${hashed#web/dist/}#g" "$glue"
+  # Only the JS import URL changes. The wasm import-map key below it is part of the ABI.
+  sed -i "/^import .* from /s#${snippet#web/dist/}#${hashed#web/dist/}#" "$glue"
 done
 
 # wasm-opt takes another ~15% off what LTO leaves behind. Convergence saves another ~6 KB gzip
