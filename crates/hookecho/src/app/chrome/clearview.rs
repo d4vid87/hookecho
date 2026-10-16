@@ -219,9 +219,9 @@ impl HookEchoApp {
                         }
                         ui.separator();
                         rail_heading(ui, "LAYOUT");
-                        enable_zeta_layout = rail_choice(ui, "◫  Radar Zeta UI", false)
-                            .named_toggle("Radar Zeta UI", false)
-                            .on_hover_text("Switch to the source selector, tools drawer and centered playback controls")
+                        enable_zeta_layout = rail_choice(ui, "◫  HookEcho layout", false)
+                            .named_toggle("HookEcho layout", false)
+                            .on_hover_text("Switch to compact map controls and the playback dock")
                             .clicked();
                     });
             }));
