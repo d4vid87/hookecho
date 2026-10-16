@@ -95,6 +95,9 @@ start_xvfb() {
 write_profile() {
   local extra="${1:-{\}}"
   mkdir -p "$PROFILE/hookecho"
+  # A prior scene can leave a recovery session with Analyst panes or open windows.
+  # Each capture starts from its requested scene, not the previous one's UI state.
+  rm -f "$PROFILE/hookecho/recovery.json"
   local key
   key="$(jq -r '.mapbox_key // ""' "$HOME/.config/hookecho/settings.json" 2>/dev/null || echo "")"
   [ -n "$key" ] || log "WARNING: no mapbox_key found — shots will fall back to the dark vector basemap"
@@ -349,8 +352,9 @@ scene_forecast() {
   launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},8.6"
   wait_settle 20 160
   palette "$L_FORECAST"
-  click 700 430
-  click 700 430  # first tap positions the crosshair; second opens the forecast
+  click 950 430 # outside the search panel, at a map location
+  click 950 430 # first tap positions the crosshair; second opens the forecast
+  click 702 201 # close search without dismissing the forecast card
   wait_settle 8
   snap forecast
 }
@@ -361,6 +365,7 @@ scene_stormtable() { # SCIT cells are fetched for today/yesterday only
   launch "${LIVE_SITE:-KTLX},${LIVE_LON:--97.3},${LIVE_LAT:-35.3},8.4"
   wait_settle 20
   palette "$L_STORMTABLE"
+  key Escape # dismiss search so the map and Storm dock can be read together
   wait_settle 8
   snap stormtable
 }

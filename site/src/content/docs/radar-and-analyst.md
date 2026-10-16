@@ -6,9 +6,9 @@ order: 2
 
 HookEcho opens in **Radar** mode: one map and a timeline. **Analyst** is an optional workbench for comparing products and inspecting their data. Open **Analysis** from the Views menu to compare four products; choose **Radar** there to return to one map.
 
-![Radar mode replaying the archived Moore storm](/shots/radar-mode-20261004.webp)
+![Radar mode replaying the archived Moore storm](/shots/radar-mode-20261016.webp)
 
-*KTLX archive replay from May 20, 2013, recaptured October 4, 2026; it is not current weather.*
+*KTLX archive replay from May 20, 2013, recaptured October 16, 2026; it is not current weather.*
 
 ## Use the short menu
 
@@ -30,9 +30,9 @@ Settings opens from the control beside search. Press **Ctrl+S** to open and focu
 4. Use **Options** for linked maps and time. Open **Inspector** for product values and the actual source time.
 5. Select **Radar** to return to one map. Select **Analysis** again to resume the multi-pane arrangement.
 
-![Analyst mode with four radar products](/shots/analyst-mode-20261004.webp)
+![Analyst mode with four radar products](/shots/analyst-mode-20261016.webp)
 
-*KTLX archive replay from May 20, 2013, recaptured October 4, 2026. The panes show reflectivity, velocity, correlation coefficient, and differential reflectivity.*
+*KTLX archive replay from May 20, 2013, recaptured October 16, 2026. The panes show reflectivity, velocity, correlation coefficient, and differential reflectivity.*
 
 Your site, map position, product, overlays, threshold settings, and selected live or archive time remain with each mode while the app is open. A disabled threshold remains disabled. Save a **Workspace** in Tools if you want to keep an arrangement across restarts. Multi-pane and explicitly analyst workspaces open in Analyst; ordinary single-pane workspaces open in Radar.
 

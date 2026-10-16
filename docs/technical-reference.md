@@ -22,7 +22,7 @@ If HookEcho is useful to you, please [give the project a star](https://github.co
 
 ![Current Radar view stepping through a KTLX archive replay](shots/radar-mode.gif)
 
-<sub>**Radar mode — KTLX, May 20, 2013.** Actual current interface over an archived storm; not live weather.</sub>
+<sub>**Radar Zeta — KTLX, May 20, 2013.** Recaptured October 16, 2026 over an archived storm; not live weather.</sub>
 
 ![Analyst Workstation advancing four linked radar products](shots/analyst-mode.gif)
 
@@ -75,12 +75,11 @@ has a default and lives in **Settings**. A short tour is optional.
 
 ## The interface
 
-HookEcho opens in **Radar**, a full-bleed single map. The fixed header keeps
-**Radar | Analyst**, search, and Settings reachable above the panel. The menu
-has four task sections: **Radar** (site, product, tilt, threshold), **Overlays**
-(storm tracks, MRMS, storm attributes, SPC outlook), **Alerts** (warning count
-and list), and **Tools** (catalog and saved workspaces). Ctrl+S focuses search;
-Space plays or pauses radar, and Escape hides or restores map controls.
+HookEcho opens in **Radar Zeta**, a full-bleed single map with a compact command
+row at the top and playback and map tools along the bottom. The menu groups
+**Views**, **Layers**, and **Your Map**; search reaches the full product and tool
+catalog. Ctrl+K opens search; Space plays or pauses radar, and Escape hides
+or restores map controls.
 
 **Analyst** uses the same header plus a fixed toolbar for presets, pane count,
 linked map/time, active pane and Inspector. Returning to Radar restores the
@@ -184,10 +183,10 @@ HRRR future radar rides the timeline's forecast tail, so scrubbing past the
 present keeps going into the model. It is labeled the whole time it is on —
 model output should never be mistaken for something a radar actually saw.
 
-![HRRR future radar one hour out, with a banner marking it as model output](shots/hrrr.jpg)
+![Radar Zeta showing the HRRR forecast layer's stale-source notice](shots/hrrr.jpg)
 
-<sub>**HRRR future radar, +1 h.** The banner stays up for as long as the layer is
-on: forecast, not observed.</sub>
+<sub>**HRRR forecast layer.** At this capture time the model data failed the
+freshness check, so the layer was hidden rather than shown as current radar.</sub>
 
 Any point on the map gives you the plain NWS forecast for that spot, and the WPC
 surface analysis draws the national weather map — fronts with their proper pips,
@@ -195,8 +194,8 @@ highs and lows with pressures.
 
 | Surface analysis | Point forecast |
 |---|---|
-| ![Fronts, highs and lows across the country](shots/fronts.jpg) | ![A seven-day forecast for a clicked point](shots/forecast.jpg) |
-| <sub>WPC coded surface analysis, live</sub> | <sub>Tap anywhere — Oklahoma, live</sub> |
+| ![Radar Zeta national view after enabling surface analysis](shots/fronts.jpg) | ![A seven-day forecast for a clicked point](shots/forecast.jpg) |
+| <sub>WPC surface analysis enabled; no front lines visible in this capture</sub> | <sub>Tap the map for a live point forecast</sub> |
 
 Also on the forecast tail: **rotation tracks** (HRRR max updraft-helicity swaths
 — where storms are forecast to rotate, accumulated across the hours you scrub
@@ -210,8 +209,8 @@ happening here" — plus rainfall accumulated over the last hour or day.
 
 | National mosaic | 24-hour rainfall |
 |---|---|
-| ![MRMS composite reflectivity across the continental US](shots/mrms.jpg) | ![Accumulated rainfall across the southern Plains](shots/qpe.jpg) |
-| <sub>MRMS composite reflectivity, live</sub> | <sub>MRMS gauge-corrected precipitation, live</sub> |
+| ![MRMS composite reflectivity across the continental US](shots/mrms.jpg) | ![Radar Zeta showing the 24-hour rainfall layer's stale-source notice](shots/qpe.jpg) |
+| <sub>MRMS composite reflectivity, live</sub> | <sub>24-hour rainfall hidden because the source was older than the selected scan at capture time</sub> |
 
 There is also a **multi-radar mosaic** built the other way round: instead of a
 national 1 km product, every radar covering your view contributes its own base

@@ -14,9 +14,9 @@ Start with one storm and a question. Use **Analyst** to compare products, check 
 4. Use **Options** to link maps and time. Open **Inspector** for values and the actual source time.
 5. Keep the same geographic feature in view as you inspect each pane. Select **Back to radar** for a single-map overview.
 
-![Actual HookEcho four-pane Analyst workspace](/shots/analyst-mode-20261004.webp)
+![Actual HookEcho four-pane Analyst workspace](/shots/analyst-mode-20261016.webp)
 
-*KTLX archive replay from May 20, 2013, recaptured October 4, 2026; not current weather. Reflectivity, velocity, CC, and ZDR provide different measurements.*
+*KTLX archive replay from May 20, 2013, recaptured October 16, 2026; not current weather. Reflectivity, velocity, CC, and ZDR provide different measurements.*
 
 For pane selection, workspace persistence, and phone behavior, see [Radar and Analyst modes](/docs/radar-and-analyst/).
 
