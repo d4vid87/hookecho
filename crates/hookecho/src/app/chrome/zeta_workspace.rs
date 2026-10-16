@@ -407,8 +407,8 @@ impl HookEchoApp {
                         })
                         .0
                         .named("Weather source mode");
-                        use_standard_layout = ui.button("Radar Zeta layout ✓")
-                            .named_toggle("Radar Zeta layout", true)
+                        use_standard_layout = ui.button("Radar Zeta UI ✓")
+                            .named_toggle("Radar Zeta UI", true)
                             .on_hover_text("Switch back to the standard layout")
                             .clicked();
                     });

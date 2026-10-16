@@ -222,7 +222,7 @@ impl HookEchoApp {
                                 &mut self.settings.reduce_motion,
                                 "Reduce interface motion",
                             );
-                            right.checkbox(&mut self.settings.radar_workspace, "Radar Zeta layout");
+                            right.checkbox(&mut self.settings.radar_workspace, "Radar Zeta UI");
                         });
                     });
             });
