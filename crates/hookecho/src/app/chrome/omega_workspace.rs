@@ -467,8 +467,8 @@ impl HookEchoApp {
                         }
                     }
                     ui.horizontal(|ui| {
-                        if show_station_radar {
-                            if ui
+                        if show_station_radar
+                            && ui
                                 .button(
                                     egui::RichText::new(format!("{station} {}", ph::CARET_DOWN))
                                         .strong()
@@ -477,9 +477,8 @@ impl HookEchoApp {
                                 .named("Select radar station")
                                 .on_hover_text(&station_details)
                                 .clicked()
-                            {
-                                action = Some(PaletteAction::OpenWindow(AppWindow::Site));
-                            }
+                        {
+                            action = Some(PaletteAction::OpenWindow(AppWindow::Site));
                         }
                         let mut globe = self.views[self.active].camera.globe;
                         let mut pitch = self.views[self.active].camera.pitch_deg;

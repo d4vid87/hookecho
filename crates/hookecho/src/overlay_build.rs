@@ -60,12 +60,12 @@ mod rainfall_border_tests {
     fn rainfall_border_control_does_not_change_other_outlooks() {
         let theme = crate::settings::Theme::Dark;
         let ero = square("ERO D1 MRGL");
-        let off = build_map_with_theme(&[ero.clone()], 6.0, theme, 0.0);
+        let off = build_map_with_theme(std::slice::from_ref(&ero), 6.0, theme, 0.0);
         let wide = build_map_with_theme(&[ero], 6.0, theme, 6.0);
         assert!(wide.indices.len() > off.indices.len());
 
         let spc = square("SPC D1 MRGL");
-        let normal = build_map_with_theme(&[spc.clone()], 6.0, theme, 0.0);
+        let normal = build_map_with_theme(std::slice::from_ref(&spc), 6.0, theme, 0.0);
         let unchanged = build_map_with_theme(&[spc], 6.0, theme, 6.0);
         assert_eq!(normal.indices, unchanged.indices);
         assert_eq!(normal.vertices.len(), unchanged.vertices.len());

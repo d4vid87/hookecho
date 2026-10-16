@@ -538,11 +538,10 @@ pub async fn fetch_volume(
     if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") || id.eq_ignore_ascii_case("IEDUB") {
         let mut parts: Vec<(f32, Sweep)> = std::iter::once(&base)
             .chain(files.iter())
-            .filter_map(|scan| {
-                (scan.sweeps().len() == 1).then(|| {
-                    let sweep = scan.sweeps()[0].clone();
-                    (angle(&sweep), sweep)
-                })
+            .filter(|scan| scan.sweeps().len() == 1)
+            .map(|scan| {
+                let sweep = scan.sweeps()[0].clone();
+                (angle(&sweep), sweep)
             })
             .filter(|(angle, _)| angle.is_finite())
             .collect();

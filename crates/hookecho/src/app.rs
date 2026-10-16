@@ -3161,6 +3161,9 @@ impl RecoverySnapshot {
 }
 
 type MarkerGeocodeResult = Result<Vec<(String, String, f64, f64)>, String>;
+type GeocodeReply = (u64, Result<(String, f64, f64), String>);
+type IpGeoReply = ((f64, f64), (f64, f64), f64, Option<String>);
+type NdfdProbeReply = Result<(Option<f64>, &'static str, &'static str, chrono::DateTime<Utc>, f64, f64), String>;
 
 /// A place lookup may take seconds. Apply its answer only to the pane and map state that
 /// requested it; a later pane switch, pan, zoom or site change is a newer navigation intent.
@@ -3375,15 +3378,15 @@ pub struct HookEchoApp {
     update_chip_hidden: bool,
     update_tx: Sender<ui::about_window::UpdateState>,
     update_rx: Receiver<ui::about_window::UpdateState>,
-    geocode_tx: Sender<(u64, Result<(String, f64, f64), String>)>,
-    geocode_rx: Receiver<(u64, Result<(String, f64, f64), String>)>,
+    geocode_tx: Sender<GeocodeReply>,
+    geocode_rx: Receiver<GeocodeReply>,
     marker_geocode_tx: Sender<MarkerGeocodeResult>,
     marker_geocode_rx: Receiver<MarkerGeocodeResult>,
     /// Edge geo-IP and the camera/site at request time. Apply only while the user still has
     /// that initial view; never fed on native, where the saved view is the answer.
     #[cfg(target_arch = "wasm32")]
-    ipgeo_tx: Sender<((f64, f64), (f64, f64), f64, Option<String>)>,
-    ipgeo_rx: Receiver<((f64, f64), (f64, f64), f64, Option<String>)>,
+    ipgeo_tx: Sender<IpGeoReply>,
+    ipgeo_rx: Receiver<IpGeoReply>,
     /// In-progress offline chase-pack tile download (basemap pre-cache for the current view).
     chasepack: Option<ChasePack>,
     /// Per-pane "what's uploaded" key, so each pane re-bins/re-uploads only on a real change.
@@ -4061,7 +4064,7 @@ pub struct HookEchoApp {
     )>,
     /// NOAA raster-point value for an interrogated NDFD map pixel. Replacing the receiver on a
     /// second tap drops any older reply, so a slow first request cannot overwrite the new point.
-    ndfd_probe_rx: Option<std::sync::mpsc::Receiver<Result<(Option<f64>, &'static str, &'static str, chrono::DateTime<Utc>, f64, f64), String>>>,
+    ndfd_probe_rx: Option<std::sync::mpsc::Receiver<NdfdProbeReply>>,
     forecast_cache:
         std::collections::HashMap<(i32, i32), (Instant, wxdata::forecast::PointForecast)>,
     /// Current conditions for the same tapped point, fetched beside the forecast and cached the
@@ -5687,10 +5690,8 @@ impl HookEchoApp {
         ] {
             if (1..=3).contains(&day) { self.spawn_overlay(ctx, OverlaySource::WinterProb(day, kind)); }
         }
-        if (1..=5).contains(&self.filters.ero_day) {
-            if self.filters.ero_archive.is_none() {
-                self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day, None));
-            }
+        if (1..=5).contains(&self.filters.ero_day) && self.filters.ero_archive.is_none() {
+            self.spawn_overlay(ctx, OverlaySource::Ero(self.filters.ero_day, None));
         }
         // Only fetch the SPC outlook the user has selected (off = day 0 fetches nothing).
         if (1..=8).contains(&self.filters.outlook_day) {

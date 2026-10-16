@@ -187,9 +187,11 @@ impl HookEchoApp {
                 } else {
                     frame.stamp.source_identity.clone()
                 };
-                let quality = (frame.stamp.quality != wxdata::field::QualitySummary::Unknown)
-                    .then(|| format!(" · {}", frame.stamp.quality.label()))
-                    .unwrap_or_default();
+                let quality = if frame.stamp.quality != wxdata::field::QualitySummary::Unknown {
+                    format!(" · {}", frame.stamp.quality.label())
+                } else {
+                    String::new()
+                };
                 format!(
                     "{} · {} · valid {}{}",
                     frame.descriptor.short_name,

@@ -500,7 +500,7 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
     let (admin2, admin4, county) = (k.admin2, k.admin4, k.county);
     // Waterway lines lean on the water fill so the two agree.
     let water = k.water;
-    let (c, w) = match layer {
+    let (c, w): (_, f32) = match layer {
         "transportation" => match class {
             "motorway" => (motorway, 4.0),
             "trunk" => (motorway, 3.6),
@@ -541,7 +541,7 @@ pub fn stroke(p: Palette, layer: &str, class: &str) -> Option<([u8; 4], f32)> {
     } else if p == Palette::Blue && layer == "boundary" && matches!(class, "3" | "4" | "6") {
         // Subpixel admin strokes visibly break into segments on the blue map at
         // regional zooms, even when the underlying tile geometry is continuous.
-        (w as f32).max(1.0)
+        w.max(1.0)
     } else {
         w
     };
