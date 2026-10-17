@@ -15716,7 +15716,8 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
-        let radar_probe = map_hover.and_then(|pos| {
+        let show_probe_tooltip = ViewMode::for_layout(self.analyst_open, self.views.len()) == ViewMode::Analyst;
+        let radar_probe = map_hover.filter(|_| show_probe_tooltip).and_then(|pos| {
             let w = cam.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp)?;
             let (lon, lat) = crate::render::mercator::world_to_lonlat(w.0, w.1);
             self.field_probe_at(idx, lon, lat)
@@ -17585,7 +17586,7 @@ impl HookEchoApp {
 
         // The difference layer reads as "they disagree here" and nothing more without a number,
         // so the cursor samples the grid it was drawn from.
-        if view
+        if show_probe_tooltip && view
             .fields_on
             .contains(&crate::render::FieldLayer::ModelDiff)
         {
@@ -17603,7 +17604,7 @@ impl HookEchoApp {
                     ));
                 }
             }
-        } else if let Some(hp) = map_hover {
+        } else if let Some(hp) = map_hover.filter(|_| show_probe_tooltip) {
             // Sample the same native values the inspector exposes. The GPU texture may be
             // decimated or palette-indexed for display, so reading it back would be scientifically
             // wrong even when it looks identical.
