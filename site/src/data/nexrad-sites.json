@@ -3322,6 +3322,17 @@
     "tz": "America/Chicago"
   },
   {
+    "city": "West Palm Beach",
+    "country": "US",
+    "elev_m": 40,
+    "id": "TDJT",
+    "lat": 26.688,
+    "lon": -80.273,
+    "network": "tdwr",
+    "state": "FL",
+    "tz": "America/New_York"
+  },
+  {
     "city": "Detroit",
     "country": "US",
     "elev_m": 235,
@@ -3551,17 +3562,6 @@
     "network": "tdwr",
     "state": "IL",
     "tz": "America/Chicago"
-  },
-  {
-    "city": "West Palm Beach",
-    "country": "US",
-    "elev_m": 40,
-    "id": "TPBI",
-    "lat": 26.688,
-    "lon": -80.273,
-    "network": "tdwr",
-    "state": "FL",
-    "tz": "America/New_York"
   },
   {
     "city": "Philadelphia",

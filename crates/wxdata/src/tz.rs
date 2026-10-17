@@ -111,7 +111,7 @@ pub fn site_tz(id: &str) -> Option<Tz> {
         "TADW" | "TBWI" | "TDCA" | "TIAD" => America__New_York, // DC / MD / VA
         "TCLT" | "TRDU" => America__New_York,                   // NC
         "TATL" => America__New_York,                            // GA
-        "TFLL" | "TMCO" | "TMIA" | "TPBI" | "TTPA" => America__New_York, // FL
+        "TFLL" | "TMCO" | "TMIA" | "TPBI" | "TDJT" | "TTPA" => America__New_York, // FL
         "TSJU" => America__Puerto_Rico,                         // PR
 
         // Germany is one zone, so the DWD table needs no per-site entry — but it does need to be

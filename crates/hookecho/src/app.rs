@@ -2899,7 +2899,7 @@ fn parse_goto(v: &str) -> Option<Goto> {
         let s = wxdata::sites::site_by_id(&p[0])?;
         // Same zoom a cold start picks for the default site.
         Goto {
-            site: p[0].to_ascii_uppercase(),
+            site: s.id.to_string(),
             lon: s.longitude as f64,
             lat: s.latitude as f64,
             zoom: 8.0,
@@ -2923,10 +2923,10 @@ fn parse_goto(v: &str) -> Option<Goto> {
             return None;
         };
         let requested_site = site.to_ascii_uppercase();
-        let site = if requested_site.is_empty()
-            || wxdata::sites::site_by_id(&requested_site).is_some()
-        {
+        let site = if requested_site.is_empty() {
             requested_site
+        } else if let Some(site) = wxdata::sites::site_by_id(&requested_site) {
+            site.id.to_string()
         } else {
             let nearest = crate::geo::nearest_site_id(lon, lat).unwrap_or_default();
             log::warn!("goto: unknown radar site {requested_site:?}; using nearest {nearest:?}");
@@ -25590,6 +25590,8 @@ mod tests {
         let g = parse_goto("ktlx").unwrap();
         assert_eq!(g.site, "KTLX");
         assert!(g.lon < -97.0 && g.lat > 35.0 && g.zoom == 8.0);
+        assert_eq!(parse_goto("tpbi").unwrap().site, "TDJT");
+        assert_eq!(parse_goto("TPBI,-80.273,26.688,8").unwrap().site, "TDJT");
         // Product and tilt are sniffed by shape, in either order.
         for v in ["KTLX,-97.3,35.3,9,VEL,2", "KTLX,-97.3,35.3,9,2,VEL"] {
             let g = parse_goto(v).unwrap();
