@@ -298,9 +298,10 @@ mod tests {
         let lut = palette::reflectivity().bake(&thr, false);
         assert_eq!(&lut[0..4], &[0, 0, 0, 0], "level 0 is transparent");
         assert_eq!(&lut[4..8], &[0, 0, 0, 0], "reflectivity never range-folds");
-        // Level 86 is 10 dBZ, the table's lowest stop; below it stays transparent.
-        assert_eq!(lut[85 * 4 + 3], 0, "below the display floor");
-        assert!(lut[86 * 4 + 3] > 0, "the floor stop is painted");
+        // The supplied Color4 stop fades in from transparent at -10 dBZ to opaque at 0.
+        assert_eq!(lut[46 * 4 + 3], 0, "-10 dBZ is transparent");
+        assert!(lut[56 * 4 + 3] > 0, "-5 dBZ is partially visible");
+        assert_eq!(lut[66 * 4 + 3], 217, "0 dBZ reaches normal opacity");
     }
 
     #[test]
