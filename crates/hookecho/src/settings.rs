@@ -1858,11 +1858,13 @@ mod tests {
 
     #[test]
     fn renamed_tdwr_keeps_saved_views_and_presets() {
-        let mut settings = Settings::default();
-        settings.default_site = "TPBI".into();
-        settings.presets = vec!["KMLB".into(), "TPBI".into()];
-        settings.start_view = Some(StartView { site: "TPBI".into(), x: 0.1, y: 0.2, zoom: 8.0 });
-        settings.last_view = Some(StartView { site: "tpbi".into(), x: 0.3, y: 0.4, zoom: 9.0 });
+        let mut settings = Settings {
+            default_site: "TPBI".into(),
+            presets: vec!["KMLB".into(), "TPBI".into()],
+            start_view: Some(StartView { site: "TPBI".into(), x: 0.1, y: 0.2, zoom: 8.0 }),
+            last_view: Some(StartView { site: "tpbi".into(), x: 0.3, y: 0.4, zoom: 9.0 }),
+            ..Default::default()
+        };
         settings.bookmarks.push(Bookmark { name: "Palm Beach".into(), site: "TPBI".into(), x: 0.5, y: 0.6, zoom: 8.0, time_secs: None, span_min: 0 });
         settings.workspaces.push(crate::workspace::starters().remove(0));
         settings.workspaces[0].panes[0].site = Some("TPBI".into());
