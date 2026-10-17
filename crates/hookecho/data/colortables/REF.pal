@@ -1,15 +1,15 @@
-; HookEcho default reflectivity color table — FOXweather (user-supplied .pal)
-product: BR
+; HookEcho default reflectivity color table — RadarOmega (user-supplied .pal)
 units: dBZ
-step: 5
+step: 10
+product: BR
 
-
-color: 10 50 230 165 0 80 20
-solidcolor: 35 255 255 0
-solidcolor: 40 225 175 0
-solidcolor: 45 255 0 0
-solidcolor: 50 200 0 0
-solidcolor: 55 180 0 180
-solidcolor: 60 240 100 240
-solidcolor: 65 255 255 255
-solidcolor: 70 175 175 175
+color4: -10 7 59 71 0
+color: 0 62 69 71 191 193 197
+color: 20 135 229 125
+color: 30 48 102 43
+color: 35 253 227 0
+color: 50 254 26 0 181 0 52
+color: 60 163 0 136 254 4 250
+color: 70 67 190 254 19 144 242
+color: 80 166 176 150 255 231 188
+color: 85 255 231 188

@@ -8,9 +8,9 @@
 /// One color stop, values already in the product's units (`Scale`/`Offset` applied at parse).
 struct Stop {
     value: f32,
-    rgb: [u8; 3],
+    rgba: [u8; 4],
     /// Second color of a two-color `Color:` line — a hard break reached at the next stop.
-    end: Option<[u8; 3]>,
+    end: Option<[u8; 4]>,
     /// `SolidColor:` line — flat across the band, no interpolation.
     solid: bool,
 }
@@ -23,28 +23,29 @@ pub struct Table {
 
 impl Table {
     /// Color for a physical value, or `None` below the lowest stop (the display floor).
-    fn sample(&self, v: f32) -> Option<[u8; 3]> {
+    fn sample(&self, v: f32) -> Option<[u8; 4]> {
         if self.stops.is_empty() || v < self.stops[0].value {
             return None;
         }
         let i = self.stops.partition_point(|s| s.value <= v) - 1;
         let s = &self.stops[i];
         if s.solid {
-            return Some(s.rgb);
+            return Some(s.rgba);
         }
         let next = self.stops.get(i + 1);
         let (hi_val, hi_col) = match (s.end, next) {
             (Some(e), Some(n)) => (n.value, e),
             (Some(e), None) => return Some(e),
-            (None, Some(n)) => (n.value, n.rgb),
-            (None, None) => return Some(s.rgb),
+            (None, Some(n)) => (n.value, n.rgba),
+            (None, None) => return Some(s.rgba),
         };
         let span = (hi_val - s.value).abs().max(f32::EPSILON);
         let t = ((v - s.value) / span).clamp(0.0, 1.0);
         Some([
-            lerp(s.rgb[0], hi_col[0], t),
-            lerp(s.rgb[1], hi_col[1], t),
-            lerp(s.rgb[2], hi_col[2], t),
+            lerp(s.rgba[0], hi_col[0], t),
+            lerp(s.rgba[1], hi_col[1], t),
+            lerp(s.rgba[2], hi_col[2], t),
+            lerp(s.rgba[3], hi_col[3], t),
         ])
     }
 
@@ -65,7 +66,7 @@ impl Table {
             };
             let Some(c) = self.sample(v) else { continue };
             let b = (level * 4) as usize;
-            lut[b..b + 4].copy_from_slice(&[c[0], c[1], c[2], 217]);
+            lut[b..b + 4].copy_from_slice(&[c[0], c[1], c[2], (u16::from(c[3]) * 217 / 255) as u8]);
         }
         lut
     }
@@ -100,16 +101,23 @@ fn parse(text: &str) -> Table {
             "rf" if n.len() >= 3 => rf = [byte(n[0]), byte(n[1]), byte(n[2])],
             "color" | "solidcolor" | "color4" | "solidcolor4" => {
                 let solid = key.starts_with("solid");
-                let w = if key.ends_with('4') { 4 } else { 3 }; // color width (alpha ignored)
+                let w = if key.ends_with('4') { 4 } else { 3 };
                 if n.len() < 1 + w {
                     continue;
                 }
-                let read = |o: usize| -> Option<[u8; 3]> {
-                    (n.len() >= o + w).then(|| [byte(n[o]), byte(n[o + 1]), byte(n[o + 2])])
+                let read = |o: usize| -> Option<[u8; 4]> {
+                    (n.len() >= o + w).then(|| {
+                        [
+                            byte(n[o]),
+                            byte(n[o + 1]),
+                            byte(n[o + 2]),
+                            if w == 4 { byte(n[o + 3]) } else { 255 },
+                        ]
+                    })
                 };
                 stops.push(Stop {
                     value: n[0],
-                    rgb: read(1).unwrap(),
+                    rgba: read(1).unwrap(),
                     end: if solid { None } else { read(1 + w) },
                     solid,
                 });

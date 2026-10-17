@@ -457,7 +457,7 @@ mod tests {
             assert!(!t.stops.is_empty(), "{name} has stops");
         }
         // And the LazyLock array builds without panicking.
-        assert_eq!(default_table(Moment::Reflectivity).stops.len(), 9);
+        assert_eq!(default_table(Moment::Reflectivity).stops.len(), 10);
     }
 
     #[test]
@@ -555,15 +555,15 @@ SolidColorRange: 60 70 255 0 0
     }
 
     #[test]
-    fn solid_step_function() {
+    fn shipped_reflectivity_palette_preserves_user_stops_and_alpha() {
         let table = default_table(Moment::Reflectivity);
-        // 47 dBZ falls in the FOXweather 45-dBZ red band.
-        assert_eq!(table.sample(47.0), Some([255, 0, 0, 255]));
-        // Below the 10-dBZ floor -> transparent (None).
+        assert_eq!(table.sample(-10.0), Some([7, 59, 71, 0]));
+        assert_eq!(table.sample(0.0), Some([62, 69, 71, 255]));
+        assert_eq!(table.sample(20.0), Some([135, 229, 125, 255]));
+        assert_eq!(table.sample(35.0), Some([253, 227, 0, 255]));
+        assert_eq!(table.sample(50.0), Some([254, 26, 0, 255]));
+        assert_eq!(table.sample(85.0), Some([255, 231, 188, 255]));
         assert_eq!(table.sample(-100.0), None);
-        assert_eq!(table.sample(5.0), None);
-        // Exactly at the first (gradient) stop -> its start color.
-        assert_eq!(table.sample(10.0), Some([50, 230, 165, 255]));
     }
 
     #[test]
