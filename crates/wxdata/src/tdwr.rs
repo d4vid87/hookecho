@@ -45,6 +45,7 @@ pub const SITES: &[SiteEntry] = &[
     site("TDCA", "Washington National", "DC", 38.759, -76.962, 345),
     site("TDEN", "Denver", "CO", 39.727, -104.526, 5701),
     site("TDFW", "Dallas-Fort Worth", "TX", 33.065, -96.918, 585),
+    site("TDJT", "West Palm Beach", "FL", 26.688, -80.273, 133),
     site("TDTW", "Detroit", "MI", 42.111, -83.515, 772),
     site("TEWR", "Newark", "NJ", 40.594, -74.270, 136),
     site("TFLL", "Fort Lauderdale", "FL", 26.143, -80.344, 120),
@@ -72,7 +73,6 @@ pub const SITES: &[SiteEntry] = &[
     site("TMSY", "New Orleans", "LA", 30.022, -90.403, 99),
     site("TOKC", "Oklahoma City", "OK", 35.276, -97.510, 1308),
     site("TORD", "Chicago O'Hare", "IL", 41.797, -87.858, 744),
-    site("TPBI", "West Palm Beach", "FL", 26.688, -80.273, 133),
     site("TPHL", "Philadelphia", "PA", 39.949, -75.070, 153),
     site("TPHX", "Phoenix", "AZ", 33.420, -112.163, 1089),
     site("TPIT", "Pittsburgh", "PA", 40.501, -80.486, 1386),
@@ -106,7 +106,13 @@ const fn site(
 
 /// The TDWR with this four-letter id, if any.
 pub fn site_by_id(id: &str) -> Option<&'static SiteEntry> {
-    SITES.iter().find(|s| s.id.eq_ignore_ascii_case(id))
+    SITES.iter().find(|s| s.id.eq_ignore_ascii_case(canonical_site_id(id)))
+}
+
+/// NWS SCN 26-61 renamed the Palm Beach SPG in August 2026. Accept saved TPBI selections and links,
+/// but use TDJT for the live Level 3 keys and new frames.
+pub fn canonical_site_id(id: &str) -> &str {
+    if id.eq_ignore_ascii_case("TPBI") { "TDJT" } else { id }
 }
 
 /// Whether `id` names a TDWR rather than a WSR-88D. Note that not every `T…` id is one:
@@ -174,11 +180,22 @@ fn frame_name(site: &str, time: DateTime<Utc>) -> String {
     format!("{site}{}_TDWR", time.format("%Y%m%d_%H%M%S"))
 }
 
+fn archive_site_id(id: &str, date: NaiveDate) -> &str {
+    if canonical_site_id(id) == "TDJT"
+        && date < NaiveDate::from_ymd_opt(2026, 8, 3).unwrap()
+    {
+        "TPBI"
+    } else {
+        canonical_site_id(id)
+    }
+}
+
 /// List every low-tilt TDWR reflectivity scan on a UTC day for the shared archive timeline.
 /// One hour per request avoids S3's default pagination limit and admits midnight boundaries.
 pub async fn list_volumes(http: &reqwest::Client, id: &str, date: NaiveDate) -> anyhow::Result<Vec<Identifier>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a TDWR"))?;
-    let short = &meta.id[1..];
+    let source = archive_site_id(meta.id, date);
+    let short = &source[1..];
     let day = date.format("%Y_%m_%d").to_string();
     let listings = futures_util::future::join_all((0..24).map(|hour| {
         let http = http.clone();
@@ -191,7 +208,7 @@ pub async fn list_volumes(http: &reqwest::Client, id: &str, date: NaiveDate) -> 
         successes += 1;
         frames.extend(keys.into_iter().filter_map(|key| key_time(&key))
             .filter(|time| time.date_naive() == date)
-            .map(|time| Identifier::new(frame_name(meta.id, time))));
+            .map(|time| Identifier::new(frame_name(source, time))));
     }
     anyhow::ensure!(successes > 0, "TDWR hourly listings unavailable for {id} {date}");
     frames.sort_by(|a, b| a.name().cmp(b.name()));
@@ -317,7 +334,7 @@ pub async fn fetch_volume(
         crate::stats::bump(crate::stats::Counter::FetchSkipped);
         return Ok(None);
     }
-    assemble_volume(http, meta, keys, anchor).await.map(|(name, time, scan)| Some((name, time, scan, revision)))
+    assemble_volume(http, meta, meta.id, keys, anchor).await.map(|(name, time, scan)| Some((name, time, scan, revision)))
 }
 
 /// Fetch the product set that was current at a listed low-tilt frame, for playback and scrubbing.
@@ -325,8 +342,8 @@ pub async fn fetch_volume_at(http: &reqwest::Client, id: &Identifier) -> anyhow:
     let site = id.site().ok_or_else(|| anyhow::anyhow!("TDWR frame has no site"))?;
     let meta = site_by_id(site).ok_or_else(|| anyhow::anyhow!("{site} is not a TDWR"))?;
     let anchor = id.date_time().ok_or_else(|| anyhow::anyhow!("TDWR frame has no valid time"))?;
-    anyhow::ensure!(id.name() == frame_name(meta.id, anchor), "TDWR frame name malformed");
-    let short = &meta.id[1..];
+    anyhow::ensure!(id.name() == frame_name(site, anchor), "TDWR frame name malformed");
+    let short = &site[1..];
     // This frame name came from an actual TZ0 bucket key. Its key is deterministic, so do not
     // re-list it for every playback fetch: concurrent long-loop backfill can otherwise turn a
     // transient listing failure into a false "low tilt unavailable" error.
@@ -343,12 +360,13 @@ pub async fn fetch_volume_at(http: &reqwest::Client, id: &Identifier) -> anyhow:
         }
     })).await;
     let keys = std::iter::once(Some(low)).chain(other).collect();
-    assemble_volume(http, meta, keys, anchor).await
+    assemble_volume(http, meta, site, keys, anchor).await
 }
 
 async fn assemble_volume(
     http: &reqwest::Client,
     meta: &SiteEntry,
+    frame_site: &str,
     keys: Vec<Option<String>>,
     anchor: DateTime<Utc>,
 ) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
@@ -420,7 +438,7 @@ async fn assemble_volume(
         false,
         Vec::new(),
     );
-    Ok((frame_name(meta.id, anchor), anchor, Scan::with_site(site, vcp, sweeps)))
+    Ok((frame_name(frame_site, anchor), anchor, Scan::with_site(site, vcp, sweeps)))
 }
 
 #[cfg(test)]
@@ -444,6 +462,11 @@ mod tests {
         assert!(!is_tdwr("TJUA"));
         assert!(is_tdwr("TOKC") && is_tdwr("tokc"));
         assert_eq!(site_by_id("TOKC").unwrap().city, "Oklahoma City");
+        assert_eq!(site_by_id("TPBI").unwrap().id, "TDJT");
+        assert_eq!(site_by_id("TDJT").unwrap().id, "TDJT");
+        assert!(!SITES.iter().any(|site| site.id == "TPBI"));
+        assert_eq!(archive_site_id("TDJT", NaiveDate::from_ymd_opt(2026, 8, 2).unwrap()), "TPBI");
+        assert_eq!(archive_site_id("TPBI", NaiveDate::from_ymd_opt(2026, 10, 17).unwrap()), "TDJT");
     }
 
     #[test]

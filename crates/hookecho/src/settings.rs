@@ -1646,6 +1646,9 @@ impl Settings {
     pub fn load() -> Self {
         let saved = Self::read_saved();
         let mut loaded = Self::from_saved_profile(saved.as_deref(), crate::paths::is_radar_workspace());
+        if loaded.canonicalize_renamed_radar_sites() {
+            loaded.save();
+        }
         // Older installs saved the five-minute default, which hid tracks between source scans.
         // Migrate that value once; a user who later chooses five minutes keeps their choice.
         if loaded.priority_rules.migrate_track_age_default() {
@@ -1667,6 +1670,28 @@ impl Settings {
             loaded.save();
         }
         loaded
+    }
+
+    fn canonicalize_renamed_radar_sites(&mut self) -> bool {
+        let mut changed = false;
+        let mut canonicalize = |site: &mut String| {
+            if site.eq_ignore_ascii_case("TPBI") {
+                *site = "TDJT".into();
+                changed = true;
+            }
+        };
+        canonicalize(&mut self.default_site);
+        for site in &mut self.presets { canonicalize(site); }
+        for bookmark in &mut self.bookmarks { canonicalize(&mut bookmark.site); }
+        for view in [&mut self.start_view, &mut self.last_view].into_iter().flatten() {
+            canonicalize(&mut view.site);
+        }
+        for workspace in &mut self.workspaces {
+            for pane in &mut workspace.panes {
+                if let Some(site) = &mut pane.site { canonicalize(site); }
+            }
+        }
+        changed
     }
 
     /// Export a portable bundle: this Settings plus the *contents* of every referenced `.pal`
@@ -1829,6 +1854,27 @@ fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result
 
 #[cfg(test)]
 mod tests {
+    use super::{Bookmark, Settings, StartView};
+
+    #[test]
+    fn renamed_tdwr_keeps_saved_views_and_presets() {
+        let mut settings = Settings::default();
+        settings.default_site = "TPBI".into();
+        settings.presets = vec!["KMLB".into(), "TPBI".into()];
+        settings.start_view = Some(StartView { site: "TPBI".into(), x: 0.1, y: 0.2, zoom: 8.0 });
+        settings.last_view = Some(StartView { site: "tpbi".into(), x: 0.3, y: 0.4, zoom: 9.0 });
+        settings.bookmarks.push(Bookmark { name: "Palm Beach".into(), site: "TPBI".into(), x: 0.5, y: 0.6, zoom: 8.0, time_secs: None, span_min: 0 });
+        settings.workspaces.push(crate::workspace::starters().remove(0));
+        settings.workspaces[0].panes[0].site = Some("TPBI".into());
+        assert!(settings.canonicalize_renamed_radar_sites());
+        assert_eq!(settings.default_site, "TDJT");
+        assert_eq!(settings.presets, ["KMLB", "TDJT"]);
+        assert_eq!(settings.start_view.as_ref().unwrap().site, "TDJT");
+        assert_eq!(settings.last_view.as_ref().unwrap().site, "TDJT");
+        assert_eq!(settings.bookmarks[0].site, "TDJT");
+        assert_eq!(settings.workspaces[0].panes[0].site.as_deref(), Some("TDJT"));
+        assert!(!settings.canonicalize_renamed_radar_sites());
+    }
     #[test]
     fn storm_track_controls_round_trip_and_older_settings_keep_defaults() {
         let older: super::PriorityRules = serde_json::from_str(r#"{"track_horizon_min":45}"#).unwrap();
