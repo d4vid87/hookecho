@@ -96,9 +96,9 @@ fn new_tds_locations(
 /// Soft encoded-payload cap. Displayed frames and actively borrowed scans are never evicted;
 /// diagnostics explicitly report when those pinned allocations alone exceed the cap.
 pub const NATIVE_RADAR_PAYLOAD_BUDGET: usize = 512 * 1024 * 1024;
-fn radar_payload_budget() -> usize {
+fn radar_payload_budget(settings: &Settings) -> usize {
     if cfg!(target_os = "android") { 96 * 1024 * 1024 }
-    else if cfg!(target_arch = "wasm32") { 192 * 1024 * 1024 }
+    else if cfg!(target_arch = "wasm32") { settings.web_radar_memory_mib.clamp(192, 768) * 1024 * 1024 }
     else { NATIVE_RADAR_PAYLOAD_BUDGET }
 }
 
@@ -2689,6 +2689,25 @@ fn web_loop_window_for_bytes(scan_bytes: usize, budget: usize) -> usize {
     // Never regress the established four-frame loop for a large volume. The payload budget is
     // soft, and the memory trimmer still evicts unpinned scans when a site exceeds it.
     (budget / scan_bytes).saturating_sub(2).clamp(4, WEB_LOOP_WINDOW)
+}
+
+fn shared_head_source(views: &[MapView], idx: usize, poll_secs: u64) -> Option<usize> {
+    let target = &views[idx];
+    if !target.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
+        || !target.timeline.following || target.timeline.live_looping() { return None; }
+    views.iter().enumerate().filter(|(i, source)| {
+        *i != idx && target.site.is_some() && source.site == target.site
+            && source.timeline.following && !source.timeline.live_looping()
+            && source.retained_station.is_none() && !source.loading && source.error.is_none()
+            && source.head_request.pending_name().is_none()
+            && source.last_poll.is_some_and(|at| at.elapsed().as_secs() < poll_secs)
+            && source.volume.as_ref().is_some_and(|volume| {
+                volume.live_status.is_none()
+                    && target.volume.as_ref().filter(|_| target.retained_station.is_none())
+                        .is_none_or(|current| current.time <= volume.time)
+            })
+    }).max_by_key(|(_, source)| source.volume.as_ref().map(|volume| volume.time))
+        .map(|(i, _)| i)
 }
 
 enum DataMsg {
@@ -12768,14 +12787,14 @@ impl HookEchoApp {
         if !cfg!(target_arch = "wasm32") { return NATIVE_LOOP_WINDOW; }
         let bytes = self.views.get(idx).and_then(|view| view.volume.as_ref())
             .map(|volume| self.radar_memory.scan_bytes(&volume.scan)).unwrap_or(0);
-        web_loop_window_for_bytes(bytes, radar_payload_budget())
+        web_loop_window_for_bytes(bytes, radar_payload_budget(&self.settings))
     }
 
     fn trim_radar_memory(&mut self) {
         let mut bytes = self.radar_memory.bytes(self.scan_cache.iter().map(|(_, scan)| scan)
             .chain(self.views.iter().flat_map(|view| view.retained_scans())));
         self.radar_memory_highwater = self.radar_memory_highwater.max(bytes);
-        let cap = radar_payload_budget();
+        let cap = radar_payload_budget(&self.settings);
         let binned_cap = if cfg!(target_os = "android") { 16 * 1024 * 1024 }
             else if cfg!(target_arch = "wasm32") { 32 * 1024 * 1024 } else { 64 * 1024 * 1024 };
         for view in &mut self.views { view.trim_binned_memory(binned_cap); }
@@ -13491,7 +13510,37 @@ impl HookEchoApp {
                 };
                 (v.site.clone(), current_name, due)
             };
-            if site.is_some() && !self.views[idx].loading && (site_changed || due) {
+            if !self.views[idx].loading && (site_changed || due
+                || self.views[idx].volume.is_none() || self.views[idx].retained_station.is_some()) {
+                if let Some(source) = shared_head_source(&self.views, idx, self.poll_interval_secs()) {
+                    let source = &self.views[source];
+                    let volume = source.volume.as_ref().expect("shared head has a volume");
+                    let (scan, name, time, polled, revision) = (Arc::clone(&volume.scan), volume.name.clone(), volume.time, source.last_poll, source.tdwr_revision.clone());
+                    let view = &mut self.views[idx];
+                    if view.retained_station.is_some() || view.volume.as_ref().is_none_or(|volume| volume.name != name) {
+                        view.show_volume(scan, name, time);
+                        view.clamp_tilt();
+                        view.clamp_moment();
+                        self.pane_shown.remove(&idx);
+                    }
+                    if time.date_naive() != view.timeline.date {
+                        view.timeline.date = time.date_naive();
+                    } else if view.timeline.frames.last().and_then(|id| id.date_time()).is_none_or(|last| time > last) {
+                        view.timeline.append_head(Identifier::new(view.volume.as_ref().expect("shared head displayed").name.clone()));
+                    }
+                    view.last_poll = polled;
+                    view.tdwr_revision = revision;
+                    view.error = None;
+                    view.fetch_failures = 0;
+                    return;
+                }
+            }
+            // Same-station panes share the completed head instead of queueing duplicate decodes.
+            let head_pending = self.views.iter().enumerate().any(|(i, view)| {
+                i != idx && site.as_deref().is_some_and(wxdata::sites::is_nexrad) && view.site == site
+                    && view.head_request.pending_name() == site.as_deref()
+            });
+            if site.is_some() && !self.views[idx].loading && !head_pending && (site_changed || due) {
                 if let Some(s) = site {
                     self.views[idx].loading = true;
                     self.views[idx].last_poll = Some(Instant::now());
@@ -13652,7 +13701,8 @@ impl HookEchoApp {
     /// back from the newest frame instead, under the same in-flight budget, so the visitor's first
     /// volume is the current one and the recent past fills in behind it.
     fn backfill_loop_frames(&mut self, idx: usize, ctx: &egui::Context) {
-        if self.gesture_live {
+        // Let the head arrive before history competes for its download and decode slots.
+        if self.gesture_live || self.views[idx].volume.is_none() || self.views[idx].retained_station.is_some() {
             return;
         }
         book(&self.prefetching)
@@ -20187,10 +20237,10 @@ impl HookEchoApp {
             "performance_counters": counters,
             "render_metrics": {
                 "map_gpu_timestamps_supported":crate::gpu_metrics::supported(), "nominal_gpu_bytes":gpu_bytes, "cpu_upload_shadow_bytes":shadow_bytes, "encoded_scan_payload_bytes":encoded_scan_bytes, "panes":pane_metrics,
-                "radar_payload_budget_bytes":radar_payload_budget(),
+                "radar_payload_budget_bytes":radar_payload_budget(&self.settings),
                 "radar_payload_highwater_bytes":self.radar_memory_highwater,
                 "radar_cache_evictions":self.radar_cache_evictions,
-                "radar_payload_over_budget":encoded_scan_bytes > radar_payload_budget(),
+                "radar_payload_over_budget":encoded_scan_bytes > radar_payload_budget(&self.settings),
                 "visual_quality_degraded":crate::ui::motion::degraded(),
                 "adaptive_quality_reduced":self.adaptive.reduced,
                 "ui_cpu_p95_ms":self.adaptive.p95_ms(),
@@ -25391,6 +25441,44 @@ mod tests {
         assert_eq!(super::web_loop_window_for_bytes(mib / 2, budget), 250);
         assert_eq!(super::web_loop_window_for_bytes(30 * mib, budget), 4);
         assert_eq!(super::web_loop_window_for_bytes(64 * mib, budget), 4);
+    }
+
+    #[test]
+    fn larger_browser_budgets_allow_longer_loops() {
+        let mib = 1024 * 1024;
+        assert_eq!(super::web_loop_window_for_bytes(30 * mib, 384 * mib), 10);
+        assert_eq!(super::web_loop_window_for_bytes(30 * mib, 768 * mib), 23);
+        assert_eq!(super::web_loop_window_for_bytes(64 * mib, 768 * mib), 10);
+    }
+
+    #[test]
+    fn shared_heads_require_a_fresh_complete_scan_from_the_same_live_station() {
+        use super::{Arc, level2, Utc, Instant};
+        use crate::view::{MapView, Volume};
+        let camera = crate::render::mercator::Camera::at_lonlat(-93.72, 41.73, 6.0);
+        let mut views = vec![MapView::new(Some("KDMX".into()), camera), MapView::new(Some("KDMX".into()), camera)];
+        let scan = Arc::new(level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
+        views[0].volume = Some(Volume::new(scan, "KDMX20261019_170000".into(), Utc::now()));
+        views[0].last_poll = Some(Instant::now());
+        assert_eq!(super::shared_head_source(&views, 1, 60), Some(0));
+        assert_eq!(super::shared_head_source(&views, 1, 0), None, "expired heads must poll again");
+        views[1].site = Some("KTLX".into());
+        assert_eq!(super::shared_head_source(&views, 1, 60), None);
+        views[1].site = Some("KDMX".into());
+        views[1].timeline.following = false;
+        assert_eq!(super::shared_head_source(&views, 1, 60), None, "archive selections own their data");
+        views[1].timeline.following = true;
+        views[0].loading = true;
+        assert_eq!(super::shared_head_source(&views, 1, 60), None);
+        views[0].loading = false;
+        views[0].head_request.start("KDMX".into());
+        assert_eq!(super::shared_head_source(&views, 1, 60), None);
+        views[0].head_request.cancel();
+        views[0].error = Some("unavailable".into());
+        assert_eq!(super::shared_head_source(&views, 1, 60), None);
+        views[0].error = None;
+        views[0].timeline.following = false;
+        assert_eq!(super::shared_head_source(&views, 1, 60), None, "historical scans cannot become a live head");
     }
 
     /// A palette change must not re-send the sweep. Everything the GPU keeps (the gate bytes,

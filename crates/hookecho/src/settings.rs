@@ -226,6 +226,20 @@ fn default_volume() -> f32 {
 fn default_live_loop_frames() -> usize {
     10
 }
+fn default_web_radar_memory_mib() -> usize {
+    384
+}
+
+#[cfg(test)]
+#[test]
+fn browser_radar_memory_defaults_and_roundtrips() {
+    let legacy = Settings::from_json_lossy("{}");
+    assert_eq!(legacy.web_radar_memory_mib, 384);
+    let saved = Settings { web_radar_memory_mib: 768, live_loop_frames: 21, ..Default::default() };
+    let loaded = Settings::from_json_lossy(&serde_json::to_string(&saved).unwrap());
+    assert_eq!(loaded.web_radar_memory_mib, 768);
+    assert_eq!(loaded.live_loop_frames, 21);
+}
 
 /// Where the desktop window was last time. Size only, not position: a saved position is wrong the
 /// moment a monitor is unplugged or a laptop is docked, and a window that opens off-screen is a
@@ -626,6 +640,9 @@ pub struct Settings {
     /// Number of newest volumes the live loop cycles over when playing.
     #[serde(default = "default_live_loop_frames")]
     pub live_loop_frames: usize,
+    /// Browser encoded radar payload budget; runtime clamps imported values to 192–768 MiB.
+    #[serde(default = "default_web_radar_memory_mib")]
+    pub web_radar_memory_mib: usize,
     /// Persisted basemap style slug for startup (empty = the pane default, [`crate::tiles::BasemapStyle::default`]).
     #[serde(default)]
     pub basemap: String,
@@ -1485,6 +1502,7 @@ impl Default for Settings {
             emergency_sound: default_emergency_sound(),
             alert_volume: default_volume(),
             live_loop_frames: default_live_loop_frames(),
+            web_radar_memory_mib: default_web_radar_memory_mib(),
             basemap: String::new(),
             overlays_on: None,
             window: None,
@@ -2287,6 +2305,7 @@ mod tests {
             emergency_sound: AlertSound::Alarm,
             alert_volume: 0.7,
             live_loop_frames: 12,
+            web_radar_memory_mib: 768,
             basemap: "carto-dark".to_string(),
             overlays_on: Some(vec!["Alerts".to_string(), "Wind".to_string()]),
             window: None,

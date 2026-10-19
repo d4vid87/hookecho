@@ -42,7 +42,7 @@ export async function fixtureRadar(page, options = {}) {
     counts.list++;
     const prefix=url.searchParams.get('prefix');
     const parts=prefix.split('/');
-    const times=options.loopFrames ? ['170000','170100','170200','170300','170400','170500'] : ['170000'];
+    const times=options.loopFrames ? Array.from({length: options.frameCount ?? 6}, (_, i) => `17${String(i).padStart(2, '0')}00`) : ['170000'];
     const site=options.loopFrames ? parts[3] : 'KDMX';
     const contents=times.map(time=>`<Contents><Key>${prefix}/${site}${parts.slice(0,3).join('')}_${time}_V06</Key><LastModified>${parts.slice(0,3).join('-')}T17:00:00Z</LastModified><Size>${fixture.length}</Size></Contents>`).join('');
     await request.respond({status:200,contentType:'application/xml',body:`<ListBucketResult><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`});
