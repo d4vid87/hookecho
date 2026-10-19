@@ -115,6 +115,8 @@ impl HookEchoApp {
             .is_some_and(|(pane, _, _)| *pane == idx);
         let was_cut_playback = v.timeline.cut_playback;
         let mut loop_frames = self.settings.live_loop_frames;
+        #[cfg(target_arch = "wasm32")]
+        let mut radar_memory_mib = self.settings.web_radar_memory_mib;
         let effective_loop = loop_frames.clamp(1, max_loop);
         let listed_loop = effective_loop.min(v.timeline.frames.len());
         let cached_loop = cached_loop_tail(&v.timeline.frames, listed_loop, |name| {
@@ -160,18 +162,21 @@ impl HookEchoApp {
                             if radar_visible {
                             egui::ComboBox::from_id_salt("zeta_frame_count")
                                 .width(92.0)
+                                .height(600.0)
                                 .selected_text(egui::RichText::new(format!("{effective_loop} Frames")).color(accent))
                                 .show_ui(ui, |ui| {
-                                    let choices: &[usize] = if max_loop < 7 { &[2, 3, 4, 6] }
-                                        else { &[7, 14, 21, 30, 50, 75, 100, 150, 200, 250] };
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        super::scrubber::browser_radar_memory_controls(ui, &mut radar_memory_mib, max_loop);
+                                        ui.separator();
+                                    }
+                                    let choices: &[usize] = &[2, 3, 4, 6, 7, 10, 14, 21, 30, 50, 75, 100, 150, 200, 250];
                                     for &count in choices {
                                         ui.add_enabled_ui(count <= max_loop, |ui| {
                                             ui.selectable_value(&mut loop_frames, count, format!("{count} Frames"));
                                         });
                                     }
-                                    if cfg!(target_arch = "wasm32") {
-                                        ui.weak(format!("Measured radar payload allows up to {max_loop} live-loop frames in this browser."));
-                                    } else if max_loop < 7 {
+                                    if !cfg!(target_arch = "wasm32") && max_loop < 7 {
                                         ui.weak(format!("This device supports up to {max_loop} live-loop frames."));
                                     }
                                     ui.weak("Limits the live loop; archive frames remain available.");
@@ -184,6 +189,7 @@ impl HookEchoApp {
                                 ui.strong("History & playback");
                                 ui.label("Archive date (UTC)");
                                 let result = super::scrubber::history_controls(ui, &mut self.views[idx].timeline, &mut loop_frames, max_loop,
+                                    #[cfg(target_arch = "wasm32")] &mut radar_memory_mib,
                                     #[cfg(target_arch = "wasm32")] &packs,
                                     #[cfg(target_arch = "wasm32")] pack_status.as_deref(),
                                 );
@@ -558,6 +564,8 @@ impl HookEchoApp {
             self.fields.entry(layer).or_default().last_fetch = None;
         }
         self.settings.live_loop_frames = loop_frames;
+        #[cfg(target_arch = "wasm32")]
+        { self.settings.web_radar_memory_mib = radar_memory_mib; }
         if was_cut_playback && !self.views[idx].timeline.cut_playback {
             self.views[idx].cut_selection = None;
         }

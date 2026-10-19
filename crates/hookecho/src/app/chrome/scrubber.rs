@@ -142,6 +142,8 @@ impl HookEchoApp {
         let dvr = self.dvr_depth();
         // Edited through a local so the pill closure keeps its single `&mut self.views` borrow.
         let mut loop_frames = self.settings.live_loop_frames;
+        #[cfg(target_arch = "wasm32")]
+        let mut radar_memory_mib = self.settings.web_radar_memory_mib;
         let max_loop = self.live_loop_limit(self.active);
         let narrow = super::overlay::compact(ctx);
         let phone_landscape = narrow && self.chrome_rect.width() > self.chrome_rect.height();
@@ -346,6 +348,7 @@ impl HookEchoApp {
                         }
 
                             let result = history_controls(ui, t, &mut loop_frames, max_loop,
+                                #[cfg(target_arch = "wasm32")] &mut radar_memory_mib,
                                 #[cfg(target_arch = "wasm32")] &packs,
                                 #[cfg(target_arch = "wasm32")] pack_status.as_deref(),
                             );
@@ -417,6 +420,8 @@ impl HookEchoApp {
             });
         }
         self.settings.live_loop_frames = loop_frames;
+        #[cfg(target_arch = "wasm32")]
+        { self.settings.web_radar_memory_mib = radar_memory_mib; }
         if was_cut_playback && !self.views[self.active].timeline.cut_playback {
             self.views[self.active].cut_selection = None;
         }
@@ -862,6 +867,7 @@ pub(super) fn history_controls(
     t: &mut crate::timeline::Timeline,
     loop_frames: &mut usize,
     max_loop: usize,
+    #[cfg(target_arch = "wasm32")] radar_memory_mib: &mut usize,
     #[cfg(target_arch = "wasm32")] packs: &[crate::webcache::Pack],
     #[cfg(target_arch = "wasm32")] pack_status: Option<&str>,
 ) -> HistoryActions {
@@ -932,6 +938,8 @@ pub(super) fn history_controls(
     )
     .on_hover_text("How many of the newest volumes ▶ cycles through when live");
     #[cfg(target_arch = "wasm32")]
+    browser_radar_memory_controls(ui, radar_memory_mib, max_loop);
+    #[cfg(target_arch = "wasm32")]
     {
         ui.separator();
         if ui
@@ -965,4 +973,16 @@ pub(super) fn history_controls(
         ui.close();
     }
     result
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn browser_radar_memory_controls(ui: &mut egui::Ui, memory_mib: &mut usize, max_loop: usize) {
+    ui.label("Browser radar memory");
+    ui.horizontal(|ui| {
+        for mib in [192, 384, 768] {
+            ui.selectable_value(memory_mib, mib, format!("{mib} MiB"));
+        }
+    });
+    ui.weak(format!("Up to {max_loop} frames at this station. More memory allows longer loops."));
+    ui.weak("Longer loops download more data and fill in behind the latest scan.");
 }
