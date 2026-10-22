@@ -31,6 +31,18 @@ if (root) {
     text('save', selected ? 'Saved ✓' : 'Save location'); el('save').setAttribute('aria-pressed', String(selected));
   }
   const narrative = p => `${unit === 'C' ? 'NWS outlook (°F): ' : ''}${p.detailedForecast || p.shortForecast}`;
+  function rainChance(value, className) {
+    const label = percent(value), rain = node('span', '', className);
+    if (!root.closest('.signal-weather')) { rain.textContent = label; return rain; }
+    rain.classList.add('rain-chance');
+    rain.setAttribute('aria-label', label === '—' ? 'Precipitation chance unavailable' : `Precipitation chance ${label}`);
+    rain.append(node('span', 'Precip. chance', 'rain-label'), node('b', label, 'rain-value'));
+    const track = node('span', '', 'rain-track'), fill = node('span', '', 'rain-fill');
+    track.setAttribute('aria-hidden', 'true');
+    fill.style.width = label === '—' ? '0%' : label;
+    track.append(fill); rain.append(track);
+    return rain;
+  }
   function render() {
     root.querySelectorAll('[data-unit]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.unit === unit)));
     const hours = currentPeriods(hourly), days = currentPeriods(daily), current = hours[0] || days[0];
@@ -46,14 +58,15 @@ if (root) {
     text('local-time', when(new Date().toISOString()));
     el('hourly').replaceChildren(...(hours.length ? hours.slice(0,24).map((p,i) => {
       const item = node('div','', 'hour');
+      item.dataset.daytime = String(p.isDaytime);
       item.append(node('span', i === 0 && Date.parse(p.startTime) <= Date.now() ? 'This hour' : new Date(p.startTime).toLocaleTimeString('en-US',{timeZone:timezone,hour:'numeric'})));
       const symbol = node('span', weatherSymbol(p.shortForecast,p.isDaytime),'symbol'); symbol.title = p.shortForecast; symbol.setAttribute('role','img'); symbol.setAttribute('aria-label',p.shortForecast);
-      item.append(symbol,node('strong',temperature(p.temperature,p.temperatureUnit,unit)),node('span',percent(p.probabilityOfPrecipitation?.value),'rain'),node('span',p.windSpeed || '—','wind'));
+      item.append(symbol,node('strong',temperature(p.temperature,p.temperatureUnit,unit)),rainChance(p.probabilityOfPrecipitation?.value,'rain'),node('span',p.windSpeed || '—','wind'));
       return item;
     }) : [node('p','Hourly forecast unavailable. Try Refresh.')]));
     el('daily').replaceChildren(...(days.length ? days.slice(0,14).map(p => {
       const detail = node('details',''), summary = node('summary','');
-      summary.append(node('span',p.name),node('span',p.shortForecast,'period-description'),node('strong',temperature(p.temperature,p.temperatureUnit,unit),'period-temp'),node('span',percent(p.probabilityOfPrecipitation?.value),'period-rain'),node('span','+'));
+      summary.append(node('span',p.name),node('span',p.shortForecast,'period-description'),node('strong',temperature(p.temperature,p.temperatureUnit,unit),'period-temp'),rainChance(p.probabilityOfPrecipitation?.value,'period-rain'),node('span','+'));
       detail.append(summary,node('p',narrative(p))); return detail;
     }) : [node('p','Daily forecast unavailable. Try Refresh.')]));
   }
