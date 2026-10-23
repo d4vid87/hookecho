@@ -64,11 +64,57 @@ if (root) {
       item.append(symbol,node('strong',temperature(p.temperature,p.temperatureUnit,unit)),rainChance(p.probabilityOfPrecipitation?.value,'rain'),node('span',p.windSpeed || '—','wind'));
       return item;
     }) : [node('p','Hourly forecast unavailable. Try Refresh.')]));
-    el('daily').replaceChildren(...(days.length ? days.slice(0,14).map(p => {
+    const dailyEntries = days.length ? days.slice(0,14).map(p => {
       const detail = node('details',''), summary = node('summary','');
       summary.append(node('span',p.name),node('span',p.shortForecast,'period-description'),node('strong',temperature(p.temperature,p.temperatureUnit,unit),'period-temp'),rainChance(p.probabilityOfPrecipitation?.value,'period-rain'),node('span','+'));
+      if (root.closest('.signal-weather') && typeof p.isDaytime === 'boolean') {
+        detail.dataset.daytime = String(p.isDaytime);
+        const name = summary.firstElementChild, marker = node('span', p.isDaytime ? '☀︎' : '☾', 'period-marker');
+        marker.setAttribute('aria-hidden', 'true');
+        name.className = 'period-name';
+        name.textContent = p.name.replace(/ Night$/, '');
+        const phase = node('span', '', 'period-phase');
+        phase.append(marker, node('span', p.isDaytime ? 'Day' : 'Night', 'period-phase-label'));
+        summary.insertBefore(phase, summary.querySelector('.period-temp'));
+        summary.querySelector('.period-temp').prepend(node('small', p.isDaytime ? 'High' : 'Low', 'period-extreme'));
+      }
+      if (root.closest('.signal-weather')) {
+        const date = node('time', new Date(p.startTime).toLocaleDateString('en-US', {timeZone:timezone, month:'short', day:'numeric'}), 'period-date');
+        date.dateTime = p.startTime;
+        summary.firstElementChild.append(date);
+      }
       detail.append(summary,node('p',narrative(p))); return detail;
-    }) : [node('p','Daily forecast unavailable. Try Refresh.')]));
+    }) : [node('p','Daily forecast unavailable. Try Refresh.')];
+    if (root.closest('.signal-weather') && days.length) {
+      const dates = new Map();
+      dailyEntries.forEach((entry, i) => {
+        const p = days[i], start = new Date(p.startTime);
+        const key = start.toLocaleDateString('en-CA', {timeZone:timezone, year:'numeric', month:'2-digit', day:'2-digit'});
+        let group = dates.get(key);
+        if (!group) {
+          group = node('details', '', 'day-entry');
+          const heading = node('span', start.toLocaleDateString('en-US', {timeZone:timezone, weekday:'long'}), 'period-name');
+          heading.append(entry.querySelector('.period-date'));
+          const summary = node('summary', '');
+          summary.append(heading, node('span', '', 'day-periods'), node('span', '+'));
+          group.append(summary);
+          dates.set(key, group);
+        }
+        const panel = node('span', '', 'day-period');
+        if (typeof p.isDaytime === 'boolean') panel.dataset.daytime = String(p.isDaytime);
+        for (const selector of ['.period-phase', '.period-temp', '.period-description', '.period-rain']) {
+          const child = entry.querySelector(selector);
+          if (child) panel.append(child);
+        }
+        group.querySelector('.day-periods').append(panel);
+        const narrative = entry.querySelector('details > p');
+        narrative.prepend(node('strong', p.name + ': '));
+        group.append(narrative);
+      });
+      el('daily').replaceChildren(...dates.values());
+    } else {
+      el('daily').replaceChildren(...dailyEntries);
+    }
   }
   async function json(url, signal) {
     const parsed = new URL(url);

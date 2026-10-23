@@ -7,7 +7,7 @@ html.site-signal[data-palette] .btn-primary:hover,html.site-signal[data-palette]
 html.site-signal[data-palette] .site-foot{background:var(--surface-2)}
 html.site-signal[data-palette] :focus-visible{outline-color:var(--accent)}
 html.site-signal[data-palette] .signal-weather .current,html.site-signal[data-palette] .signal-weather .hours{background:var(--surface-1)}
-html.site-signal[data-palette] .signal-weather .days details:nth-child(even){background:var(--surface-2)}
+/* Forecast rows carry their own day/night tint across palettes. */
 html.site-signal[data-palette] .signal-weather .outlook{background:var(--palette-action);color:var(--palette-action-ink)}
 html.site-signal[data-palette] .signal-weather .outlook p{color:inherit}
 html.site-signal[data-palette] .signal-weather .weather-icon{color:var(--accent)}
