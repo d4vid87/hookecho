@@ -129,9 +129,14 @@ struct ConnectionPermit(Arc<AtomicUsize>);
 
 impl ConnectionPermit {
     fn acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
-        active.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n|
-            (n < MAX_CONNECTIONS).then_some(n + 1)
-        ).ok().map(|_| Self(Arc::clone(active)))
+        let mut count = active.load(Ordering::Relaxed);
+        while count < MAX_CONNECTIONS {
+            match active.compare_exchange_weak(count, count + 1, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return Some(Self(Arc::clone(active))),
+                Err(current) => count = current,
+            }
+        }
+        None
     }
 }
 
