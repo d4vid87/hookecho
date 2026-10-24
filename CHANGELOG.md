@@ -22,6 +22,8 @@ available for rollback.
 - Fix shared radar scans being mislabeled during a multi-pane station switch.
 - Add Kotlin alert tests, native-activity menu/resume instrumentation tests, and a
   physical-device release checklist.
+- Repair incomplete Android offline voice data on upgrade and return initialization errors
+  instead of terminating the app; align speech libraries for 16 KB memory pages.
 
 ## Field Atlas map overlays - 2026-09-27 (rolling release)
 

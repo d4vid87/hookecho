@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <espeak-ng/speak_lib.h>
+#include <espeak-ng/espeak_ng.h>
 #include <mutex>
 #include <string>
 
@@ -10,8 +11,16 @@ Java_io_hookecho_HookEcho_PiperVoice_nativePhonemes(JNIEnv *env, jclass, jstring
   std::lock_guard<std::mutex> guard(lock);
   const char *text = env->GetStringUTFChars(input, nullptr);
   const char *path = env->GetStringUTFChars(data_path, nullptr);
-  espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 0, path, 0);
-  espeak_SetVoiceByName("en-us");
+  espeak_ng_InitializePath(path);
+  espeak_ng_ERROR_CONTEXT error = nullptr;
+  const auto status = espeak_ng_Initialize(&error);
+  espeak_ng_ClearErrorContext(&error);
+  if (status != ENS_OK || espeak_SetVoiceByName("en-us") != EE_OK) {
+    env->ReleaseStringUTFChars(input, text);
+    env->ReleaseStringUTFChars(data_path, path);
+    env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Unable to load eSpeak voice data");
+    return nullptr;
+  }
   const void *cursor = text;
   std::string result;
   while (cursor) {

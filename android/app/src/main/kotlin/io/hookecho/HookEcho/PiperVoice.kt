@@ -83,7 +83,9 @@ object PiperVoice {
     }
 
     private fun installAssets(context: Context, dir: File) {
-        if (File(dir, "en_US-amy-medium.onnx").exists()) return
+        val required = listOf("en_US-amy-medium.onnx", "en_US-amy-medium.onnx.json") +
+            listOf("phontab", "phondata", "phonindex", "intonations", "en_dict").map { "espeak-ng-data/$it" }
+        if (required.all { File(dir, it).let { file -> file.isFile && file.length() > 0 } }) return
         fun copy(asset: String, target: File) {
             val children = context.assets.list(asset).orEmpty()
             if (children.isEmpty()) {
