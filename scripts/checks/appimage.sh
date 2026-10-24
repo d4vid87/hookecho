@@ -22,6 +22,10 @@ test -s "$app/usr/share/doc/hookecho/LICENSE"
 test -s "$app/usr/share/doc/hookecho/ALSA-copyright"
 "$app/AppRun" --version | tee "$check_dir/version"
 grep -q 'built .*UTC' "$check_dir/version"
+if grep -q '(unknown;' "$check_dir/version"; then
+  echo 'Missing build revision; build from a Git checkout with its worktree metadata accessible' >&2
+  exit 1
+fi
 "$app/AppRun" --help > "$check_dir/help"
 grep -q 'Usage: hookecho' "$check_dir/help"
 if "$app/AppRun" --unknown-option > "$check_dir/invalid" 2>&1; then
