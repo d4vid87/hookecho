@@ -181,7 +181,7 @@ class AlertService : Service() {
         private fun notify(context: Context, m: Nws.Watch, a: Nws.Alert, speak: Boolean) {
             // Deep-link back to the watched point. The site field is left empty: the app keeps
             // whichever radar it was on and just flies the camera there.
-            val goto = ",%.4f,%.4f,9".format(m.lon, m.lat)
+            val goto = Nws.gotoPoint(m.lon, m.lat)
             val intent = Intent(context, MainActivity::class.java)
                 .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 .putExtra(MainActivity.EXTRA_GOTO, goto)

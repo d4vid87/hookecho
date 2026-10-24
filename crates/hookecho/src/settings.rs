@@ -1742,6 +1742,10 @@ impl Settings {
     pub fn import_bundle(json: &str) -> Result<Settings, String> {
         let bundle: SettingsBundle = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let mut settings = bundle.settings;
+        // A portable settings file is not permission to execute its author's commands.
+        for plugin in &mut settings.plugins {
+            plugin.enabled = false;
+        }
         if !bundle.palette_files.is_empty() {
             let dir = Self::colortables_dir().ok_or("no colortables dir")?;
             for moment in bundle.palette_files.keys() {
@@ -2398,6 +2402,24 @@ mod tests {
             "palette_files": {"../../outside":"Step: 5"}
         }"#;
         assert!(Settings::import_bundle(json).is_err());
+    }
+
+    #[test]
+    fn imported_plugins_require_local_activation() {
+        let mut original = Settings::default();
+        original.plugins.push(PluginConfig {
+            name: "Shared overlay".into(), command: "untrusted-command".into(),
+            args: vec!["--example".into()], refresh_secs: 30,
+            enabled: true, manifest: PluginManifest::default(),
+        });
+        let bundle = original.export_bundle().unwrap();
+        let imported = Settings::import_bundle(&bundle).unwrap();
+        assert!(!imported.plugins[0].enabled);
+        assert_eq!(imported.plugins[0].command, "untrusted-command");
+        assert_eq!(imported.plugins[0].args, ["--example"]);
+        // Loading this machine's own settings still preserves its explicit permission.
+        let local: Settings = serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
+        assert!(local.plugins[0].enabled);
     }
 
     #[test]

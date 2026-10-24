@@ -10,60 +10,32 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # One job creates the release; the platform jobs only ever upload into it. Before this each of
-  # the four raced `action-gh-release`, and on v0.12.0-alpha.1 two of them created one release
-  # object while two created another, splitting the artifacts across a published release and a
-  # draft — and failing the macOS job when it tried to publish the loser.
-  create-release:
-    name: Create the release
-    if: startsWith(github.ref, 'refs/tags/')
+  verify:
+    name: Require successful CI for this commit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
-
-      # The tag's own CHANGELOG section becomes the release body. Empty means the section is
-      # missing, which is worth failing the release over — a release with no notes is the state
-      # this repo shipped eight versions in.
-      - name: Extract release notes
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          awk -v v="$VERSION" '
-            $0 ~ "^## " v " " { want = 1; next }
-            want && /^## / { exit }
-            want { print }
-          ' CHANGELOG.md > notes.md
-          test -s notes.md || { echo "::error::no CHANGELOG.md section for $VERSION"; exit 1; }
-          cat notes.md
-
-      - name: Create it
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Wait for CI
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          # Re-running a release workflow is a normal thing to do; the release surviving from the
-          # first attempt is not an error.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "$TAG already exists"
-            exit 0
-          fi
-          # A hyphen in the tag is a prerelease (`v0.12.0-alpha.1`): flagged as one, and never
-          # made "Latest", so nobody lands on an alpha from the repo's front page.
-          case "$TAG" in
-            *-*) flags="--prerelease --latest=false";;
-            *)   flags="--latest";;
-          esac
-          gh release create "$TAG" --title "$TAG" --notes-file notes.md $flags
+        run: node scripts/release/require-ci.mjs
 
   appimage:
     name: Linux AppImage
     # 22.04 sets the glibc floor (2.35); an AppImage built on newer won't run on older distros.
     runs-on: ubuntu-22.04
-    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
-    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
-    # build too.
-    needs: create-release
-    if: ${{ !cancelled() }}
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -98,9 +70,7 @@ jobs:
         run: |
           bash packaging/build-deb.sh
           cp target/debian/*.deb dist/
-          # A second copy under a name that does not move, kept out of `dist/` so the tagged
-          # upload's `dist/*.deb` still means exactly one versioned file. The rolling release
-          # uploads this one, so each push replaces the previous build instead of adding to a pile.
+          # Stable filename across both release channels; the release tag carries the version.
           mkdir -p dist/rolling
           cp target/debian/*.deb dist/rolling/HookEcho-amd64.deb
           dpkg -c dist/*.deb
@@ -115,62 +85,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hookecho-deb
-          path: dist/*.deb
+          path: dist/rolling/HookEcho-amd64.deb
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" dist/HookEcho-x86_64.AppImage dist/*.deb --clobber
-
-      # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
-      # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
-      # and 49 commits' worth of green runs published nothing.
-      - name: Update rolling release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest build (main)
-          prerelease: false
-          make_latest: true
-          body: |
-            Rolling build of `main` — rebuilt and re-published on every push, so this
-            is always the newest code. Older releases are kept as drafts.
-          files: |
-            dist/HookEcho-x86_64.AppImage
-            dist/rolling/HookEcho-amd64.deb
-
-      # The rolling release is supposed to hold one build, and it held eighteen assets: seven
-      # .debs going back to 0.8.0, because `cargo-deb` puts the version in the filename and
-      # `--clobber` cannot clobber a name that changes every release. A stable name for the
-      # rolling copy fixes that going forward; the step below clears what has already piled up.
-      #
-      # Tagged releases keep the versioned filename, which is correct — a tag *is* a version.
-      - name: Prune stale rolling assets
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Two patterns, both provably dead, so this can never delete a live asset:
-          #   hookecho_<version>_amd64.deb   the versioned debs, superseded by HookEcho-amd64.deb
-          #   Hook_Echo-WX-*                 the old product name, last built 2026-08-26
-          gh release view latest --json assets -q '.assets[].name' \
-            | grep -E '^(hookecho_.*_amd64\.deb|Hook_Echo-WX-.*)$' \
-            | while read -r name; do
-                echo "removing stale asset $name"
-                gh release delete-asset latest "$name" --yes
-              done
 
   windows:
     name: Windows zip
     runs-on: windows-latest
-    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
-    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
-    # build too.
-    needs: create-release
-    if: ${{ !cancelled() }}
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -259,46 +180,13 @@ jobs:
             dist/HookEcho-x86_64.msi
             dist/HookEcho-setup-x86_64.exe
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        # bash, not the runner's default pwsh: `"$TAG"` is empty in PowerShell (it wants
-        # `$env:TAG`), so this uploaded into tag "" and failed with "release not found" on
-        # v0.12.0-beta.1 while every other platform, which runs bash, attached fine.
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" dist/hookecho-windows-x86_64.zip dist/HookEcho-x86_64.msi dist/HookEcho-setup-x86_64.exe --clobber
-
-      # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
-      # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
-      # and 49 commits' worth of green runs published nothing.
-      - name: Update rolling release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest build (main)
-          prerelease: false
-          make_latest: true
-          body: |
-            Rolling build of `main` — rebuilt and re-published on every push, so this
-            is always the newest code. Older releases are kept as drafts.
-          files: |
-            dist/hookecho-windows-x86_64.zip
-            dist/HookEcho-x86_64.msi
-            dist/HookEcho-setup-x86_64.exe
 
   macos:
     name: macOS app (experimental)
     # Piper's archived arm64 download is mislabeled x86_64; build one internally consistent Intel
     # app (runs under Rosetta on Apple Silicon) rather than shipping a bundle that cannot launch.
     runs-on: macos-15-intel
-    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
-    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
-    # build too.
-    needs: create-release
-    if: ${{ !cancelled() }}
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -396,34 +284,11 @@ jobs:
           name: HookEcho-macos
           path: dist/HookEcho-macos.zip
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" dist/HookEcho-macos.zip --clobber
-
-      - name: Update rolling release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest build (main)
-          prerelease: false
-          make_latest: true
-          body: |
-            Rolling build of `main` — rebuilt and re-published on every push, so this
-            is always the newest code. Older releases are kept as drafts.
-          files: dist/HookEcho-macos.zip
 
   android:
     name: Android APK (arm64-v8a)
     runs-on: ubuntu-latest
-    # Waits only so the release exists before the upload at the end. `!cancelled()` because on a
-    # push to main `create-release` is skipped, and a skipped dependency would otherwise skip the
-    # build too.
-    needs: create-release
-    if: ${{ !cancelled() }}
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -498,32 +363,10 @@ jobs:
           name: HookEcho-arm64-v8a.aab
           path: HookEcho-arm64-v8a.aab
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" HookEcho-arm64-v8a.apk --clobber
 
-      # Every push to main refreshes a rolling "latest" prerelease, so the Releases page always
-      # carries current builds. Before this, artifacts only ever reached Releases on a tag push,
-      # and 49 commits' worth of green runs published nothing.
-      - name: Update rolling release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest build (main)
-          prerelease: false
-          make_latest: true
-          body: |
-            Rolling build of `main` — rebuilt and re-published on every push, so this
-            is always the newest code. Older releases are kept as drafts.
-          files: HookEcho-arm64-v8a.apk
-
-  # The image people actually run the server from. Built on every push to main so `:latest`
-  # tracks the rolling release, and tagged with the version on a `v*` push.
+  # Exact images stay addressable; preview and stable aliases point to their own channels.
   docker:
+    needs: verify
     name: Container image (ghcr.io)
     runs-on: ubuntu-latest
     permissions:
@@ -545,45 +388,35 @@ jobs:
         id: build
         run: |
           image="ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')"
-          docker build -t "$image:latest" .
-          case "${{ github.ref }}" in
-            refs/tags/v*) docker tag "$image:latest" "$image:${GITHUB_REF#refs/tags/v}";;
+          docker build -t "$image:sha-$GITHUB_SHA" .
+          case "$GITHUB_REF" in
+            refs/tags/v*-*) docker tag "$image:sha-$GITHUB_SHA" "$image:${GITHUB_REF#refs/tags/v}";;
+            refs/tags/v*) docker tag "$image:sha-$GITHUB_SHA" "$image:${GITHUB_REF#refs/tags/v}"
+                          docker tag "$image:sha-$GITHUB_SHA" "$image:latest";;
+            refs/heads/main) docker tag "$image:sha-$GITHUB_SHA" "$image:preview";;
           esac
           echo "image=$image" >> "$GITHUB_OUTPUT"
 
       # A container that can't start is worse than no container; find out here, not in someone's
       # compose file.
       - name: Smoke-test the image
-        run: docker run --rm --entrypoint hookecho ${{ steps.build.outputs.image }}:latest --version
+        run: docker run --rm --entrypoint hookecho ${{ steps.build.outputs.image }}:sha-${{ github.sha }} --version
 
       - name: Push
         run: docker push --all-tags ${{ steps.build.outputs.image }}
 
-  # Only the current build should be public. Everything else gets demoted to a draft:
-  # ... except prereleases, which are checkpoints people are asked to go and test: an alpha that
-  # goes invisible on the next push to main is an alpha nobody can install. They stay until the
-  # release they lead to ships, and are cleaned up by hand then.
-  # still on the Releases page for anyone with push access, assets intact, but invisible
-  # (and undownloadable) to the public. Deleting would lose the binaries; drafts don't.
-  # The git tags stay public either way — they're repo history, not release pages.
-  demote-old:
-    name: Hide superseded releases
-    needs: [appimage, windows, android]
+  publish:
+    name: Publish complete release
+    needs: [verify, appimage, windows, macos, android, docker]
     runs-on: ubuntu-latest
     steps:
-      - name: Draft every release except the current one
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/artifacts
+      - name: Publish tested packages together
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF: ${{ github.ref }}
-        run: |
-          # Keep the rolling build; on a tag push keep that tag's release too.
-          keep="latest"
-          case "$REF" in refs/tags/*) keep="$keep ${REF#refs/tags/}";; esac
-          gh api "repos/$REPO/releases" --paginate \
-            --jq '.[] | select(.draft == false and .prerelease == false) | "\(.id) \(.tag_name)"' |
-          while read -r id tag; do
-            case " $keep " in *" $tag "*) continue;; esac
-            echo "drafting $tag (id $id)"
-            gh api -X PATCH "repos/$REPO/releases/$id" -F draft=true >/dev/null
-          done
+        run: node scripts/release/publish.mjs dist/artifacts

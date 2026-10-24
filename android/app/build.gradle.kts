@@ -22,6 +22,12 @@ dependencies {
     // scheduled worker gets the poll going again (see AlertWorker.kt / BootReceiver.kt).
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
 
 // Single source of truth for the version: the workspace Cargo.toml. Hand-maintained gradle
@@ -47,6 +53,7 @@ android {
         // around. arm64-v8a only for v1 — every phone that can run this ships it.
         minSdk = 29
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = cargoVersionCode
         versionName = cargoVersion
         ndk {

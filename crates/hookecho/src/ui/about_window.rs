@@ -71,7 +71,7 @@ pub fn show(
                         egui::RichText::new(format!("Version {tag} is available"))
                             .color(style::ZETA_GREEN),
                     );
-                    ui.hyperlink_to("Download", format!("{REPO}/releases/latest"));
+                    ui.hyperlink_to("Download", format!("{REPO}/releases"));
                 });
             }
             UpdateState::NoRelease => {

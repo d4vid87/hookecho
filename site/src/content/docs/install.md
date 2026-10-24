@@ -5,11 +5,10 @@ order: 3
 ---
 
 [The download page](/download/) helps you choose the right build for your machine.
-Use [the rolling beta build](https://github.com/d4vid87/hookecho/releases/tag/latest)
-for the current filenames below, or choose a versioned release from
-[all releases](https://github.com/d4vid87/hookecho/releases). Versioned
-`v*` releases are the stable channel; a rolling `latest` prerelease carries the
-newest work if you don't want to wait for a tag.
+Use [GitHub Releases](https://github.com/d4vid87/hookecho/releases) for the current
+filenames below. Version tags without a prerelease suffix are the stable channel.
+Preview releases contain tested main-branch builds, each with an immutable commit
+tag and checksums. Older releases stay available for rollback.
 
 Or don't install anything: [app.hookecho.io](https://app.hookecho.io) is the
 whole app running in your browser on live data.

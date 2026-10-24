@@ -52,17 +52,17 @@ jobs:
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: echo "value=$TAG" >> "$GITHUB_OUTPUT"
-      - name: Wait for the release to exist
+      - name: Wait for the complete release to be published
         if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.value }}
         run: |
-          for _ in $(seq 1 60); do
-            gh release view "$TAG" >/dev/null 2>&1 && exit 0
+          for _ in $(seq 1 180); do
+            [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)" = false ] && exit 0
             sleep 30
           done
-          echo "::error::release $TAG never appeared (30 min)"
+          echo "::error::release $TAG was not published (90 min)"
           exit 1
       - name: Test promotion logic
         run: node --test scripts/announce/promotion.test.mjs

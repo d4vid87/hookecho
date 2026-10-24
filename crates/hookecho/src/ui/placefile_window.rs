@@ -200,7 +200,7 @@ impl PlacefileWindow {
                 .iter()
                 .find(|s| s.url == format!("plugin:{}", p.name));
             ui.horizontal(|ui| {
-                ui.checkbox(&mut p.enabled, "");
+                ui.checkbox(&mut p.enabled, "Run").on_hover_text("Allow this command to run with your privileges");
                 if ui.button("✖").on_hover_text("Remove").clicked() {
                     drop_plugin = Some(i);
                 }

@@ -7,8 +7,29 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  verify:
+    name: Require successful CI for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Wait for CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/require-ci.mjs
+
   deploy:
+    needs: verify
     name: Cloudflare Pages
     runs-on: ubuntu-latest
     steps:
@@ -47,8 +68,8 @@ jobs:
 
       # `web/` is the deploy directory: index.html, dist/ and _worker.js, which Pages picks up as
       # advanced mode and puts in front of every request.
-      # ponytail: Pages hard-fails on files over 25 MiB; the wasm is 12.6 MB today.
-      - name: Deploy
+      # Preview first: no public alias changes until this exact bundle passes its smoke checks.
+      - name: Deploy preview
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -57,7 +78,7 @@ jobs:
         # on 2026-09-03 a deploy went green while app.hookecho.io answered with the bundle from
         # two merges earlier, and nothing here noticed.
         run: |
-          npx --yes wrangler@3 pages deploy web --project-name=hookecho --branch=main \
+          npx --yes wrangler@3 pages deploy web --project-name=hookecho --branch=verify-${{ github.sha }} \
             | tee /tmp/deploy.log
           url=$(grep -oE 'https://[0-9a-f]+\.hookecho\.pages\.dev' /tmp/deploy.log | tail -1)
           test -n "$url" || { echo "::error::wrangler printed no deployment URL"; exit 1; }
@@ -112,6 +133,25 @@ jobs:
           curl -sf "$DEPLOY_URL/proxy/api.weather.gov/alerts/active/count" >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' "$DEPLOY_URL/proxy/evil.example/x")" = 403
 
+      - name: Check the proxy caches and revalidates
+        run: |
+          url="$DEPLOY_URL/proxy/api.weather.gov/alerts/active/count"
+          curl -sD - -o /dev/null "$url" | tr -d '\r' > /tmp/h.txt
+          grep -qi '^cache-control: public, max-age=15$' /tmp/h.txt
+          etag=$(grep -i '^etag:' /tmp/h.txt | cut -d' ' -f2-)
+          test -n "$etag"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "If-None-Match: $etag" "$url")
+          test "$code" = 304
+
+      - name: Promote the tested bundle to production
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test "$(gh api repos/$GITHUB_REPOSITORY/git/ref/heads/main --jq .object.sha)" = "$GITHUB_SHA"
+          npx --yes wrangler@3 pages deploy web --project-name=hookecho --branch=main
+
       # A proxied response has to be cacheable and revalidatable, or every repeat poll pays for
       # the whole body again. The two calls land inside the 15 s edge TTL, so the second sees the
       # same cached upstream response — which is the point: the 304 is answered at the edge.
@@ -132,13 +172,3 @@ jobs:
 
       - name: Check executable assets on both public app addresses
         run: node scripts/web/check-assets.mjs https://app.hookecho.io/ https://hookecho.pages.dev/
-
-      - name: Check the proxy caches and revalidates
-        run: |
-          url="$DEPLOY_URL/proxy/api.weather.gov/alerts/active/count"
-          curl -sD - -o /dev/null "$url" | tr -d '\r' > /tmp/h.txt
-          grep -qi '^cache-control: public, max-age=15$' /tmp/h.txt
-          etag=$(grep -i '^etag:' /tmp/h.txt | cut -d' ' -f2-)
-          test -n "$etag"
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H "If-None-Match: $etag" "$url")
-          test "$code" = 304

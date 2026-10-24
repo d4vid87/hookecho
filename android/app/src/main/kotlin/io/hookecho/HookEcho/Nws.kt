@@ -4,6 +4,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 /**
  * The watched-points alert lookup, shared by the background service and the home-screen widget.
@@ -164,8 +165,27 @@ object Nws {
         return doubleArrayOf(Math.toDegrees(la2), Math.toDegrees(lo2))
     }
 
+    fun pointUrl(lat: Double, lon: Double): String =
+        "https://api.weather.gov/alerts/active?point=%.4f,%.4f".format(Locale.ROOT, lat, lon)
+
+    fun gotoPoint(lon: Double, lat: Double): String =
+        ",%.4f,%.4f,9".format(Locale.ROOT, lon, lat)
+
+    fun checkSummary(hasPlaces: Boolean, lines: List<String>, successful: Int, failed: Int, lastCompleteCheck: Long): String {
+        if (!hasPlaces) return "No saved locations yet"
+        val alerts = lines.distinct().take(4).joinToString("\n")
+        if (failed == 0 && successful > 0) return alerts.ifEmpty { "All quiet" }
+        val status = if (successful > 0) "Some locations couldn't be checked" else "Couldn't check alerts"
+        val previous = if (lastCompleteCheck > 0) {
+            "\nLast complete check: " + java.text.DateFormat.getDateTimeInstance(
+                java.text.DateFormat.SHORT, java.text.DateFormat.SHORT
+            ).format(java.util.Date(lastCompleteCheck))
+        } else ""
+        return listOf(alerts, status + previous).filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
     fun alertsAt(lat: Double, lon: Double): AlertResponse = runCatching {
-        val url = URL("https://api.weather.gov/alerts/active?point=%.4f,%.4f".format(lat, lon))
+        val url = URL(pointUrl(lat, lon))
         val conn = (url.openConnection() as HttpURLConnection).apply {
             setRequestProperty("User-Agent", USER_AGENT)
             setRequestProperty("Accept", "application/geo+json")

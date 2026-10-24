@@ -2697,6 +2697,7 @@ fn shared_head_source(views: &[MapView], idx: usize, poll_secs: u64) -> Option<u
         || !target.timeline.following || target.timeline.live_looping() { return None; }
     views.iter().enumerate().filter(|(i, source)| {
         *i != idx && target.site.is_some() && source.site == target.site
+            && source.loaded_site == source.site
             && source.timeline.following && !source.timeline.live_looping()
             && source.retained_station.is_none() && !source.loading && source.error.is_none()
             && source.head_request.pending_name().is_none()
@@ -20488,7 +20489,7 @@ impl HookEchoApp {
         {
             Ok(settings) => {
                 self.settings = settings;
-                self.toast(ToastKind::Success, "Settings imported");
+                self.toast(ToastKind::Success, "Settings imported. Review and enable imported plugins in Layers.");
             }
             Err(e) => {
                 log::warn!("settings import failed: {e}");
@@ -25460,10 +25461,15 @@ mod tests {
         let scan = Arc::new(level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
         views[0].volume = Some(Volume::new(scan, "KDMX20261019_170000".into(), Utc::now()));
         views[0].last_poll = Some(Instant::now());
+        views[0].loaded_site = views[0].site.clone();
         assert_eq!(super::shared_head_source(&views, 1, 60), Some(0));
         assert_eq!(super::shared_head_source(&views, 1, 0), None, "expired heads must poll again");
         views[1].site = Some("KTLX".into());
         assert_eq!(super::shared_head_source(&views, 1, 60), None);
+        // All pane selectors change before the per-pane sync pass runs.
+        views[0].site = Some("KTLX".into());
+        assert_eq!(super::shared_head_source(&views, 1, 60), None, "an unsynced pane still carries its previous station");
+        views[0].site = Some("KDMX".into());
         views[1].site = Some("KDMX".into());
         views[1].timeline.following = false;
         assert_eq!(super::shared_head_source(&views, 1, 60), None, "archive selections own their data");
