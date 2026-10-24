@@ -1,6 +1,7 @@
 name: Android device preview
 
 on:
+  workflow_dispatch:
   push:
     branches: ["fix/android-*", "feature/mobile-*"]
 
@@ -41,9 +42,16 @@ jobs:
         working-directory: android
         env:
           HOOKECHO_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease assembleDebug assembleDebugAndroidTest --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: hookecho-android-preview
           path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hookecho-android-device-tests
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           retention-days: 7
