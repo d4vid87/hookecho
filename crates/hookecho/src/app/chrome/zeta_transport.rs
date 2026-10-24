@@ -406,7 +406,7 @@ impl HookEchoApp {
                         if radar_visible && t.following && t.playing && listed_loop > 0 && cached_loop < listed_loop {
                             ui.weak(format!("Loop: {cached_loop}/{listed_loop} recent frames ready"));
                         }
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             if radar_visible {
                             if zeta_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
                             let playing = self.views[idx].timeline.playing;
@@ -433,6 +433,7 @@ impl HookEchoApp {
                             }
                             if zeta_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
                             if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
+                            if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
                             if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
                             if zeta_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
                             if zeta_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
@@ -479,6 +480,7 @@ impl HookEchoApp {
                                     self.analyst_open, self.views.len(), &self.settings.workspaces);
                                 if zeta_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
                                 if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
+                                if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
                                 if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
                                 if zeta_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
                                 if zeta_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
