@@ -52,7 +52,7 @@ const products = [
     <p class="product-detail" aria-live="polite">{products[0].detail}</p>
   </div>
   <div class="desktop-explainer" hidden>
-    {products.map((product, index) => <div class:list={["explainer", { "is-velocity": index === 1 }]}><span>0{index + 1} · {product.name}</span><p>{product.detail}</p></div>)}
+    {products.map((product, index) => <div class:list={["explainer", { "is-velocity": index === 1 }]}><span>{product.name}</span><p>{product.detail}</p></div>)}
   </div>
   <p class="demo-caution">Recorded historical event, shown with the current HookEcho interface and warning styling. <a href="https://www.weather.gov/oun/events-20130520">Read the NWS Moore tornado event report</a>.</p>
   <noscript><p>The still images show the recorded radar view. <a href="/docs/radar-and-analyst/">Read the Analyst guide</a> or <a href="https://app.hookecho.io/">open the app</a>.</p></noscript>

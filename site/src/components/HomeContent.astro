@@ -22,7 +22,7 @@ const features = [
       <div class="section-intro"><p class="eyebrow">Advanced storm analysis</p><h2>Follow the storm from the big picture to the details.</h2><p>Compare products, inspect storm attributes, and check the source time. Move between Radar and Analyst as your question changes.</p></div>
       <div class="capability-layout" data-feature-showcase>
         <div class="feature-choices" role="group" aria-label="Explore HookEcho capabilities">
-          {features.map((feature, index) => <button type="button" data-feature={index} aria-pressed={index === 0 ? "true" : "false"}><span>0{index + 1} / {feature.label}</span><strong>{feature.title}</strong><small>{feature.body}</small></button>)}
+          {features.map((feature, index) => <button type="button" data-feature={index} aria-pressed={index === 0 ? "true" : "false"}><span>{feature.label}</span><strong>{feature.title}</strong><small>{feature.body}</small></button>)}
         </div>
         <div class="feature-display">
           <div class="feature-frame"><img data-feature-image src={features[0].poster} alt={features[0].alt} width="1280" height="800" loading="lazy" /><video data-feature-video muted loop playsinline preload="none" controls poster={features[0].poster} aria-label={features[0].alt}><source data-feature-source type="video/mp4" /></video></div>
