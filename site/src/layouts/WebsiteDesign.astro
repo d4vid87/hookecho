@@ -1,0 +1,46 @@
+---
+import HomeContent from '../components/HomeContent.astro';
+import {designLinks} from '../data/website-designs.js';
+import '../styles/global.css';
+import '../styles/website-designs.css';
+const {design:d,next,production = false,jsonld} = Astro.props;
+const title = production ? 'Hookecho — free radar and open-source storm analysis' : `${d.name} — HookEcho design study`;
+const description = production ? 'Free, open-source weather radar and a full analysis suite. Explore storm tools, compare linked radar products, and investigate the details with Hookecho.' : d.description;
+const analytics = import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN;
+const tokens = `--bg:${d.bg};--bg-deep:${d.bg};--surface-1:${d.panel};--surface-2:color-mix(in srgb,${d.ink} 7%,${d.panel});--text:${d.ink};--text-dim:${d.muted};--accent:${d.accent};--accent-ink:${d.accentInk};--stroke:color-mix(in srgb,${d.ink} 15%,${d.panel});--stroke-strong:color-mix(in srgb,${d.ink} 24%,${d.panel});color-scheme:${d.theme}`;
+---
+<!doctype html>
+<html lang="en" class="design-preview" data-design={d.id} style={tokens}>
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+{!production && <meta name="robots" content="noindex,nofollow"/>}
+<title>{title}</title><meta name="description" content={description}/><link rel="icon" href="/logo.png"/>
+<meta name="theme-color" content={d.bg}/>
+<link rel="preload" href="/fonts/InterVariable-subset.woff2" as="font" type="font/woff2" crossorigin/>
+{production && <>
+<link rel="canonical" href="https://hookecho.io/"/>
+<link rel="alternate" type="application/rss+xml" title="HookEcho" href="/rss.xml"/>
+<meta property="og:type" content="website"/><meta property="og:title" content={title}/><meta property="og:description" content={description}/><meta property="og:url" content="https://hookecho.io/"/><meta property="og:image" content="https://hookecho.io/showcase/moore-2013-four.webp"/>
+<meta name="twitter:card" content="summary_large_image"/><meta name="twitter:title" content={title}/><meta name="twitter:description" content={description}/><meta name="twitter:image" content="https://hookecho.io/showcase/moore-2013-four.webp"/>
+{jsonld && <script type="application/ld+json" set:html={JSON.stringify(jsonld)}/>}
+{analytics && <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon={JSON.stringify({token:analytics})}/>}
+</>}
+</head>
+<body data-pagefind-ignore={production ? undefined : true}>
+<a class="design-skip" href="#main-content">Skip to weather</a>
+{!production && <div class="review-strip"><a href="/designs/">← All ten designs</a><span>{d.number} / {d.name}</span><a href={`/designs/${next.id}/`}>Next: {next.name} →</a></div>}
+<header class:list={['design-head',`menu-${d.menu}`]}>
+ <a class="design-brand" href={production ? "/" : `/designs/${d.id}/`}><img src="/logo.png" width="30" height="30" alt=""/><span>HookEcho<small>WEATHER, IN THE OPEN</small></span></a>
+ {['mega','drawer'].includes(d.menu) ? <details class="design-expand"><summary>{d.menu==='mega'?'Explore HookEcho':'Menu'} <span aria-hidden="true">＋</span></summary><nav aria-label="Main navigation">{designLinks.map((l,i)=><a href={l.href}><span aria-hidden="true">{l.icon}</span><b>{l.label}</b><small>0{i+1}</small></a>)}</nav></details> : <nav class="design-nav" aria-label="Main navigation">{designLinks.map((l,i)=><a href={l.href}><span aria-hidden="true">{d.menu==='numbered'?`0${i+1}`:l.icon}</span>{l.label}</a>)}</nav>}
+ <a class="design-launch" href="https://app.hookecho.io/">Open radar <span aria-hidden="true">↗</span></a>
+</header>
+<main id="main-content"><div class="design-intro">{!production && <span>{d.number} / {d.name.toUpperCase()}</span>}<p>{d.headline}</p></div><HomeContent /></main>
+<footer class="design-footer"><a class="design-brand" href="/">HookEcho</a><p>Free, open-source weather radar. NOAA / NWS public data.</p><nav aria-label="Project links"><a href="/docs/storm-analysis/">Analysis guide</a><a href="/radar/">Radar sites</a><a href="/roadmap/">Roadmap</a><a href="https://github.com/d4vid87/hookecho">GitHub</a><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>{!production && <a href="/designs/">Compare all ten designs ↗</a>}</footer>
+<script>
+ import {applySmartCtas} from '../scripts/smart-cta.js';
+ applySmartCtas(navigator.userAgent);
+ const menu=document.querySelector<HTMLDetailsElement>('.design-expand');
+ menu?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>menu.open=false));
+ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&menu?.open){menu.open=false;menu.querySelector('summary')?.focus();}});
+</script>
+</body></html>

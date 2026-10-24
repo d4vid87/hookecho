@@ -6,10 +6,13 @@ import sitemap from "@astrojs/sitemap";
 // is a separate deploy (project `hookecho`) and lives at app.hookecho.io — nothing here bundles it.
 export default defineConfig({
   site: "https://hookecho.io",
+  devToolbar: { enabled: false },
   // Hover-prefetch every internal link. The pages are a few kB of static HTML, so the next one is
   // already there by the time the click lands; lists opt into viewport prefetching by hand.
   prefetch: true,
   // Every site image is already a prepared static asset; no build-time image processor is needed.
   image: { service: { entrypoint: "astro/assets/services/noop" } },
-  integrations: [sitemap()],
+  // Local design previews use the same place-search service as the published site.
+  vite: { server: { proxy: { "/api/place": { target: "https://hookecho.io", changeOrigin: true } } } },
+  integrations: [sitemap({ filter: (page) => !new URL(page).pathname.startsWith("/designs/") })],
 });

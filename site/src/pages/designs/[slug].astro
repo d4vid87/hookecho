@@ -1,0 +1,6 @@
+---
+import WebsiteDesign from '../../layouts/WebsiteDesign.astro';
+import {websiteDesigns} from '../../data/website-designs.js';
+export function getStaticPaths() { return websiteDesigns.map((design,index) => ({params:{slug:design.id},props:{design,next:websiteDesigns[(index+1)%websiteDesigns.length]}})); }
+---
+<WebsiteDesign {...Astro.props}/>

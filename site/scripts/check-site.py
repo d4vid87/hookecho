@@ -17,6 +17,9 @@ class Page(HTMLParser):
         if tag == "html":
             self.classes = attrs.get("class", "").split()
             self.palette = attrs.get("data-palette")
+            self.design = attrs.get("data-design")
+        if tag == "meta" and attrs.get("name") == "robots":
+            self.robots = attrs.get("content", "")
         if tag == "a" and attrs.get("href"):
             self.links.append(attrs["href"])
         if tag == "iframe":
@@ -31,9 +34,15 @@ for filename, page in pages.items():
     # The five original studies remain a separate comparison archive.
     if filename.startswith("directions/"):
         continue
-    assert "site-signal" in page.classes, f"Missing Signal design: {filename}"
-    assert page.palette == "carbon", f"Missing default Carbon palette: {filename}"
-    assert "/docs/storm-analysis/" in page.links, f"Missing analysis navigation: {filename}"
+    if filename == "index.html":
+        assert page.design == "nocturne", "Homepage must use Nocturne"
+        assert "noindex" not in getattr(page, "robots", ""), "Homepage must be indexable"
+        assert not any(href.startswith("/designs/") for href in page.links), "Remove preview navigation from homepage"
+        assert "/docs/storm-analysis/" in page.links, "Missing analysis navigation"
+    elif not filename.startswith("designs/"):
+        assert "site-signal" in page.classes, f"Missing Signal design: {filename}"
+        assert page.palette == "carbon", f"Missing default Carbon palette: {filename}"
+        assert "/docs/storm-analysis/" in page.links, f"Missing analysis navigation: {filename}"
     checked += 1
     for href in page.links:
         url = urlsplit(urljoin("https://preview.local/" + filename, href))
@@ -49,4 +58,4 @@ for filename, page in pages.items():
             assert unquote(url.fragment) in pages[target].ids, f"Broken anchor on {filename}: {href}"
 
 assert any(src.startswith("https://app.hookecho.io/?embed#goto=") for src in pages["index.html"].frames), "Homepage must embed the actual HookEcho radar"
-print(f"Verified Signal design, analysis navigation, and local links across {checked} pages.")
+print(f"Verified homepage design, analysis navigation, and local links across {checked} pages.")
