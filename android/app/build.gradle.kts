@@ -56,6 +56,7 @@ android {
         minSdk = 29
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArguments["waitForActivitiesToComplete"] = "false"
         versionCode = cargoVersionCode
         versionName = cargoVersion
         ndk {

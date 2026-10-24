@@ -26,14 +26,14 @@ class DeviceSmokeTest {
             rule.runOnUiThread { activity.showQuietShelf(section, "KDMX", "REF", 0) }
             rule.onNodeWithText("${section.uppercase()} / QUICK ACTIONS").assertIsDisplayed()
             rule.onNodeWithText("×").performClick()
-            rule.onNodeWithText("HOOKECHO / MOBILE").assertDoesNotExist()
+            rule.onNodeWithText("HOOKECHO / MOBILE").assertIsNotDisplayed()
         }
         scenario.moveToState(Lifecycle.State.CREATED)
         scenario.moveToState(Lifecycle.State.RESUMED)
         rule.runOnUiThread { activity.showQuietShelf("Layers", "KDMX", "REF", 0) }
         rule.onNodeWithText("LAYERS / QUICK ACTIONS").assertIsDisplayed()
         rule.onNodeWithText("×").performClick()
-        rule.onNodeWithText("HOOKECHO / MOBILE").assertDoesNotExist()
+        rule.onNodeWithText("HOOKECHO / MOBILE").assertIsNotDisplayed()
 
         assertTrue(PiperVoice.speakBlocking(activity, "HookEcho device test. This is only a test."))
         val phonemes = PiperVoice::class.java.getDeclaredMethod(

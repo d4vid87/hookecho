@@ -15,8 +15,12 @@ The real-activity instrumentation tests live in
 `android/app/src/androidTest/.../DeviceSmokeTest.kt`. After building the native
 library with `android/build.sh`, run `cd android && ./gradlew connectedDebugAndroidTest`
 on an arm64 device using the same signing configuration as the installed app.
-They exercise every shelf tab and native activity background/resume. CI compiles
-the test APK; executing it requires compatible hardware.
+They exercise every shelf tab, native activity background/resume, offline speech,
+and recoverable missing voice data. The native activity intentionally ends its process
+on finish, so the runner leaves it open until results are reported. Gradle configures
+this automatically; when using `adb shell am instrument`, pass
+`-e waitForActivitiesToComplete false`. CI compiles the test APK; executing it
+requires compatible hardware.
 
 Then check these flows on the phone:
 
