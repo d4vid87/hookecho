@@ -36,7 +36,10 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
 ## Install
 
 - **Linux**: download `HookEcho-x86_64.AppImage` from
-  [Releases](https://github.com/d4vid87/hookecho/releases), `chmod +x`, run. Debian/Ubuntu users can install
+  [Releases](https://github.com/d4vid87/hookecho/releases), `chmod +x`, run. The AppImage requires
+  glibc 2.35 or newer (Ubuntu 22.04 or equivalent); it bundles the ALSA audio library and offline
+  English voice. `hookecho --version` reports its revision, channel and build date; `--help` works
+  without a display. Debian/Ubuntu users can install
   `hookecho_<version>_amd64.deb` from the same place
   (`sudo apt install ./hookecho_*.deb`) to get the menu entry and icon.
 - **Windows**: grab the installer from [Releases](https://github.com/d4vid87/hookecho/releases) —

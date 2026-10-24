@@ -24,6 +24,11 @@ impl HookEchoApp {
     pub(crate) fn workbench_inspector_body(&mut self, ui: &mut egui::Ui) {
         ui.heading("Inspector");
         ui.weak("Native values and actual source times");
+        if let Some(gap) = comparison_time_gap(self.views.iter()
+            .filter(|view| view.show_radar).filter_map(MapView::displayed_time)) {
+            ui.colored_label(egui::Color32::from_rgb(255, 186, 86),
+                format!("Pane times differ by {}", humanize(gap)));
+        }
         let enabled_overlays: Vec<_> = OverlayToggle::ALL.into_iter()
             .filter(|toggle| !toggle.session_only() && *self.overlay_flag(*toggle))
             .collect();
@@ -216,7 +221,8 @@ impl HookEchoApp {
                     ui.weak(&site);
                 });
                 ui.label(source);
-                ui.collapsing("Layer sources and times", |ui| {
+                egui::CollapsingHeader::new("Layer sources and times")
+                    .id_salt(("pane_layer_sources", i)).show(ui, |ui| {
                     let view = &self.views[i];
                     let radar = view.displayed_time();
                     if let Some(time) = radar {

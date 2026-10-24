@@ -283,7 +283,7 @@ impl HookEchoApp {
         let mut compare_panes = None;
         let entries = self.palette_entries();
         let top = egui::Area::new("zeta_workspace_top".into())
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Middle)
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(12.0, 24.0))
             .show(ctx, |ui| {
@@ -446,7 +446,7 @@ impl HookEchoApp {
         );
         let station_details = format!("{station_status}\n{scan_status}\nPin color reflects NOAA network status.");
         let station_area = egui::Area::new("zeta_workspace_station".into())
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Middle)
             .constrain_to(self.chrome_rect)
             .anchor(
                 if room_for_center {
@@ -575,7 +575,7 @@ impl HookEchoApp {
                 .filter(|feature| feature.kind == wxdata::overlay::FeatureKind::Warning)
                 .count();
             let alerts = egui::Area::new("zeta_workspace_alerts".into())
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 24.0))
                 .show(ctx, |ui| {
@@ -892,9 +892,7 @@ impl HookEchoApp {
             self.activate_workspace_view(index, ctx);
         } else if let Some(count) = compare_panes {
             menu_open = false;
-            self.switch_mode(ViewMode::Analyst, ctx);
-            self.set_pane_count(count);
-            self.active_workspace = None;
+            self.compare_radar_products(count, ctx);
         }
         if stream_dashboard {
             menu_open = false;

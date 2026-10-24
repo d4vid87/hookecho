@@ -415,6 +415,12 @@ impl MapView {
     /// retained scan; only a cut from the selected, already-loaded volume overrides its head.
     pub fn linked_requested_time(&self) -> Option<DateTime<Utc>> {
         if let Some(target) = self.timeline.seek_target { return Some(target); }
+        // Streamed cuts advance before the completed-volume listing catches up.
+        if self.timeline.following && !self.timeline.playing && self.retained_station.is_none()
+            && self.volume.as_ref().and_then(|volume| volume.live_status.as_ref())
+                .is_some_and(|status| status.stream_active) {
+            return self.displayed_time();
+        }
         if let Some(source) = self.timeline.current() {
             if self.volume.as_ref().is_some_and(|volume| volume.name == source.name()) {
                 if let Some(time) = self.displayed_time() { return Some(time); }
@@ -940,6 +946,30 @@ mod tests {
         view.volume.as_mut().unwrap().name = view.timeline.frames[1].name().into();
         view.volume.as_mut().unwrap().time = next_time + chrono::Duration::seconds(30);
         assert_eq!(view.linked_requested_time(), view.displayed_time());
+    }
+
+    #[test]
+    fn linked_live_comparison_follows_streamed_cuts_before_the_archive_listing() {
+        let mut view = MapView::new(None, Camera::at_lonlat(0.0, 0.0, 3.0));
+        let completed = wxdata::level2::Identifier::new("KTLX20130520_000000_V06".into());
+        let listed_time = completed.date_time().unwrap();
+        let live_time = listed_time + chrono::Duration::minutes(13);
+        view.timeline.frames = vec![completed];
+        view.timeline.following = true;
+        view.volume = Some(Volume::new(scan_at(&[0.5]), "live-chunks".into(), live_time));
+        view.volume.as_mut().unwrap().live_status = Some(live_status());
+        assert_eq!(view.linked_requested_time(), Some(live_time));
+        view.retained_station = Some("KTLX".into());
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
+        view.retained_station = None;
+        view.timeline.seek_target = Some(listed_time);
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
+        view.timeline.seek_target = None;
+        view.timeline.playing = true;
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
+        view.timeline.playing = false;
+        view.timeline.following = false;
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
     }
 
     #[test]

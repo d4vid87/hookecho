@@ -96,6 +96,8 @@ impl HookEchoApp {
         let fresh = latest_cut
             .or(loaded_time)
             .is_some_and(|time| (Utc::now() - time).num_seconds() < 900);
+        let comparison_gap = comparison_time_gap(self.views.iter()
+            .filter(|view| view.show_radar).filter_map(MapView::displayed_time));
         let age = latest_cut.or(loaded_time).map(|time| {
             format!(
                 "{} {} ago",
@@ -141,8 +143,9 @@ impl HookEchoApp {
         let accent = egui::Color32::from_rgb(255, 190, 42);
         let expanded_id = egui::Id::new("zeta_transport_expanded");
         let split = self.chrome_rect.width() >= 1100.0;
-        let mut expanded = !split || ctx.data_mut(|d| d.get_temp::<bool>(expanded_id).unwrap_or(false));
+        let mut expanded = ctx.data_mut(|d| d.get_temp::<bool>(expanded_id).unwrap_or(false));
         let area = if expanded { egui::Area::new(egui::Id::new("zeta_transport"))
+            .order(egui::Order::Middle)
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .show(ctx, |ui| {
@@ -369,13 +372,11 @@ impl HookEchoApp {
                             ui.label(egui::RichText::new(clock).size(12.0));
                             layout_choice = zeta_layout_menu(ui, self.active_workspace.as_deref(),
                                 self.analyst_open, self.views.len(), &self.settings.workspaces);
-                            if split {
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.button(format!("{} Minimal controls", ph::CARET_DOWN))
                                         .on_hover_text("Collapse playback controls")
                                         .clicked() { expanded = false; }
-                                });
-                            }
+                            });
                         });
                         let t = &mut self.views[idx].timeline;
                         if !radar_visible {
@@ -449,6 +450,9 @@ impl HookEchoApp {
                         else if skipped { "Skipped unavailable radar frame".into() }
                         else if !self.views[idx].timeline.following { self.views[idx].timeline.date.format("Archive · %Y-%m-%d").to_string() }
                         else { age.clone().unwrap_or_default() };
+                        if let Some(gap) = comparison_gap {
+                            ui.colored_label(accent, format!("Pane times differ by {}", humanize(gap)));
+                        }
                         if !status.is_empty() {
                             ui.add(egui::Label::new(egui::RichText::new(status).size(11.0).color(egui::Color32::from_gray(190))).wrap())
                                 .on_hover_text(format!("Displayed scan: {}\nRequested scan: {}", loaded_time.map_or_else(|| "unavailable".into(), |t| t.to_rfc3339()), requested_time.map_or_else(|| "unavailable".into(), |t| t.to_rfc3339())));
@@ -457,7 +461,7 @@ impl HookEchoApp {
             })
         } else {
             egui::Area::new(egui::Id::new("zeta_transport_compact"))
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -18.0))
                 .show(ctx, |ui| {
@@ -467,8 +471,10 @@ impl HookEchoApp {
                         .corner_radius(18.0)
                         .inner_margin(egui::Margin::symmetric(10, 8))
                         .show(ui, |ui| {
+                            ui.set_width((if split { 400.0_f32 } else { 500.0_f32 })
+                                .min((self.chrome_rect.width() - 48.0).max(240.0)));
                             ui.spacing_mut().interact_size.y = 30.0;
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 if radar_visible {
                                     if zeta_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
                                     let playing = self.views[idx].timeline.playing;
@@ -478,13 +484,27 @@ impl HookEchoApp {
                                 }
                                 layout_choice = zeta_layout_menu(ui, self.active_workspace.as_deref(),
                                     self.analyst_open, self.views.len(), &self.settings.workspaces);
-                                if zeta_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
-                                if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
-                                if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
-                                if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
-                                if zeta_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
-                                if zeta_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
-                                if zeta_button(ui, ph::PENCIL_SIMPLE, "Draw on the map", self.tool == MapTool::Draw).clicked() { action = Some(PaletteAction::Tool(MapTool::Draw)); }
+                                if !split && ui.button(age.as_deref().unwrap_or("Waiting for scan"))
+                                    .on_hover_text("Open full radar playback and history").clicked() { expanded = true; }
+                                if let Some(gap) = comparison_gap {
+                                    ui.colored_label(accent, format!("Δ {}", humanize(gap)))
+                                        .on_hover_text("Radar pane observation times differ.");
+                                }
+                                ui.menu_button("Tools", |ui| {
+                                    for (label, selected, tool) in [
+                                        ("Set chase location", self.tool == MapTool::Chase, MapTool::Chase),
+                                        ("Inspect radar value", self.tool == MapTool::Interrogate, MapTool::Interrogate),
+                                        ("Measure distance and bearing", self.tool == MapTool::Measure, MapTool::Measure),
+                                        ("Draw a manual storm track", self.tool == MapTool::StormTrack, MapTool::StormTrack),
+                                        ("Draw on the map", self.tool == MapTool::Draw, MapTool::Draw),
+                                    ] {
+                                        if ui.selectable_label(selected, label).clicked() {
+                                            action = Some(PaletteAction::Tool(tool)); ui.close();
+                                        }
+                                    }
+                                    if ui.button("Choose outlooks").clicked() { action = Some(PaletteAction::OpenOutlooks); ui.close(); }
+                                    if ui.button("Layers").clicked() { show_layers = true; ui.close(); }
+                                });
                                 if zeta_button(ui, ph::SLIDERS_HORIZONTAL, "Full playback controls", false).clicked() { expanded = true; }
                             });
                         });
@@ -492,7 +512,7 @@ impl HookEchoApp {
         };
         if split && !expanded {
             let history = egui::Area::new(egui::Id::new("zeta_history_compact"))
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -18.0))
                 .show(ctx, |ui| {
@@ -505,7 +525,7 @@ impl HookEchoApp {
                 });
             self.mobile_occlusion.push(history.response.rect);
             let product = egui::Area::new(egui::Id::new("zeta_product_compact"))
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -18.0))
                 .show(ctx, |ui| {
@@ -517,7 +537,7 @@ impl HookEchoApp {
                 });
             self.mobile_occlusion.push(product.response.rect);
         }
-        if split { ctx.data_mut(|d| d.insert_temp(expanded_id, expanded)); }
+        ctx.data_mut(|d| d.insert_temp(expanded_id, expanded));
         if let (Some(layer), Some(index)) = (active_mrms, mrms_seek) {
             if let Some(loop_state) = self.mrms_loops.iter_mut().find(|loop_state| loop_state.layer == layer) {
                 loop_state.index = index;
@@ -611,9 +631,7 @@ impl HookEchoApp {
             Some(ZetaLayoutChoice::Radar) => self.return_to_radar(ctx),
             Some(ZetaLayoutChoice::Workspace(index)) => self.activate_workspace_view(index, ctx),
             Some(ZetaLayoutChoice::Panes(count)) => {
-                self.switch_mode(ViewMode::Analyst, ctx);
-                self.set_pane_count(count);
-                self.active_workspace = None;
+                self.compare_radar_products(count, ctx);
             }
             None => {}
         }

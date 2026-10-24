@@ -3,9 +3,8 @@
 #
 # The binary is nearly self-contained: TLS is static rustls (no libssl), D-Bus/tray/file-dialogs
 # ride the D-Bus/portal socket (no libdbus/GTK link), X11/Wayland client libs are dlopened. The
-# only bundled shared lib concern is libasound (ALSA); audio degrades gracefully if absent. We
-# assemble a bare AppDir and package it with appimagetool — no linuxdeploy, since everything we
-# would auto-bundle is on the AppImage excludelist anyway.
+# audio backend links ALSA directly, so bundle it before the loader starts the app. Build on
+# Ubuntu 22.04 (glibc 2.35); verify every bundled ELF against that floor before packaging.
 #
 # Usage: packaging/build-appimage.sh [--radar-workspace]
 # Output: dist/HookEcho-x86_64.AppImage
@@ -38,11 +37,27 @@ cargo build --release -p hookecho
 echo "==> assembling AppDir at $APPDIR"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin"
-cp "$ROOT/target/release/hookecho" "$APPDIR/usr/bin/hookecho"
+cp "${CARGO_TARGET_DIR:-$ROOT/target}/release/hookecho" "$APPDIR/usr/bin/hookecho"
+mkdir -p "$APPDIR/usr/lib"
+alsa="$(ldd "$APPDIR/usr/bin/hookecho" | awk '$1 == "libasound.so.2" {print $3}')"
+[[ -f "$alsa" ]] || { echo "Missing libasound.so.2; install the supported build dependencies" >&2; exit 1; }
+cp -L "$alsa" "$APPDIR/usr/lib/libasound.so.2"
 
 "$ROOT/packaging/piper/fetch.sh" linux-x86_64
 mkdir -p "$APPDIR/usr/lib/hookecho/piper"
 cp -a "$ROOT/target/piper/linux-x86_64/." "$APPDIR/usr/lib/hookecho/piper/"
+# Amy uses English phonemes; retain all voice/language rules and the compiled core data.
+voice="$APPDIR/usr/lib/hookecho/piper"
+find "$voice/espeak-ng-data" -maxdepth 1 -name '*_dict' ! -name en_dict -delete
+rm -f "$voice/libtashkeel_model.ort" "$voice/piper_phonemize" "$voice/espeak-ng"
+mkdir -p "$APPDIR/usr/share/doc/hookecho"
+cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/hookecho/LICENSE"
+cp "$ROOT/packaging/THIRD-PARTY-NOTICES.txt" "$APPDIR/usr/share/doc/hookecho/"
+cp "$ROOT/LICENSE" "$voice/ESpeak-NG-LICENSE-GPL-3.0"
+curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.14.1/LICENSE -o "$voice/ONNXRuntime-LICENSE-MIT"
+curl -fsSL https://raw.githubusercontent.com/rhasspy/piper-phonemize/2023.11.14-2/LICENSE.md -o "$voice/Piper-Phonemize-LICENSE-MIT"
+curl -fsSL https://raw.githubusercontent.com/rhasspy/piper-phonemize/2023.11.14-2/licenses/uni-algo/LICENSE.md -o "$voice/Uni-Algo-LICENSE"
+cp /usr/share/doc/libasound2/copyright "$APPDIR/usr/share/doc/hookecho/ALSA-copyright"
 
 # Desktop entry (top level + the canonical applications dir).
 cp "$assets/$desktop.desktop" "$APPDIR/$desktop.desktop"
@@ -79,6 +94,8 @@ if [ ! -x "$TOOL" ]; then
   chmod +x "$TOOL"
 fi
 
+echo "==> verifying AppDir"
+bash "$ROOT/scripts/checks/appimage.sh" "$APPDIR"
 echo "==> packaging"
 mkdir -p "$ROOT/dist"
 # APPIMAGE_EXTRACT_AND_RUN lets appimagetool run without FUSE (CI, containers).
