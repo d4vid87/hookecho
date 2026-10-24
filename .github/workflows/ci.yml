@@ -254,6 +254,8 @@ jobs:
           packages: "platform-tools platforms;android-35"
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare native phonemizer and voice assets
+        run: packaging/piper/fetch-android.sh
       - name: Test Kotlin app and background alert logic
         working-directory: android
         run: ./gradlew testDebugUnitTest assembleDebugAndroidTest --no-daemon
