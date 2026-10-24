@@ -46,10 +46,9 @@ cp -L "$alsa" "$APPDIR/usr/lib/libasound.so.2"
 "$ROOT/packaging/piper/fetch.sh" linux-x86_64
 mkdir -p "$APPDIR/usr/lib/hookecho/piper"
 cp -a "$ROOT/target/piper/linux-x86_64/." "$APPDIR/usr/lib/hookecho/piper/"
-# Amy uses English phonemes; retain all voice/language rules and the compiled core data.
+# Keep language data for the voice picker and custom models; only standalone tools are unused.
 voice="$APPDIR/usr/lib/hookecho/piper"
-find "$voice/espeak-ng-data" -maxdepth 1 -name '*_dict' ! -name en_dict -delete
-rm -f "$voice/libtashkeel_model.ort" "$voice/piper_phonemize" "$voice/espeak-ng"
+rm -f "$voice/piper_phonemize" "$voice/espeak-ng"
 mkdir -p "$APPDIR/usr/share/doc/hookecho"
 cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/hookecho/LICENSE"
 cp "$ROOT/packaging/THIRD-PARTY-NOTICES.txt" "$APPDIR/usr/share/doc/hookecho/"

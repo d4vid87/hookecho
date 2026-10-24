@@ -12,5 +12,6 @@ The AppImage includes these voice/audio components:
 - ALSA libasound: see ALSA-copyright in this directory for the packaged version's
   licenses, copyright holders and source URL.
 
-The voice uses English phonemes. Other language dictionaries and the unused Arabic
-Tashkeel model are omitted. The English voice model and phoneme rules are unchanged.
+The bundled Amy voice is English. Language dictionaries and Arabic Tashkeel support
+are retained for downloaded and custom voices. Standalone phonemizer/eSpeak tools
+are omitted; the runtime libraries, voice model and phoneme rules are unchanged.

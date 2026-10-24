@@ -36,6 +36,10 @@ fi
 "$app/AppRun" --headless-icon "$check_dir/icon.png" 64
 test -s "$check_dir/icon.png"
 voice="$app/usr/lib/hookecho/piper"
+for dictionary in en es de fr it pt; do
+  test -s "$voice/espeak-ng-data/${dictionary}_dict"
+done
+test -s "$voice/libtashkeel_model.ort"
 printf '%s\n' 'Tornado warning for Tarrant County. Wind 65 miles per hour. El Niño, McKinney, Bois d’Arc. Temperature minus 5 degrees.' |
   "$voice/piper" --model "$voice/en_US-amy-medium.onnx" --output_file "$check_dir/voice.wav"
 python3 - "$check_dir/voice.wav" <<'PY'
