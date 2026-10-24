@@ -22,6 +22,12 @@ class DeviceSmokeTest {
         }
     }
 
+    @Test fun offlineVoiceLoadsTheNativeRuntimeAndSynthesizes() {
+        org.junit.Assert.assertTrue(PiperVoice.speakBlocking(
+            rule.activity, "HookEcho device test. This is only a test."
+        ))
+    }
+
     @Test fun backgroundResumeRestoresTheActivityAndWorkingShelf() {
         rule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
         rule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
