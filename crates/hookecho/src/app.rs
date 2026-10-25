@@ -12870,8 +12870,10 @@ impl HookEchoApp {
                     // including a same-name TDWR revision, belongs in the cache until playback
                     // reaches that frame.
                     if !(looping && selected_frame.is_none()) {
+                        if v.retained_station.is_some() { self.pane_shown.remove(&view); }
                         v.show_volume(scan, name, time);
-                        self.pane_shown.remove(&view);
+                        // Invalidate the upload, not the visible image, while the next sweep is prepared.
+                        self.pane_upload_tokens.insert(view, 0);
                     }
                     v.loading = false;
                     v.error = None;
@@ -12896,7 +12898,6 @@ impl HookEchoApp {
                     v.last_list_failure = None;
                     if v.timeline.date == date && v.site.as_deref() == Some(site.as_str()) {
                         v.timeline.set_frames(frames, (site, date));
-                        self.pane_shown.remove(&view);
                     }
                 }
                 DataMsg::Live {
@@ -12919,7 +12920,10 @@ impl HookEchoApp {
                     if v.timeline.playing {
                         continue; // looping pane owns its displayed frame (cf. Volume above)
                     }
-                    if v.retained_station.is_some() { v.volume = None; }
+                    if v.retained_station.is_some() {
+                        v.volume = None;
+                        self.pane_shown.remove(&view);
+                    }
                     v.station_ready();
                     match &mut v.volume {
                         Some(vol) => vol.apply_live(scan, name, time, &changed, status),
@@ -12938,7 +12942,7 @@ impl HookEchoApp {
                     // A healthy stream pushes the poll deadline forward — this line IS the
                     // fallback: if the stream dies, interval polling resumes on schedule.
                     v.last_poll = Some(Instant::now());
-                    self.pane_shown.remove(&view);
+                    self.pane_upload_tokens.insert(view, 0);
                     self.scan_chime(view, time);
                 }
                 DataMsg::UpToDate { view, .. } => {
@@ -13471,10 +13475,11 @@ impl HookEchoApp {
                     let (scan, name, time, polled, revision) = (Arc::clone(&volume.scan), volume.name.clone(), volume.time, source.last_poll, source.tdwr_revision.clone());
                     let view = &mut self.views[idx];
                     if view.retained_station.is_some() || view.volume.as_ref().is_none_or(|volume| volume.name != name) {
+                        if view.retained_station.is_some() { self.pane_shown.remove(&idx); }
                         view.show_volume(scan, name, time);
                         view.clamp_tilt();
                         view.clamp_moment();
-                        self.pane_shown.remove(&idx);
+                        self.pane_upload_tokens.insert(idx, 0);
                     }
                     if time.date_naive() != view.timeline.date {
                         view.timeline.date = time.date_naive();
@@ -13516,12 +13521,13 @@ impl HookEchoApp {
                     if let Some(scan) = self.scan_cache.get(&name).map(Arc::clone) {
                         wxdata::stats::bump(wxdata::stats::Counter::ScanCacheHits);
                         let v = &mut self.views[idx];
+                        if v.retained_station.is_some() { self.pane_shown.remove(&idx); }
                         v.show_volume(scan, name, time);
                         v.loading = false;
                         v.error = None;
                         v.clamp_tilt();
                         v.clamp_moment();
-                        self.pane_shown.remove(&idx);
+                        self.pane_upload_tokens.insert(idx, 0);
                     } else if !self.views[idx].loading || self.views[idx].frame_request.pending_name() != Some(name.as_str()) {
                         wxdata::stats::bump(wxdata::stats::Counter::ScanCacheMisses);
                         let s = self.views[idx].site.clone().unwrap_or_default();
