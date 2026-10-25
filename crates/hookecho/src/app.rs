@@ -13428,18 +13428,7 @@ impl HookEchoApp {
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
         self.views[idx].buffering = next_pending;
         if should_advance_timeline(next_pending, self.settings.pause_while_panning && self.gesture_live) {
-            let view = &mut self.views[idx];
-            let previous = view.timeline.playhead;
-            let unavailable = view.failed_frame.as_deref().is_some_and(|name| view.timeline.current().is_some_and(|frame| frame.name() == name));
-            view.timeline.tick_cut();
-            if unavailable && view.timeline.playhead != previous {
-                if let Some(name) = view.failed_frame.clone() {
-                    view.note_frame_status(name, crate::timeline::FrameStatus::Skipped);
-                }
-                view.skipped_frames += 1;
-                view.last_skipped_at = Some(wxdata::clock::Instant::now());
-                view.failed_frame = None;
-            }
+            self.views[idx].advance_playback();
         }
         if self.views[idx].timeline.following {
             self.views[idx].cut_selection = None;

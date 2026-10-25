@@ -50,7 +50,7 @@ try {
  assert((await checkpoint()).session.panes[0].time?.includes('T17:03:00'),'must select the deliberately failing radar frame');
  await wait(1500);
  const unavailable=await diagnostics();assert(unavailable.timeline_availability.includes('Unavailable'),'failed selected frame must be marked unavailable');report.unavailable=unavailable;await page.screenshot({path:output+'/timeline-unavailable.png'});
- await page.keyboard.press('Space');await wait(2000);const skipped=await diagnostics();assert(skipped.timeline_availability.includes('Skipped'),'playback must identify skipped unavailable frame');report.skipped=skipped;report.checks.unavailableAndSkippedTimeline=true;
+ await page.keyboard.press('Space');await wait(2000);const skipped=await diagnostics();report.skipped=skipped;assert(skipped.timeline_availability.includes('Skipped'),'playback must identify skipped unavailable frame');report.checks.unavailableAndSkippedTimeline=true;
  await command('Jump to live');await wait(500);
  const before=await checkpoint();await command('2 panes');await page.waitForFunction(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace.panes.length===2);
  const two=await ready(2,'KDMX');report.two=two;assert(two.render_metrics.nominal_gpu_bytes<four.render_metrics.nominal_gpu_bytes,'closing panes must reduce nominal GPU allocation');report.checks.closedPaneMemory=true;

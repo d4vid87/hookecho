@@ -540,6 +540,27 @@ impl MapView {
         self.frame_history.push_back((name, state));
     }
 
+    /// Advance the cursor and retain why a frame was skipped, even after a cached scan
+    /// replaced the transient failed request.
+    pub fn advance_playback(&mut self) {
+        if !self.timeline.playing { return; }
+        let previous = self.timeline.playhead;
+        let unavailable = self.timeline.current().map(|frame| frame.name())
+            .filter(|name| self.failed_frame.as_deref() == Some(*name)
+                || self.frame_history.iter().any(|(frame, status)| frame == *name
+                    && *status == crate::timeline::FrameStatus::Unavailable))
+            .map(str::to_owned);
+        self.timeline.tick_cut();
+        if self.timeline.playhead != previous {
+            if let Some(name) = unavailable {
+                self.note_frame_status(name.clone(), crate::timeline::FrameStatus::Skipped);
+                self.skipped_frames += 1;
+                self.last_skipped_at = Some(wxdata::clock::Instant::now());
+                if self.failed_frame.as_deref() == Some(name.as_str()) { self.failed_frame = None; }
+            }
+        }
+    }
+
     pub fn has_decoded_frame(&self, name: &str) -> bool {
         self.volume.as_ref().is_some_and(|volume| volume.name == name) || self.recent.contains(&name.to_owned())
     }
@@ -1282,6 +1303,23 @@ mod tests {
         assert_eq!(view.frame_history.len(), 64);
         view.show_volume(scan_at(&[0.5]), "99".into(), Utc::now());
         assert!(!view.frame_history.iter().any(|(name, _)| name == "99"));
+    }
+
+    #[test]
+    fn playback_keeps_skipped_status_after_the_transient_request_error_is_cleared() {
+        let mut view = MapView::new(None, Camera::at_lonlat(0.0, 0.0, 3.0));
+        let missing = wxdata::level2::Identifier::new("KTLX20130520_000000_V06".into());
+        let next = wxdata::level2::Identifier::new("KTLX20130520_000500_V06".into());
+        let name = missing.name().to_owned();
+        view.timeline.frames = vec![missing, next];
+        view.timeline.playing = true;
+        view.note_frame_status(name.clone(), crate::timeline::FrameStatus::Unavailable);
+        assert!(view.failed_frame.is_none());
+        view.advance_playback();
+        assert_eq!(view.timeline.playhead, 1);
+        assert_eq!(view.skipped_frames, 1);
+        assert!(view.frame_history.iter().any(|(frame, state)|
+            frame == &name && *state == crate::timeline::FrameStatus::Skipped));
     }
 
     #[test]
