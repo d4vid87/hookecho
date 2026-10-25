@@ -42,6 +42,14 @@ fn main() -> eframe::Result<()> {
     )
     .init();
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_help();
+        return Ok(());
+    }
+    if let Some(option) = unknown_option(&args[1..]) {
+        eprintln!("Unknown option: {option}\nRun hookecho --help for usage.");
+        std::process::exit(2);
+    }
     if args.iter().any(|a| a == "--radar-workspace") {
         hookecho::paths::use_radar_workspace();
     }
@@ -51,7 +59,8 @@ fn main() -> eframe::Result<()> {
 
     // `hookecho --version` — matches what the About window and the update check compare against.
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("hookecho {}", env!("CARGO_PKG_VERSION"));
+        println!("hookecho {} ({}; {}; built {})", env!("CARGO_PKG_VERSION"),
+            hookecho::BUILD_REVISION, hookecho::BUILD_CHANNEL, hookecho::build_date());
         return Ok(());
     }
 
@@ -1184,4 +1193,64 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
+}
+
+#[cfg(not(target_os = "android"))]
+const CLI_OPTIONS: &[&str] = &[
+    "--help", "-h", "--version", "-V", "--radar-workspace", "--decorated",
+    "--status", "--json", "--line", "--serve", "--bind", "--web-root", "--serve-token", "--public",
+    "--snapshot", "--size", "--zoom", "--moment", "--tilt", "--date", "--time", "--every",
+    "--on-change", "--no-smooth", "--smooth", "--dealias", "--pal", "--basemap", "--srv",
+    "--transparent", "--threshold", "--tray-test", "--chime",
+    "--headless", "--headless-3d", "--headless-afd", "--headless-alerts", "--headless-archwarn",
+    "--headless-aviation", "--headless-cappi", "--headless-cells", "--headless-chasepack",
+    "--headless-climatology", "--headless-contours", "--headless-diff", "--headless-dualpol",
+    "--headless-env", "--headless-field", "--headless-fronts", "--headless-gauges", "--headless-glm",
+    "--headless-global", "--headless-hrrr", "--headless-ico", "--headless-icon", "--headless-indices",
+    "--headless-l3grid", "--headless-lightning", "--headless-live", "--headless-metar",
+    "--headless-mosaic", "--headless-mrms", "--headless-multipane", "--headless-obs",
+    "--headless-outlooks", "--headless-overlay", "--headless-placefile", "--headless-probsevere",
+    "--headless-reports", "--headless-rotation", "--headless-rules", "--headless-spotters",
+    "--headless-tds", "--headless-tropical", "--headless-verify", "--headless-vwp", "--headless-xsection",
+];
+
+#[cfg(not(target_os = "android"))]
+fn unknown_option(args: &[String]) -> Option<&str> {
+    args.iter().find(|arg| arg.starts_with('-') && arg.as_str() != "-"
+        && !arg.split(',').all(|part| part.parse::<f64>().is_ok()) && !CLI_OPTIONS.contains(&arg.as_str())).map(String::as_str)
+}
+
+#[cfg(not(target_os = "android"))]
+fn print_help() {
+    println!("HookEcho — NEXRAD weather radar
+Usage: hookecho [--radar-workspace] [hookecho://goto/…]
+       hookecho --status [--json|--line] [LAT,LON]
+       hookecho --serve [PORT] [--bind ADDR] [--web-root DIR] [--serve-token TOKEN] [--public]
+       hookecho --snapshot FILE [SITE] [--size WIDTHxHEIGHT] [--zoom Z] [--every SECS] [--on-change]
+       hookecho --headless FILE [SITE] [--date YYYY-MM-DD] [--time HH:MM]
+       hookecho --version | --help
+
+Render options:
+  --moment REF|VEL|SW|ZDR|PHI|KDP|CC   --tilt INDEX   --threshold DBZ
+  --smooth | --no-smooth   --dealias   --pal FILE   --basemap dark|light|satellite
+  --srv DIRECTION/SPEED   --transparent
+Archive dates and times are UTC. Run without options to open the radar.
+Diagnostic commands: {}", CLI_OPTIONS.iter().copied().filter(|arg| arg.starts_with("--headless-"))
+        .collect::<Vec<_>>().join(" "));
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn validates_options_without_rejecting_negative_coordinates() {
+        let args = |values: &[&str]| values.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+        assert!(unknown_option(&args(&["--headless", "radar.png", "--size", "900x650", "--zoom", "-1"])).is_none());
+        assert!(unknown_option(&args(&["--decorated", "--radar-workspace"])).is_none());
+        assert!(unknown_option(&args(&["--status", "-35.3,-97.2"])).is_none());
+        assert!(unknown_option(&args(&["--headless-indices", "-97.3", "33.2"])).is_none());
+        assert_eq!(unknown_option(&args(&["--headles", "radar.png"])), Some("--headles"));
+        assert_eq!(unknown_option(&args(&["--headless-typo"])), Some("--headless-typo"));
+    }
 }

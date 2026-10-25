@@ -47,11 +47,9 @@ const LOOP_SETTLE_FRAMES: u8 = 12;
 /// a core within a couple of seconds.
 const QUIET_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// The heartbeat in a window nobody is touching. Two frames a second: the clocks the heartbeat
-/// exists for (volume age, countdowns) are minute- and second-resolution, so the visible cost is
-/// a reading up to 0.4 s stale. Everything that actually moves asks for its own repaint and is
-/// unaffected — see the comment at the use site.
-const IDLE_QUIET_MS: u64 = 500;
+/// Resting windows need one heartbeat per second for clocks and countdowns.
+/// Input, arriving data and animations request their own immediate repaints.
+const IDLE_QUIET_MS: u64 = 1_000;
 
 /// How long any one overlay or field fetch may run before it is abandoned.
 ///
@@ -2697,6 +2695,7 @@ fn shared_head_source(views: &[MapView], idx: usize, poll_secs: u64) -> Option<u
         || !target.timeline.following || target.timeline.live_looping() { return None; }
     views.iter().enumerate().filter(|(i, source)| {
         *i != idx && target.site.is_some() && source.site == target.site
+            && source.loaded_site == source.site
             && source.timeline.following && !source.timeline.live_looping()
             && source.retained_station.is_none() && !source.loading && source.error.is_none()
             && source.head_request.pending_name().is_none()
@@ -4299,6 +4298,15 @@ fn pane_rects(r: egui::Rect, n: usize) -> Vec<egui::Rect> {
             v
         }
     }
+}
+
+fn comparison_time_gap(times: impl Iterator<Item = chrono::DateTime<Utc>>) -> Option<i64> {
+    let (first, last) = times.fold(None, |range, time| match range {
+        None => Some((time, time)),
+        Some((first, last)) => Some((first.min(time), last.max(time))),
+    })?;
+    let seconds = (last - first).num_seconds();
+    (seconds > 120).then_some(seconds)
 }
 
 /// Bounded observations around the analysis probe even when the map shows the whole country.
@@ -10372,13 +10380,13 @@ impl HookEchoApp {
             PaletteAction::ExportRegionStats => self.export_region_stats(),
             PaletteAction::ExportDetectorHistory => self.export_detector_history(),
             PaletteAction::SetPanes(n) => {
-                if n > 1 { self.switch_mode(ViewMode::Analyst, ctx); }
-                self.set_pane_count(n);
+                if n > 1 { self.compare_radar_products(n, ctx); }
+                else { self.set_pane_count(n); }
                 if n > 1 {
                     self.hint(
                         "panes",
                         "Each pane keeps its own radar, product and tilt \u{2014} turn \
-                         on Link pane cameras to pan them together",
+                         off Link map positions or Link timelines to explore independently",
                     );
                 }
             }
@@ -13420,18 +13428,7 @@ impl HookEchoApp {
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
         self.views[idx].buffering = next_pending;
         if should_advance_timeline(next_pending, self.settings.pause_while_panning && self.gesture_live) {
-            let view = &mut self.views[idx];
-            let previous = view.timeline.playhead;
-            let unavailable = view.failed_frame.as_deref().is_some_and(|name| view.timeline.current().is_some_and(|frame| frame.name() == name));
-            view.timeline.tick_cut();
-            if unavailable && view.timeline.playhead != previous {
-                if let Some(name) = view.failed_frame.clone() {
-                    view.note_frame_status(name, crate::timeline::FrameStatus::Skipped);
-                }
-                view.skipped_frames += 1;
-                view.last_skipped_at = Some(wxdata::clock::Instant::now());
-                view.failed_frame = None;
-            }
+            self.views[idx].advance_playback();
         }
         if self.views[idx].timeline.following {
             self.views[idx].cut_selection = None;
@@ -15619,6 +15616,26 @@ impl HookEchoApp {
                                     }
                                 }
                             });
+                            let view = &self.views[idx];
+                            if let Some(time) = view.displayed_time().filter(|_| view.show_radar) {
+                                ui.horizontal(|ui| {
+                                    let withheld = idx != self.active && self.link_times
+                                        && !view.alignment_acceptable(self.settings.linked_time_limit_seconds);
+                                    ui.weak(format!("{}{} UTC", if withheld { "Last scan " } else { "" }, time.format("%H:%M:%S")));
+                                    let active_time = self.views[self.active].displayed_time();
+                                    if let Some(delta) = active_time.map(|active| (time - active).num_seconds())
+                                        .filter(|delta| delta.abs() > 120) {
+                                        ui.colored_label(egui::Color32::from_rgb(255, 186, 86),
+                                            format!("Time offset {:+} min", delta / 60))
+                                            .on_hover_text("This pane has a different observation time from the active pane.");
+                                    }
+                                });
+                                if idx != self.active && self.link_times
+                                    && !view.alignment_acceptable(self.settings.linked_time_limit_seconds) {
+                                    ui.colored_label(egui::Color32::from_rgb(255, 186, 86),
+                                        "Waiting for a scan within the linked time limit");
+                                }
+                            }
                         });
                 });
         }
@@ -19310,6 +19327,18 @@ impl HookEchoApp {
         self.pane_shown.clear();
     }
 
+    fn compare_radar_products(&mut self, count: usize, ctx: &egui::Context) {
+        let entering = !self.analyst_open;
+        self.switch_mode(ViewMode::Analyst, ctx);
+        self.set_pane_count(count);
+        // Retain deliberate unlinking inside a comparison; new comparisons start together.
+        if entering {
+            self.link_cameras = true;
+            self.link_times = true;
+        }
+        self.active_workspace = None;
+    }
+
     /// The app's own commands — the ones that aren't a layer, product, tool or window, and so
     /// have no place in the action registry: view toggles, chase, capture, settings bundles.
     /// Compact preference groups; details stay collapsed until needed.
@@ -20488,7 +20517,7 @@ impl HookEchoApp {
         {
             Ok(settings) => {
                 self.settings = settings;
-                self.toast(ToastKind::Success, "Settings imported");
+                self.toast(ToastKind::Success, "Settings imported. Review and enable imported plugins in Layers.");
             }
             Err(e) => {
                 log::warn!("settings import failed: {e}");
@@ -23260,7 +23289,7 @@ impl eframe::App for HookEchoApp {
         // the same for every surface in a frame.
         let setup_ms = ui_started.elapsed().as_secs_f32() * 1000.0;
         let chrome_started = Instant::now();
-        ui::motion::frame(ctx, self.settings.reduce_motion);
+        ui::motion::frame(ctx, self.settings.reduce_motion, _frame.info().cpu_usage);
 
         // Chrome: touch-first on Android (top chips + bottom sheet + docked toolbar), desktop
         // otherwise (the floating map-first chrome below). Both funnel into the same `UiActions`
@@ -24405,8 +24434,12 @@ impl eframe::App for HookEchoApp {
         // Visibility history spans the frame; each clipped pane starts a fresh collision pass.
         self.labels.begin();
         egui::CentralPanel::default().show(root, |ui| {
-            let full = ui.available_rect_before_wrap();
+            let mut full = ui.available_rect_before_wrap();
             let n = self.views.len();
+            if n > 1 && self.settings.radar_workspace && !self.obs_mode && !chrome::compact(ctx) {
+                // Global controls occupy one common header above the pane product tabs.
+                full.min.y = (self.chrome_rect.top() + 96.0).min(full.bottom());
+            }
             // A phone shows one pane at a time. Two 400x400 pt panes stacked is two views of
             // nothing; the pane strip above the scrubber is how you get to the others.
             // Only where one pane is all that fits: a tablet shows the split.
@@ -24666,14 +24699,7 @@ impl eframe::App for HookEchoApp {
             // repaint and is unaffected.
             1_000
         } else if self.last_input.elapsed() > QUIET_AFTER {
-            // Nobody has touched it for a while. This is a floor, not a schedule: egui takes the
-            // *minimum* of every repaint request in a frame, so playback, the warning pulse, the
-            // wind field and every arriving volume all still outbid it and animate at their own
-            // rate. What it changes is the cost of a window nothing is happening in — ten wasted
-            // full passes a second, each re-walking thirty poll clocks and re-projecting every
-            // label, becomes two. The first event of any kind snaps it back the same frame.
-            //
-            // The visible price is that a clock can read up to 0.4 s stale in a still window.
+            // This is a floor: input, playback and arriving data request earlier repaints.
             IDLE_QUIET_MS
         } else if cfg!(target_os = "android") {
             250
@@ -25203,6 +25229,15 @@ mod tests {
     }
 
     #[test]
+    fn comparison_gap_uses_observation_times_and_ignores_small_scan_offsets() {
+        let at = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        assert_eq!(super::comparison_time_gap(std::iter::empty()), None);
+        assert_eq!(super::comparison_time_gap([at].into_iter()), None);
+        assert_eq!(super::comparison_time_gap([at, at + chrono::Duration::seconds(120)].into_iter()), None);
+        assert_eq!(super::comparison_time_gap([at, at - chrono::Duration::minutes(13)].into_iter()), Some(780));
+    }
+
+    #[test]
     fn scan_progress_ring_paints_missing_old_and_new_segments() {
         use wxdata::level2::AzimuthAge;
         let mut ages = [AzimuthAge::Missing; 720];
@@ -25460,10 +25495,15 @@ mod tests {
         let scan = Arc::new(level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
         views[0].volume = Some(Volume::new(scan, "KDMX20261019_170000".into(), Utc::now()));
         views[0].last_poll = Some(Instant::now());
+        views[0].loaded_site = views[0].site.clone();
         assert_eq!(super::shared_head_source(&views, 1, 60), Some(0));
         assert_eq!(super::shared_head_source(&views, 1, 0), None, "expired heads must poll again");
         views[1].site = Some("KTLX".into());
         assert_eq!(super::shared_head_source(&views, 1, 60), None);
+        // All pane selectors change before the per-pane sync pass runs.
+        views[0].site = Some("KTLX".into());
+        assert_eq!(super::shared_head_source(&views, 1, 60), None, "an unsynced pane still carries its previous station");
+        views[0].site = Some("KDMX".into());
         views[1].site = Some("KDMX".into());
         views[1].timeline.following = false;
         assert_eq!(super::shared_head_source(&views, 1, 60), None, "archive selections own their data");

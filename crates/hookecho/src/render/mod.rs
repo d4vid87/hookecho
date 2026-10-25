@@ -1216,55 +1216,6 @@ impl RenderResources {
         })
     }
 
-    /// Quads to draw for one visible tile: normally itself, but if its texture hasn't arrived,
-    /// whatever resident neighbours in the pyramid cover the same ground.
-    ///
-    /// Children first (pinch-out: the level we came from is still resident and sharper), each
-    /// covering its quarter with the full texture. Otherwise the nearest resident ancestor, up to
-    /// three levels up, drawn once with its UVs cropped to the part this tile occupies. Without
-    /// this the whole basemap blanks every time the integer zoom level changes, even though the
-    /// pixels to show are sitting on the GPU.
-    #[allow(clippy::type_complexity)] // one call site; a struct here would be ceremony
-    fn tile_quads(
-        &self,
-        style: u64,
-        v: &VisibleTile,
-    ) -> Vec<(TileKey, [f32; 2], [f32; 2], [f32; 2], [f32; 2])> {
-        const FULL: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
-        if self.tiles.contains_key(&(style, v.id)) {
-            return vec![((style, v.id), v.world_min, v.world_max, FULL.0, FULL.1)];
-        }
-        let (z, x, y) = v.id;
-        let [x0, y0] = v.world_min;
-        let [x1, y1] = v.world_max;
-        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-        let kids: Vec<_> = [(0u32, 0u32), (1, 0), (0, 1), (1, 1)]
-            .into_iter()
-            .filter_map(|(dx, dy)| {
-                let id = (style, (z + 1, x * 2 + dx, y * 2 + dy));
-                self.tiles.contains_key(&id).then(|| {
-                    let (qx0, qx1) = if dx == 0 { (x0, mx) } else { (mx, x1) };
-                    let (qy0, qy1) = if dy == 0 { (y0, my) } else { (my, y1) };
-                    (id, [qx0, qy0], [qx1, qy1], FULL.0, FULL.1)
-                })
-            })
-            .collect();
-        if !kids.is_empty() {
-            return kids;
-        }
-        for up in 1..=3u8 {
-            if up > z {
-                break;
-            }
-            let id = (style, (z - up, x >> up, y >> up));
-            if self.tiles.contains_key(&id) {
-                let (uv_min, uv_max) = ancestor_uv(x, y, up);
-                return vec![(id, v.world_min, v.world_max, uv_min, uv_max)];
-            }
-        }
-        Vec::new()
-    }
-
     fn upload_tile(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, t: &PendingTile) {
         let size = wgpu::Extent3d {
             width: t.width,
@@ -1552,7 +1503,7 @@ impl RenderResources {
         let mut tverts: Vec<TileVertex> = Vec::new();
         let mut visible = Vec::new();
         for v in &cb.visible {
-            for (id, wmin, wmax, uvmin, uvmax) in self.tile_quads(cb.basemap_key, v) {
+            for (id, wmin, wmax, uvmin, uvmax) in raster_tile_quads(cb.basemap_key, v, |id| self.tiles.contains_key(id)) {
                 let steps = tile_subdivisions(cb.globe, cb.world_per_pixel, wmin, wmax);
                 let first = tverts.len() as u32;
                 if tverts.len() as u64 + 6 * steps * steps > MAX_TILE_VERTS {
@@ -2203,6 +2154,61 @@ impl egui_wgpu::CallbackTrait for MapCallback {
     }
 }
 
+/// Prefer exact imagery, then cached children; fill their missing quarters from an ancestor.
+#[allow(clippy::type_complexity)] // one call site; a struct here would be ceremony
+fn raster_tile_quads(
+    style: u64,
+    v: &VisibleTile,
+    contains: impl Fn(&TileKey) -> bool,
+) -> Vec<(TileKey, [f32; 2], [f32; 2], [f32; 2], [f32; 2])> {
+    const FULL: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
+    if contains(&(style, v.id)) {
+        return vec![((style, v.id), v.world_min, v.world_max, FULL.0, FULL.1)];
+    }
+    let (z, x, y) = v.id;
+    let [x0, y0] = v.world_min;
+    let [x1, y1] = v.world_max;
+    let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let mut kids: Vec<_> = [(0u32, 0u32), (1, 0), (0, 1), (1, 1)]
+        .into_iter()
+        .filter_map(|(dx, dy)| {
+            let id = (style, (z + 1, x * 2 + dx, y * 2 + dy));
+            contains(&id).then(|| {
+                let (qx0, qx1) = if dx == 0 { (x0, mx) } else { (mx, x1) };
+                let (qy0, qy1) = if dy == 0 { (y0, my) } else { (my, y1) };
+                (id, [qx0, qy0], [qx1, qy1], FULL.0, FULL.1)
+            })
+        })
+        .collect();
+    if kids.len() == 4 {
+        return kids;
+    }
+    for up in 1..=3u8 {
+        if up > z {
+            break;
+        }
+        let id = (style, (z - up, x >> up, y >> up));
+        if contains(&id) {
+            if kids.is_empty() {
+                let (uv_min, uv_max) = ancestor_uv(x, y, up);
+                return vec![(id, v.world_min, v.world_max, uv_min, uv_max)];
+            }
+            // Fill only missing quarters, so translucent imagery is never blended twice.
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let (cx, cy) = (x * 2 + dx, y * 2 + dy);
+                if !contains(&(style, (z + 1, cx, cy))) {
+                    let (qx0, qx1) = if dx == 0 { (x0, mx) } else { (mx, x1) };
+                    let (qy0, qy1) = if dy == 0 { (y0, my) } else { (my, y1) };
+                    let (uv_min, uv_max) = ancestor_uv(cx, cy, up + 1);
+                    kids.push((id, [qx0, qy0], [qx1, qy1], uv_min, uv_max));
+                }
+            }
+            break;
+        }
+    }
+    kids
+}
+
 /// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
 /// then finer fallbacks, then the requested tiles so current detail always wins.
 pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
@@ -2276,6 +2282,44 @@ mod tests {
         let (min, max) = ancestor_uv(7, 7, 3);
         assert_eq!(min, [0.875, 0.875]);
         assert_eq!(max, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn partial_raster_children_keep_complete_non_overlapping_coverage() {
+        let tile = super::VisibleTile { id: (4, 3, 5), world_min: [0.0; 2], world_max: [1.0; 2] };
+        let parent = (17, (3, 1, 2));
+        for mask in 0..16 {
+            let mut resident = std::collections::HashSet::from([parent]);
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    if mask & (1 << (dy * 2 + dx)) != 0 {
+                        resident.insert((17, (5, 6 + dx, 10 + dy)));
+                    }
+                }
+            }
+            let quads = super::raster_tile_quads(17, &tile, |id| resident.contains(id));
+            let area: f32 = quads.iter().map(|(_, min, max, _, _)| (max[0] - min[0]) * (max[1] - min[1])).sum();
+            assert_eq!(area, 1.0, "partial child mask {mask} must cover the entire tile once");
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let point = [0.25 + dx as f32 * 0.5, 0.25 + dy as f32 * 0.5];
+                    let covering: Vec<_> = quads.iter().filter(|(_, min, max, _, _)|
+                        (0..2).all(|i| min[i] <= point[i] && point[i] < max[i])).collect();
+                    assert_eq!(covering.len(), 1);
+                    let expected = if mask & (1 << (dy * 2 + dx)) != 0 { (17, (5, 6 + dx, 10 + dy)) } else { parent };
+                    assert_eq!(covering[0].0, expected);
+                    if expected == parent {
+                        let (_, min, max, uvmin, uvmax) = covering[0];
+                        let uv = std::array::from_fn::<_, 2, _>(|i|
+                            uvmin[i] + (point[i] - min[i]) / (max[i] - min[i]) * (uvmax[i] - uvmin[i]));
+                        assert_eq!(uv, [0.5 + point[0] * 0.5, 0.5 + point[1] * 0.5]);
+                    }
+                }
+            }
+        }
+        assert!(super::raster_tile_quads(18, &tile, |id| *id == parent).is_empty());
+        let exact = (17, tile.id);
+        assert_eq!(super::raster_tile_quads(17, &tile, |id| *id == parent || *id == exact).len(), 1);
     }
 }
 

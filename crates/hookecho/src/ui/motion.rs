@@ -70,15 +70,14 @@ pub fn reduced() -> bool {
 /// ponytail: the slow-frame test is a run of bad frames, not an average — a single 200 ms hitch is
 /// a tile decode, not a slow machine, and averaging in the startup frames would brake every cold
 /// start. Sustained badness is the thing worth reacting to.
-pub fn frame(ctx: &egui::Context, user_reduce: bool) {
+pub fn frame(ctx: &egui::Context, user_reduce: bool, cpu_seconds: Option<f32>) {
     USER_OFF.store(user_reduce, Ordering::Relaxed);
-    // `stable_dt` substitutes the predicted frame interval after reactive-mode sleep. The raw
-    // delta counts an idle 100 ms heartbeat as a slow frame and degrades a perfectly idle app.
-    let dt = ctx.input(|i| i.stable_dt);
+    // Integration CPU time excludes reactive sleep and vsync; idle cadence is not render cost.
     let (slow, changed) = ctx.data_mut(|d| {
         let id = egui::Id::new("visual_quality_guard");
         let mut guard: Guard = d.get_temp(id).unwrap_or_default();
-        let changed = guard.observe(dt);
+        let changed = cpu_seconds.filter(|dt| dt.is_finite() && *dt >= 0.0)
+            .and_then(|dt| guard.observe(dt));
         d.insert_temp(id, guard);
         (guard.degraded, changed)
     });
@@ -215,5 +214,17 @@ mod tests {
         guard.observe(0.030);
         assert_eq!(guard.observe(0.020), None);
         assert!(guard.degraded);
+    }
+
+    #[test]
+    fn resting_one_second_frames_do_not_reduce_visual_quality() {
+        let ctx = egui::Context::default();
+        for second in 0..ENGAGE_FRAMES + 10 {
+            let raw = egui::RawInput { time: Some(f64::from(second)), predicted_dt: 1.0, ..Default::default() };
+            let _ = ctx.run_ui(raw, |_| frame(&ctx, false, Some(0.005)));
+        }
+        let guard = ctx.data(|data| data.get_temp::<Guard>(egui::Id::new("visual_quality_guard"))).unwrap();
+        assert!(!guard.degraded);
+        assert_eq!(guard.run, 0);
     }
 }

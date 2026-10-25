@@ -2599,6 +2599,7 @@ dependencies = [
  "rfd",
  "rodio",
  "rumqttc",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

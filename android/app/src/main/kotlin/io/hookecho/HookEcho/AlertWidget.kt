@@ -46,12 +46,16 @@ class AlertWidget : AppWidgetProvider() {
                 }
             }
         }
-        var text = when {
-            watched.isEmpty() -> "No saved locations yet"
-            successful == 0 && failed > 0 -> "Couldn't check alerts"
-            lines.isEmpty() -> "All quiet"
-            else -> lines.distinct().take(4).joinToString("\n")
+        val coverage = watched.joinToString("|") { w ->
+            "${w.lat},${w.lon}:" + w.samples.joinToString(";") { it.joinToString(",") }
         }
+        val prefs = context.getSharedPreferences("alert-widget", Context.MODE_PRIVATE)
+        var lastComplete = if (prefs.getString("coverage", null) == coverage) prefs.getLong("complete_at", 0) else 0
+        if (successful > 0 && failed == 0) {
+            lastComplete = System.currentTimeMillis()
+            prefs.edit().putString("coverage", coverage).putLong("complete_at", lastComplete).apply()
+        }
+        var text = Nws.checkSummary(watched.isNotEmpty(), lines, successful, failed, lastComplete)
         // The storm line the app last wrote for the radar widget, reused here: "all quiet" and
         // "a cell 12 miles away" are different kinds of quiet, and this widget has no cell data
         // of its own. Absent when the app has not run, which is simply no line.
@@ -63,7 +67,7 @@ class AlertWidget : AppWidgetProvider() {
         val intent = Intent(context, MainActivity::class.java)
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         watched.firstOrNull()?.let {
-            intent.putExtra(MainActivity.EXTRA_GOTO, ",%.4f,%.4f,9".format(it.lon, it.lat))
+            intent.putExtra(MainActivity.EXTRA_GOTO, Nws.gotoPoint(it.lon, it.lat))
         }
         val tap = PendingIntent.getActivity(
             context, 0, intent,

@@ -36,7 +36,10 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
 ## Install
 
 - **Linux**: download `HookEcho-x86_64.AppImage` from
-  [Releases](https://github.com/d4vid87/hookecho/releases), `chmod +x`, run. Debian/Ubuntu users can install
+  [Releases](https://github.com/d4vid87/hookecho/releases), `chmod +x`, run. The AppImage requires
+  glibc 2.35 or newer (Ubuntu 22.04 or equivalent); it bundles the ALSA audio library and offline
+  English voice. `hookecho --version` reports its revision, channel and build date; `--help` works
+  without a display. Debian/Ubuntu users can install
   `hookecho_<version>_amd64.deb` from the same place
   (`sudo apt install ./hookecho_*.deb`) to get the menu entry and icon.
 - **Windows**: grab the installer from [Releases](https://github.com/d4vid87/hookecho/releases) —
@@ -65,9 +68,12 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
   via `android/build.sh` (NDK + `cargo-ndk`).
 
-Versioned `v*` releases are the stable channel. Every push to `main` also
-refreshes a [`latest`](https://github.com/d4vid87/hookecho/releases/tag/latest) rolling prerelease carrying the
-same artifacts, if you want the newest work without waiting for a tag.
+Versioned releases without a prerelease suffix are the stable channel. Main-branch
+builds publish as **Preview** releases with an immutable `build-<commit>` tag after
+CI and every platform package succeeds. All packages and `SHA256SUMS` are published
+together; older releases stay public for rollback. The [releases page](https://github.com/d4vid87/hookecho/releases)
+lists both channels. Container `:preview` follows tested main builds; `:latest`
+follows stable version tags, and `:sha-<commit>` identifies an exact image.
 
 First launch can choose a nearby radar from your location; you can also search
 for a site. Everything else — map, theme, accent color, how warnings reach you —
@@ -660,7 +666,8 @@ docker run -d -p 127.0.0.1:8080:8080 \
   ghcr.io/d4vid87/hookecho:latest
 ```
 
-`:latest` is rebuilt from `main` on every push; released versions are tagged
+`:preview` follows tested `main` builds; `:latest` follows stable version tags. Exact images use
+`:sha-<commit>`, and released versions are tagged
 (`:0.7.0`). `docker build -t hookecho .` still works if you'd rather build it.
 
 Mount your settings so it reports on your saved locations. The image is ~660 MB

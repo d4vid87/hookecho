@@ -15,7 +15,7 @@
 use crate::status::{self, Spot};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -100,11 +100,17 @@ pub fn run(
             log::info!("bound to all interfaces, bearer token required");
         }
     }
+    let connections = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let Some(permit) = ConnectionPermit::acquire(&connections) else {
+                    drop(stream);
+                    continue;
+                };
                 let server = Arc::clone(&server);
-                std::thread::spawn(move || {
+                let _ = std::thread::Builder::new().name("http".into()).spawn(move || {
+                    let _permit = permit;
                     if let Err(e) = handle(&server, stream) {
                         log::debug!("connection ended: {e}");
                     }
@@ -116,10 +122,127 @@ pub fn run(
     Ok(())
 }
 
+const MAX_CONNECTIONS: usize = 32;
+const MAX_HEAD_BYTES: usize = 32 * 1024;
+
+struct ConnectionPermit(Arc<AtomicUsize>);
+
+impl ConnectionPermit {
+    fn acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
+        let mut count = active.load(Ordering::Relaxed);
+        while count < MAX_CONNECTIONS {
+            match active.compare_exchange_weak(count, count + 1, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return Some(Self(Arc::clone(active))),
+                Err(current) => count = current,
+            }
+        }
+        None
+    }
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Bound the entire header read, including clients sending a byte just before each timeout.
+fn read_request_head(stream: TcpStream, timeout: Duration) -> anyhow::Result<(String, Vec<String>)> {
+    let mut reader = BufReader::new(stream);
+    let deadline = Instant::now() + timeout;
+    let mut budget = MAX_HEAD_BYTES;
+    let mut lines = Vec::new();
+    loop {
+        anyhow::ensure!(lines.len() <= 65, "too many request headers");
+        let mut line = Vec::new();
+        loop {
+            let remaining = deadline.checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero()).ok_or_else(|| anyhow::anyhow!("request header timeout"))?;
+            reader.get_ref().set_read_timeout(Some(remaining))?;
+            let buf = reader.fill_buf()?;
+            anyhow::ensure!(!buf.is_empty(), "incomplete request headers");
+            let n = buf.iter().position(|b| *b == b'\n').map_or(buf.len(), |i| i + 1);
+            anyhow::ensure!(n <= budget, "request headers too large");
+            line.extend_from_slice(&buf[..n]);
+            budget -= n;
+            reader.consume(n);
+            if line.last() == Some(&b'\n') { break; }
+        }
+        let line = String::from_utf8(line)?;
+        if line.trim().is_empty() {
+            anyhow::ensure!(!lines.is_empty(), "missing request line");
+            return Ok((lines.remove(0), lines));
+        }
+        anyhow::ensure!(lines.len() < 65, "too many request headers");
+        lines.push(line);
+    }
+}
+
+#[cfg(test)]
+mod request_limit_tests {
+    use super::*;
+
+    fn pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        (client, listener.accept().unwrap().0)
+    }
+
+    #[test]
+    fn valid_headers_keep_auth_range_and_conditional_values() {
+        let (mut client, server) = pair();
+        client.write_all(b"GET /status.json HTTP/1.1\r\nAuthorization: Bearer abc\r\nRange: bytes=1-2\r\nIf-None-Match: xyz\r\n\r\n").unwrap();
+        let (line, headers) = read_request_head(server, Duration::from_secs(1)).unwrap();
+        assert!(line.starts_with("GET /status.json "));
+        assert_eq!(headers.len(), 3);
+        assert_eq!(headers[0].trim(), "Authorization: Bearer abc");
+    }
+
+    #[test]
+    fn oversized_and_incomplete_headers_are_refused() {
+        for bytes in [
+            format!("GET /{} HTTP/1.1\r\n\r\n", "x".repeat(MAX_HEAD_BYTES)),
+            format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "x".repeat(MAX_HEAD_BYTES)),
+            format!("GET / HTTP/1.1\r\n{}\r\n", "X: a\r\n".repeat(65)),
+            "GET / HTTP/1.1\r\nX: unfinished".into(),
+        ] {
+            let (mut client, server) = pair();
+            let writer = std::thread::spawn(move || { let _ = client.write_all(bytes.as_bytes()); });
+            assert!(read_request_head(server, Duration::from_secs(1)).is_err());
+            writer.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn trickling_input_cannot_extend_the_total_header_deadline() {
+        let (mut client, server) = pair();
+        let writer = std::thread::spawn(move || {
+            for _ in 0..100 {
+                if client.write_all(b"x").is_err() { break; }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let started = Instant::now();
+        assert!(read_request_head(server, Duration::from_millis(40)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn connection_slots_are_bounded_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let mut permits: Vec<_> = (0..MAX_CONNECTIONS).map(|_| ConnectionPermit::acquire(&active).unwrap()).collect();
+        assert!(ConnectionPermit::acquire(&active).is_none());
+        permits.pop();
+        assert!(ConnectionPermit::acquire(&active).is_some());
+        drop(permits);
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+    }
+}
+
 fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
+    stream.set_write_timeout(Some(Duration::from_secs(15)))?;
+    let (line, headers) = read_request_head(stream.try_clone()?, Duration::from_secs(5))?;
     // "GET /status.json?x=1 HTTP/1.1"
     let target = line.split_whitespace().nth(1).unwrap_or("/");
     let (path, query) = match target.split_once('?') {
@@ -135,11 +258,7 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
     let mut range = None;
     {
         let supplied = query_token(query);
-        for _ in 0..64 {
-            let mut h = String::new();
-            if reader.read_line(&mut h)? == 0 || h.trim().is_empty() {
-                break;
-            }
+        for h in headers {
             let Some((name, value)) = h.split_once(':') else {
                 continue;
             };

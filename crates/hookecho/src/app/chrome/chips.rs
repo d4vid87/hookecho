@@ -462,7 +462,7 @@ impl HookEchoApp {
                             );
                             ui.hyperlink_to(
                                 egui::RichText::new("Download").size(crate::ui::style::FONT_BASE),
-                                format!("{}/releases/latest", crate::ui::about_window::REPO),
+                                format!("{}/releases", crate::ui::about_window::REPO),
                             );
                             if ui
                                 .small_button(egui_phosphor::regular::X)

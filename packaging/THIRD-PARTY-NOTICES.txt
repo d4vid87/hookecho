@@ -1,0 +1,17 @@
+HookEcho is licensed under GPL-3.0-only. See LICENSE in this directory.
+Source and release history: https://github.com/d4vid87/hookecho
+
+The AppImage includes these voice/audio components:
+- Piper 2023.11.14-2 (MIT): https://github.com/rhasspy/piper/tree/2023.11.14-2
+- Piper phonemize 1.2.0 (MIT): https://github.com/rhasspy/piper-phonemize/tree/2023.11.14-2
+- eSpeak NG (GPL-3.0-or-later): https://github.com/rhasspy/espeak-ng
+- ONNX Runtime 1.14.1 (MIT): https://github.com/microsoft/onnxruntime/tree/v1.14.1
+- Amy medium voice (CC-BY-SA-4.0): https://github.com/MycroftAI/mimic3-voices
+  Voice model revision and checksums: packaging/piper/assets.json in the HookEcho source.
+  Piper, eSpeak and ONNX license texts accompany the voice files in usr/lib/hookecho/piper.
+- ALSA libasound: see ALSA-copyright in this directory for the packaged version's
+  licenses, copyright holders and source URL.
+
+The bundled Amy voice is English. Language dictionaries and Arabic Tashkeel support
+are retained for downloaded and custom voices. Standalone phonemizer/eSpeak tools
+are omitted; the runtime libraries, voice model and phoneme rules are unchanged.

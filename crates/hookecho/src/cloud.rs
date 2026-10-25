@@ -47,7 +47,9 @@ fn select_remote_file(files: Vec<RemoteFile>, radar_workspace: bool) -> Option<R
 
 /// Settings fields that belong to *this* machine and must survive a sync from another one.
 /// Everything else — markers, placefiles, palettes, theme, API keys — is shared.
-pub const DEVICE_LOCAL: [&str; 6] = [
+pub const DEVICE_LOCAL: [&str; 7] = [
+    // Permission to execute a command is granted separately on each machine.
+    "plugins",
     "ui_scale",
     "share_name",
     "background_alerts",
@@ -628,6 +630,15 @@ mod tests {
         let s = shareable(&json!({"ui_scale": 1.5, "mapbox_key": "pk.x"}));
         assert!(s.get("ui_scale").is_none());
         assert_eq!(s["mapbox_key"], "pk.x"); // keys do sync — the user asked for that
+    }
+
+    #[test]
+    fn sync_cannot_install_or_enable_remote_commands() {
+        let local = json!({"plugins": [{"command": "trusted-local", "enabled": true}]});
+        let remote = r#"{"plugins":[{"command":"remote-command","enabled":true}],"theme":"Light"}"#;
+        assert_eq!(merge_in(&local, remote).unwrap()["plugins"], local["plugins"]);
+        assert!(merge_in(&json!({}), remote).unwrap().get("plugins").is_none());
+        assert!(shareable(&local).get("plugins").is_none());
     }
 
     #[test]

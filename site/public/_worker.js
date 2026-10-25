@@ -1,3 +1,40 @@
+const DOWNLOAD_FILES = [
+  "HookEcho-x86_64.AppImage", "HookEcho-amd64.deb", "hookecho-windows-x86_64.zip",
+  "HookEcho-x86_64.msi", "HookEcho-setup-x86_64.exe", "HookEcho-macos.zip", "HookEcho-arm64-v8a.apk",
+];
+
+export function selectDownload(releases, name) {
+  if (!DOWNLOAD_FILES.includes(name)) return null;
+  const complete = releases.filter(release => !release.draft &&
+    DOWNLOAD_FILES.every(file => release.assets?.some(asset => asset.name === file)));
+  const stable = complete.filter(release => /^v\d+\.\d+\.\d+$/.test(release.tag_name) && !release.prerelease);
+  const current = release => release.assets.some(asset => asset.name === "SHA256SUMS");
+  const selected = stable.find(current) ?? complete.find(current) ?? complete.find(release => release.tag_name === "latest");
+  const asset = selected?.assets.find(asset => asset.name === name);
+  return asset?.browser_download_url?.startsWith("https://github.com/d4vid87/hookecho/releases/download/") ? asset.browser_download_url : null;
+}
+
+export async function downloadRedirect(request) {
+  const name = new URL(request.url).pathname.slice("/download-file/".length);
+  if (!DOWNLOAD_FILES.includes(name)) return new Response("Not found", {status: 404});
+  if (!["GET", "HEAD"].includes(request.method)) return new Response("Method not allowed", {status: 405});
+  let destination = "https://github.com/d4vid87/hookecho/releases";
+  try {
+    const init = {
+      headers: {"User-Agent": "HookEcho downloads", "Accept": "application/vnd.github+json"},
+      cf: {cacheTtl: 300, cacheEverything: true},
+    };
+    const [latest, list] = await Promise.all([
+      fetch("https://api.github.com/repos/d4vid87/hookecho/releases/latest", init),
+      fetch("https://api.github.com/repos/d4vid87/hookecho/releases?per_page=30", init),
+    ]);
+    const releases = list.ok ? await list.json() : [];
+    if (latest.ok) releases.push(await latest.json());
+    destination = selectDownload(releases, name) ?? destination;
+  } catch { /* The releases page remains usable when the API is unavailable. */ }
+  return new Response(null, {status: 302, headers: {location: destination, "cache-control": "no-store"}});
+}
+
 export const GO_TARGETS = Object.freeze({
   web: "https://app.hookecho.io/",
   download: "/download/",
@@ -68,6 +105,7 @@ export default {
       return Response.redirect(url.toString(), 301);
     }
     if (url.pathname.startsWith("/go/")) return trackedRedirect(request, env);
+    if (url.pathname.startsWith("/download-file/")) return downloadRedirect(request);
     if (url.pathname === "/api/place") {
       const q = url.searchParams.get("q")?.trim() ?? "";
       if (request.method !== "GET" || !q || q.length > 120) return new Response("Invalid place search", { status: 400 });

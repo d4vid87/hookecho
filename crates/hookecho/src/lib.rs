@@ -138,6 +138,16 @@ fn cap_texture_limit_to_adapter(options: &mut egui_wgpu::WgpuConfiguration) {
     });
 }
 
+/// Build identity shared by About and command-line diagnostics.
+pub const BUILD_REVISION: &str = env!("HOOKECHO_BUILD_REVISION");
+pub const BUILD_CHANNEL: &str = env!("HOOKECHO_BUILD_CHANNEL");
+
+pub fn build_date() -> String {
+    env!("HOOKECHO_BUILD_DATE").parse::<i64>().ok()
+        .and_then(|epoch| chrono::DateTime::from_timestamp(epoch, 0))
+        .map_or_else(|| "unknown".into(), |date| date.format("%Y-%m-%d %H:%M UTC").to_string())
+}
+
 /// Is the OS drawing the window frame?
 ///
 /// Normally it isn't: the app is borderless and draws its own controls into the floating chrome

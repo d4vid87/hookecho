@@ -415,6 +415,12 @@ impl MapView {
     /// retained scan; only a cut from the selected, already-loaded volume overrides its head.
     pub fn linked_requested_time(&self) -> Option<DateTime<Utc>> {
         if let Some(target) = self.timeline.seek_target { return Some(target); }
+        // Streamed cuts advance before the completed-volume listing catches up.
+        if self.timeline.following && !self.timeline.playing && self.retained_station.is_none()
+            && self.volume.as_ref().and_then(|volume| volume.live_status.as_ref())
+                .is_some_and(|status| status.stream_active) {
+            return self.displayed_time();
+        }
         if let Some(source) = self.timeline.current() {
             if self.volume.as_ref().is_some_and(|volume| volume.name == source.name()) {
                 if let Some(time) = self.displayed_time() { return Some(time); }
@@ -532,6 +538,27 @@ impl MapView {
         self.frame_history.retain(|(previous, _)| previous != &name);
         if self.frame_history.len() == 64 { self.frame_history.pop_front(); }
         self.frame_history.push_back((name, state));
+    }
+
+    /// Advance the cursor and retain why a frame was skipped, even after a cached scan
+    /// replaced the transient failed request.
+    pub fn advance_playback(&mut self) {
+        if !self.timeline.playing { return; }
+        let previous = self.timeline.playhead;
+        let unavailable = self.timeline.current().map(|frame| frame.name())
+            .filter(|name| self.failed_frame.as_deref() == Some(*name)
+                || self.frame_history.iter().any(|(frame, status)| frame == *name
+                    && *status == crate::timeline::FrameStatus::Unavailable))
+            .map(str::to_owned);
+        self.timeline.tick_cut();
+        if self.timeline.playhead != previous {
+            if let Some(name) = unavailable {
+                self.note_frame_status(name.clone(), crate::timeline::FrameStatus::Skipped);
+                self.skipped_frames += 1;
+                self.last_skipped_at = Some(wxdata::clock::Instant::now());
+                if self.failed_frame.as_deref() == Some(name.as_str()) { self.failed_frame = None; }
+            }
+        }
     }
 
     pub fn has_decoded_frame(&self, name: &str) -> bool {
@@ -943,6 +970,30 @@ mod tests {
     }
 
     #[test]
+    fn linked_live_comparison_follows_streamed_cuts_before_the_archive_listing() {
+        let mut view = MapView::new(None, Camera::at_lonlat(0.0, 0.0, 3.0));
+        let completed = wxdata::level2::Identifier::new("KTLX20130520_000000_V06".into());
+        let listed_time = completed.date_time().unwrap();
+        let live_time = listed_time + chrono::Duration::minutes(13);
+        view.timeline.frames = vec![completed];
+        view.timeline.following = true;
+        view.volume = Some(Volume::new(scan_at(&[0.5]), "live-chunks".into(), live_time));
+        view.volume.as_mut().unwrap().live_status = Some(live_status());
+        assert_eq!(view.linked_requested_time(), Some(live_time));
+        view.retained_station = Some("KTLX".into());
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
+        view.retained_station = None;
+        view.timeline.seek_target = Some(listed_time);
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
+        view.timeline.seek_target = None;
+        view.timeline.playing = true;
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
+        view.timeline.playing = false;
+        view.timeline.following = false;
+        assert_eq!(view.linked_requested_time(), Some(listed_time));
+    }
+
+    #[test]
     fn dublin_clock_follows_the_selected_moments_cut() {
         let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![106]);
         let make = |time, number, reflectivity, velocity| Radial::new(
@@ -1252,6 +1303,23 @@ mod tests {
         assert_eq!(view.frame_history.len(), 64);
         view.show_volume(scan_at(&[0.5]), "99".into(), Utc::now());
         assert!(!view.frame_history.iter().any(|(name, _)| name == "99"));
+    }
+
+    #[test]
+    fn playback_keeps_skipped_status_after_the_transient_request_error_is_cleared() {
+        let mut view = MapView::new(None, Camera::at_lonlat(0.0, 0.0, 3.0));
+        let missing = wxdata::level2::Identifier::new("KTLX20130520_000000_V06".into());
+        let next = wxdata::level2::Identifier::new("KTLX20130520_000500_V06".into());
+        let name = missing.name().to_owned();
+        view.timeline.frames = vec![missing, next];
+        view.timeline.playing = true;
+        view.note_frame_status(name.clone(), crate::timeline::FrameStatus::Unavailable);
+        assert!(view.failed_frame.is_none());
+        view.advance_playback();
+        assert_eq!(view.timeline.playhead, 1);
+        assert_eq!(view.skipped_frames, 1);
+        assert!(view.frame_history.iter().any(|(frame, state)|
+            frame == &name && *state == crate::timeline::FrameStatus::Skipped));
     }
 
     #[test]

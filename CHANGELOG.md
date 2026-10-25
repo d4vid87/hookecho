@@ -4,8 +4,26 @@ Notable changes per release, newest first. Every tagged release's body on GitHub
 is this file's matching section, extracted by `.github/workflows/release.yml` —
 so **write the section before pushing the tag**, or the release job fails.
 
-The rolling `latest` release tracks `main`. Named entries below record major
-updates shipped in that rolling build; versioned entries match GitHub tags.
+Tested `main` builds publish as immutable Preview releases. Named entries below
+record major updates; versioned entries match GitHub tags. Older releases stay
+available for rollback.
+
+## Reliability and release safety - 2026-10-24
+
+- Require successful CI for the exact main commit before website deployment or packaging.
+- Verify Cloudflare preview deployments before updating the public app and website.
+- Publish complete platform packages and checksums together, with immutable preview tags;
+  preserve old releases and distinguish preview downloads from stable releases.
+- Disable executable plugins imported through settings until explicitly enabled locally.
+- Fix Android alert coordinates and navigation on phones using comma-decimal languages.
+- Report incomplete alert checks instead of claiming all quiet, keeping received warnings
+  and the last complete check time visible.
+- Limit self-hosted server connections, request-header size, and read/write timeouts.
+- Fix shared radar scans being mislabeled during a multi-pane station switch.
+- Add Kotlin alert tests, native-activity menu/resume instrumentation tests, and a
+  physical-device release checklist.
+- Repair incomplete Android offline voice data on upgrade and return initialization errors
+  instead of terminating the app; align speech libraries for 16 KB memory pages.
 
 ## Field Atlas map overlays - 2026-09-27 (rolling release)
 

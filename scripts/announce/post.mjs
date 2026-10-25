@@ -115,7 +115,9 @@ async function prepareRelease(output, product, tag, changelogPath) {
 
 async function prepareLatestRelease(output, product) {
   if (!PRODUCTS[product]) throw new Error("unknown product");
-  const release = await request(`https://api.github.com/repos/${PRODUCTS[product].repo}/releases/latest`, githubHeaders());
+  const releases = await request(`https://api.github.com/repos/${PRODUCTS[product].repo}/releases?per_page=100`, githubHeaders());
+  const release = releases.find(release => !release.draft && !release.prerelease && /^v?\\d+\\.\\d+\\.\\d+$/.test(release.tag_name));
+  if (!release) return false;
   if (release.draft || release.prerelease || !release.tag_name || new Date(release.published_at) < new Date(`${PROMOTION_START}T00:00:00Z`)) return false;
   const version = release.tag_name.replace(/^v/, "");
   const heading = product === "stormdesk" ? `## [${version}]` : `## ${version}`;

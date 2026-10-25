@@ -15,8 +15,14 @@ fi
 rm -rf "$work/espeak-ng"
 mkdir "$work/espeak-ng"
 tar -xzf "$archive" --strip-components=1 -C "$work/espeak-ng"
-# Android packages the release's precompiled espeak-ng-data. The upstream CMake data target tries
-# to execute its newly cross-compiled ARM binary on the x86 build host.
+# Compile the data with a host executable; the tag archive only contains language sources.
+cmake -S "$work/espeak-ng" -B "$work/espeak-host" -DBUILD_TESTING=OFF \
+  -DUSE_MBROLA=OFF -DUSE_LIBSONIC=OFF -DUSE_LIBPCAUDIO=OFF -DUSE_ASYNC=OFF
+cmake --build "$work/espeak-host" --target data --parallel 2
+for data in phontab phondata phonindex intonations en_dict; do
+  test -s "$work/espeak-host/espeak-ng-data/$data"
+done
+# Cross-compilation must not try to execute its ARM data compiler on the build host.
 sed -i '/include(cmake\/data.cmake)/d' "$work/espeak-ng/CMakeLists.txt"
 sed -i '/add_subdirectory(tests)/d' "$work/espeak-ng/CMakeLists.txt"
 "$root/packaging/piper/fetch.sh" web "$work/voice"
@@ -24,6 +30,6 @@ rm -rf "$assets"
 mkdir -p "$assets"
 cp "$work/voice/en_US-amy-medium.onnx" "$work/voice/en_US-amy-medium.onnx.json" \
   "$work/voice/Amy-LICENSE-CC-BY-SA-4.0" "$work/voice/ATTRIBUTION" "$assets/"
-cp -a "$work/espeak-ng/espeak-ng-data" "$assets/"
+cp -a "$work/espeak-host/espeak-ng-data" "$assets/"
 cp "$work/espeak-ng/COPYING" "$assets/eSpeak-NG-LICENSE-GPL-3.0"
 printf '%s\n' "eSpeak NG 1.52.0 source: $url" > "$assets/SOURCE"

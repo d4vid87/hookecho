@@ -12,7 +12,7 @@ affects you. Open it in a browser or install the app on Windows, Linux, Android,
 No account. No ads. No API key. Free and open source.
 
 [Open live radar](https://app.hookecho.io/) ·
-[Download the app](https://github.com/d4vid87/hookecho/releases/tag/latest) ·
+[Download the app](https://github.com/d4vid87/hookecho/releases) ·
 [Visit the website](https://hookecho.io/) ·
 [Get help](https://github.com/d4vid87/hookecho/issues)
 
@@ -104,7 +104,7 @@ Screen** or **Install app** option.
 The installed app is useful when you want a dedicated window, stronger alerts, saved workspaces,
 or deeper weather tools.
 
-Open the [latest build](https://github.com/d4vid87/hookecho/releases/tag/latest), then choose the
+Open the [releases page](https://github.com/d4vid87/hookecho/releases), then choose the
 file for your device.
 
 | Your device | File to choose | What to do |

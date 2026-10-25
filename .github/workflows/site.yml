@@ -12,8 +12,29 @@ on:
       - ".github/workflows/site.yml"
   workflow_dispatch:
 
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  verify:
+    name: Require successful CI for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Wait for CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release/require-ci.mjs
+
   deploy:
+    needs: verify
     name: Cloudflare Pages
     runs-on: ubuntu-latest
     steps:
@@ -55,8 +76,22 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/hookecho-site" \
             | jq -e '.success == true' >/dev/null
 
-      - name: Deploy
+      - name: Verify preview before publishing
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@3 pages deploy site/dist --project-name=hookecho-site --branch=main
+        run: |
+          npx --yes wrangler@3 pages deploy site/dist --project-name=hookecho-site --branch=verify-${{ github.sha }} | tee /tmp/site-preview.log
+          url=$(grep -oE 'https://[0-9a-f]+\.hookecho-site\.pages\.dev' /tmp/site-preview.log | tail -1)
+          test -n "$url"
+          curl --fail --retry 10 --retry-all-errors --retry-delay 5 "$url/" -o /tmp/site-preview.html
+          grep -qi '<html' /tmp/site-preview.html
+
+      - name: Deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test "$(gh api repos/$GITHUB_REPOSITORY/git/ref/heads/main --jq .object.sha)" = "$GITHUB_SHA"
+          npx --yes wrangler@3 pages deploy site/dist --project-name=hookecho-site --branch=main

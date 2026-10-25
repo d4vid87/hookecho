@@ -71,6 +71,8 @@ tells you why instead of quietly not appearing.
 Plugins run as you, with your privileges, because you typed the command — the same trust you give
 a shell alias. The cap and the timeout are hygiene against a plugin that wedges or floods, **not**
 a sandbox: a hostile plugin is not contained. Don't add a plugin you wouldn't run by hand.
+Imported settings keep plugin commands disabled until you review and enable them locally.
+Plugins and their execution permissions are local to each machine and are excluded from sync.
 
 ## Examples
 
