@@ -14576,6 +14576,21 @@ impl HookEchoApp {
             .last_gesture_end
             .is_some_and(|t| t.elapsed().as_millis() < 150);
         let quiet = gesture.is_none() && !gesture_tail;
+        let double_click_zoom = quiet && map_input && self.tool == MapTool::Interrogate
+            && response.double_clicked_by(egui::PointerButton::Primary);
+        if double_click_zoom {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let cursor = (pos.x - prect.left(), pos.y - prect.top());
+                let view = &mut self.views[idx];
+                if view.camera.pick_world(cursor, vp).is_some() {
+                    self.active = idx;
+                    view.recenter_on_ready = false;
+                    view.camera_motion.cancel();
+                    view.camera_motion.wheel(&mut view.camera, 1.0, cursor, vp, reduced);
+                    self.last_tap = None;
+                }
+            }
+        }
         // Watch-zone tool: a double-click (or Enter) closes the ring being clicked out.
         if self.tool == MapTool::AlertZone
             && self.zone_pts.len() >= 3
@@ -14752,7 +14767,7 @@ impl HookEchoApp {
             // Before anything is drawn: the buzz is what says the press was heard.
             crate::platform::haptic(crate::platform::Haptic::Press);
         }
-        if (response.clicked() || long_press) && quiet {
+        if (response.clicked() || long_press) && quiet && !double_click_zoom {
             self.active = idx;
             // What this press means. A long press is always an interrogation; anything else is
             // whatever the toolbar says.
