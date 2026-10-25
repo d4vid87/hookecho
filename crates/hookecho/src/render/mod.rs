@@ -2212,28 +2212,37 @@ fn raster_tile_quads(
 /// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
 /// then finer fallbacks, then the requested tiles so current detail always wins.
 pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
+    if visible.is_empty() {
+        return Vec::new();
+    }
     let resident: Vec<_> = resident.collect();
     let mut fallback = Vec::new();
-    // ponytail: bounded tile-cache scan; add a spatial index only if the cache grows substantially.
+    let mut exact = Vec::new();
     for &(z, x, y) in visible {
         if resident.contains(&(z, x, y)) {
+            exact.push((z, x, y));
             continue;
         }
-        // Prefer the nearest ancestor instead of stacking every cached zoom level.
-        if let Some(parent) = resident.iter().copied().filter(|&(rz, rx, ry)| {
-            rz < z && (x >> (z - rz), y >> (z - rz)) == (rx, ry)
-        }).max_by_key(|id| id.0) {
-            fallback.push(parent);
-        }
+        // Select the nearest ancestor and cached descendants in the same pass.
+        let mut parent: Option<TileId> = None;
         for &(rz, rx, ry) in &resident {
-            if rz > z && (rx >> (rz - z), ry >> (rz - z)) == (x, y) {
+            if rz < z && (x >> (z - rz), y >> (z - rz)) == (rx, ry)
+                && parent.is_none_or(|p| rz > p.0) {
+                parent = Some((rz, rx, ry));
+            } else if rz > z && (rx >> (rz - z), ry >> (rz - z)) == (x, y) {
                 fallback.push((rz, rx, ry));
             }
+        }
+        if let Some(parent) = parent {
+            fallback.push(parent);
         }
     }
     fallback.sort_unstable();
     fallback.dedup();
-    fallback.extend(visible.iter().copied().filter(|id| resident.contains(id)));
+    if fallback.is_empty() {
+        return exact;
+    }
+    fallback.extend(exact);
     fallback
 }
 
@@ -2254,6 +2263,27 @@ mod vector_fallback_tests {
         assert_eq!(vector_draw_tiles(&[child, sibling], [parent, child].into_iter()), vec![parent, child]);
         assert_eq!(vector_draw_tiles(&[child], [parent, child].into_iter()), vec![child]);
         assert!(vector_draw_tiles(&[child], [far].into_iter()).is_empty());
+    }
+
+    #[test]
+    fn mixed_zoom_fallbacks_keep_order_and_nearest_parent_for_any_cache_order() {
+        let grandparent = (3, 1, 2);
+        let parent = (4, 3, 5);
+        let missing = (5, 6, 10);
+        let exact = (5, 7, 10);
+        let child = (6, 12, 20);
+        let mut resident = vec![grandparent, parent, exact, child, (5, 20, 20)];
+        for _ in 0..resident.len() {
+            assert_eq!(vector_draw_tiles(&[missing, exact], resident.iter().copied()),
+                vec![parent, child, exact]);
+            resident.reverse();
+            assert_eq!(vector_draw_tiles(&[missing, exact], resident.iter().copied()),
+                vec![parent, child, exact]);
+            resident.reverse();
+            resident.rotate_left(1);
+        }
+        assert!(vector_draw_tiles(&[missing], std::iter::empty()).is_empty());
+        assert!(vector_draw_tiles(&[], resident.into_iter()).is_empty());
     }
 }
 
