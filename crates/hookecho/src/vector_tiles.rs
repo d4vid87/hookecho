@@ -1191,8 +1191,17 @@ impl VectorTileManager {
         if !full_ready {
             // First fill a small backdrop instead of spending every request slot on streets.
             // Coarse parents cover both the present view and nearby zoom-out positions.
-            let backdrop = Self::backdrop(cam, viewport, &full);
-            self.request_missing(&backdrop);
+            // Cached ancestors already cover a zoom-in; reserve downloads for new detail.
+            let uncovered: Vec<_> = full.iter().copied().filter(|tile| {
+                let (z, x, y) = tile.id;
+                !(0..=z).any(|shift|
+                    self.uploaded.contains(&(z - shift, x >> shift, y >> shift)))
+            }).collect();
+            if !uncovered.is_empty() {
+                let backdrop: Vec<_> = Self::backdrop(cam, viewport, &full).into_iter()
+                    .filter(|tile| tile_overlaps_view(tile.id, &uncovered)).collect();
+                self.request_missing(&backdrop);
+            }
         }
         self.request_missing(&full);
         if full_ready && !moving {
@@ -1800,6 +1809,66 @@ mod tests {
                 (tile.id.1>>shift,tile.id.2>>shift)==(parent.id.1,parent.id.2)
             }));
         }
+    }
+
+    #[tokio::test]
+    async fn cached_zoom_coverage_prioritizes_current_detail_over_redundant_backdrops() {
+        let mut manager = test_manager();
+        manager.template = Some("https://example.invalid/{z}/{x}/{y}".into());
+        let camera = Camera::at_lonlat(-97.0, 32.0, 9.0);
+        let viewport = (800.0, 600.0);
+        let full = VectorTileManager::centered(manager.visible(&camera, viewport), &camera);
+        for tile in &full {
+            let (z, x, y) = tile.id;
+            manager.uploaded.put((z - 1, x >> 1, y >> 1), 0);
+        }
+
+        manager.request_view(&camera, viewport, true, crate::settings::MapQuality::Full);
+
+        let expected: HashSet<_> = full.iter().take(MAX_INFLIGHT).map(|tile| tile.id).collect();
+        assert_eq!(manager.requested, expected,
+            "cached parents already cover this zoom; spend download slots on current detail");
+    }
+
+    #[tokio::test]
+    async fn cold_view_still_requests_backdrops_before_current_detail() {
+        let mut manager = test_manager();
+        manager.template = Some("https://example.invalid/{z}/{x}/{y}".into());
+        let camera = Camera::at_lonlat(-97.0, 32.0, 9.0);
+        let viewport = (800.0, 600.0);
+        let full = manager.visible(&camera, viewport);
+        let backdrop = VectorTileManager::backdrop(&camera, viewport, &full);
+
+        manager.request_view(&camera, viewport, true, crate::settings::MapQuality::Full);
+
+        assert!(!backdrop.is_empty());
+        for tile in backdrop.iter().take(MAX_INFLIGHT) {
+            assert!(manager.requested.contains(&tile.id), "blank areas need a backdrop first");
+        }
+        assert!(manager.requested.len() <= MAX_INFLIGHT);
+    }
+
+    #[tokio::test]
+    async fn partial_pan_loads_backdrops_only_for_newly_exposed_geography() {
+        let mut manager = test_manager();
+        manager.template = Some("https://example.invalid/{z}/{x}/{y}".into());
+        let camera = Camera::at_lonlat(-97.0, 32.0, 9.0);
+        let viewport = (800.0, 600.0);
+        let full = manager.visible(&camera, viewport);
+        let backdrop = VectorTileManager::backdrop(&camera, viewport, &full);
+        assert!(backdrop.len() > 1);
+        let covered = backdrop[0].id;
+        for tile in &full {
+            if tile_overlaps_view(covered, std::slice::from_ref(tile)) {
+                manager.uploaded.put(tile.id, 0);
+            }
+        }
+
+        manager.request_view(&camera, viewport, true, crate::settings::MapQuality::Full);
+
+        assert!(!manager.requested.contains(&covered));
+        assert!(manager.requested.contains(&backdrop[1].id));
+        assert!(manager.requested.len() <= MAX_INFLIGHT);
     }
 
     #[tokio::test]
