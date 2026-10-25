@@ -7,6 +7,16 @@ await fs.mkdir(output,{recursive:true});
 const browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN??puppeteer.executablePath(),headless:true,args:['--no-sandbox','--enable-unsafe-swiftshader','--use-gl=angle','--use-angle=swiftshader']});
 const report={started:new Date().toISOString(),fixture:'Historical KDMX sweep bytes under synthetic station/time names. No live-feed or real-device latency claim.',errors:[],checks:{}};
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+function assertRestoredPanes(actual, expected) {
+ assert.equal(actual.length, expected.length);
+ for (let i=0;i<actual.length;i++) {
+  const {lon,lat,...settings}=actual[i];
+  const {lon:beforeLon,lat:beforeLat,...beforeSettings}=expected[i];
+  // Mercator round-trips introduce floating-point noise in geographic coordinates.
+  assert(Math.abs(lon-beforeLon)<1e-10 && Math.abs(lat-beforeLat)<1e-10, 'undo must restore the map center');
+  assert.deepEqual(settings,beforeSettings);
+ }
+}
 let page;
 try {
  page=await browser.newPage();await page.setViewport({width:1440,height:1000});await page.setBypassServiceWorker(true);
@@ -54,9 +64,9 @@ try {
  await command('Jump to live');await wait(500);
  const before=await checkpoint();await command('2 panes');await page.waitForFunction(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace.panes.length===2);
  const two=await ready(2,'KDMX');report.two=two;assert(two.render_metrics.nominal_gpu_bytes<four.render_metrics.nominal_gpu_bytes,'closing panes must reduce nominal GPU allocation');report.checks.closedPaneMemory=true;
- await command('Undo workspace action');await page.waitForFunction(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace.panes.length===4);const restored=await checkpoint();assert.deepEqual(restored.session.workspace.panes,before.session.workspace.panes);report.checks.closedPaneUndo=true;
+ await command('Undo workspace action');await page.waitForFunction(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace.panes.length===4);const restored=await checkpoint();assertRestoredPanes(restored.session.workspace.panes,before.session.workspace.panes);report.checks.closedPaneUndo=true;
  network.offline=true;await select(2,'KTLX');const retained=await diagnostics();report.retained=retained;assert(retained.reproduction.panes.every(p=>p.selected_station==='KTLX'&&p.displayed_station==='KDMX'&&p.station_transition&&p.volume_time),'old scan must remain explicitly identified while replacement is unavailable');report.retained=retained;await page.screenshot({path:output+'/station-loading.png'});report.checks.stationContinuity=true;
- await command('Undo workspace action');await page.waitForFunction(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace.panes.length===4);const restoredWorkspace=await checkpoint();assert.deepEqual(restoredWorkspace.session.workspace.panes,before.session.workspace.panes);report.checks.workspaceUndo=true;
+ await command('Undo workspace action');await page.waitForFunction(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace.panes.length===4);const restoredWorkspace=await checkpoint();assertRestoredPanes(restoredWorkspace.session.workspace.panes,before.session.workspace.panes);report.checks.workspaceUndo=true;
  network.offline=false;await ready(4,'KDMX');
  const final=await diagnostics();report.final=final;const text=JSON.stringify(final);for(const privateValue of ['private-provider-secret','private-marker-id','private-marker-name','41.712345','93.654321'])assert(!text.includes(privateValue),`diagnostics exposed ${privateValue}`);
  assert(final.recent_interactions.some(event=>event.action==='undo_workspace_action'));assert(final.recent_interactions.length<=64);assert(final.undo_history.entries<=16);assert(final.undo_history.serialized_bytes<=2*1024*1024);report.checks.diagnosticsPrivacyAndHistory=true;

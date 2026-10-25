@@ -131,12 +131,12 @@ impl Motion {
         }
     }
 
-    /// Returns true while more camera frames are required. A stalled/backgrounded frame cancels
-    /// motion instead of applying a large catch-up jump when the window resumes.
+    /// Returns true while more camera frames are required. A stall finishes requested zoom,
+    /// but cancels pan inertia instead of applying a large catch-up jump on resume.
     pub fn advance(&mut self, cam: &mut Camera, dt: f32, vp: (f32, f32), reduced: bool) -> bool {
         self.sync(cam, vp);
         if !dt.is_finite() || (dt > 0.25 && !self.fresh_input) || reduced {
-            if reduced {
+            if reduced || dt.is_finite() {
                 for impulse in &self.zoom_impulses {
                     cam.zoom_at(impulse.remaining, impulse.anchor, vp);
                 }
@@ -302,6 +302,21 @@ mod tests {
             assert!(c.zoom >= 19.0);
         }
         assert!((c.zoom - 19.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn slow_frame_finishes_requested_zoom_at_its_anchor() {
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let anchor = (810.0, 350.0);
+        let mut expected = cam;
+        expected.zoom_at(1.0, anchor, VP);
+        let mut motion = Motion::default();
+        motion.wheel(&mut cam, 1.0, anchor, VP, false);
+        assert!(motion.advance(&mut cam, 0.016, VP, false));
+        assert!(!motion.advance(&mut cam, 0.284, VP, false));
+        assert!((cam.zoom - expected.zoom).abs() < 1e-9);
+        assert!((cam.center.0 - expected.center.0).abs() < 1e-9);
+        assert!((cam.center.1 - expected.center.1).abs() < 1e-9);
     }
 
     #[test]
