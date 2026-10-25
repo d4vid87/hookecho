@@ -1464,10 +1464,11 @@ impl VectorTileManager {
 
     /// Keep this frame's tiles at the front of the LRU so a wide view can't evict what it draws.
     pub fn touch_visible(&mut self, visible: &[VisibleTile]) {
-        let want = VECTOR_TILE_CACHE.max(visible.len() + 8);
         let protected = crate::render::vector_draw_tiles(
             &visible.iter().map(|v| v.id).collect::<Vec<_>>(),
             self.uploaded.iter().map(|(id, _)| *id));
+        // Zoom-out can draw several cached children for every visible tile.
+        let want = VECTOR_TILE_CACHE.max(visible.len().max(protected.len()) + 8);
         for id in protected {
             self.uploaded.promote(&id);
         }
@@ -1493,10 +1494,15 @@ impl VectorTileManager {
     pub fn labels_for<'a>(&'a self, ids: impl Iterator<Item = &'a TileId>) -> Vec<&'a PlaceLabel> {
         let mut labels = Vec::new();
         for &id in ids {
+            let n = (1u32 << id.0) as f32;
+            if let Some(exact) = self.labels.get(&id) {
+                labels.extend(exact.iter().filter(|l|
+                    ((l.world[0] * n).floor() as u32, (l.world[1] * n).floor() as u32) == (id.1, id.2)));
+                continue;
+            }
             // The GPU retains cached geography while a new detail level loads. Use the same
             // fallback for names/shields; looking up only exact ids blanked every label at once.
             let sources = crate::render::vector_draw_tiles(&[id], self.labels.keys().copied());
-            let n = (1u32 << id.0) as f32;
             for source in &sources {
                 if let Some(tile_labels) = self.labels.get(source) {
                     labels.extend(tile_labels.iter().filter(|l| {
@@ -1743,6 +1749,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exact_tile_labels_win_and_stay_within_their_requested_tile() {
+        let mut manager = test_manager();
+        let tile = (5, 6, 10);
+        let label = |name: &str, x| PlaceLabel {
+            name: name.into(), world: [x, 10.5 / 32.0], city: true,
+            rank: 1, shield: RoadShield::None, min_zoom: 0.0,
+        };
+        manager.labels.insert((4, 3, 5), vec![label("parent", 6.5 / 32.0)]);
+        manager.labels.insert((6, 13, 21), vec![label("child", 6.5 / 32.0)]);
+        manager.labels.insert(tile, vec![label("exact", 6.5 / 32.0), label("outside", 7.5 / 32.0)]);
+        let names: Vec<_> = manager.labels_for([&tile].into_iter()).into_iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["exact"]);
+        manager.labels.insert(tile, Vec::new());
+        assert!(manager.labels_for([&tile].into_iter()).is_empty(), "an empty exact tile must not revive stale names");
+    }
+
+    #[tokio::test]
     async fn byte_budget_defers_a_tile_without_loss_and_discards_a_stale_deferred_generation() {
         let queue = |m: &mut VectorTileManager| {
             for x in 0..2 {
@@ -1892,6 +1915,31 @@ mod tests {
         manager.touch_visible(&[VisibleTile { id: (6, 14, 24), world_min: [0.0; 2], world_max: [1.0; 2] }]);
         assert!(manager.uploaded.contains(&parent));
         assert!(!manager.take_evicted().contains(&parent));
+    }
+
+    #[tokio::test]
+    async fn zoom_out_keeps_all_visible_fallback_tiles_until_replacements_arrive() {
+        let mut manager = test_manager();
+        let count = VECTOR_TILE_CACHE + 16;
+        manager.uploaded.resize(NonZeroUsize::new(count).unwrap());
+        let visible: Vec<_> = (0..count as u32 / 4).map(|x|
+            VisibleTile { id: (8, x, 0), world_min: [0.0; 2], world_max: [1.0; 2] }).collect();
+        for tile in &visible {
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let id = (9, tile.id.1 * 2 + dx, dy);
+                    manager.uploaded.put(id, 0);
+                    manager.labels.insert(id, Vec::new());
+                }
+            }
+        }
+        manager.touch_visible(&visible);
+        assert_eq!(manager.uploaded.len(), count, "visible fallback children must not be evicted");
+        assert!(manager.take_evicted().is_empty());
+        // Once the camera leaves, the cache returns to its normal bound.
+        manager.touch_visible(&[]);
+        assert_eq!(manager.uploaded.len(), VECTOR_TILE_CACHE);
+        assert_eq!(manager.labels.len(), VECTOR_TILE_CACHE);
     }
 
     #[test]
