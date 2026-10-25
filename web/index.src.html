@@ -174,7 +174,7 @@
       const startDecodeWorker = () => {
         globalThis.__decodeVolume = makeBridge({
           spawnWorker: () => {
-            const w = new Worker(new URL("./decode-worker.js?v=goes-abi", import.meta.url), { type: "module" });
+            const w = new Worker(new URL("./decode-worker.js?v=radar-fields", import.meta.url), { type: "module" });
             w.postMessage({ module, glue: glueUrl });
             return w;
           },

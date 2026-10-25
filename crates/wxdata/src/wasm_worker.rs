@@ -44,6 +44,16 @@ pub async fn assemble_chunks(framed: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("assemble", framed).await
 }
 
+/// Bin a selected cut without pausing map input.
+pub async fn bin_display(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("bin", payload).await
+}
+
+/// Decode MRMS and prepare its display grid on the worker heap.
+pub async fn decode_mrms(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("mrms", payload).await
+}
+
 /// Build a vector basemap tile off the thread handling map input.
 pub async fn tessellate_vector(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("vector", payload).await

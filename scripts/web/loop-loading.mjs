@@ -74,7 +74,9 @@ try {
         localStorage.clear();
         localStorage.setItem('loop-test-initialized', '1');
         localStorage.setItem('hookecho-settings', JSON.stringify({setup_done: true, seeded_workspaces: true,
-          default_site: 'KDMX', radar_feed: 'ArchiveOnly', live_loop_frames: 14, web_radar_memory_mib: 768}));
+          default_site: 'KDMX', radar_feed: 'ArchiveOnly', live_loop_frames: 14, web_radar_memory_mib: 768,
+          // Memory-menu coordinates below target the HookEcho transport.
+          radar_workspace: false}));
       }
     });
     await loopPage.goto(process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/', {waitUntil: 'domcontentloaded'});
@@ -91,14 +93,14 @@ try {
     await loopPage.screenshot({path: `${output}/long-loop.png`});
     await new Promise(resolve => setTimeout(resolve, 600));
     await loopPage.screenshot({path: `${output}/playback-controls.png`});
-    await loopPage.mouse.move(350, 723);
+    await loopPage.mouse.move(750, 835);
     await new Promise(resolve => setTimeout(resolve, 150));
-    await loopPage.mouse.click(350, 723);
+    await loopPage.mouse.click(750, 835);
     await new Promise(resolve => setTimeout(resolve, 500));
     await loopPage.screenshot({path: `${output}/frame-options.png`});
-    await loopPage.mouse.move(355, 353);
+    await loopPage.mouse.move(570, 650);
     await new Promise(resolve => setTimeout(resolve, 150));
-    await loopPage.mouse.click(355, 353);
+    await loopPage.mouse.click(570, 650);
     await new Promise(resolve => setTimeout(resolve, 1500));
     report.changedMemory = await loopPage.evaluate(() => JSON.parse(localStorage.getItem('hookecho-settings')).web_radar_memory_mib);
     await loopPage.screenshot({path: `${output}/memory-changed.png`});

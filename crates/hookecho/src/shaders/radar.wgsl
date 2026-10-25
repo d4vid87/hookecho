@@ -85,6 +85,8 @@ fn globe_world(ndc: vec2<f32>) -> vec3<f32> {
 @group(1) @binding(1) var sweep_tex: texture_2d<u32>;
 @group(1) @binding(2) var lut_tex: texture_2d<f32>;
 @group(1) @binding(3) var precip_flag_tex: texture_2d<u32>;
+// Float32 bits in an integer attachment also work on WebGL2 without float color buffers.
+@group(1) @binding(4) var smooth_tex: texture_2d<u32>;
 
 fn code_max() -> f32 { return select(255.0, radar.code_max, radar.code_max >= 255.0); }
 
@@ -132,22 +134,21 @@ fn world_to_lonlat(w: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(lon, lat);
 }
 
-// Two separable normalized stages, evaluated on demand rather than storing a
-// full intermediate texture. The center classification always wins; invalid
-// neighbours never become numeric values. This works with R8 and R16 textures.
-fn display_gate(gx: i32, gy: i32, nbins: i32) -> f32 {
+// Precompute the original normalized stages once per changed sweep. Classification and
+// operation order stay identical for both R8 and R16 source data.
+fn smooth_gate(gx: i32, gy: i32, nbins: i32) -> f32 {
     let center = textureLoad(sweep_tex, vec2<i32>(gx, gy), 0).r;
-    if (radar.multipass < 0.5 || center < 2u) { return f32(center); }
+    if (center < 2u) { return f32(center); }
     var radial_sum = 0.0;
     var radial_weight = 0.0;
     for (var j = -1; j <= 1; j++) {
-        let y = ((gy + j) % nbins + nbins) % nbins;
+        let y = (gy + j + nbins) % nbins;
         if (textureLoad(sweep_tex, vec2<i32>(gx, y), 0).r < 2u) { continue; }
         var gate_sum = 0.0;
         var gate_weight = 0.0;
         for (var i = -1; i <= 1; i++) {
             let x = gx + i;
-            if (x < 0 || x >= i32(radar.gate_count)) { continue; }
+            if (x < 0 || x >= i32(textureDimensions(sweep_tex).x)) { continue; }
             let value = textureLoad(sweep_tex, vec2<i32>(x, y), 0).r;
             if (value < 2u) { continue; }
             let weight = select(1.0, 2.0, i == 0);
@@ -159,6 +160,26 @@ fn display_gate(gx: i32, gy: i32, nbins: i32) -> f32 {
         radial_weight += weight;
     }
     return radial_sum / radial_weight;
+}
+
+@vertex
+fn vs_smooth(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let corner = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    return vec4<f32>(corner[index], 0.0, 1.0);
+}
+
+@fragment
+fn fs_smooth(@builtin(position) position: vec4<f32>) -> @location(0) u32 {
+    return bitcast<u32>(smooth_gate(i32(position.x), i32(position.y),
+        i32(textureDimensions(sweep_tex).y)));
+}
+
+fn display_gate(gx: i32, gy: i32, nbins: i32) -> f32 {
+    if (radar.multipass < 0.5) {
+        return f32(textureLoad(sweep_tex, vec2<i32>(gx, gy), 0).r);
+    }
+    return bitcast<f32>(textureLoad(smooth_tex, vec2<i32>(gx, gy), 0).r);
 }
 
 fn radar_color(in: VsOut) -> vec4<f32> {
@@ -219,7 +240,7 @@ fn radar_color(in: VsOut) -> vec4<f32> {
             for (var j = 0; j < 2; j++) {
                 let gx = g0 + i;
                 if (gx < 0 || gx >= i32(radar.gate_count)) { continue; }
-                let gy = ((a0 + j) % nbins + nbins) % nbins;
+                let gy = (a0 + j + nbins) % nbins;
                 let r = display_gate(gx, gy, nbins);
                 if (r < 2.0) { continue; } // skip below-threshold / range-folded
                 let wg = select(1.0 - tg, tg, i == 1);
