@@ -2159,6 +2159,7 @@ pub(crate) enum AppWindow {
     Events,
     /// Replay a recorded drive against the archive.
     ChaseReplay,
+    StormChasers,
     PublicStreams,
     Digest,
     Afd,
@@ -3996,6 +3997,7 @@ pub struct HookEchoApp {
     show_webcams: bool,
     /// Public fixed-camera stream list for the current map view.
     show_stream_dashboard: bool,
+    show_chaser_dashboard: bool,
     stream_inside_warnings: bool,
     webcams: Vec<wxdata::webcams::CamSite>,
     webcam_bounds: Option<(f64, f64, f64, f64)>,
@@ -4974,6 +4976,7 @@ impl HookEchoApp {
             show_spotters: false,
             show_webcams: false,
             show_stream_dashboard: false,
+            show_chaser_dashboard: false,
             stream_inside_warnings: false,
             webcams: Vec::new(),
             show_fires: false,
@@ -9461,61 +9464,10 @@ impl HookEchoApp {
         }
         ui.add_space(4.0);
         ui.separator();
-        ui.label(egui::RichText::new("Radar appearance").strong());
-        let mut smooth = self.views[self.active].smooth;
-        ui.horizontal(|ui| {
-            let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
-            for (label, value, hint) in [
-                ("Crisp", false, "Show each radar gate with a sharp edge"),
-                ("Smooth", true, "Blend neighboring radar gates"),
-            ] {
-                if ui
-                    .add_sized(
-                        egui::vec2(width, 34.0),
-                        egui::Button::new(label)
-                            .selected(smooth == value)
-                            .corner_radius(9.0),
-                    )
-                    .on_hover_text(hint)
-                    .clicked()
-                {
-                    smooth = value;
-                }
-            }
-        });
-        self.views[self.active].smooth = smooth;
+        let mut globe = self.views[self.active].camera.globe;
+        if ui.checkbox(&mut globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() { self.views[self.active].camera.set_globe(globe); }
+        self.radar_appearance_controls(ui);
         let pane = &mut self.views[self.active];
-        let palette_moment = pane.custom_product.as_ref()
-            .and_then(|name| self.settings.radar_products.iter().find(|p| &p.name == name))
-            .and_then(|p| Moment::from_code(&p.palette))
-            .unwrap_or(pane.moment);
-        let mut globe = pane.camera.globe;
-        if ui.checkbox(&mut globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() { pane.camera.set_globe(globe); }
-        ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
-        if smooth {
-            ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Caches extra GPU data.");
-            ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
-                .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
-        }
-        ui.checkbox(&mut pane.appearance.fade_old_sectors, "Fade retained sectors from the previous scan").on_hover_text("Live radar only: older sectors remain visible at 35% opacity until replaced. Measurements and archive playback are unchanged.");
-        let moment = palette_moment;
-        let key = moment.short_name().to_string();
-        let current = if pane.appearance.palettes.contains_key(&key) { "Pane palette" } else { "App palette" };
-        ui.menu_button(format!("{current} · Change…"), |ui| {
-            if ui.button("Follow app palette").clicked() { pane.appearance.palettes.remove(&key); ui.close(); }
-            if ui.button("Keep current app palette in this pane").clicked() {
-                pane.appearance.palettes.insert(key.clone(), crate::colormap::effective_table(&self.palettes, moment, self.settings.theme));
-                ui.close();
-            }
-            if ui.button("Built-in default").clicked() { pane.appearance.palettes.insert(key.clone(), crate::colormap::default_table(moment).clone()); ui.close(); }
-            for name in crate::colormap::alt_names(moment) {
-                if ui.button(name).clicked() {
-                    if let Some(table) = crate::colormap::builtin_alt(name) { pane.appearance.palettes.insert(key.clone(), table); }
-                    ui.close();
-                }
-            }
-        });
-        ui.label("Appearance applies to the active pane and is saved with its workspace.");
         let preset = crate::radar_appearance::AppearancePreset::capture(pane);
         let gate_bytes: usize = self.views.iter().map(|view| view.binned_cache_bytes()).sum();
         let derived_bytes: usize = self.pane_custom_sweep.values().map(|sweep| {
@@ -10503,6 +10455,10 @@ impl HookEchoApp {
                 W::Palettes => self.palette_editor.open = true,
                 W::Events => self.event_window.open = true,
                 W::ChaseReplay => self.chase_replay.open = true,
+                W::StormChasers => {
+                    self.show_chaser_dashboard = true;
+                    self.show_spotters = true;
+                }
                 W::PublicStreams => {
                     self.show_stream_dashboard = true;
                     self.dotcam_last_fetch = None;
@@ -23283,7 +23239,11 @@ impl eframe::App for HookEchoApp {
             }
             if !egui::Popup::is_any_open(ctx) && !self.panel_open
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-                self.apply_action(BindableAction::ToggleObs, ctx);
+                if self.tool != MapTool::Interrogate {
+                    self.tool = MapTool::Interrogate;
+                } else {
+                    self.apply_action(BindableAction::ToggleObs, ctx);
+                }
             }
             let bindings = hotkeys::active(&self.settings).into_owned();
             for action in hotkeys::poll(ctx, &bindings) {
@@ -24352,6 +24312,9 @@ impl eframe::App for HookEchoApp {
         }
         if self.show_stream_dashboard {
             self.show_public_streams(ctx);
+        }
+        if self.show_chaser_dashboard {
+            self.show_chaser_dashboard(ctx);
         }
         if self.show_hodo
             && !ui::hodograph_window::show(

@@ -81,9 +81,6 @@ impl HookEchoApp {
                 .and_then(|cut| chrono::DateTime::from_timestamp_millis(cut.ended_at_ms))
         });
         let loaded_time = v.displayed_time();
-        let selected_cut = v
-            .selected_cut_ms()
-            .and_then(chrono::DateTime::from_timestamp_millis);
         let requested_time = v.timeline.selected_time();
         let site = v.site.clone().unwrap_or_else(|| "No site".into());
         let retained = v.retained_station.clone();
@@ -93,15 +90,12 @@ impl HookEchoApp {
         let skipped = v
             .last_skipped_at
             .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
-        let fresh = latest_cut
-            .or(loaded_time)
-            .is_some_and(|time| (Utc::now() - time).num_seconds() < 900);
         let comparison_gap = comparison_time_gap(self.views.iter()
             .filter(|view| view.show_radar).filter_map(MapView::displayed_time));
-        let age = latest_cut.or(loaded_time).map(|time| {
+        let age = loaded_time.map(|time| {
             format!(
                 "{} {} ago",
-                if latest_cut.is_some() { "Cut" } else { "Scan" },
+                "Displayed scan",
                 humanize((Utc::now() - time).num_seconds().max(0))
             )
         });
@@ -110,11 +104,6 @@ impl HookEchoApp {
             Some(level2::LoadPhase::Decoding) => "Decoding radar…",
             None => "Loading radar…",
         };
-        let archived = v.site.as_deref().is_some_and(wxdata::sites::is_nexrad);
-        let streaming = self
-            .live_stream
-            .as_ref()
-            .is_some_and(|(pane, _, _)| *pane == idx);
         let was_cut_playback = v.timeline.cut_playback;
         let mut loop_frames = self.settings.live_loop_frames;
         #[cfg(target_arch = "wasm32")]
@@ -124,8 +113,55 @@ impl HookEchoApp {
         let cached_loop = cached_loop_tail(&v.timeline.frames, listed_loop, |name| {
             self.scan_cache.contains(&name.to_string())
         });
+        let forecast_hour = v.timeline.forecast_hour();
+        let forecast_valid = self.hrrr_valid.filter(|_| self.hrrr_fetched_hour == forecast_hour);
+        let at_latest = v.timeline.at_head() && (!v.timeline.cut_playback || latest_cut.is_none_or(|latest| loaded_time.is_some_and(|shown| shown >= latest)));
+        let radar_mode = if forecast_hour.is_some() { "Forecast" }
+        else if retained.is_some() || error.is_some() {
+            if error.is_some() { "Unavailable" } else { "Loading" }
+        } else if buffering { "Buffering" }
+        else if loading { "Loading" }
+        else { radar_playback_mode(v.timeline.following, v.timeline.playing, at_latest, loaded_time, Utc::now()) };
+        let mode = if radar_visible { radar_mode } else {
+            match field_time {
+                _ if mrms_loading => "Loading archive",
+                _ if mrms_error.is_some() => "Archive unavailable",
+                _ if mrms_archive_at.is_some() => "Archive",
+                Some((_, _, _, true)) if mrms_loop.is_some_and(|(len, index, _)| index + 1 < len) => "Replay",
+                Some((_, _, _, true)) => "Field valid",
+                Some((_, _, _, false)) => "Field hidden",
+                None if field.is_some() => "Awaiting field",
+                None => "Radar hidden",
+            }
+        };
+        let status = if !radar_visible {
+            if mrms_loading { "Loading selected history · previous mosaic remains visible".into() }
+            else if let Some(error) = &mrms_error { format!("Archive: {error}") }
+            else { field_time.map_or_else(String::new, |(valid, _, _, aligned)|
+                format!("{}{}", crate::timefmt::fmt_date_clock(valid, tz),
+                    if aligned { "" } else { " · outside selected time tolerance" })) }
+        } else if let Some(hour) = forecast_hour {
+            forecast_valid.map_or_else(|| format!("HRRR F+{hour}h · awaiting forecast"),
+                |valid| format!("HRRR F+{hour}h · valid {}", crate::timefmt::fmt_date_clock(valid, tz)))
+        } else if let Some(previous) = &retained {
+            format!("Showing {previous} · {site} {}", if error.is_some() { "unavailable" } else { "loading" })
+        } else if let Some(error) = &error { format!("{site}: {error}") }
+        else if buffering { format!("Buffering · {cached_loop}/{listed_loop} frames ready") }
+        else if loading { load_label.into() }
+        else if skipped { "Skipped unavailable radar frame".into() }
+        else if v.timeline.playing && listed_loop > 0 && cached_loop < listed_loop {
+            format!("{cached_loop}/{listed_loop} frames ready")
+        } else { age.clone().unwrap_or_else(|| "No displayed scan".into()) };
+        let displayed_clock = if radar_visible && forecast_hour.is_some() {
+            forecast_hour.map(|hour| format!("F+{hour}h"))
+        } else if radar_visible {
+            loaded_time.map(|time| crate::timefmt::fmt_clock(time, tz, v.timeline.cut_playback))
+        } else { field_time.map(|(time, _, _, _)| crate::timefmt::fmt_clock(time, tz, false)) };
+        let status_hint = format!("Displayed scan: {}\nRequested scan: {}\nNewest received cut: {}\n{}",
+            scan_timestamp(loaded_time), scan_timestamp(requested_time), scan_timestamp(latest_cut), status);
         let mut action = None;
         let mut layout_choice = None;
+        let mut active_pane = idx;
         let mut show_layers = false;
         let mut mrms_step = 0isize;
         let mut mrms_boundary_step = 0isize;
@@ -157,11 +193,11 @@ impl HookEchoApp {
                     .show(ui, |ui| {
                         ui.set_width(440.0_f32.min((self.chrome_rect.width() - 48.0).max(240.0)));
                         ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                        ui.spacing_mut().interact_size.y = 28.0;
+                        ui.spacing_mut().interact_size.y = if compact(ctx) { 44.0 } else { 28.0 };
                         ui.visuals_mut().override_text_color = Some(egui::Color32::from_gray(235));
                         ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 33, 33);
                         ui.visuals_mut().selection.bg_fill = egui::Color32::from_rgb(88, 65, 17);
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             if radar_visible {
                             egui::ComboBox::from_id_salt("zeta_frame_count")
                                 .width(92.0)
@@ -341,37 +377,12 @@ impl HookEchoApp {
                                 }
                             }
                         });
-                        ui.horizontal(|ui| {
-                            let t = &self.views[idx].timeline;
-                            let (color, status) = if !radar_visible {
-                                (accent, match field_time {
-                                    _ if mrms_loading => "Loading archive",
-                                    _ if mrms_error.is_some() => "Archive unavailable",
-                                    _ if mrms_archive_at.is_some() => "Archive",
-                                    Some((_, _, _, true)) if mrms_loop.is_some_and(|(len, index, _)| index + 1 < len) => "Replay",
-                                    Some((_, _, _, true)) => "Field valid",
-                                    Some((_, _, _, false)) => "Field hidden",
-                                    None if field.is_some() => "Awaiting field",
-                                    None => "Radar hidden",
-                                })
-                            } else if retained.is_some() || error.is_some() {
-                                (accent, if error.is_some() { "Unavailable" } else { "Loading" })
-                            } else if !t.following { (egui::Color32::from_rgb(170, 205, 250), "Archive") }
-                            else if loading && loaded_time.is_none() { (accent, "Loading") }
-                            else if fresh { (egui::Color32::from_rgb(69, 210, 110), "Live") }
-                            else { (accent, "Stale") };
-                            ui.label(egui::RichText::new(format!("● {status}")).size(11.0).color(color))
-                                .on_hover_text(if retained.is_some() { "The map retains the previous station while the selected station is unavailable or loading." } else if !t.following { "Browsing historical data. Return to live follows the latest scan." } else if streaming { "Newest scans arrive through the live stream." } else { "Updates use the station poller. Data age is shown below." });
-                            let clock = if !radar_visible {
-                                field_time.map_or_else(String::new, |(valid, _, _, _)| crate::timefmt::fmt_clock(valid, tz, false))
-                            } else { t.forecast_hour().map(|h| format!("F+{h}h")).unwrap_or_else(|| {
-                                selected_cut.or_else(|| latest_cut.filter(|_| t.following && !t.playing)).or(loaded_time)
-                                    .map(|time| crate::timefmt::fmt_clock(time, tz, t.cut_playback))
-                                    .unwrap_or_else(|| if t.listing { "Listing volumes…" } else if archived { "No volumes" } else { "Live only" }.into())
-                            }) };
-                            ui.label(egui::RichText::new(clock).size(12.0));
-                            layout_choice = zeta_layout_menu(ui, self.active_workspace.as_deref(),
-                                self.analyst_open, self.views.len(), &self.settings.workspaces);
+                        ui.horizontal_wrapped(|ui| {
+                            let color = if mode == "Live" { egui::Color32::from_rgb(69, 210, 110) } else { accent };
+                            ui.label(egui::RichText::new(format!("● {mode}")).size(11.0).color(color))
+                                .on_hover_text(&status_hint);
+                            ui.label(egui::RichText::new(displayed_clock.as_deref().unwrap_or("No displayed scan")).size(12.0));
+                            layout_choice = zeta_layout_menu(ui, self, &mut active_pane);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.button(format!("{} Minimal controls", ph::CARET_DOWN))
                                         .on_hover_text("Collapse playback controls")
@@ -440,22 +451,13 @@ impl HookEchoApp {
                             if zeta_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
                             if zeta_button(ui, ph::PENCIL_SIMPLE, "Draw on the map", self.tool == MapTool::Draw).clicked() { action = Some(PaletteAction::Tool(MapTool::Draw)); }
                         });
-                        let status = if !radar_visible {
-                            field_time.map_or_else(|| if field.is_some() { "Field data has not loaded yet".into() } else { String::new() }, |(valid, _, _, aligned)| format!("{}{}", crate::timefmt::fmt_date_clock(valid, tz), if aligned { "" } else { " · outside selected time tolerance" }))
-                        } else if let Some(previous) = &retained {
-                            format!("Showing {previous} · {site} {}", if error.is_some() { "unavailable" } else { "loading" })
-                        } else if let Some(error) = &error { format!("{site}: {error}") }
-                        else if buffering { "Buffering next radar frame…".into() }
-                        else if loading { load_label.into() }
-                        else if skipped { "Skipped unavailable radar frame".into() }
-                        else if !self.views[idx].timeline.following { self.views[idx].timeline.date.format("Archive · %Y-%m-%d").to_string() }
-                        else { age.clone().unwrap_or_default() };
+
                         if let Some(gap) = comparison_gap {
                             ui.colored_label(accent, format!("Pane times differ by {}", humanize(gap)));
                         }
                         if !status.is_empty() {
-                            ui.add(egui::Label::new(egui::RichText::new(status).size(11.0).color(egui::Color32::from_gray(190))).wrap())
-                                .on_hover_text(format!("Displayed scan: {}\nRequested scan: {}", loaded_time.map_or_else(|| "unavailable".into(), |t| t.to_rfc3339()), requested_time.map_or_else(|| "unavailable".into(), |t| t.to_rfc3339())));
+                            ui.add(egui::Label::new(egui::RichText::new(&status).size(11.0).color(egui::Color32::from_gray(190))).wrap())
+                                .on_hover_text(&status_hint);
                         }
                     });
             })
@@ -473,7 +475,7 @@ impl HookEchoApp {
                         .show(ui, |ui| {
                             ui.set_width((if split { 400.0_f32 } else { 500.0_f32 })
                                 .min((self.chrome_rect.width() - 48.0).max(240.0)));
-                            ui.spacing_mut().interact_size.y = 30.0;
+                            ui.spacing_mut().interact_size.y = if compact(ctx) { 44.0 } else { 30.0 };
                             ui.horizontal_wrapped(|ui| {
                                 if radar_visible {
                                     if zeta_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
@@ -482,10 +484,7 @@ impl HookEchoApp {
                                     if zeta_button(ui, ph::SKIP_FORWARD, "Next frame", false).clicked() { self.views[idx].timeline.step_cut(1); }
                                     ui.separator();
                                 }
-                                layout_choice = zeta_layout_menu(ui, self.active_workspace.as_deref(),
-                                    self.analyst_open, self.views.len(), &self.settings.workspaces);
-                                if !split && ui.button(age.as_deref().unwrap_or("Waiting for scan"))
-                                    .on_hover_text("Open full radar playback and history").clicked() { expanded = true; }
+                                layout_choice = zeta_layout_menu(ui, self, &mut active_pane);
                                 if let Some(gap) = comparison_gap {
                                     ui.colored_label(accent, format!("Δ {}", humanize(gap)))
                                         .on_hover_text("Radar pane observation times differ.");
@@ -507,6 +506,16 @@ impl HookEchoApp {
                                 });
                                 if zeta_button(ui, ph::SLIDERS_HORIZONTAL, "Full playback controls", false).clicked() { expanded = true; }
                             });
+                            if self.views.len() > 1 {
+                                ui.small(format!("Pane {} · Maps {} · Times {}", idx + 1,
+                                    if self.link_cameras { "linked" } else { "independent" },
+                                    if self.link_times { "linked" } else { "independent" }));
+                            }
+                            if !split {
+                                if ui.add(egui::Button::new(format!("{mode} · {}", displayed_clock.as_deref().unwrap_or("No displayed scan"))).wrap())
+                                    .named("Playback status — open full controls").on_hover_text(&status_hint).clicked() { expanded = true; }
+                                ui.add(egui::Label::new(&status).wrap());
+                            }
                         });
                 })
         };
@@ -519,8 +528,11 @@ impl HookEchoApp {
                     egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(8, 11, 17, 244))
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(68)))
                         .corner_radius(14.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-                            if ui.button(format!("{} Frames  ·  {}", effective_loop, age.as_deref().unwrap_or("Waiting for scan")))
-                                .on_hover_text("Open full radar playback and history").clicked() { expanded = !expanded; }
+                            ui.set_width(240.0);
+                            if ui.add(egui::Button::new(format!("{mode} · {} · {effective_loop} frames",
+                                displayed_clock.as_deref().unwrap_or("No displayed scan"))).wrap())
+                                .named("Playback status — open full controls").on_hover_text(&status_hint).clicked() { expanded = true; }
+                            ui.add(egui::Label::new(&status).wrap());
                         });
                 });
             self.mobile_occlusion.push(history.response.rect);
@@ -627,6 +639,7 @@ impl HookEchoApp {
         if before != after {
             self.record_interaction("timeline_transport");
         }
+        if active_pane < self.views.len() { self.active = active_pane; }
         match layout_choice {
             Some(ZetaLayoutChoice::Radar) => self.return_to_radar(ctx),
             Some(ZetaLayoutChoice::Workspace(index)) => self.activate_workspace_view(index, ctx),
@@ -640,17 +653,24 @@ impl HookEchoApp {
 
 enum ZetaLayoutChoice { Radar, Workspace(usize), Panes(usize) }
 
-fn zeta_layout_menu(ui: &mut egui::Ui, active_workspace: Option<&str>, analyst_open: bool,
-    pane_count: usize, workspaces: &[crate::workspace::Workspace]) -> Option<ZetaLayoutChoice> {
+fn zeta_layout_menu(ui: &mut egui::Ui, app: &mut HookEchoApp, active: &mut usize) -> Option<ZetaLayoutChoice> {
     use egui_phosphor::regular as ph;
+    let active_workspace = app.active_workspace.as_deref();
+    let analyst_open = app.analyst_open;
+    let pane_count = app.views.len();
+    let workspaces = &app.settings.workspaces;
+    let link_maps = &mut app.link_cameras;
+    let link_times = &mut app.link_times;
     let mut choice = None;
     egui::containers::menu::MenuButton::new(
-        egui::RichText::new(ph::SQUARES_FOUR).size(18.0),
+        egui::RichText::new(format!("{} Layout", ph::SQUARES_FOUR)).size(14.0),
     )
     .config(egui::containers::menu::MenuConfig::new()
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
     .ui(ui, |ui| {
-        ui.set_min_width(190.0);
+        ui.set_min_width(220.0);
+        egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 80.0).max(180.0)).show(ui, |ui| {
+        ui.spacing_mut().interact_size.y = 44.0;
         ui.strong("Map layout");
         if ui.selectable_label(!analyst_open && active_workspace.is_none(), "Radar")
             .named("Single radar layout").clicked() { choice = Some(ZetaLayoutChoice::Radar); ui.close(); }
@@ -669,13 +689,68 @@ fn zeta_layout_menu(ui: &mut egui::Ui, active_workspace: Option<&str>, analyst_o
                 ui.close();
             }
         }
+        if pane_count > 1 {
+            ui.separator();
+            ui.label("Active pane");
+            ui.horizontal_wrapped(|ui| {
+                for index in 0..pane_count {
+                    ui.selectable_value(active, index, format!("Pane {}", index + 1));
+                }
+            });
+            ui.checkbox(link_maps, "Link map positions");
+            ui.checkbox(link_times, "Link timelines");
+            ui.weak("Product controls apply to the active pane.");
+        }
+        });
     }).0.named("Choose map layout and pane count");
     choice
 }
 
+#[inline(never)]
+fn scan_timestamp(time: Option<chrono::DateTime<Utc>>) -> String {
+    time.map_or_else(|| "unavailable".into(), |time| time.to_rfc3339())
+}
+
+fn radar_playback_mode(following: bool, playing: bool, at_latest: bool, displayed: Option<chrono::DateTime<Utc>>, now: chrono::DateTime<Utc>) -> &'static str {
+    let Some(displayed) = displayed else { return "Waiting"; };
+    if !following { "History" }
+    else if playing { "Loop" }
+    else if !at_latest { "Paused" }
+    else if (now - displayed).num_seconds() >= 900 { "Stale" }
+    else { "Live" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_mode_describes_displayed_frame_not_newest_received_cut() {
+        let now = Utc::now();
+        let old = Some(now - chrono::Duration::minutes(20));
+        assert_eq!(radar_playback_mode(true, false, true, old, now), "Stale");
+        assert_eq!(radar_playback_mode(true, true, true, old, now), "Loop");
+        assert_eq!(radar_playback_mode(false, false, true, Some(now), now), "History");
+        assert_eq!(radar_playback_mode(true, false, true, None, now), "Waiting");
+        assert_eq!(radar_playback_mode(true, false, true, Some(now), now), "Live");
+        assert_eq!(radar_playback_mode(true, false, false, Some(now - chrono::Duration::minutes(5)), now), "Paused");
+    }
+
+    #[test]
+    fn compact_tool_buttons_have_touch_sized_hit_areas() {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(390.0, 844.0))), ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| {
+            let response = zeta_button(ui, "▶", "Play", false);
+            assert!(response.rect.width() >= 44.0 && response.rect.height() >= 44.0);
+        });
+    }
+}
+
+#[inline(never)]
 fn zeta_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egui::Response {
     ui.add_sized(
-        [36.0, 34.0],
+        if compact(ui.ctx()) { [44.0, 44.0] } else { [36.0, 34.0] },
         egui::Button::new(egui::RichText::new(glyph).size(18.0).color(if active {
             egui::Color32::from_rgb(255, 190, 42)
         } else {

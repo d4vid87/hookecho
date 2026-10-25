@@ -89,7 +89,7 @@ impl HookEchoApp {
             self.set_basemap(style);
         }
     }
-    /// Shared product/elevation chooser for the compact header and radar workspace transport.
+    /// Active-pane product, elevation and appearance choices for every radar toolbar.
     pub(crate) fn radar_product_controls(&mut self, ui: &mut egui::Ui, full_name: bool) {
         let idx = self.active;
         let phone = compact(ui.ctx());
@@ -101,135 +101,252 @@ impl HookEchoApp {
             .as_ref()
             .map(|v| v.elevations.clone())
             .unwrap_or_default();
-        let available_tilts = self.views[idx].volume.as_ref()
+        let available_tilts = self.views[idx]
+            .volume
+            .as_ref()
             .map(|v| v.available_tilts(self.views[idx].moment))
             .unwrap_or_default();
         let tilt = self.views[idx].tilt;
         ui.horizontal(|ui| {
             let mut pick = None;
-            let menu = ui.menu_button(
-                format!(
-                    "{} {}",
-                    if phone || full_name {
-                        product.as_str()
-                    } else if self.views[idx].srv && self.views[idx].moment == Moment::Velocity {
-                        "SRV"
-                    } else {
-                        self.views[idx]
-                            .custom_product
-                            .as_deref()
-                            .unwrap_or(crate::products::info(self.views[idx].moment).short)
-                    },
-                    egui_phosphor::regular::CARET_DOWN
-                ),
-                |ui| {
-                    ui.set_min_width(220.0);
-                    ui.spacing_mut().interact_size.y = 44.0;
-                    let available = self.available_moments();
-                    let mut products: Vec<_> = crate::products::PRODUCTS
-                        .iter()
-                        .map(|p| (p.moment, false, p.name))
-                        .chain([(Moment::Velocity, true, "Storm-relative velocity")])
-                        .filter(|(m, _, _)| available[m.index()])
-                        .collect();
-                    products.sort_by_key(|(m, relative, _)| {
-                        !self
-                            .settings
-                            .favorite_fields
-                            .contains(&radar_favorite_id(*m, *relative))
-                    });
-                    let mut favorites = false;
-                    for (moment, relative, label) in products {
-                        let favorite = self
-                            .settings
-                            .favorite_fields
-                            .contains(&radar_favorite_id(moment, relative));
-                        if favorite && !favorites {
-                            ui.strong("Favorites");
-                            favorites = true;
-                        }
-                        if !favorite && favorites {
-                            ui.separator();
-                            ui.strong("All radar products");
-                            favorites = false;
-                        }
-                        ui.push_id(("radar_product", moment.index(), relative), |ui| {
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .selectable_label(
-                                        self.views[idx].custom_product.is_none()
-                                            && self.views[idx].moment == moment
-                                            && (moment != Moment::Velocity
-                                                || self.views[idx].srv == relative),
-                                        label,
-                                    )
-                                    .clicked()
-                                {
-                                    pick = Some((moment, relative));
-                                    ui.close();
+            let menu = egui::containers::menu::MenuButton::from_button(egui::Button::new(format!(
+                "{} {}",
+                if phone || full_name {
+                    product.as_str()
+                } else if self.views[idx].srv && self.views[idx].moment == Moment::Velocity {
+                    "SRV"
+                } else {
+                    self.views[idx]
+                        .custom_product
+                        .as_deref()
+                        .unwrap_or(crate::products::info(self.views[idx].moment).short)
+                },
+                egui_phosphor::regular::CARET_DOWN
+            )).min_size(egui::vec2(0.0, 44.0)).wrap())
+            .config(
+                egui::containers::menu::MenuConfig::new()
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+            )
+            .ui(ui, |ui| {
+                let width = (ui.ctx().content_rect().width() - 48.0).clamp(220.0, 360.0);
+                ui.set_min_width(width);
+                ui.set_max_width(width);
+                ui.spacing_mut().interact_size.y = 44.0;
+                ui.strong(format!(
+                    "Pane {} · {}",
+                    idx + 1,
+                    self.views[idx].site.as_deref().unwrap_or("No site")
+                ));
+                ui.label(&product);
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt(("radar_product_menu", idx))
+                    .max_height((ui.ctx().content_rect().height() - 180.0).clamp(120.0, 560.0))
+                    .show(ui, |ui| {
+                        ui.strong("Elevation");
+                        egui::ComboBox::from_id_salt(("identity_elevation", idx))
+                            .width(if phone { 78.0 } else { 90.0 })
+                            .selected_text(
+                                elevations
+                                    .get(tilt)
+                                    .map_or_else(|| "Elevation…".into(), |a| format!("{a:.1}°")),
+                            )
+                            .show_ui(ui, |ui| {
+                                ui.spacing_mut().interact_size.y = 44.0;
+                                for (i, a) in elevations.iter().enumerate() {
+                                    if !available_tilts.contains(&i) {
+                                        continue;
+                                    }
+                                    if ui.selectable_label(i == tilt, format!("{a:.1}°")).clicked()
+                                    {
+                                        self.views[idx].tilt = i;
+                                        self.views[idx].follow_low_cut = false;
+                                        self.views[idx].error = None;
+                                    }
                                 }
-                                if ui
-                                    .add_sized(
-                                        [44.0, 44.0],
-                                        egui::Button::new(egui_phosphor::regular::STAR)
-                                            .selected(favorite),
-                                    )
-                                    .named_toggle(&format!("Favorite {label}"), favorite)
-                                    .clicked()
-                                {
-                                    self.apply_palette(
-                                        PaletteAction::ToggleRadarFavorite(moment, relative),
-                                        ui.ctx(),
-                                    );
+                                if elevations.is_empty() {
+                                    ui.weak("Elevations appear when the scan loads.");
                                 }
                             })
+                            .response
+                            .on_hover_text("Choose radar elevation");
+                        ui.collapsing("Appearance", |ui| self.radar_appearance_controls(ui));
+                        ui.separator();
+                        ui.strong("Products");
+                        let available = self.available_moments();
+                        let mut products: Vec<_> = crate::products::PRODUCTS
+                            .iter()
+                            .map(|p| (p.moment, false, p.name))
+                            .chain([(Moment::Velocity, true, "Storm-relative velocity")])
+                            .filter(|(m, _, _)| available[m.index()])
+                            .collect();
+                        products.sort_by_key(|(m, relative, _)| {
+                            !self
+                                .settings
+                                .favorite_fields
+                                .contains(&radar_favorite_id(*m, *relative))
                         });
-                    }
-                    for p in &self.settings.radar_products {
-                        if ui
-                            .selectable_label(
-                                self.views[idx].custom_product.as_deref() == Some(p.name.as_str()),
-                                &p.name,
-                            )
-                            .clicked()
-                        {
-                            self.views[idx].custom_product = Some(p.name.clone());
-                            ui.close();
+                        let mut favorites = false;
+                        for (moment, relative, label) in products {
+                            let favorite = self
+                                .settings
+                                .favorite_fields
+                                .contains(&radar_favorite_id(moment, relative));
+                            if favorite && !favorites {
+                                ui.strong("Favorites");
+                                favorites = true;
+                            }
+                            if !favorite && favorites {
+                                ui.separator();
+                                ui.strong("All radar products");
+                                favorites = false;
+                            }
+                            ui.push_id(("radar_product", moment.index(), relative), |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .add_sized(
+                                            [
+                                                (ui.available_width()
+                                                    - 44.0
+                                                    - ui.spacing().item_spacing.x)
+                                                    .max(80.0),
+                                                44.0,
+                                            ],
+                                            egui::Button::new(label).wrap().selected(
+                                                self.views[idx].custom_product.is_none()
+                                                    && self.views[idx].moment == moment
+                                                    && (moment != Moment::Velocity
+                                                        || self.views[idx].srv == relative),
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        pick = Some((moment, relative));
+                                        ui.close();
+                                    }
+                                    if ui
+                                        .add_sized(
+                                            [44.0, 44.0],
+                                            egui::Button::new(egui_phosphor::regular::STAR)
+                                                .selected(favorite),
+                                        )
+                                        .named_toggle(&format!("Favorite {label}"), favorite)
+                                        .clicked()
+                                    {
+                                        self.apply_palette(
+                                            PaletteAction::ToggleRadarFavorite(moment, relative),
+                                            ui.ctx(),
+                                        );
+                                    }
+                                })
+                            });
                         }
-                    }
-                },
-            );
-            self.tour_anchors.product = Some(menu.response.rect);
-            menu.response
-                .named("Choose radar product")
-                .on_hover_text(&product);
+                        for p in &self.settings.radar_products {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 44.0],
+                                    egui::Button::new(&p.name).wrap().selected(
+                                        self.views[idx].custom_product.as_deref()
+                                            == Some(p.name.as_str()),
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                self.views[idx].custom_product = Some(p.name.clone());
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+            self.tour_anchors.product = Some(menu.0.rect);
+            menu.0.named("Choose radar product").on_hover_text(&product);
             if let Some((m, srv)) = pick {
                 self.apply_palette(PaletteAction::SetMoment(m, srv), ui.ctx());
             }
-            egui::ComboBox::from_id_salt(("identity_elevation", idx))
-                .width(if phone { 78.0 } else { 90.0 })
-                .selected_text(
-                    elevations
-                        .get(tilt)
-                        .map_or_else(|| "Elevation…".into(), |a| format!("{a:.1}°")),
-                )
-                .show_ui(ui, |ui| {
-                    ui.spacing_mut().interact_size.y = 44.0;
-                    for (i, a) in elevations.iter().enumerate() {
-                        if !available_tilts.contains(&i) { continue; }
-                        if ui.selectable_label(i == tilt, format!("{a:.1}°")).clicked() {
-                            self.views[idx].tilt = i;
-                            self.views[idx].follow_low_cut = false;
-                            self.views[idx].error = None;
-                        }
-                    }
-                    if elevations.is_empty() {
-                        ui.weak("Elevations appear when the scan loads.");
-                    }
-                })
-                .response
-                .on_hover_text("Choose radar elevation");
         });
+    }
+
+    /// The active pane uses the same appearance controls in settings and its product picker.
+    #[inline(never)]
+    pub(crate) fn radar_appearance_controls(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().interact_size.y = 44.0;
+        ui.label(egui::RichText::new("Radar appearance").strong());
+        let mut smooth = self.views[self.active].smooth;
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+            for (label, value, hint) in [
+                ("Crisp", false, "Show each radar gate with a sharp edge"),
+                ("Smooth", true, "Blend neighboring radar gates"),
+            ] {
+                if ui
+                    .add_sized(
+                        egui::vec2(width, 44.0),
+                        egui::Button::new(label)
+                            .selected(smooth == value)
+                            .corner_radius(9.0),
+                    )
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    smooth = value;
+                }
+            }
+        });
+        self.views[self.active].smooth = smooth;
+        let pane = &mut self.views[self.active];
+        let palette_moment = pane
+            .custom_product
+            .as_ref()
+            .and_then(|name| {
+                self.settings
+                    .radar_products
+                    .iter()
+                    .find(|p| &p.name == name)
+            })
+            .and_then(|p| Moment::from_code(&p.palette))
+            .unwrap_or(pane.moment);
+        ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
+        if smooth {
+            ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Caches extra GPU data.");
+            ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
+                .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
+        }
+        ui.checkbox(&mut pane.appearance.fade_old_sectors, "Fade retained sectors from the previous scan").on_hover_text("Live radar only: older sectors remain visible at 35% opacity until replaced. Measurements and archive playback are unchanged.");
+        let moment = palette_moment;
+        let key = moment.short_name().to_string();
+        let current = if pane.appearance.palettes.contains_key(&key) {
+            "Pane palette"
+        } else {
+            "App palette"
+        };
+        ui.menu_button(format!("{current} · Change…"), |ui| {
+            if ui.button("Follow app palette").clicked() {
+                pane.appearance.palettes.remove(&key);
+                ui.close();
+            }
+            if ui.button("Keep current app palette in this pane").clicked() {
+                pane.appearance.palettes.insert(
+                    key.clone(),
+                    crate::colormap::effective_table(&self.palettes, moment, self.settings.theme),
+                );
+                ui.close();
+            }
+            if ui.button("Built-in default").clicked() {
+                pane.appearance
+                    .palettes
+                    .insert(key.clone(), crate::colormap::default_table(moment).clone());
+                ui.close();
+            }
+            for name in crate::colormap::alt_names(moment) {
+                if ui.button(name).clicked() {
+                    if let Some(table) = crate::colormap::builtin_alt(name) {
+                        pane.appearance.palettes.insert(key.clone(), table);
+                    }
+                    ui.close();
+                }
+            }
+        });
+        ui.label("Appearance applies to the active pane and is saved with its workspace.");
     }
 }
 

@@ -297,18 +297,23 @@ impl HookEchoApp {
             self.tool = MapTool::Interrogate;
             return;
         }
-        egui::Area::new(egui::Id::new("info_chip"))
+        let compact = super::overlay::compact(ctx);
+        let content_width = (self.chrome_rect.width() - 54.0).clamp(44.0, 720.0);
+        let area = egui::Area::new(egui::Id::new("info_chip"))
             .constrain_to(self.chrome_rect)
             .anchor(
                 egui::Align2::RIGHT_BOTTOM,
                 egui::vec2(-14.0, style::LANE_BOTTOM_CHIP),
             )
-            // The draw tool's chip carries buttons; the rest are read-only hints that must never
-            // swallow a click meant for the map underneath.
-            .interactable(matches!(self.tool, MapTool::Draw | MapTool::StormTrack))
+            .default_width(content_width + 24.0)
+            .interactable(true)
             .show(ctx, |ui| {
                 style::glass(ui, 238).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.set_max_width(content_width);
+                    if compact {
+                        ui.spacing_mut().interact_size = egui::vec2(44.0, 44.0);
+                    }
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new(glyph).size(15.0).color(accent));
                         ui.label(
                             egui::RichText::new(name)
@@ -316,12 +321,17 @@ impl HookEchoApp {
                                 .color(accent)
                                 .strong(),
                         );
+                        if ui.add(egui::Button::new("Done").min_size(egui::vec2(44.0, 44.0)))
+                            .on_hover_text("Return to the map; keep existing drawings and measurements")
+                            .clicked()
+                        {
+                            self.tool = MapTool::Interrogate;
+                        }
+                        let hint = if compact { hint.replace("click", "tap") } else { hint.to_owned() };
                         ui.label(egui::RichText::new(hint).size(style::FONT_SM).weak());
-                        ui.label(
-                            egui::RichText::new("· Esc cancels")
-                                .size(style::FONT_SM)
-                                .weak(),
-                        );
+                        if !compact {
+                            ui.label(egui::RichText::new("· Esc exits").size(style::FONT_SM).weak());
+                        }
                         if self.tool != MapTool::Draw {
                             return;
                         }
@@ -334,11 +344,12 @@ impl HookEchoApp {
                         }
                         ui.add_enabled_ui(!self.draw_eraser, |ui| {
                             ui.menu_button("Pen", |ui| {
-                                ui.horizontal(|ui| {
+                                ui.set_max_width(content_width);
+                                ui.horizontal_wrapped(|ui| {
                                     for c in DRAW_COLORS {
                                         let sel = self.draw_color == c;
                                         let (rect, resp) = ui.allocate_exact_size(
-                                            egui::vec2(24.0, 24.0), egui::Sense::click(),
+                                            egui::Vec2::splat(if compact { 44.0 } else { 24.0 }), egui::Sense::click(),
                                         );
                                         let p = ui.painter_at(rect);
                                         p.circle_filled(rect.center(), 8.0, c);
@@ -393,13 +404,13 @@ impl HookEchoApp {
                     if self.tool == MapTool::StormTrack {
                         ui.separator();
                         ui.label("User-defined motion · click twice to place or replace the track");
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label("Direction");
                             ui.add(egui::DragValue::new(&mut self.manual_storm_track.bearing_deg).range(0.0..=359.0).suffix("°"));
                             ui.label("Horizon");
                             ui.add(egui::Slider::new(&mut self.manual_storm_track.horizon_min, 15..=120).step_by(15.0).suffix(" min"));
                         });
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label("Speed");
                             let (factor, suffix) = match self.manual_storm_track.speed_unit {
                                 1 => (1.150_779, " mph"),
@@ -424,6 +435,7 @@ impl HookEchoApp {
                     }
                 });
             });
+        self.mobile_occlusion.push(area.response.rect);
     }
 
     /// Top-center chip when a newer release exists: says so, links to the download, dismisses.

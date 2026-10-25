@@ -652,7 +652,7 @@ impl HookEchoApp {
                                 .max_height((bounds.height() - 105.0).max(60.0))
                                 .show(ui, |ui| {
                                     section(ui, "VIEWS");
-                                    if menu_row(ui, "HookEcho layout ✓", true).on_hover_text("Switch back to the standard layout").clicked() {
+                                    if menu_row(ui, "HookEcho layout", false).named("HookEcho layout").on_hover_text("Switch back to the standard layout").clicked() {
                                         use_standard_layout = true;
                                         menu_open = false;
                                     }
@@ -705,7 +705,7 @@ impl HookEchoApp {
                                             OverlayToggle::AlertPanel,
                                         ));
                                     }
-                                    egui::CollapsingHeader::new("Weather Products")
+                                    egui::CollapsingHeader::new("Weather & map overlays")
                                         .id_salt("zeta_weather_products")
                                         .show(ui, |ui| {
                                             for (label, mapped) in [
@@ -721,8 +721,11 @@ impl HookEchoApp {
                                                 ("Surface fronts", PaletteAction::ToggleOverlay(OverlayToggle::Fronts)),
                                                 ("Local storm reports", PaletteAction::ToggleOverlay(OverlayToggle::StormReports)),
                                                 ("Lightning detection (GLM)", PaletteAction::ToggleOverlay(OverlayToggle::GlmLightning)),
-                                                ("Spotter Network", PaletteAction::ToggleOverlay(OverlayToggle::Spotters)),
                                                 ("Power outages", PaletteAction::ToggleOverlay(OverlayToggle::Outages)),
+                                                ("Storm tracks", PaletteAction::ToggleOverlay(OverlayToggle::Tracks)),
+                                                ("SPC Outlook", PaletteAction::ToggleOutlook),
+                                                ("MRMS reflectivity", PaletteAction::ToggleField(F::Mrms)),
+                                                ("Layer manager", PaletteAction::OpenWindow(AppWindow::LayerManager)),
                                             ] {
                                                 let on = entries.iter()
                                                     .find(|entry| entry.action == mapped)
@@ -742,68 +745,6 @@ impl HookEchoApp {
                                                 }
                                             }
                                         });
-                                    egui::CollapsingHeader::new("Data Overlays")
-                                        .id_salt("zeta_data_overlays")
-                                        .show(ui, |ui| {
-                                            for (label, mapped) in [
-                                                (
-                                                    "Weather warnings",
-                                                    PaletteAction::ToggleOverlay(
-                                                        OverlayToggle::Alerts,
-                                                    ),
-                                                ),
-                                                (
-                                                    "Storm reports",
-                                                    PaletteAction::ToggleOverlay(
-                                                        OverlayToggle::StormReports,
-                                                    ),
-                                                ),
-                                                (
-                                                    "Storm tracks",
-                                                    PaletteAction::ToggleOverlay(
-                                                        OverlayToggle::Tracks,
-                                                    ),
-                                                ),
-                                                (
-                                                    "Satellite lightning",
-                                                    PaletteAction::ToggleOverlay(
-                                                        OverlayToggle::GlmLightning,
-                                                    ),
-                                                ),
-                                                (
-                                                    "Surface observations",
-                                                    PaletteAction::ToggleOverlay(
-                                                        OverlayToggle::Metar,
-                                                    ),
-                                                ),
-                                                ("SPC Outlook", PaletteAction::ToggleOutlook),
-                                                (
-                                                    "Tropical cyclones",
-                                                    PaletteAction::ToggleOverlay(
-                                                        OverlayToggle::Tropical,
-                                                    ),
-                                                ),
-                                                (
-                                                    "MRMS reflectivity",
-                                                    PaletteAction::ToggleField(F::Mrms),
-                                                ),
-                                                (
-                                                    "Layer manager",
-                                                    PaletteAction::OpenWindow(
-                                                        AppWindow::LayerManager,
-                                                    ),
-                                                ),
-                                            ] {
-                                                let on = entries
-                                                    .iter()
-                                                    .find(|entry| entry.action == mapped)
-                                                    .and_then(|entry| entry.on)
-                                                    .unwrap_or(false);
-                                                if menu_row(ui, label, on).clicked() {
-                                                    action = Some(mapped);
-                                                }
-                                            }
-                                        });
                                     if menu_row(ui, "Custom Locations", false).clicked() {
                                         action =
                                             Some(PaletteAction::OpenWindow(AppWindow::Markers));
@@ -816,6 +757,9 @@ impl HookEchoApp {
                                     egui::CollapsingHeader::new("Storm Chasers")
                                         .id_salt("zeta_storm_chasers")
                                         .show(ui, |ui| {
+                                            if menu_row(ui, "Chaser list", self.show_chaser_dashboard).clicked() {
+                                                action = Some(PaletteAction::OpenWindow(AppWindow::StormChasers));
+                                            }
                                             if menu_row(ui, "Public camera streams", self.show_stream_dashboard).clicked() {
                                                 stream_dashboard = true;
                                             }

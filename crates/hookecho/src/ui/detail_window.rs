@@ -141,9 +141,9 @@ pub fn show(
             if let Some(url) = &detail.stream {
                 ui.add_space(6.0);
                 let label = if cfg!(target_os = "android") {
-                    "Open live stream"
+                    "Open stream"
                 } else {
-                    "Watch live"
+                    "Watch stream"
                 };
                 if ui.button(label).clicked() {
                     *play_stream = Some(url.clone());
