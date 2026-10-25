@@ -72,27 +72,28 @@ try {
     assert(Math.abs(await zoom() - before) < 0.001, 'single click must not zoom');
     // Keep assertions outside the double-click timing window on slow CI renderers.
     await new Promise(resolve => setTimeout(resolve, 750));
-    await page.mouse.click(810, 350);
-    await new Promise(resolve => setTimeout(resolve, 50));
-    await page.mouse.click(810, 350, {clickCount: 2});
+    await page.mouse.click(810, 350, {count: 2});
     await page.waitForFunction(z =>
       Math.abs(globalThis.__hookechoMapTrace.frames.at(-1)[3] - z - 1) < 0.001,
       {timeout: 10000}, before);
     const after = await zoom();
     if (radarWorkspace) {
-      await page.mouse.click(38, 45);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      await page.mouse.click(38, 45, {clickCount: 2});
+      await page.mouse.click(38, 45, {count: 2});
       await new Promise(resolve => setTimeout(resolve, 300));
       assert(Math.abs(await zoom() - after) < 0.001, 'toolbar double click must not zoom the map');
     }
-    await page.mouse.click(930, 420, {button: 'right', clickCount: 2});
+    await page.mouse.click(930, 420, {button: 'right', count: 2});
     await new Promise(resolve => setTimeout(resolve, 300));
     assert(Math.abs(await zoom() - after) < 0.001, 'right double click must not zoom');
     report.checks.push({radarWorkspace, doubleClickZoom: after - before});
     await page.removeScriptToEvaluateOnNewDocument(identifier);
   }
   assert.equal(report.errors.length, 0);
+} catch (error) {
+  const page = (await browser.pages()).at(-1);
+  report.failureTrace = await page.evaluate(() => globalThis.__hookechoMapTrace);
+  await page.screenshot({path: `${output}/failure.png`});
+  throw error;
 } finally {
   await fs.writeFile(`${output}/report.json`, JSON.stringify(report, null, 2));
   await browser.close();
