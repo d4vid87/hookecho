@@ -452,6 +452,7 @@ impl HookEchoApp {
                         ui,
                         &feats,
                         bounds,
+                        &self.settings.markers,
                         &mut muted,
                         &mut export_alerts,
                     );
