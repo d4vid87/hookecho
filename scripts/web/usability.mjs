@@ -60,12 +60,20 @@ try {
     }, radarWorkspace);
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.panes[0]?.time,
+      {timeout: 90000});
+    // Let the fixture decode/upload settle before measuring camera animation.
+    await new Promise(resolve => setTimeout(resolve, 3000));
     await page.waitForFunction(() => globalThis.__hookechoMapTrace?.frames.length > 0);
     const zoom = () => page.evaluate(() => globalThis.__hookechoMapTrace.frames.at(-1)[3]);
     const before = await zoom();
     await page.mouse.click(810, 350);
     await new Promise(resolve => setTimeout(resolve, 100));
     assert(Math.abs(await zoom() - before) < 0.001, 'single click must not zoom');
+    // Keep assertions outside the double-click timing window on slow CI renderers.
+    await new Promise(resolve => setTimeout(resolve, 750));
+    await page.mouse.click(810, 350);
+    await new Promise(resolve => setTimeout(resolve, 50));
     await page.mouse.click(810, 350, {clickCount: 2});
     await page.waitForFunction(z =>
       Math.abs(globalThis.__hookechoMapTrace.frames.at(-1)[3] - z - 1) < 0.001,
