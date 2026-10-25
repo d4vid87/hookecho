@@ -19,6 +19,7 @@ try {
   page.on('pageerror', error => report.errors.push(error.message));
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'gpu', {value: undefined});
+    globalThis.__hookechoMapTraceEnabled = true;
     localStorage.setItem('hookecho-settings', JSON.stringify({
       setup_done: true, seeded_workspaces: true, default_site: 'KDMX', radar_feed: 'ArchiveOnly',
     }));
@@ -49,7 +50,50 @@ try {
     await page.screenshot({path: `${output}/phone-${width}-dismissed.png`});
     report.checks.push({width, height, geometry, dismissed: true});
   }
+  await page.setViewport({width: 1280, height: 800, deviceScaleFactor: 1});
+  for (const radarWorkspace of [true, false]) {
+    const {identifier} = await page.evaluateOnNewDocument(value => {
+      const settings = JSON.parse(localStorage.getItem('hookecho-settings'));
+      settings.radar_workspace = value;
+      settings.reduce_motion = !value;
+      localStorage.setItem('hookecho-settings', JSON.stringify(settings));
+    }, radarWorkspace);
+    await page.reload({waitUntil: 'domcontentloaded'});
+    await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.panes[0]?.time,
+      {timeout: 90000});
+    // Let the fixture decode/upload settle before measuring camera animation.
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    await page.waitForFunction(() => globalThis.__hookechoMapTrace?.frames.length > 0);
+    const zoom = () => page.evaluate(() => globalThis.__hookechoMapTrace.frames.at(-1)[3]);
+    const before = await zoom();
+    await page.mouse.click(810, 350);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert(Math.abs(await zoom() - before) < 0.001, 'single click must not zoom');
+    // Keep assertions outside the double-click timing window on slow CI renderers.
+    await new Promise(resolve => setTimeout(resolve, 750));
+    await page.mouse.click(810, 350, {count: 2});
+    await page.waitForFunction(z =>
+      Math.abs(globalThis.__hookechoMapTrace.frames.at(-1)[3] - z - 1) < 0.001,
+      {timeout: 10000}, before);
+    const after = await zoom();
+    if (radarWorkspace) {
+      await page.mouse.click(38, 45, {count: 2});
+      await new Promise(resolve => setTimeout(resolve, 300));
+      assert(Math.abs(await zoom() - after) < 0.001, 'toolbar double click must not zoom the map');
+    }
+    await page.mouse.click(930, 420, {button: 'right', count: 2});
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert(Math.abs(await zoom() - after) < 0.001, 'right double click must not zoom');
+    report.checks.push({radarWorkspace, doubleClickZoom: after - before});
+    await page.removeScriptToEvaluateOnNewDocument(identifier);
+  }
   assert.equal(report.errors.length, 0);
+} catch (error) {
+  const page = (await browser.pages()).at(-1);
+  report.failureTrace = await page.evaluate(() => globalThis.__hookechoMapTrace);
+  await page.screenshot({path: `${output}/failure.png`});
+  throw error;
 } finally {
   await fs.writeFile(`${output}/report.json`, JSON.stringify(report, null, 2));
   await browser.close();
