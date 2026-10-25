@@ -132,6 +132,7 @@ pub fn encode_display16(value: f32, min: f32, max: f32) -> u16 {
 /// `0` below threshold, `1` range folded, `2..=255` linearly maps the moment's
 /// [`Moment::value_range`].
 #[derive(Debug, Clone)]
+#[cfg_attr(target_arch = "wasm32", derive(serde::Serialize, serde::Deserialize))]
 pub struct BinnedSweep {
     pub moment: Moment,
     pub az_bins: usize,
@@ -1002,6 +1003,47 @@ pub fn bin_scan_display_at(scan: &Scan, moment: Moment, tilt: usize, dealias: bo
     bin_sweep_display(sweep, moment, lat, lon, dealias, precision)
 }
 
+/// Prepare the selected display field without occupying the thread drawing the map.
+pub async fn prepare_display(
+    scan: std::sync::Arc<Scan>,
+    moment: Moment,
+    tilt: usize,
+    dealias: bool,
+    cut_end_ms: Option<i64>,
+    precision: bool,
+) -> anyhow::Result<BinnedSweep> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::task::blocking(move || bin_scan_display_at(&scan, moment, tilt, dealias, cut_end_ms, precision)).await?
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let sweep = selected_sweep_at(&scan, moment, tilt, cut_end_ms)
+            .ok_or_else(|| anyhow::anyhow!("no sweep carries requested moment at this tilt"))?;
+        let site = scan.site().ok_or_else(|| anyhow::anyhow!("scan has no site metadata"))?;
+        // Send only the selected cut, not the other moments/tilts in the entire volume.
+        let payload = postcard::to_allocvec(&(sweep, moment, site.latitude(), site.longitude(), dealias, precision))?;
+        match crate::wasm_worker::bin_display(payload).await {
+            Ok(wire) => {
+                let binned = postcard::from_bytes(&wire)?;
+                crate::stats::bump(crate::stats::Counter::SweepsBinned);
+                Ok(binned)
+            }
+            Err(crate::wasm_worker::Error::Unavailable) => bin_scan_display_at(&scan, moment, tilt, dealias, cut_end_ms, precision),
+            Err(error) => anyhow::bail!("{error}"),
+        }
+    }
+}
+
+/// Worker entry point; the input and output use the same compiled domain model as the page.
+#[cfg(target_arch = "wasm32")]
+pub fn bin_display_worker(payload: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let (sweep, moment, lat, lon, dealias, precision): (Sweep, Moment, f32, f32, bool, bool) =
+        postcard::from_bytes(&payload)?;
+    let binned = bin_sweep_display(&sweep, moment, lat, lon, dealias, precision)?;
+    Ok(postcard::to_allocvec(&binned)?)
+}
+
 /// Bin the lowest-elevation sweep of `scan` for `moment`.
 pub fn bin_lowest_sweep(scan: &Scan, moment: Moment) -> anyhow::Result<BinnedSweep> {
     bin_scan(scan, moment, 0)
@@ -1098,8 +1140,6 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
     // Bucket the radials by azimuth bin first so each bin's output row can be filled
     // independently. Radials stay in scan order within a bin, so overlapping radials still
     // overwrite in the same order the single serial pass used — identical output.
-    // ponytail: cache-miss fill now N-cores faster, but it still runs on the UI thread; async
-    // fill via task::blocking is the upgrade path if hitches persist.
     let mut by_bin: Vec<Vec<&_>> = vec![Vec::new(); AZ_BINS];
     for radial in radials {
         let Some(m) = moment.select(radial) else {

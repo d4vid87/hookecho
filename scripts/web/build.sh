@@ -121,7 +121,7 @@ sed \
 # a worker the browser never bothers to install.
 font_shell=""
 for f in web/dist/font-*.ttf; do font_shell="$font_shell,\"/${f#web/}\""; done
-shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js?boot=2\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/dist/video-export-$video_export_hash.js\",\"/decode-worker.js?v=vector-tiles\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
+shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js?boot=2\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/dist/video-export-$video_export_hash.js\",\"/decode-worker.js?v=radar-fields\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
 sed \
   -e "s#__SHELL__#$shell_json#" \
   -e "s#__VERSION__#\"$glue_hash-$wasm_hash\"#" \
@@ -203,7 +203,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Public-camera dashboard adds a small amount of UI code; measured at 4,664,691 bytes gzip.
 # Complete raster fallbacks and faster label lookup measured 4,676,680 gzip bytes in CI.
 # Allow 10 KB (0.21%) more than the previous cap; Lite/startup gates remain unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4685000}"
+# Radar/MRMS worker preparation and the cached smoothing pass add about 8 KB gzip.
+# Keep the measured feature increase explicit; Lite/startup budgets stay unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4700000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

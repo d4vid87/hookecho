@@ -759,7 +759,7 @@ impl OverlaySource {
         }
     }
 
-    async fn fetch(self, http: &reqwest::Client) -> anyhow::Result<OverlayMsg> {
+    async fn fetch(self, http: &reqwest::Client, display_cap: usize) -> anyhow::Result<OverlayMsg> {
         Ok(match self {
             OverlaySource::Alerts(points, bounds, enabled_optional) => {
                 let excluded: Vec<_> = alerts::OPTIONAL_EVENTS.into_iter()
@@ -838,11 +838,8 @@ impl OverlaySource {
             }
             OverlaySource::Field(layer, product) => {
                 if wxdata::mrms::descriptor_for_product(&product).is_some() {
-                    OverlayMsg::RegisteredField(
-                        layer,
-                        wxdata::mrms::fetch_latest_frame(http, &product).await?,
-                        None,
-                    )
+                    let (frame, display) = wxdata::mrms::fetch_latest_frame_display(http, &product, display_cap).await?;
+                    OverlayMsg::RegisteredField(layer, frame, display)
                 } else {
                     OverlayMsg::Field(layer, wxdata::mrms::fetch_latest(http, &product).await?)
                 }
@@ -855,9 +852,9 @@ impl OverlaySource {
                 };
                 let mut frames = Vec::with_capacity(keys.len());
                 for key in keys {
-                    let frame = wxdata::mrms::fetch_frame_key(http, &product, &key).await?;
-                    // Keep six display-sized grids, rather than six full regional source grids.
-                    let display = frame.field().clone().decimated(2_048);
+                    let (frame, display) = wxdata::mrms::fetch_frame_key_display(http, &product, &key, 2_048).await?;
+                    // Pool on the decoder worker before retaining six history frames.
+                    let display = display.unwrap_or_else(|| frame.field().clone());
                     frames.push(wxdata::field::FieldFrame::new(
                         frame.descriptor, display, frame.stamp.clone(),
                     ));
@@ -5652,7 +5649,7 @@ impl HookEchoApp {
             let result = match wxdata::task::timeout(
                 OVERLAY_TIMEOUT,
                 retry_once(std::time::Duration::from_millis(750), || {
-                    source.clone().fetch(&http)
+                    source.clone().fetch(&http, cap)
                 }),
             )
             .await
@@ -5667,8 +5664,8 @@ impl HookEchoApp {
                     // for the whole pool.
                     Ok(match msg {
                         OverlayMsg::Field(layer, f) => OverlayMsg::Field(layer, f.decimated(cap)),
-                        OverlayMsg::RegisteredField(layer, frame, _) => {
-                            let display = registered_display_field(&frame, cap);
+                        OverlayMsg::RegisteredField(layer, frame, display) => {
+                            let display = display.or_else(|| registered_display_field(&frame, cap));
                             OverlayMsg::RegisteredField(layer, frame, display)
                         }
                         OverlayMsg::PaneField(pane, layer, frame, _) => {
@@ -9496,7 +9493,7 @@ impl HookEchoApp {
         if ui.checkbox(&mut globe, "Globe projection").on_hover_text("Orthographic globe with geographic radar and overlays. Mercator tile coverage stops at 85° latitude.").changed() { pane.camera.set_globe(globe); }
         ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
         if smooth {
-            ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Uses more GPU samples.");
+            ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Caches extra GPU data.");
             ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
                 .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
         }
@@ -13426,6 +13423,7 @@ impl HookEchoApp {
         };
         // A frame switch bins and uploads a full sweep. Holding animation while the map is under
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
+        let next_pending = next_pending || (self.views[idx].show_radar && self.views[idx].volume.as_ref().is_some_and(Volume::display_pending));
         self.views[idx].buffering = next_pending;
         if should_advance_timeline(next_pending, self.settings.pause_while_panning && self.gesture_live) {
             self.views[idx].advance_playback();
@@ -13438,6 +13436,8 @@ impl HookEchoApp {
         // A cached volume can become ready during sync_timeline, so schedule after its cuts
         // are known instead of waiting for the idle heartbeat to resume playback.
         if let Some(dt) = self.views[idx].timeline.time_to_next_frame() {
+            // A due playhead must not busy-loop while background preparation is still pending.
+            let dt = if next_pending { dt.max(std::time::Duration::from_millis(50)) } else { dt };
             ctx.request_repaint_after(dt);
         }
 
@@ -13805,7 +13805,7 @@ impl HookEchoApp {
     /// Radar upload for pane `idx`, binning the shared volume in `data` (usually the active pane)
     /// with pane `idx`'s product/tilt. Returns `(upload_when_changed, draw_radar)`; the pane's GPU
     /// buffer persists, so `None` means "reuse what's uploaded". Caches per pane via `pane_shown`.
-    fn pane_radar(&mut self, idx: usize, data: usize) -> (Option<RadarUpload>, bool) {
+    fn pane_radar(&mut self, idx: usize, data: usize, ctx: &egui::Context) -> (Option<RadarUpload>, bool) {
         crate::prof_scope!("pane_radar");
         if !self.views[idx].alignment_acceptable(self.settings.linked_time_limit_seconds) {
             return (None, false);
@@ -13822,7 +13822,7 @@ impl HookEchoApp {
         let count = self.views[data].elevation_count();
         self.views[idx].clamp_tilt_to(&count);
         if let Some(name) = self.views[idx].custom_product.clone() {
-            return self.pane_custom_radar(idx, data, &name);
+            return self.pane_custom_radar(idx, data, &name, ctx);
         }
         self.pane_custom_sweep.remove(&idx);
         self.pane_custom_recipe.remove(&idx);
@@ -13895,6 +13895,7 @@ impl HookEchoApp {
         let token = self.pane_upload_tokens.get(&idx).copied().unwrap_or(0);
         let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
+            if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
             return (None, true);
         }
         let table_owned = self.views[idx].appearance.table(&self.palettes, moment, self.settings.theme);
@@ -13914,9 +13915,9 @@ impl HookEchoApp {
             if vol.elevations.is_empty() {
                 return (None, true);
             }
-            vol.binned_display_at(moment, tilt, dealias, cut_end_ms, precision).map(|s| {
+            vol.prepare_display((moment, tilt, dealias, cut_end_ms, precision), &self.spawner, ctx).map(|ready| ready.map(|s| {
                 to_upload(
-                    s,
+                    &s,
                     table,
                     threshold,
                     smooth,
@@ -13924,10 +13925,11 @@ impl HookEchoApp {
                     precip.as_deref(),
                     lut_only,
                 )
-            })
+            }))
         };
         match upload {
-            Ok(mut up) => {
+            Ok(None) => (None, self.pane_shown.get(&idx).is_some_and(|shown| same_radar_measurement(shown, &key))),
+            Ok(Some(mut up)) => {
                 up.cache_loop = self.views[idx].timeline.playing
                     && self.views[idx].timeline.frames.len() > 1;
                 self.views[idx].appearance.apply_upload(&mut up, moment);
@@ -13956,6 +13958,7 @@ impl HookEchoApp {
                 (Some(up), true)
             }
             Err(e) => {
+                if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
                 self.views[idx].error = Some(e.to_string());
                 (None, false)
             }
@@ -13967,6 +13970,7 @@ impl HookEchoApp {
         idx: usize,
         data: usize,
         product_name: &str,
+        ctx: &egui::Context,
     ) -> (Option<RadarUpload>, bool) {
         use std::hash::{Hash, Hasher};
         let Some(definition) = self
@@ -13977,6 +13981,7 @@ impl HookEchoApp {
             .cloned()
         else {
             self.pane_custom_sweep.remove(&idx);
+            if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
             self.views[idx].error = Some(format!("radar product '{product_name}' was not found"));
             return (None, false);
         };
@@ -13996,6 +14001,7 @@ impl HookEchoApp {
                 }
                 Err(error) => {
                     self.pane_custom_sweep.remove(&idx);
+                    if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
                     self.views[idx].error = Some(error.to_string());
                     return (None, false);
                 }
@@ -14042,24 +14048,26 @@ impl HookEchoApp {
             .is_some_and(|input| input.matches(&scan, tilt, cut_end_ms, precision, product_hash))
             && self.pane_custom_sweep.contains_key(&idx);
         if !reuse {
-            let sweeps_result = {
+            let sweeps_result = (|| -> anyhow::Result<Option<Vec<_>>> {
                 let Some(volume) = self.views[data].volume.as_mut() else {
-                    return (None, true);
+                    return Ok(None);
                 };
-                product
-                    .inputs()
-                    .iter()
-                    .map(|moment| {
-                        volume
-                            .shared_binned_display_at(*moment, tilt, cut_end_ms, precision)
-                            .map(|sweep| (*moment, sweep))
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()
-            };
+                let mut sweeps = Vec::with_capacity(product.inputs().len());
+                let mut pending = false;
+                for moment in product.inputs() {
+                    match volume.prepare_display((*moment, tilt, false, cut_end_ms, precision), &self.spawner, ctx)? {
+                        Some(sweep) => sweeps.push((*moment, sweep)),
+                        None => pending = true,
+                    }
+                }
+                Ok((!pending).then_some(sweeps))
+            })();
             let sweeps = match sweeps_result {
-                Ok(sweeps) => sweeps,
+                Ok(Some(sweeps)) => sweeps,
+                Ok(None) => return (None, self.pane_shown.get(&idx).is_some_and(|shown| same_radar_measurement(shown, &key))),
                 Err(error) => {
                     self.pane_custom_sweep.remove(&idx);
+                    if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
                     self.views[idx].error = Some(error.to_string());
                     return (None, false);
                 }
@@ -14072,6 +14080,7 @@ impl HookEchoApp {
                 Ok(sweep) => sweep,
                 Err(error) => {
                     self.pane_custom_sweep.remove(&idx);
+                    if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
                     self.views[idx].error = Some(error.to_string());
                     return (None, false);
                 }
@@ -14081,6 +14090,7 @@ impl HookEchoApp {
             const DERIVED_BUDGET: usize = 32 * 1024 * 1024;
             if bytes > DERIVED_BUDGET {
                 self.pane_custom_sweep.remove(&idx);
+                if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
                 self.views[idx].error =
                     Some("Custom product exceeds the 32 MiB display buffer budget".into());
                 return (None, false);
@@ -14104,6 +14114,7 @@ impl HookEchoApp {
                 crate::custom_cache::Input::new(&scan, tilt, cut_end_ms, precision, product_hash),
             );
         } else {
+            if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
             wxdata::stats::bump(wxdata::stats::Counter::CustomCacheHits);
         }
         let sweep = &self.pane_custom_sweep[&idx];
@@ -14690,9 +14701,9 @@ impl HookEchoApp {
         // a mouse it is a tilt wheel nobody was using.
         let zoom = ui.input(|i| i.zoom_delta());
         let line_speed = ctx.options(|o| o.input_options.line_scroll_speed);
-        let scroll = ui.input(|i| raw_map_scroll(i, line_speed, vp.1));
         if let Some(pos) = response.hover_pos().filter(|pos| self.views[idx].camera.pick_world((pos.x - prect.left(), pos.y - prect.top()), vp).is_some()).filter(|p| prect.contains(*p) && map_input) {
             let cursor = (pos.x - prect.left(), pos.y - prect.top());
+            let scroll = ui.input(|i| raw_map_scroll(i, line_speed, vp.1, &mut self.views[idx].camera_motion));
             // `zoom_delta()` reports a live touchscreen pinch too, which the gesture block below
             // already owns (and it is the one that knows about the mobile chrome) — skip it here
             // or a phone pinch zooms twice.
@@ -14704,7 +14715,7 @@ impl HookEchoApp {
             if scroll.y.abs() > 0.0 {
                 self.active = idx;
                 let view = &mut self.views[idx];
-                view.camera_motion.wheel(&mut view.camera, scroll.y as f64 * 0.005, cursor, vp, reduced);
+                view.camera_motion.wheel(&mut view.camera, scroll.y as f64, cursor, vp, reduced);
             }
             if scroll.x.abs() > 0.0 {
                 self.active = idx;
@@ -15438,7 +15449,7 @@ impl HookEchoApp {
         if !new_tiles.is_empty() || !new_vector_tiles.is_empty() { ctx.request_repaint(); }
 
         // --- Radar (this pane's product, its own volume) ---
-        let (radar_upload, mut draw_radar) = self.pane_radar(idx, idx);
+        let (radar_upload, mut draw_radar) = self.pane_radar(idx, idx, ctx);
         // In the forecast-scrub tail there's no observed volume — show the HRRR field instead.
         if self.views[idx].timeline.forecast_hour().is_some() {
             draw_radar = false;
@@ -21404,20 +21415,20 @@ fn map_gesture_on_map(ctx: &egui::Context, occlusion: &[egui::Rect]) -> bool {
     live && pos.is_some_and(|pos| map_input_at(ctx, pos, occlusion))
 }
 
-/// Include inertial scrolling and trackpad pinches, which do not hold a pointer down.
-/// Consume the original wheel events once. egui's smoothed tail must not be fed into another
-/// smoother. Ctrl/cmd wheel is already represented by zoom_delta and remains direct.
-fn raw_map_scroll(i: &egui::InputState, line_speed: f32, height: f32) -> egui::Vec2 {
+/// Consume original events once: x is pan points and y is bounded zoom levels.
+/// Ctrl/cmd wheel is already represented by zoom_delta and remains direct.
+fn raw_map_scroll(i: &egui::InputState, line_speed: f32, height: f32, motion: &mut crate::camera_motion::Motion) -> egui::Vec2 {
     i.raw.events.iter().filter_map(|event| {
         let egui::Event::MouseWheel { unit, delta, modifiers, .. } = event else { return None };
         if modifiers.ctrl || modifiers.command { return None; }
-        let mut delta = *delta * match unit {
+        let mut delta = *delta;
+        if modifiers.shift { delta = egui::vec2(delta.x + delta.y, 0.0); }
+        let pan = delta.x * match unit {
             egui::MouseWheelUnit::Point => 1.0,
             egui::MouseWheelUnit::Line => line_speed,
             egui::MouseWheelUnit::Page => height,
         };
-        if modifiers.shift { delta = egui::vec2(delta.x + delta.y, 0.0); }
-        Some(delta)
+        Some(egui::vec2(pan, motion.scroll_delta(*unit, delta.y as f64, i.time) as f32))
     }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
 }
 
@@ -21435,6 +21446,29 @@ fn should_retess(gesture_live: bool, geometry_changed: bool, bucket_changed: boo
 
 fn frame_result_is_current(timeline: &crate::timeline::Timeline, name: &str) -> bool {
     timeline.current().is_some_and(|frame| frame.name() == name)
+}
+
+// A previous timestamp may stay visible during refresh; a different measurement must not.
+fn same_radar_measurement(shown: &ShownKey, wanted: &ShownKey) -> bool {
+    shown.1 == wanted.1 && shown.2 == wanted.2 && shown.5 == wanted.5
+        && shown.6 == wanted.6 && shown.8 == wanted.8 && shown.9 == wanted.9
+}
+
+#[cfg(test)]
+#[test]
+fn pending_radar_never_labels_the_previous_product_as_a_new_measurement() {
+    let shown: ShownKey = ("old scan".into(), Moment::Reflectivity, 0, None, false, None, false, None, None, None, false);
+    let mut wanted = shown.clone();
+    wanted.0 = "new scan".into();
+    assert!(same_radar_measurement(&shown, &wanted), "retain coverage during a scan refresh");
+    wanted.1 = Moment::Velocity;
+    assert!(!same_radar_measurement(&shown, &wanted), "reflectivity cannot be presented as velocity");
+    wanted = shown.clone();
+    wanted.2 = 1;
+    assert!(!same_radar_measurement(&shown, &wanted), "a tilt change must wait for that cut");
+    wanted = shown.clone();
+    wanted.9 = Some(123);
+    assert!(!same_radar_measurement(&shown, &wanted), "a custom recipe changes the measurement");
 }
 
 fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
@@ -25441,6 +25475,28 @@ mod tests {
         let _ = ctx.run_ui(raw, |ui| {
             assert!(ui.input(super::map_gesture_live), "trackpad pinch without a button");
         });
+    }
+
+    #[test]
+    fn map_scroll_normalizes_events_before_summing_and_preserves_modifier_behavior() {
+        use egui::{Event, Modifiers, MouseWheelUnit};
+        let mut input = egui::InputState::default();
+        input.time = 1.0;
+        let wheel = |unit, delta, modifiers| Event::MouseWheel { unit, delta, modifiers, phase: egui::TouchPhase::Move };
+        input.raw.events = vec![
+            wheel(MouseWheelUnit::Line, egui::vec2(0.0, 3.0), Modifiers::NONE),
+            wheel(MouseWheelUnit::Point, egui::vec2(0.0, 120.0), Modifiers::NONE),
+            wheel(MouseWheelUnit::Point, egui::vec2(0.0, 99.0), Modifiers::CTRL),
+            wheel(MouseWheelUnit::Line, egui::vec2(1.0, 2.0), Modifiers::SHIFT),
+        ];
+        let mut motion = crate::camera_motion::Motion::default();
+        let scroll = super::raw_map_scroll(&input, 40.0, 800.0, &mut motion);
+        assert!((scroll.y - 2.0 * 0.333991).abs() < 1e-5);
+        assert_eq!(scroll.x, 120.0, "shift wheel pans without adding zoom");
+        input.raw.events = vec![
+            wheel(MouseWheelUnit::Point, egui::vec2(0.0, 120.0), Modifiers { command: true, ..Modifiers::NONE }),
+        ];
+        assert_eq!(super::raw_map_scroll(&input, 40.0, 800.0, &mut motion), egui::Vec2::ZERO);
     }
 
     /// New geometry appears when it lands; a zoom-bucket crossing waits for the finger to lift,

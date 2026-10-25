@@ -221,6 +221,18 @@ pub fn assemble_live_chunks(framed: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::Js
     wxdata::live::assemble_and_encode(&framed).map_err(|e| e.to_string().into())
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn bin_radar_display(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::level2::bin_display_worker(payload).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn decode_mrms(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::mrms::decode_worker(payload).map_err(|e| e.to_string().into())
+}
+
 /// Worker export: decode and triangulate a basemap tile without blocking map input.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

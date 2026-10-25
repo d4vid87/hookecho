@@ -41,9 +41,9 @@ async function once(product) {
       get: () =>
         real === null
           ? undefined
-          : (bytes) =>
-              real(bytes).then((r) => {
-                globalThis.__firstDecode ??= performance.now();
+          : (bytes, op) =>
+              real(bytes, op).then((r) => {
+                if (op === "decode") globalThis.__firstDecode ??= performance.now();
                 return r;
               }),
       set: (v) => {

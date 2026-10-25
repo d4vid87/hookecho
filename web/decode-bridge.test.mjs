@@ -108,3 +108,24 @@ test("vector tile jobs preserve their operation and transferred payload", async 
   assert.equal(spawned[0].jobs[0].op, "vector");
   assert.deepEqual([...new Uint8Array(spawned[0].jobs[0].bytes)], [3, 4]);
 });
+
+test("visible display preparation runs before queued downloads and map refinement", async () => {
+  const worker = { jobs: [], postMessage(job) { this.jobs.push(job); }, terminate() {} };
+  const bridge = makeBridge({ spawnWorker: () => worker, log: () => {} });
+  const running = bridge(new Uint8Array([1]), "mrms");
+  const history = bridge(new Uint8Array([2]), "decode");
+  const vector = bridge(new Uint8Array([3]), "vector");
+  const display = bridge(new Uint8Array([4]), "bin");
+  const finish = () => {
+    const job = worker.jobs.at(-1);
+    worker.onmessage({ data: { id: job.id, ok: new Uint8Array([9]).buffer } });
+  };
+  finish();
+  assert.equal(worker.jobs[1].op, "bin");
+  finish();
+  assert.equal(worker.jobs[2].op, "decode");
+  finish();
+  assert.equal(worker.jobs[3].op, "vector");
+  finish();
+  await Promise.all([running, history, vector, display]);
+});

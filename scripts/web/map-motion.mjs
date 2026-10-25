@@ -15,7 +15,8 @@ try {
  for(const [name,n,delay,linked,reduced] of [['warm',1,0],['cold',1,250],['quad',4,0],['quad-linked',4,0,true],['reduced',1,0,false,true]]) {
   const page=await browser.newPage();
   const inputSession=await page.createCDPSession();
-  const wheelSequence=async()=>{const jobs=[];for(let i=0;i<40;i++){jobs.push(inputSession.send('Input.dispatchMouseEvent',{type:'mouseWheel',x:450,y:350,deltaX:0,deltaY:i<20?-24:24}));await wait(50)}await Promise.all(jobs);};
+  // Await delivery so Chromium cannot coalesce queued wheel events during a slow frame.
+  const wheelSequence=async()=>{for(let i=0;i<40;i++){await inputSession.send('Input.dispatchMouseEvent',{type:'mouseWheel',x:450,y:350,deltaX:0,deltaY:i<20?-24:24});await wait(50)}};
   await page.setViewport({width:1440,height:1000,deviceScaleFactor:1});await page.setBypassServiceWorker(true);
   page.on('pageerror',e=>report.errors.push(e.message));
   const pending=new Map();
@@ -62,7 +63,9 @@ try {
   }
   const main=trace.trace.frames.filter(f=>f[1]===0);assert(main.some(f=>f[3]!==main[0][3]),'wheel must change camera zoom');
   await page.screenshot({path:out+'/'+name+'.png'});
-  const first=main[0];const anchor=[442,342];
+  // Quad panes begin below their header; derive its inset from the traced pane height.
+  const first=main[0];const rows=n>1?2:1;
+  const anchor=[450-8,350-(page.viewport().height-8-rows*first[7]-(rows-1)*2)];
   const world=[first[4]+(anchor[0]-first[6]/2)/(256*2**first[3]),first[5]+(anchor[1]-first[7]/2)/(256*2**first[3])];
   const drift=Math.max(...main.map(f=>Math.hypot((world[0]-f[4])*256*2**f[3]+f[6]/2-anchor[0],(world[1]-f[5])*256*2**f[3]+f[7]/2-anchor[1])));
   assert(drift<0.5,'cursor anchor drift '+drift);

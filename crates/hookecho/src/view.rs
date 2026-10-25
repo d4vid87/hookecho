@@ -57,6 +57,15 @@ const RECENT_VOLUMES: usize = if cfg!(target_os = "android") {
 
 type BinnedKey = (Moment, usize, bool, Option<i64>, bool);
 
+struct PendingDisplay {
+    result: std::sync::mpsc::Receiver<anyhow::Result<BinnedSweep>>,
+    abort: futures_util::future::AbortHandle,
+}
+
+impl Drop for PendingDisplay {
+    fn drop(&mut self) { self.abort.abort(); }
+}
+
 /// A decoded volume plus lazily-binned sweeps for the moments/tilts the user has viewed.
 pub struct Volume {
     /// Shared with the app's decoded-volume LRU: the cache and every pane showing this volume
@@ -74,6 +83,7 @@ pub struct Volume {
     /// Which moments *this* volume carries (the pane keeps the wider union for its UI rows).
     pub moments: [bool; Moment::ALL.len()],
     binned: LruCache<BinnedKey, Arc<BinnedSweep>>,
+    pending_display: LruCache<BinnedKey, PendingDisplay>,
     /// Set once a live chunk has been merged in. Such a volume is still being written — half its
     /// tilts may not have arrived — so it must never be kept and shown again later in place of
     /// the complete archived volume of the same name.
@@ -109,6 +119,7 @@ impl Volume {
             cuts,
             moments,
             binned: LruCache::new(NonZeroUsize::new(BINNED_CACHE).unwrap()),
+            pending_display: LruCache::new(NonZeroUsize::new(8).unwrap()),
             live: false,
             live_status: None,
         }
@@ -133,6 +144,7 @@ impl Volume {
         if new_elev.is_empty() {
             return;
         }
+        self.pending_display.clear(); // Late results belong to the previous scan revision.
         self.scan = scan;
         if !tilts_only_grew(&self.elevations, &new_elev) {
             self.binned.clear(); // tilt indices may have shifted
@@ -186,17 +198,66 @@ impl Volume {
         self.binned_display_at(moment, tilt, dealias, cut_end_ms, false)
     }
 
+    fn cache_display(&mut self, key: BinnedKey, sweep: BinnedSweep) {
+        self.binned.pop(&key);
+        let bytes = |s: &BinnedSweep| s.data.len() + s.data16.as_ref().map_or(0, |d| d.len() * 2);
+        let budget = BINNED_CACHE * 720 * 1840;
+        let mut retained: usize = self.binned.iter().map(|(_, s)| bytes(s)).sum();
+        while !self.binned.is_empty() && retained + bytes(&sweep) > budget {
+            if let Some((_, old)) = self.binned.pop_lru() { retained -= bytes(&old); }
+        }
+        self.binned.put(key, Arc::new(sweep));
+    }
+
+    pub fn display_pending(&self) -> bool { !self.pending_display.is_empty() }
+
+    pub fn cancel_display_jobs(&mut self) { self.pending_display.clear(); }
+
+    /// A cache miss starts one background job; the caller keeps its last GPU image until ready.
+    pub fn prepare_display(
+        &mut self,
+        key: BinnedKey,
+        spawner: &crate::rt::Spawner,
+        ctx: &egui::Context,
+    ) -> anyhow::Result<Option<Arc<BinnedSweep>>> {
+        let completed: Vec<_> = self.pending_display.iter().filter_map(|(key, pending)| {
+            match pending.result.try_recv() {
+                Ok(result) => Some((*key, result)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((*key, Err(anyhow::anyhow!("display preparation stopped")))),
+            }
+        }).collect();
+        let mut error = None;
+        for (ready_key, result) in completed {
+            self.pending_display.pop(&ready_key);
+            match result {
+                Ok(sweep) => self.cache_display(ready_key, sweep),
+                Err(e) if ready_key == key => error = Some(e),
+                Err(_) => {}
+            }
+        }
+        if let Some(error) = error { return Err(error); }
+        if let Some(sweep) = self.binned.get(&key) { return Ok(Some(sweep.clone())); }
+        if !self.pending_display.contains(&key) {
+            let scan = self.scan.clone();
+            let ctx = ctx.clone();
+            let (tx, result) = std::sync::mpsc::channel();
+            let abort = spawner.spawn_abortable(async move {
+                let (moment, tilt, dealias, cut_end_ms, precision) = key;
+                let prepared = level2::prepare_display(scan, moment, tilt, dealias, cut_end_ms, precision).await;
+                let _ = tx.send(prepared);
+                ctx.request_repaint();
+            });
+            self.pending_display.put(key, PendingDisplay { result, abort });
+        }
+        Ok(None)
+    }
+
     pub fn binned_display_at(&mut self, moment: Moment, tilt: usize, dealias: bool, cut_end_ms: Option<i64>, precision: bool) -> anyhow::Result<&BinnedSweep> {
         let key = (moment, tilt, dealias, cut_end_ms, precision);
         if !self.binned.contains(&key) {
             let sweep = level2::bin_scan_display_at(&self.scan, moment, tilt, dealias, cut_end_ms, precision)?;
-            let bytes = |s: &BinnedSweep| s.data.len() + s.data16.as_ref().map_or(0, |d| d.len() * 2);
-            let budget = BINNED_CACHE * 720 * 1840;
-            let mut retained: usize = self.binned.iter().map(|(_, s)| bytes(s)).sum();
-            while !self.binned.is_empty() && retained + bytes(&sweep) > budget {
-                if let Some((_, old)) = self.binned.pop_lru() { retained -= bytes(&old); }
-            }
-            self.binned.put(key, Arc::new(sweep));
+            self.cache_display(key, sweep);
         }
         Ok(self.binned.get(&key).expect("inserted display sweep"))
     }
@@ -838,6 +899,68 @@ mod tests {
             retries: 0,
             stream_active: true,
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn display_preparation_is_deduplicated_and_matches_native_binning() {
+        let scan = scan_at(&[0.5]);
+        let expected = level2::bin_scan_display_at(&scan, Moment::Reflectivity, 0, false, None, true).unwrap();
+        let mut volume = Volume::new(scan, "test".into(), Utc::now());
+        let spawner = crate::rt::Spawner::new(tokio::runtime::Handle::current());
+        let ctx = egui::Context::default();
+        let key = (Moment::Reflectivity, 0, false, None, true);
+        assert!(volume.prepare_display(key, &spawner, &ctx).unwrap().is_none());
+        assert_eq!(volume.pending_display.len(), 1);
+        // Until the runtime can run the task, repeated renders reuse the one request.
+        assert!(volume.prepare_display(key, &spawner, &ctx).unwrap().is_none());
+        assert_eq!(volume.pending_display.len(), 1);
+        let prepared = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(sweep) = volume.prepare_display(key, &spawner, &ctx).unwrap() { break sweep; }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(prepared.data, expected.data);
+        assert_eq!(prepared.data16, expected.data16);
+        assert_eq!(prepared.radar_lat, expected.radar_lat);
+        assert_eq!(volume.pending_display.len(), 0);
+        let again = volume.prepare_display(key, &spawner, &ctx).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&prepared, &again));
+    }
+
+    #[test]
+    fn a_live_revision_discards_even_completed_old_display_jobs() {
+        let scan = scan_at(&[0.5]);
+        let mut volume = Volume::new(scan.clone(), "old".into(), Utc::now());
+        let key = (Moment::Reflectivity, 0, false, None, false);
+        let (tx, result) = std::sync::mpsc::channel();
+        let (abort, _registration) = futures_util::future::AbortHandle::new_pair();
+        let observed = abort.clone();
+        tx.send(Ok(level2::bin_scan_display_at(&scan, Moment::Reflectivity, 0, false, None, false).unwrap())).unwrap();
+        volume.pending_display.put(key, PendingDisplay { result, abort });
+        volume.apply_live(scan_at(&[0.5]), "new".into(), Utc::now(), &[0.5], live_status());
+        assert!(volume.pending_display.is_empty());
+        assert!(!volume.binned.contains(&key));
+        assert!(observed.is_aborted());
+    }
+
+    #[test]
+    fn returning_to_a_cached_product_cancels_obsolete_display_work() {
+        let scan = scan_at(&[0.5]);
+        let mut volume = Volume::new(scan.clone(), "test".into(), Utc::now());
+        let a = (Moment::Reflectivity, 0, false, None, false);
+        volume.binned_display_at(a.0, a.1, a.2, a.3, a.4).unwrap();
+        let (tx, result) = std::sync::mpsc::channel();
+        let (abort, _) = futures_util::future::AbortHandle::new_pair();
+        let observed = abort.clone();
+        volume.pending_display.put((Moment::Velocity, 0, false, None, false), PendingDisplay { result, abort });
+        tx.send(Err(anyhow::anyhow!("obsolete product"))).unwrap();
+        assert!(volume.display_pending());
+        volume.cancel_display_jobs();
+        assert!(!volume.display_pending(), "a completed B job must not hold playback on cached A");
+        assert!(volume.binned.contains(&a));
+        assert!(observed.is_aborted());
     }
 
     /// A scan with one radial per given elevation, carrying reflectivity only.

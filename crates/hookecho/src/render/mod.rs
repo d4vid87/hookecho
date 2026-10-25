@@ -50,7 +50,7 @@ pub struct RadarUpload {
     pub data16: Option<Vec<u16>>,
     /// [radar_lat, radar_lon, first_gate_km, gate_interval_km, az_bins, gate_count,
     ///  smoothing, srv, motion_e, motion_n, tint, flag_nx, flag_ny, flag_west, flag_north,
-    ///  flag_east, flag_south, blend_width, _pad, _pad] (see `shaders/radar.wgsl`).
+    ///  flag_east, flag_south, blend_width, code_max, multipass] (see `shaders/radar.wgsl`).
     pub uniform: [f32; 20],
     /// Half-degree azimuth opacity; absent means all sectors are fully opaque.
     pub sector_opacity: Option<[f32; 720]>,
@@ -715,6 +715,8 @@ struct TileGpu {
 
 struct RadarGpu {
     tex: wgpu::Texture,
+    smooth: Option<wgpu::Texture>,
+    smooth_dirty: bool,
     flag: wgpu::Texture,
     lut: wgpu::Texture,
     uni: wgpu::Buffer,
@@ -735,6 +737,7 @@ const RADAR_GPU_CACHE_BYTES: usize = 32 * 1024 * 1024;
 impl RadarGpu {
     fn shadow_bytes(&self) -> usize {
         self.gate_bytes.len() + self.flag_bytes.len() + self.lut_width as usize * 12
+            + self.smooth.as_ref().map_or(0, |_| self.dims.0 as usize * self.dims.1 as usize * 4)
     }
 
     fn matches_upload(&self, r: &RadarUpload, gates: &[u8], flags: &[u8]) -> bool {
@@ -821,6 +824,8 @@ impl PaneGpu {
 pub struct RenderResources {
     tile_pipeline: wgpu::RenderPipeline,
     radar_pipeline: wgpu::RenderPipeline,
+    smooth_pipeline: wgpu::RenderPipeline,
+    smooth_empty: wgpu::BindGroup,
     surface_renderer: radar_surface::Renderer,
     overlay_pipeline: wgpu::RenderPipeline,
     mrms_pipeline: wgpu::RenderPipeline,
@@ -932,6 +937,16 @@ impl RenderResources {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
                 // The precipitation-type grid. Always bound — a binding cannot be conditional —
                 // and 1×1 when the tint is off.
                 wgpu::BindGroupLayoutEntry {
@@ -945,6 +960,38 @@ impl RenderResources {
                     count: None,
                 },
             ],
+        });
+
+        // Integer float-bit storage keeps precision without optional float-attachment support.
+        let smooth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("radar smoothing"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &radar_shader,
+                entry_point: Some("vs_smooth"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &radar_shader,
+                entry_point: Some("fs_smooth"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::R32Uint,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let smooth_empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("radar smoothing empty camera"),
+            layout: &smooth_pipeline.get_bind_group_layout(0),
+            entries: &[],
         });
 
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
@@ -1143,6 +1190,8 @@ impl RenderResources {
             surface_renderer,
             tile_pipeline,
             radar_pipeline,
+            smooth_pipeline,
+            smooth_empty,
             overlay_pipeline,
             mrms_pipeline,
             camera_bgl,
@@ -1294,12 +1343,14 @@ impl RenderResources {
         if let Some(mut g) = existing {
             if g.dims == (r.gate_count, r.az_bins) && g.flag_dims == flag_dims && g.precision == precision && g.lut_width == lut_width {
                 if !r.lut_only && !cached_data {
+                    g.smooth_dirty |= g.gate_bytes != gate_data;
                     write_texture_changes(queue, &g.tex, g.dims, bytes_per_gate, &mut g.gate_bytes, gate_data);
                     write_texture_changes(queue, &g.flag, g.flag_dims, 1, &mut g.flag_bytes, &flag_bytes(r, g.flag_dims));
                 }
                 queue.write_buffer(&g.uni, 0, bytemuck::cast_slice(&r.uniform));
                 queue.write_buffer(&g.uni, 80, bytemuck::cast_slice(&r.sector_opacity.unwrap_or([1.0; 720])));
                 write_lut(queue, &g.lut, &r.lut);
+                if r.uniform[19] > 0.5 { self.smooth_radar(device, queue, &mut g); }
                 return Some(g);
             }
         }
@@ -1439,10 +1490,16 @@ impl RenderResources {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&flag_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
             ],
         });
-        Some(RadarGpu {
+        let mut gpu = RadarGpu {
             tex,
+            smooth: None,
+            smooth_dirty: true,
             flag: flag_tex,
             lut: lut_tex,
             uni,
@@ -1453,7 +1510,72 @@ impl RenderResources {
             lut_width,
             gate_bytes: gate_data.to_vec(),
             flag_bytes: flag_bytes(r, flag_dims),
-        })
+        };
+        if r.uniform[19] > 0.5 { self.smooth_radar(device, queue, &mut gpu); }
+        Some(gpu)
+    }
+
+    /// Cache only data-dependent filtering; palette, camera and storm motion stay live.
+    fn smooth_radar(&self, device: &wgpu::Device, queue: &wgpu::Queue, radar: &mut RadarGpu) {
+        if radar.smooth.is_none() {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("cached radar smoothing"),
+                size: wgpu::Extent3d { width: radar.dims.0, height: radar.dims.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Uint,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let sweep = radar.tex.create_view(&Default::default());
+            let lut = radar.lut.create_view(&Default::default());
+            let flag = radar.flag.create_view(&Default::default());
+            let smooth = texture.create_view(&Default::default());
+            radar.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("radar with cached smoothing"),
+                layout: &self.radar_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: radar.uni.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sweep) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&lut) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&flag) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&smooth) },
+                ],
+            });
+            radar.smooth = Some(texture);
+            radar.smooth_dirty = true;
+        }
+        if !radar.smooth_dirty { return; }
+        let sweep = radar.tex.create_view(&Default::default());
+        let input = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("radar smoothing input"),
+            layout: &self.smooth_pipeline.get_bind_group_layout(1),
+            entries: &[wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sweep) }],
+        });
+        let target = radar.smooth.as_ref().unwrap().create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("cache radar smoothing") });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cache radar smoothing"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.smooth_pipeline);
+            pass.set_bind_group(0, &self.smooth_empty, &[]);
+            pass.set_bind_group(1, &input, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit(Some(encoder.finish()));
+        radar.smooth_dirty = false;
     }
 
     /// Upload camera/tiles/radar for `cb` and stage its pane's draw list. Shared caches (tiles,
@@ -2062,7 +2184,7 @@ impl RenderResources {
             gpu += pane.camera_buf.size() + pane.tile_vbuf.size() + pane.radar_vbuf.size();
             if let Some(surface) = &pane.surface { gpu += surface.memory_bytes(); }
             for radar in pane.radar.iter().chain(pane.radar_cache.iter()) {
-                gpu += texture(&radar.tex)
+                gpu += radar.smooth.as_ref().map_or(0, texture) + texture(&radar.tex)
                     + texture(&radar.flag)
                     + texture(&radar.lut)
                     + radar.uni.size();
@@ -2509,6 +2631,120 @@ mod projection_shader_tests {
                 } None
             }).unwrap();
             assert_eq!(uniform,if name=="wind" {112} else {std::mem::size_of::<super::CameraUniform>() as u32},"{name}");
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod smoothing_tests {
+    use super::*;
+
+    fn reference(gates: &[u16], width: usize, x: usize, y: usize) -> f32 {
+        let height = gates.len() / width;
+        let center = gates[y * width + x];
+        if center < 2 { return center as f32; }
+        let mut sum = 0.0;
+        let mut weight = 0.0;
+        for j in -1isize..=1 {
+            let row = (y as isize + j).rem_euclid(height as isize) as usize;
+            if gates[row * width + x] < 2 { continue; }
+            let mut inner = 0.0;
+            let mut inner_weight = 0.0;
+            for i in -1isize..=1 {
+                let col = x as isize + i;
+                if col < 0 || col >= width as isize { continue; }
+                let value = gates[row * width + col as usize];
+                if value < 2 { continue; }
+                let w = if i == 0 { 2.0 } else { 1.0 };
+                inner += value as f32 * w;
+                inner_weight += w;
+            }
+            let w = if j == 0 { 2.0 } else { 1.0 };
+            sum += inner / inner_weight * w;
+            weight += w;
+        }
+        sum / weight
+    }
+
+    fn read_cache(device: &wgpu::Device, queue: &wgpu::Queue, radar: &RadarGpu) -> Vec<f32> {
+        let stride = (radar.dims.0 * 4).div_ceil(256) * 256;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None, size: u64::from(stride * radar.dims.1),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: radar.smooth.as_ref().unwrap(), mip_level: 0,
+                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo { buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: None } },
+            wgpu::Extent3d { width: radar.dims.0, height: radar.dims.1, depth_or_array_layers: 1 });
+        queue.submit(Some(encoder.finish()));
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        rx.recv().unwrap().unwrap();
+        let mapped = slice.get_mapped_range();
+        mapped.chunks_exact(stride as usize).flat_map(|row| {
+            row[..radar.dims.0 as usize * 4].as_chunks::<4>().0.iter().map(|word| f32::from_le_bytes(*word))
+        }).collect()
+    }
+
+    #[test]
+    fn cache_format_is_portable_and_preserves_reserved_values() {
+        let features = wgpu::TextureFormat::R32Uint.guaranteed_format_features(wgpu::Features::empty());
+        assert!(features.allowed_usages.contains(wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT));
+        let gates = [0, 1, 20, 30, 40, 50];
+        assert_eq!(reference(&gates, 3, 0, 0), 0.0);
+        assert_eq!(reference(&gates, 3, 1, 0), 1.0);
+        assert!(reference(&gates, 3, 2, 0) >= 2.0);
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_cached_smoothing_preserves_precision_classification_and_reuse() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let instance = wgpu::Instance::default();
+        let adapter = rt.block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) = rt.block_on(adapter.request_device(&Default::default())).unwrap();
+        let resources = RenderResources::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        for precision in [false, true] {
+            let mut gates = vec![0, 1, 20, 30, 40, 50, 0, 250, 1, 90, 100, 110];
+            if precision { gates[7] = 65_535; }
+            let mut uniform = [0.0; 20];
+            uniform[4] = 3.0; uniform[5] = 4.0; uniform[18] = if precision { 65_535.0 } else { 255.0 };
+            let mut upload = RadarUpload {
+                upload_token: 1, cache_loop: true, az_bins: 3, gate_count: 4,
+                data: gates.iter().map(|v| *v as u8).collect(),
+                data16: precision.then(|| gates.clone()), uniform, sector_opacity: None,
+                lut: vec![255; 256 * 3 * 4], precip_flag: Vec::new(),
+                world_min: [0.0; 2], world_max: [1.0; 2], lut_only: false,
+            };
+            let mut gpu = resources.build_radar(&device, &queue, &upload, None, false).unwrap();
+            assert!(gpu.smooth.is_none(), "disabled smoothing allocates no cache");
+            upload.lut_only = true; upload.uniform[19] = 1.0;
+            gpu = resources.build_radar(&device, &queue, &upload, Some(gpu), false).unwrap();
+            let first = read_cache(&device, &queue, &gpu);
+            for (i, actual) in first.iter().enumerate() {
+                let expected = reference(&gates, 4, i % 4, i / 4);
+                assert!((actual - expected).abs() <= expected.abs().max(1.0) * 0.000_001,
+                    "{precision} gate {i}: {actual} != {expected}");
+                if gates[i] < 2 { assert_eq!(actual.to_bits(), (gates[i] as f32).to_bits()); }
+            }
+            assert!(!gpu.smooth_dirty);
+            let bytes = gpu.shadow_bytes();
+            upload.uniform[8] = 42.0;
+            upload.lut[8] = 0;
+            gpu = resources.build_radar(&device, &queue, &upload, Some(gpu), false).unwrap();
+            assert_eq!(first, read_cache(&device, &queue, &gpu), "palette and motion keep data cache");
+            assert_eq!(bytes, gpu.shadow_bytes());
+            gates[2] = 150; upload.data[2] = 150;
+            if let Some(data) = &mut upload.data16 { data[2] = 150; }
+            upload.lut_only = false;
+            gpu = resources.build_radar(&device, &queue, &upload, Some(gpu), false).unwrap();
+            assert_ne!(first, read_cache(&device, &queue, &gpu), "changed gates rebuild smoothing");
+            assert_eq!(gpu.shadow_bytes(), gpu.gate_bytes.len() + gpu.flag_bytes.len() + 256 * 12 + gates.len() * 4);
         }
     }
 }

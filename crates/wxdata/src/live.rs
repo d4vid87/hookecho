@@ -417,6 +417,12 @@ async fn emit<F: FnMut(Update)>(
     if cuts_expected > 0 {
         *cuts_received = (*cuts_received).min(cuts_expected);
     }
+    // Duplicate windows need no owned snapshot or radial copies.
+    if merged.coverage_pattern_number() == partial.coverage_pattern_number()
+        && partial.sweeps().iter().all(|sweep| merged.sweeps().contains(sweep))
+    {
+        return;
+    }
     let (new_scan, changed) = merge_scan(merged, partial);
     if changed.is_empty() {
         return; // nothing new since the last emit; `merged` already holds this content
@@ -501,23 +507,21 @@ fn stitch(base: &Sweep, partial: &Sweep) -> Sweep {
     if !close_enough_to_retain {
         return partial.clone();
     }
-    // ponytail: BTreeMap because it dedupes and sorts by azimuth in one pass, and a sweep is
-    // ~720 radials. A merge of two already-sorted slices would allocate less, if it ever shows up
-    // in a profile.
-    let mut by_az: std::collections::BTreeMap<u16, Radial> = base
+    // Select borrowed winners first so overwritten gate arrays are never cloned.
+    let mut by_az: std::collections::BTreeMap<u16, &Radial> = base
         .radials()
         .iter()
-        .map(|r| (r.azimuth_number(), r.clone()))
+        .map(|r| (r.azimuth_number(), r))
         .collect();
     for radial in partial.radials() {
         let replace = by_az
             .get(&radial.azimuth_number())
             .is_none_or(|old| radial.collection_timestamp() >= old.collection_timestamp());
         if replace {
-            by_az.insert(radial.azimuth_number(), radial.clone());
+            by_az.insert(radial.azimuth_number(), radial);
         }
     }
-    Sweep::new(partial.elevation_number(), by_az.into_values().collect())
+    Sweep::new(partial.elevation_number(), by_az.into_values().cloned().collect())
 }
 
 /// A repeated low cut may have a new elevation number; split surveillance/Doppler cuts at the
@@ -535,23 +539,23 @@ fn same_cut_type(a: &Sweep, b: &Sweep) -> bool {
 /// sweep replaces the base sweep with the same elevation number only when it actually differs
 /// (`Sweep: PartialEq`), keeping split cuts and the tilt list stable mid-stream. Returns the
 /// merged scan and the angles of the sweeps that changed.
-/// ponytail: `base`'s sweeps are cloned into the merged scan because `nexrad_model::Scan` has no
-/// `into_sweeps` to move them out of. Vendoring that crate for one accessor isn't worth it while
-/// this runs off the UI thread.
+/// Borrow unchanged sweeps until the final snapshot is built, avoiding a clone of a sweep that
+/// will immediately be replaced by stitching.
 pub fn merge_scan(base: &Scan, partial: Scan) -> (Scan, Vec<f32>) {
     if base.coverage_pattern_number() != partial.coverage_pattern_number() {
         let changed = elevation_angles(&partial);
         return (partial, changed);
     }
 
-    let mut sweeps: Vec<Sweep> = base.sweeps().to_vec();
+    let mut sweeps: Vec<std::borrow::Cow<'_, Sweep>> =
+        base.sweeps().iter().map(std::borrow::Cow::Borrowed).collect();
     let mut changed_nums: Vec<u8> = Vec::new();
     for ps in partial.sweeps() {
         let en = ps.elevation_number();
         match sweeps.iter().position(|s| s.elevation_number() == en) {
             Some(i) => {
-                if &sweeps[i] != ps {
-                    sweeps[i] = stitch(&sweeps[i], ps);
+                if sweeps[i].as_ref() != ps {
+                    sweeps[i] = std::borrow::Cow::Owned(stitch(&sweeps[i], ps));
                     changed_nums.push(en);
                 }
             }
@@ -561,13 +565,17 @@ pub fn merge_scan(base: &Scan, partial: Scan) -> (Scan, Vec<f32>) {
                         .is_some_and(|(a, b)| (a - b).abs() < 0.15)
                         && same_cut_type(s, ps)
                 }).max_by_key(|s| s.radials().iter().map(|r| r.collection_timestamp()).max());
-                let next = previous.map_or_else(|| ps.clone(), |old| stitch(old, ps));
+                let next = previous.map_or_else(
+                    || std::borrow::Cow::Borrowed(ps),
+                    |old| std::borrow::Cow::Owned(stitch(old, ps)),
+                );
                 sweeps.push(next);
                 changed_nums.push(en);
             }
         }
     }
 
+    let sweeps = sweeps.into_iter().map(std::borrow::Cow::into_owned).collect();
     let vcp = base.coverage_pattern().clone();
     let scan = match base.site() {
         Some(s) => Scan::with_site(s.clone(), vcp, sweeps),
@@ -857,6 +865,32 @@ mod tests {
             .windows(2)
             .all(|pair| { pair[1].azimuth_number() == pair[0].azimuth_number() + 1 }));
         assert_eq!(radials[250].collection_timestamp(), 3_000);
+    }
+
+    #[test]
+    fn repeated_elevation_in_one_window_merges_each_partial_in_order() {
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..120, 1_000)]);
+        let partial = Scan::new(
+            vcp(212),
+            vec![wedge(1, 120..240, 2_000), wedge(1, 60..180, 3_000)],
+        );
+        let (scan, changed) = merge_scan(&base, partial);
+        let radials = scan.sweeps()[0].radials();
+        assert_eq!(radials.len(), 240);
+        assert_eq!(radials[30].collection_timestamp(), 1_000);
+        assert_eq!(radials[90].collection_timestamp(), 3_000);
+        assert_eq!(radials[210].collection_timestamp(), 2_000);
+        assert_eq!(changed, vec![0.5, 0.5]);
+        assert_eq!(base.sweeps()[0].radials().len(), 120);
+    }
+
+    #[test]
+    fn an_identical_partial_leaves_the_base_and_changed_tilts_unchanged() {
+        let base = Scan::new(vcp(212), vec![wedge(1, 0..120, 1_000), sweep(2, 1.5, 150)]);
+        let partial = Scan::new(vcp(212), vec![base.sweeps()[0].clone()]);
+        let (scan, changed) = merge_scan(&base, partial);
+        assert_eq!(scan, base);
+        assert!(changed.is_empty());
     }
 
     #[test]

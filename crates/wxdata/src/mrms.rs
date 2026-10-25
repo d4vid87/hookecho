@@ -685,25 +685,24 @@ pub async fn fetch_latest_frame(
     http: &reqwest::Client,
     product: &str,
 ) -> anyhow::Result<FieldFrame> {
-    let descriptor = descriptor_for_product(product)
-        .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
+    fetch_latest_frame_display(http, product, usize::MAX)
+        .await
+        .map(|(frame, _)| frame)
+}
+
+/// Fetch the latest native field and, when needed, a grid prepared for the display texture limit.
+pub async fn fetch_latest_frame_display(
+    http: &reqwest::Client,
+    product: &str,
+    max_dim: usize,
+) -> anyhow::Result<(FieldFrame, Option<MrmsField>)> {
+    anyhow::ensure!(max_dim > 0, "MRMS display dimension must be positive");
+    anyhow::ensure!(
+        descriptor_for_product(product).is_some(),
+        "unregistered MRMS product {product}"
+    );
     let key = latest_available_key(http, product).await?;
-    let (field, received_time) = fetch_key(http, product, &key).await?;
-    let valid_time = field.time;
-    Ok(FieldFrame::new(
-        descriptor,
-        field,
-        DataStamp {
-            source_identity: key,
-            issue_time: None,
-            run_time: None,
-            valid_time,
-            received_time,
-            class: DataClass::Analysis,
-            quality: QualitySummary::Unknown,
-            available_members: None,
-        },
-    ))
+    fetch_frame_key_display(http, product, &key, max_dim).await
 }
 
 /// List the most recent public objects for a product, oldest to newest.
@@ -788,24 +787,43 @@ pub async fn fetch_frame_key(
     product: &str,
     key: &str,
 ) -> anyhow::Result<FieldFrame> {
+    fetch_frame_key_display(http, product, key, usize::MAX)
+        .await
+        .map(|(frame, _)| frame)
+}
+
+/// Decode a selected object and prepare any smaller display grid away from the interface thread.
+pub async fn fetch_frame_key_display(
+    http: &reqwest::Client,
+    product: &str,
+    key: &str,
+    max_dim: usize,
+) -> anyhow::Result<(FieldFrame, Option<MrmsField>)> {
     let descriptor = descriptor_for_product(product)
         .ok_or_else(|| anyhow::anyhow!("unregistered MRMS product {product}"))?;
+    anyhow::ensure!(max_dim > 0, "MRMS display dimension must be positive");
     anyhow::ensure!(
         key.starts_with(&format!("{product}/")) && key.ends_with(".grib2.gz"),
         "MRMS key does not belong to {product}"
     );
-    let (field, received_time) = fetch_key(http, product, key).await?;
+    let (field, display, received_time) =
+        fetch_key_display(http, product, key, Some(max_dim)).await?;
     let valid_time = field.time;
-    Ok(FieldFrame::new(descriptor, field, DataStamp {
-        source_identity: key.to_owned(),
-        issue_time: None,
-        run_time: None,
-        valid_time,
-        received_time,
-        class: DataClass::Analysis,
-        quality: QualitySummary::Unknown,
-        available_members: None,
-    }))
+    let frame = FieldFrame::new(
+        descriptor,
+        field,
+        DataStamp {
+            source_identity: key.to_owned(),
+            issue_time: None,
+            run_time: None,
+            valid_time,
+            received_time,
+            class: DataClass::Analysis,
+            quality: QualitySummary::Unknown,
+            available_members: None,
+        },
+    );
+    Ok((frame, display))
 }
 
 /// Registry metadata for a currently supported MRMS object path.
@@ -843,7 +861,12 @@ pub fn descriptor_for_product(product: &str) -> Option<&'static FieldDescriptor>
         PRECIP_RATE => &PRECIP_RATE_DESCRIPTOR,
         PRECIP_TYPE => &PRECIP_TYPE_DESCRIPTOR,
         FLASH_ARI30 => &FLASH_ARI30_DESCRIPTOR,
-        _ => return CATALOG.iter().find(|entry| entry.product == product).map(|entry| entry.descriptor),
+        _ => {
+            return CATALOG
+                .iter()
+                .find(|entry| entry.product == product)
+                .map(|entry| entry.descriptor)
+        }
     })
 }
 
@@ -865,12 +888,19 @@ async fn fetch_key(
     product: &str,
     key: &str,
 ) -> anyhow::Result<(MrmsField, chrono::DateTime<chrono::Utc>)> {
+    let (field, _, received_time) = fetch_key_display(http, product, key, None).await?;
+    Ok((field, received_time))
+}
+
+async fn fetch_key_display(
+    http: &reqwest::Client,
+    product: &str,
+    key: &str,
+    max_dim: Option<usize>,
+) -> anyhow::Result<(MrmsField, Option<MrmsField>, chrono::DateTime<chrono::Utc>)> {
     if let Some(cached) = crate::object_cache::get("mrms", key).await {
-        let raw = gunzip(&cached.bytes)?;
-        let mut field = crate::task::guarded(|| decode_grib2(&raw))
-            .unwrap_or_else(|_| anyhow::bail!("cached grib decode panicked for {product}"))?;
-        normalize_product_missing(product, &mut field);
-        return Ok((field, cached.received_at));
+        let (field, display) = decode_gz_async(product, cached.bytes, max_dim).await?;
+        return Ok((field, display, cached.received_at));
     }
     let url = format!("{BUCKET}/{key}");
     let gz = http
@@ -881,16 +911,71 @@ async fn fetch_key(
         .bytes()
         .await?;
     let received_at = chrono::Utc::now();
-    let raw = gunzip(&gz)?;
-    // gribberish can panic on some MRMS product packings (a slice off-by-one on rotation-track /
-    // AzShear grids). Contain it so a bad product surfaces as an error, never a process abort.
-    let mut field = crate::task::guarded(|| decode_grib2(&raw))
-        .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))?;
-    normalize_product_missing(product, &mut field);
+    let (field, display) = decode_gz_async(product, gz.to_vec(), max_dim).await?;
     if let Err(error) = crate::object_cache::put("mrms", key, &gz, received_at).await {
         log::warn!("MRMS browser cache write failed: {error}");
     }
-    Ok((field, received_at))
+    Ok((field, display, received_at))
+}
+
+async fn decode_gz_async(
+    product: &str,
+    gz: Vec<u8>,
+    max_dim: Option<usize>,
+) -> anyhow::Result<(MrmsField, Option<MrmsField>)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let product = product.to_owned();
+        crate::task::blocking(move || decode_gz(&product, &gz, max_dim)).await?
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let request = postcard::to_allocvec(&(product, &gz, max_dim))?;
+        match crate::wasm_worker::decode_mrms(request).await {
+            Ok(wire) => postcard::from_bytes(&wire).map_err(Into::into),
+            Err(crate::wasm_worker::Error::Unavailable) => decode_gz(product, &gz, max_dim),
+            Err(error) => anyhow::bail!("{error}"),
+        }
+    }
+}
+
+fn decode_gz(
+    product: &str,
+    gz: &[u8],
+    max_dim: Option<usize>,
+) -> anyhow::Result<(MrmsField, Option<MrmsField>)> {
+    anyhow::ensure!(
+        max_dim != Some(0),
+        "MRMS display dimension must be positive"
+    );
+    // Some GRIB packings panic; contain both decoding and preparation on every execution path.
+    crate::task::guarded(|| {
+        let raw = gunzip(gz)?;
+        let mut field = decode_grib2(&raw)?;
+        normalize_product_missing(product, &mut field);
+        let display = prepare_display(product, &field, max_dim);
+        Ok((field, display))
+    })
+    .unwrap_or_else(|_| anyhow::bail!("grib decode panicked for {product}"))
+}
+
+fn prepare_display(product: &str, field: &MrmsField, max_dim: Option<usize>) -> Option<MrmsField> {
+    let max_dim = max_dim?;
+    (field.nx.max(field.ny) > max_dim).then(|| {
+        match descriptor_for_product(product).map(|descriptor| descriptor.value_kind) {
+            Some(ValueKind::Categorical | ValueKind::Mask) => field.subsampled(max_dim),
+            _ => field.clone().decimated(max_dim),
+        }
+    })
+}
+
+/// Decode an MRMS worker request while preserving the native field for sampling and analysis.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub fn decode_worker(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let (product, gz, max_dim): (String, Vec<u8>, Option<usize>) = postcard::from_bytes(&bytes)?;
+    let decoded = decode_gz(&product, &gz, max_dim)?;
+    postcard::to_allocvec(&decoded).map_err(Into::into)
 }
 
 /// Newest key seen per product, so refreshes can ask S3 only for what came after it.
@@ -1102,7 +1187,8 @@ fn listed_keys(xml: &str) -> Vec<String> {
 fn key_time(key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let suffix = key.rsplit_once('_')?.1.strip_suffix(".grib2.gz")?;
     chrono::NaiveDateTime::parse_from_str(suffix, "%Y%m%d-%H%M%S")
-        .ok().map(|time| time.and_utc())
+        .ok()
+        .map(|time| time.and_utc())
 }
 
 #[cfg(test)]
@@ -1343,5 +1429,77 @@ mod tests {
             &mut signed,
         );
         assert_eq!(signed.values, [-20.0, 10.0]);
+    }
+
+    #[test]
+    fn prepared_display_keeps_native_data_and_missing_blocks() {
+        let mut field = linear_field();
+        field.values = vec![
+            f32::NAN,
+            f32::NAN,
+            2.0,
+            8.0,
+            f32::NAN,
+            f32::NAN,
+            5.0,
+            6.0,
+            -20.0,
+            -10.0,
+            4.0,
+            3.0,
+            -15.0,
+            -12.0,
+            2.0,
+            1.0,
+        ];
+        let display = prepare_display(REFLECTIVITY, &field, Some(2)).unwrap();
+        assert_eq!((display.nx, display.ny), (2, 2));
+        assert!(display.values[0].is_nan());
+        assert_eq!(&display.values[1..], &[8.0, -10.0, 4.0]);
+        assert!(field.values[0].is_nan());
+        assert!(field.values[4].is_nan());
+        assert_eq!(field.values[8], -20.0);
+        assert_eq!((field.nx, field.ny), (4, 4));
+        assert!(prepare_display(REFLECTIVITY, &field, None).is_none());
+        assert!(prepare_display(REFLECTIVITY, &field, Some(4)).is_none());
+    }
+
+    #[test]
+    fn categorical_display_samples_original_categories() {
+        let mut field = linear_field();
+        field.values = vec![
+            1.0, 9.0, 2.0, 8.0, 9.0, 9.0, 8.0, 8.0, 3.0, 7.0, 4.0, 6.0, 7.0, 7.0, 6.0, 6.0,
+        ];
+        let display = prepare_display(PRECIP_TYPE, &field, Some(2)).unwrap();
+        assert_eq!(display.values, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(field.values.len(), 16);
+        assert_eq!(display.time, field.time);
+        assert!(display.lon_east < field.lon_east);
+    }
+
+    #[test]
+    fn decoder_rejects_bad_gzip_grib_and_display_limits() {
+        use std::io::Write;
+        assert!(decode_gz(REFLECTIVITY, b"not gzip", None).is_err());
+        assert!(decode_gz(REFLECTIVITY, b"", Some(0)).is_err());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(b"not a GRIB message").unwrap();
+        assert!(decode_gz(REFLECTIVITY, &gz.finish().unwrap(), Some(2)).is_err());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn worker_wire_preserves_nan_fields_and_rejects_invalid_requests() {
+        let mut field = linear_field();
+        field.values[0] = f32::NAN;
+        let display = prepare_display(REFLECTIVITY, &field, Some(2));
+        let wire = postcard::to_allocvec(&(field, display)).unwrap();
+        let (field, display): (MrmsField, Option<MrmsField>) = postcard::from_bytes(&wire).unwrap();
+        assert!(field.values[0].is_nan());
+        assert_eq!(display.unwrap().nx, 2);
+        let request =
+            postcard::to_allocvec(&(REFLECTIVITY, Vec::<u8>::new(), Some(0usize))).unwrap();
+        assert!(decode_worker(request).is_err());
+        assert!(decode_worker(vec![255]).is_err());
     }
 }

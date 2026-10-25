@@ -7,6 +7,7 @@ pub struct Motion {
     velocity: (f32, f32),
     dragging: bool,
     fresh_input: bool,
+    last_scroll: Option<(f64, bool)>,
     last_drag_move: Option<f64>,
     expected: Option<Camera>,
     viewport: Option<(f32, f32)>,
@@ -15,6 +16,7 @@ pub struct Motion {
 #[derive(Debug)]
 struct ZoomImpulse {
     remaining: f64,
+    velocity: f64,
     anchor: (f32, f32),
 }
 
@@ -46,6 +48,31 @@ impl Motion {
         self.expected = Some(*cam);
     }
 
+    /// Wheel units identify discrete input; pixel input uses size and cadence as a fallback.
+    pub fn scroll_delta(&mut self, unit: egui::MouseWheelUnit, delta: f64, now: f64) -> f64 {
+        if !delta.is_finite() || !now.is_finite() || delta == 0.0 {
+            return 0.0;
+        }
+        let wheel = match unit {
+            egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => true,
+            egui::MouseWheelUnit::Point if delta.abs() < 4.0 => false,
+            egui::MouseWheelUnit::Point => match self.last_scroll {
+                Some((last, previous)) if now >= last && now - last < 0.4 => {
+                    if now == last { previous } else { (now - last) * 1000.0 * delta.abs() >= 200.0 }
+                }
+                _ => true,
+            },
+        };
+        self.last_scroll = Some((now, wheel));
+        let points = delta * match unit {
+            egui::MouseWheelUnit::Point => 1.0,
+            egui::MouseWheelUnit::Line => 40.0,
+            egui::MouseWheelUnit::Page => 120.0,
+        };
+        let rate = if wheel { 0.004444 } else { 0.02 };
+        (2.0 / (1.0 + (-points.abs() * rate).exp())).log2() * points.signum()
+    }
+
     pub fn wheel(
         &mut self,
         cam: &mut Camera,
@@ -68,7 +95,7 @@ impl Motion {
             cam.zoom_at(delta, anchor, vp);
             self.expected = Some(*cam);
         } else {
-            self.fresh_input = true;
+            self.fresh_input |= self.zoom_impulses.is_empty();
             // A new wheel event can arrive before the previous ease has settled. Keep each
             // unfinished part at its own cursor anchor; reanchoring the old part to the latest
             // cursor makes the geography slide sideways during an otherwise smooth zoom.
@@ -81,8 +108,11 @@ impl Motion {
             let accepted = (cam.zoom + queued + delta).clamp(-2.0, 20.0) - cam.zoom - queued;
             if let Some(last) = self.zoom_impulses.last_mut().filter(|last| last.anchor == anchor) {
                 last.remaining += accepted;
+                // Reversals must not carry momentum past the new target.
+                let limit = 30.0 * last.remaining.abs();
+                last.velocity = if last.velocity * last.remaining < 0.0 { 0.0 } else { last.velocity.clamp(-limit, limit) };
             } else if accepted.abs() > 1e-5 {
-                self.zoom_impulses.push(ZoomImpulse { remaining: accepted, anchor });
+                self.zoom_impulses.push(ZoomImpulse { remaining: accepted, velocity: 0.0, anchor });
             }
         }
     }
@@ -145,24 +175,30 @@ impl Motion {
             self.expected = Some(*cam);
             return false;
         }
-        let dt = if self.fresh_input && dt > 0.25 {
-            1.0 / 60.0
+        // A new ease must not consume the reactive idle interval preceding its input.
+        let dt = if self.fresh_input {
+            dt.clamp(0.0, 1.0 / 60.0)
         } else {
-            dt.clamp(0.0, 0.05)
+            dt.max(0.0)
         } as f64;
         self.fresh_input = false;
         for impulse in &mut self.zoom_impulses {
             let delta = if impulse.remaining.abs() < 1e-4 {
                 impulse.remaining
             } else {
-                impulse.remaining * (1.0 - (-dt / 0.045).exp())
+                // Analytic critical damping keeps velocity continuous across wheel events.
+                let c = 30.0 * impulse.remaining - impulse.velocity;
+                let decay = (-30.0 * dt).exp();
+                let remaining = (impulse.remaining + c * dt) * decay;
+                impulse.velocity = (impulse.velocity + 30.0 * c * dt) * decay;
+                impulse.remaining - remaining
             };
             cam.zoom_at(delta, impulse.anchor, vp);
             impulse.remaining -= delta;
         }
         self.zoom_impulses.retain(|impulse| impulse.remaining.abs() > 1e-5);
         if !self.dragging && self.velocity.0.hypot(self.velocity.1) >= 8.0 {
-            let decay = (-dt * 7.5).exp() as f32;
+            let decay = (-dt.min(0.05) * 7.5).exp() as f32;
             let distance = (1.0 - decay) / 7.5;
             cam.pan_pixels(self.velocity.0 * distance, self.velocity.1 * distance, vp);
             self.velocity.0 *= decay;
@@ -200,30 +236,29 @@ mod tests {
     #[test]
     fn overlapping_wheel_events_keep_their_original_anchors() {
         let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
-        let mut expected = cam;
         let mut motion = Motion::default();
         let first = (250.0, 400.0);
         let second = (750.0, 400.0);
+        let mut left = cam;
+        left.zoom_at(1.0, first, VP);
+        left.zoom_at(1.0, second, VP);
+        let mut right = cam;
+        right.zoom_at(1.0, second, VP);
+        right.zoom_at(1.0, first, VP);
         motion.wheel(&mut cam, 1.0, first, VP, false);
         motion.advance(&mut cam, 1.0 / 60.0, VP, false);
-        let mut first_left = 1.0;
-        let step = first_left * (1.0 - (-(1.0 / 60.0) / 0.045_f64).exp());
-        expected.zoom_at(step, first, VP);
-        first_left -= step;
         motion.wheel(&mut cam, 1.0, second, VP, false);
-        let mut second_left = 1.0;
-        for _ in 0..30 {
+        assert_eq!(motion.zoom_impulses.len(), 2);
+        assert_eq!(motion.zoom_impulses[0].anchor, first);
+        assert_eq!(motion.zoom_impulses[1].anchor, second);
+        for _ in 0..60 {
             motion.advance(&mut cam, 1.0 / 60.0, VP, false);
-            let first_step = first_left * (1.0 - (-(1.0 / 60.0) / 0.045_f64).exp());
-            let second_step = second_left * (1.0 - (-(1.0 / 60.0) / 0.045_f64).exp());
-            expected.zoom_at(first_step, first, VP);
-            expected.zoom_at(second_step, second, VP);
-            first_left -= first_step;
-            second_left -= second_step;
         }
-        assert!((cam.zoom - expected.zoom).abs() < 1e-3);
-        assert!((cam.center.0 - expected.center.0).abs() < 1e-5);
-        assert!((cam.center.1 - expected.center.1).abs() < 1e-5);
+        assert!(!motion.active());
+        assert!((cam.zoom - 9.0).abs() < 1e-4);
+        assert!(cam.center.0 >= left.center.0.min(right.center.0) - 1e-9);
+        assert!(cam.center.0 <= left.center.0.max(right.center.0) + 1e-9);
+        assert!((cam.center.1 - left.center.1).abs() < 1e-9);
     }
     #[test]
     fn oversized_page_wheel_stays_regional() {
@@ -299,7 +334,7 @@ mod tests {
         m.wheel(&mut c, -1.0, (500.0, 400.0), VP, false);
         for _ in 0..60 {
             m.advance(&mut c, 1.0 / 60.0, VP, false);
-            assert!(c.zoom >= 19.0);
+            assert!(c.zoom >= 19.0 - 1e-9);
         }
         assert!((c.zoom - 19.0).abs() < 1e-4);
     }
@@ -321,12 +356,15 @@ mod tests {
 
     #[test]
     fn a_new_wheel_event_after_reactive_sleep_is_not_discarded() {
-        let mut c = Camera::at_lonlat(-97.0, 35.0, 7.0);
-        let mut m = Motion::default();
-        m.wheel(&mut c, 0.5, (500.0, 400.0), VP, false);
-        assert!(m.advance(&mut c, 0.5, VP, false));
-        assert!(c.zoom > 7.0);
-        assert!(!m.advance(&mut c, 0.5, VP, false));
+        for idle in [0.1, 0.5] {
+            let mut c = Camera::at_lonlat(-97.0, 35.0, 7.0);
+            let mut m = Motion::default();
+            m.wheel(&mut c, 0.5, (500.0, 400.0), VP, false);
+            assert!(m.advance(&mut c, idle, VP, false));
+            assert!(c.zoom > 7.0 && c.zoom < 7.1, "idle time must not jump through the ease");
+            assert!(!m.advance(&mut c, 0.5, VP, false));
+            assert!((c.zoom - 7.5).abs() < 1e-9);
+        }
     }
 
     #[test]
@@ -361,6 +399,84 @@ mod tests {
         c.set_orientation(45.0,90.0);
         assert!(!m.advance(&mut c,0.016,VP,false));
         assert_eq!(c.zoom,8.0);
+    }
+
+    #[test]
+    fn scroll_curve_distinguishes_wheel_and_precision_input_and_bounds_large_deltas() {
+        use egui::MouseWheelUnit::{Line, Page, Point};
+        let mut motion = Motion::default();
+        let wheel = motion.scroll_delta(Point, 120.0, 1.0);
+        assert!((wheel - 0.333991).abs() < 1e-6);
+        assert!((motion.scroll_delta(Point, -120.0, 2.0) + wheel).abs() < 1e-9);
+        assert!((motion.scroll_delta(Line, 3.0, 3.0) - wheel).abs() < 1e-9);
+        assert!((motion.scroll_delta(Page, 1.0, 4.0) - wheel).abs() < 1e-9);
+        let precision = motion.scroll_delta(Point, 2.0, 5.0);
+        assert!(precision > 0.02 && precision < 0.04);
+        let rapid = motion.scroll_delta(Point, 12.0, 5.008);
+        let discrete = motion.scroll_delta(Point, 12.0, 6.0);
+        assert!(rapid > discrete * 3.0, "precision scroll must not feel like tiny wheel ticks");
+        assert!(motion.scroll_delta(Page, f64::MAX, 7.0) <= 1.0);
+        assert!(motion.scroll_delta(Page, -f64::MAX, 8.0) >= -1.0);
+        assert_eq!(motion.scroll_delta(Point, f64::NAN, 9.0), 0.0);
+        assert_eq!(motion.scroll_delta(Point, 120.0, f64::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn repeated_input_keeps_velocity_and_reversal_does_not_overshoot() {
+        let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut motion = Motion::default();
+        let anchor = (650.0, 300.0);
+        motion.wheel(&mut cam, 0.334, anchor, VP, false);
+        motion.advance(&mut cam, 0.05, VP, false);
+        let velocity = motion.zoom_impulses[0].velocity;
+        assert!(velocity > 0.0);
+        motion.wheel(&mut cam, 0.334, anchor, VP, false);
+        assert_eq!(motion.zoom_impulses[0].velocity, velocity);
+        motion.advance(&mut cam, 0.00001, VP, false);
+        let before = cam.zoom;
+        motion.wheel(&mut cam, -1.0, anchor, VP, false);
+        let target = cam.zoom + motion.zoom_impulses[0].remaining;
+        let mut previous = before;
+        for _ in 0..60 {
+            motion.advance(&mut cam, 1.0 / 60.0, VP, false);
+            assert!(cam.zoom <= previous && cam.zoom >= target - 1e-9);
+            previous = cam.zoom;
+        }
+        assert!((cam.zoom - target).abs() < 1e-4);
+    }
+
+    #[test]
+    fn slow_zoom_frames_use_elapsed_time_instead_of_stretching_the_animation() {
+        let sample = |dt, frames| {
+            let mut cam = Camera::at_lonlat(-97.0, 35.0, 7.0);
+            let mut motion = Motion::default();
+            motion.wheel(&mut cam, 1.0, (500.0, 400.0), VP, false);
+            motion.advance(&mut cam, 1.0 / 60.0, VP, false);
+            for _ in 0..frames {
+                motion.advance(&mut cam, dt, VP, false);
+            }
+            cam.zoom
+        };
+        let fast = sample(1.0 / 120.0, 24);
+        assert!((fast - sample(0.1, 2)).abs() < 1e-7);
+        assert!(fast > 7.98 && fast < 8.0);
+    }
+
+    #[test]
+    fn reduced_motion_changes_animation_without_changing_precision_scroll_gain() {
+        let mut normal = Motion::default();
+        let mut reduced = Motion::default();
+        let mut a = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut b = a;
+        for (now, delta) in [(1.0, 2.0), (1.008, 12.0)] {
+            let eased = normal.scroll_delta(egui::MouseWheelUnit::Point, delta, now);
+            let immediate = reduced.scroll_delta(egui::MouseWheelUnit::Point, delta, now);
+            assert_eq!(eased, immediate);
+            normal.wheel(&mut a, eased, (500.0, 400.0), VP, false);
+            reduced.wheel(&mut b, immediate, (500.0, 400.0), VP, true);
+            normal.advance(&mut a, 0.008, VP, false);
+            reduced.advance(&mut b, 0.008, VP, true);
+        }
     }
 
 }
