@@ -720,6 +720,27 @@ fn radar_playback_mode(following: bool, playing: bool, at_latest: bool, displaye
     else { "Live" }
 }
 
+#[inline(never)]
+fn zeta_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egui::Response {
+    ui.add_sized(
+        if compact(ui.ctx()) { [44.0, 44.0] } else { [36.0, 34.0] },
+        egui::Button::new(egui::RichText::new(glyph).size(18.0).color(if active {
+            egui::Color32::from_rgb(255, 190, 42)
+        } else {
+            egui::Color32::from_gray(210)
+        }))
+        .fill(if active {
+            egui::Color32::from_rgba_unmultiplied(92, 64, 10, 155)
+        } else {
+            egui::Color32::TRANSPARENT
+        })
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(16.0),
+    )
+    .named_toggle(label, active)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -745,24 +766,4 @@ mod tests {
             assert!(response.rect.width() >= 44.0 && response.rect.height() >= 44.0);
         });
     }
-}
-
-#[inline(never)]
-fn zeta_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egui::Response {
-    ui.add_sized(
-        if compact(ui.ctx()) { [44.0, 44.0] } else { [36.0, 34.0] },
-        egui::Button::new(egui::RichText::new(glyph).size(18.0).color(if active {
-            egui::Color32::from_rgb(255, 190, 42)
-        } else {
-            egui::Color32::from_gray(210)
-        }))
-        .fill(if active {
-            egui::Color32::from_rgba_unmultiplied(92, 64, 10, 155)
-        } else {
-            egui::Color32::TRANSPARENT
-        })
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(16.0),
-    )
-    .named_toggle(label, active)
 }
