@@ -13,7 +13,7 @@ function assertRestoredPanes(actual, expected) {
   const {lon,lat,...settings}=actual[i];
   const {lon:beforeLon,lat:beforeLat,...beforeSettings}=expected[i];
   // Mercator round-trips introduce floating-point noise in geographic coordinates.
-  assert(Math.abs(lon-beforeLon)<1e-10 && Math.abs(lat-beforeLat)<1e-10, 'undo must restore the map center');
+  assert(Math.abs(lon-beforeLon)<1e-10 && Math.abs(lat-beforeLat)<1e-10, `undo must restore pane ${i} center: expected ${beforeLon},${beforeLat}; got ${lon},${lat}`);
   assert.deepEqual(settings,beforeSettings);
  }
 }
@@ -40,7 +40,8 @@ try {
   await page.keyboard.down('Control');await page.keyboard.press('K',{delay:150});await page.keyboard.up('Control');await wait(700);
   await page.keyboard.down('Control');await page.keyboard.press('A',{delay:150});await page.keyboard.up('Control');
   await page.keyboard.type(text,{delay:30});await wait(600);await page.keyboard.press('Enter',{delay:150});await wait(700);
-  await page.mouse.click(702,202);await wait(250);
+  // A second focus click here can become a map double-click on the next command.
+  await page.focus('#hookecho');await wait(250);
  }
 
  async function checkpoint(){return page.evaluate(()=>JSON.parse(localStorage.getItem('hookecho.recovery.v1')));}

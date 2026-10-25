@@ -191,7 +191,8 @@ jobs:
       - name: Golden test
         env:
           HOOKECHO_GPU_FALLBACK: "1"
-        run: cargo test -p hookecho -- --ignored gpu --nocapture
+        # Upload benchmarks read process-wide counters; concurrent tests contaminate them.
+        run: cargo test -p hookecho -- --ignored gpu --nocapture --test-threads=1
 
       - name: Upload actual render
         if: failure()
