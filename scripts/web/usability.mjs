@@ -58,6 +58,10 @@ try {
       settings.reduce_motion = !value;
       localStorage.setItem('hookecho-settings', JSON.stringify(settings));
     }, radarWorkspace);
+    // Each layout starts regionally; the previous station test persists a maximum-zoom URL.
+    await page.goto((process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/') +
+      '#goto=KDMX,-93.7228,41.7311,6.45,thr:16,bm:dark,proj:merc,pitch:0,brg:0',
+      {waitUntil: 'domcontentloaded'});
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.panes[0]?.time,
@@ -86,6 +90,35 @@ try {
     await new Promise(resolve => setTimeout(resolve, 300));
     assert(Math.abs(await zoom() - after) < 0.001, 'right double click must not zoom');
     report.checks.push({radarWorkspace, doubleClickZoom: after - before});
+    // Test both station dots and the selected station pill, including a first-click recenter.
+    for (const target of [
+      {id: 'KTLX', lon: -97.2778, lat: 35.3331, pill: false},
+      {id: 'KDMX', lon: -93.7228, lat: 41.7311, pill: true},
+    ]) {
+      await page.goto((process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/') +
+        '#goto=KDMX,' + (target.lon - 7) + ',' + target.lat + ',5.1,thr:16,bm:dark,proj:merc,pitch:0,brg:0',
+        {waitUntil: 'domcontentloaded'});
+      await page.reload({waitUntil: 'domcontentloaded'});
+      await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const point = await page.evaluate(({lon, lat, pill}) => {
+        const f = globalThis.__hookechoMapTrace.frames.at(-1);
+        const world = [(lon + 180) / 360, (1 - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) / Math.PI) / 2];
+        const scale = 256 * 2 ** f[3];
+        return {x: (1280 - f[6]) / 2 + f[6] / 2 + (world[0] - f[4]) * scale + (pill ? 45 : 0),
+          y: (800 - f[7]) / 2 + f[7] / 2 + (world[1] - f[5]) * scale, world};
+      }, target);
+      await page.mouse.click(point.x, point.y, {count: 2, delay: 60});
+      await page.waitForFunction(() => Math.abs(globalThis.__hookechoMapTrace.frames.at(-1)[3] - 20) < 0.001,
+        {timeout: 15000});
+      const f = await page.evaluate(() => globalThis.__hookechoMapTrace.frames.at(-1));
+      assert(Math.abs(f[4] - point.world[0]) < 1e-6 && Math.abs(f[5] - point.world[1]) < 1e-6,
+        'maximum zoom must be centered on the chosen station');
+      await page.waitForFunction(id => JSON.parse(localStorage.getItem('hookecho-settings')).recent_sites[0] === id,
+        {}, target.id);
+      await page.screenshot({path: output + '/site-' + target.id + '-' + radarWorkspace + '.png'});
+      report.checks.push({radarWorkspace, station: target.id, pill: target.pill, zoom: f[3]});
+    }
     await page.removeScriptToEvaluateOnNewDocument(identifier);
   }
   assert.equal(report.errors.length, 0);
