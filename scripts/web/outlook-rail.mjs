@@ -31,6 +31,10 @@ try {
   await page.goto(process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/', {waitUntil: 'domcontentloaded'});
   await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
   await wait(2000);
+  // SPC must take over from Alerts, not inherit its panel section or visibility flag.
+  await page.mouse.click(1225, 40);
+  await wait(800);
+  await page.screenshot({path: `${output}/alerts-before-spc.png`});
   await page.mouse.click(703, 856); // SPC in minimal playback controls
   await wait(800);
   assert.equal(requests.outlookRequests.length, 0, 'opening outlooks must not enable an overlay');
@@ -48,7 +52,7 @@ try {
   await page.mouse.click(309, 400); // Day 3 after returning to Severe
   for (let i = 0; i < 40 && requests.outlookRequests.length === enabledRequests; i++) await wait(250);
   assert(requests.outlookRequests.some(url => url.includes('day3otlk_cat')), 'returning to Severe must retain functional controls');
-  report.checks.push('minimal SPC opens', 'opening is passive', 'category switching preserves outlook', 'day changes fetch selected NOAA product');
+  report.checks.push('minimal SPC replaces Alerts with Signal rail', 'opening is passive', 'category switching preserves outlook', 'day changes fetch selected NOAA product');
   for (const [width, height] of [[390, 844], [320, 568]]) {
     await page.setViewport({width, height});
     await wait(700);

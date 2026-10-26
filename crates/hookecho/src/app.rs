@@ -10289,8 +10289,14 @@ impl HookEchoApp {
             }
             PaletteAction::OpenOutlooks => {
                 self.panel_open = true;
+                self.show_alert_panel = false;
+                self.sidebar_focus_search = false;
+                self.layers_query.clear();
+                self.panel_section = PanelSection::Tools;
+                self.drawer.show_search();
                 ctx.data_mut(|d| {
                     d.insert_temp(egui::Id::new("panel_settings_page"), Some("Outlooks"));
+                    d.insert_temp(egui::Id::new("context_all_controls"), false);
                 });
             }
             PaletteAction::ToggleOutlook => {
