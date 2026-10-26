@@ -58,6 +58,10 @@ try {
       settings.reduce_motion = !value;
       localStorage.setItem('hookecho-settings', JSON.stringify(settings));
     }, radarWorkspace);
+    // Each layout starts regionally; the previous station test persists a maximum-zoom URL.
+    await page.goto((process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/') +
+      '#goto=KDMX,-93.7228,41.7311,6.45,thr:16,bm:dark,proj:merc,pitch:0,brg:0',
+      {waitUntil: 'domcontentloaded'});
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.panes[0]?.time,
