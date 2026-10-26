@@ -1,88 +1,74 @@
-<p align="center">
-  <img src="assets/brand/hookecho-logo.png" alt="HookEcho" width="300">
-</p>
+<p align="center"><img src="assets/brand/hookecho-logo.png" alt="HookEcho" width="300"></p>
 
 # HookEcho
 
-**Live weather radar without the clutter.**
+**Free weather radar. A complete set of tools to look closer.**
 
-HookEcho helps you see where rain and storms are, where they are moving, and whether a warning
-affects you. Open it in a browser or install the app on Windows, Linux, Android, or Mac.
+Follow rain and storms with national MRMS radar, Storm Prediction Center outlooks, flexible layouts, and four-tilt comparisons. Use the menu to find weather layers, observations, forecasts, and analysis tools.
 
 No account. No ads. No API key. Free and open source.
 
-[Open live radar](https://app.hookecho.io/) ·
-[Download the app](https://github.com/d4vid87/hookecho/releases) ·
-[Visit the website](https://hookecho.io/) ·
-[Get help](https://github.com/d4vid87/hookecho/issues)
+[Open live radar](https://app.hookecho.io/) · [Download the app](https://github.com/d4vid87/hookecho/releases) · [Visit the website](https://hookecho.io/) · [Get help](https://github.com/d4vid87/hookecho/issues)
 
-![Radar Zeta stepping through an archived Oklahoma storm](docs/shots/radar-mode.gif)
+![National to local: current HookEcho menu, MRMS, SPC, layouts, and four tilts](docs/shots/national-to-local/tour.gif)
 
-*Radar Zeta recaptured October 16, 2026; KTLX archive replay · May 20, 2013.*
+*An 18-second tour that leads with MRMS and SPC before moving into storm detail. Real interface screenshots captured October 26, 2026. Storm views use the KTLX archive from May 20, 2013; MRMS and SPC show conditions at capture time.*
 
-## On a phone
+## Explore the highlights
 
-<img src="docs/shots/android/map.jpg" alt="Current Signal Deck radar UI on Android" width="320">
+### Menu & features
 
-Captured from the latest signed Android build on a Galaxy S24 Ultra. [Phone instructions](https://hookecho.io/docs/on-your-phone/) cover the Android build and mobile browser.
+**Find the tool. Keep the map.** Search weather layers, observations, forecast models, and analysis tools. Open storm attributes, alerts, and map controls from one organized menu.
 
-## Radar and Analyst
+![HookEcho menu with searchable categories and severe-weather tools](docs/shots/national-to-local/features.png)
 
-**Radar** opens with one map and a timeline. Radar Zeta is the default desktop
-layout, with a compact command row and playback dock. On Android, Signal Deck keeps playback and warnings over
-the map; the Quiet Shelf opens Radar, Layers, Alerts, and More controls.
+*Current HookEcho menu · captured October 26, 2026 · archived KTLX backdrop.*
 
-**Analyst** adds linked panes, presets, an active-pane label, and an optional
-inspector. Choose Radar again to restore the single map you left; return to
-Analyst to resume its arrangement. Save a workspace to keep it across restarts.
+### MRMS national radar
 
-| Radar mode | Analyst Workstation |
-| --- | --- |
-| ![Single radar view with the Radar section open](docs/shots/radar-mode.jpg) | ![Four radar products and the analyst inspector](docs/shots/analyst-mode.jpg) |
+**Start with the whole country.** Use the Multi-Radar / Multi-Sensor mosaic to follow rain and storms across the United States, then switch to a radar site for a closer look.
 
-![Four synchronized Analyst radar products advancing through archived scans](docs/shots/analyst-mode.gif)
+![HookEcho national overview displaying the MRMS reflectivity mosaic](docs/shots/national-to-local/mrms.png)
 
-[Follow the mode and menu guide](docs/INTERFACE.md) · [Read it on hookecho.io](https://hookecho.io/docs/radar-and-analyst/)
+*MRMS national reflectivity · October 26, 2026 · conditions at capture time.*
 
-## More weather views
+### Storm Prediction Center
 
-The desktop layout groups Views, Layers, and Your Map in a compact menu beside search
-and Settings. The radar lens identifies the site at the top right; the warning dock
-and playback stay near the bottom right, keeping the storm visible. The full layer
-and tool catalog is searchable.
-Graphite Silver is the default;
-choose Midnight Blue, Deep Pine, Smoked Plum, or Warm Ember in Settings → Appearance.
-Advanced radar tools remain in the Layers panel.
+**Put the outlook on the map.** View SPC Day 1–3 convective outlooks. For Day 1, compare categorical risk with tornado, wind, and hail probabilities.
 
-![Search results for hail products and weather layers](docs/shots/products.jpg)
+![HookEcho SPC outlook library with day and hazard controls beside the national map](docs/shots/national-to-local/spc.png)
 
-Priority display rules use separate advisory, watch, warning, and high-impact distance
-limits around your saved home (or selected radar site). Warnings containing that point
-remain visible through these thresholds. Track filters use actual SCIT forecast error
-and scan age, with a configurable 15–60 minute projection; they do not infer official
-warnings or change notification delivery. Settings → Alerts → On the radar exposes the
-same dock and track controls.
+*SPC Day 1 categorical outlook · October 26, 2026 · conditions at capture time.*
 
-Settings opens with six home cards. Alerts uses three tabs: **On the radar** for map
-visibility and display rules, **Notify me** for sound, severity and quiet hours, and
-**Delivery** for phone, chat, radio and background options. Close and Done remain
-accessible above and below the scrolling page.
+### Flexible layouts
 
-| Reflectivity | Velocity |
-| --- | --- |
-| ![Archived supercell reflectivity](docs/shots/reflectivity.jpg) | ![Archived storm velocity](docs/shots/velocity.jpg) |
+**Choose the view for the job.** Move between Radar, Chase, National overview, and Analysis. Work with one, two, or four panes, and link map positions and timelines when comparing scans.
 
-| Layers and observations | Storm attributes |
-| --- | --- |
-| ![Floating layers and labeled map controls](docs/shots/layers.jpg) | ![Storm list with selected cell attributes](docs/shots/stormtable.jpg) |
+![HookEcho navigation showing Radar, Chase, National overview, Analysis, and comparison layouts](docs/shots/national-to-local/layouts.png)
 
-| Warning bulletin | Archived tornado warning |
-| --- | --- |
-| ![Official warning bulletin immediately visible in the glass warning reader](docs/shots/alerts.jpg) | ![Archived tornado warning over the Moore storm](docs/shots/warning-detail.jpg) |
+*Current HookEcho layout menu · October 26, 2026 · archived KTLX backdrop.*
 
-![Current Storm dock with a selected cell, reflectivity, motion, hail, position, and forecast error](docs/shots/cellconsole.jpg)
+### Compare four tilts
 
-[See the complete screenshot gallery](docs/technical-reference.md#screenshots).
+**Look above the lowest scan.** Show four reflectivity tilts together to examine storm structure at different elevations. Four tilts and four radar products answer different questions.
+
+![Actual Compare 4 tilts view with four populated reflectivity panes](docs/shots/national-to-local/four-tilts.png)
+
+*Compare 4 tilts · KTLX archive, May 20, 2013 · captured October 26, 2026.*
+
+## Radar products and playback
+
+Step through radar scans or play a loop. Compare reflectivity, velocity, correlation coefficient, and differential reflectivity in linked panes. Four products compare different measurements; four tilts compare elevations. Check the scan time and radar geometry when interpreting either view.
+
+[Read the analysis guide](https://hookecho.io/docs/storm-analysis/) · [See the full feature reference](https://hookecho.io/features/)
+
+## On your phone
+
+Keep the map visible and open the controls when you need them. Use the browser app or install the Android build.
+
+<img src="docs/shots/android/map.jpg" alt="HookEcho Signal Deck on Android" width="320">
+
+[Phone instructions](https://hookecho.io/docs/on-your-phone/)
 
 ## Start here
 

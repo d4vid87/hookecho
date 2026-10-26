@@ -1,5 +1,6 @@
 ---
 import Base from "../../layouts/Base.astro";
+import { highlights } from "../../data/feature-highlights.js";
 
 // Keep feature imagery local so the copy and captures deploy as one verified version.
 const shots = "/shots";
@@ -152,16 +153,16 @@ const sections = [
 
 <Base
   title="Features — HookEcho"
-  description="Start with a clear weather radar map, then compare four synchronized products in Analyst. Explore storm tracks, national radar, warnings, archives, and more."
+  description="Explore the HookEcho menu, national MRMS radar, Storm Prediction Center outlooks, flexible layouts, and four-tilt comparisons."
 >
   <section class="feature-hero" id="analyst-mode">
     <div class="wrap feature-hero-grid">
-      <div><p class="eyebrow">Features / Analyst</p><h1>Read the storm.<br />Layer by layer.</h1><p class="lede">A single map gives you the weather at a glance. Analyst adds reflectivity, velocity, correlation coefficient, and differential reflectivity so you can investigate possible rotation without losing your place.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/docs/storm-analysis/">Start storm analysis</a></div><p class="caption">HookEcho KTLX archive · Moore, Oklahoma · recaptured October 16, 2026</p></div>
-      <img src="/shots/analyst-mode-20261016.webp" alt="Four HookEcho Analyst radar panels over Moore, Oklahoma" width="1164" height="655" fetchpriority="high" />
+      <div><p class="eyebrow">Features / Menu, maps & analysis</p><h1>Find your view.<br />Read the storm.</h1><p class="lede">Open the menu for layers and tools. Follow national MRMS radar, put SPC outlooks on the map, choose a layout, and compare four reflectivity tilts to explore storm structure.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/docs/storm-analysis/">Start storm analysis</a></div><p class="caption">Four-tilt comparison · KTLX archive, May 20, 2013 · captured October 26, 2026</p></div>
+      <img src="/showcase/national-to-local/four-tilts.png" alt="HookEcho Compare 4 tilts showing four reflectivity elevations over Moore, Oklahoma" width="1164" height="655" fetchpriority="high" />
     </div>
   </section>
   <section class="feature-index"><div class="wrap"><div class="intro"><p class="eyebrow">Go deeper</p><h2>Every tool has a job.</h2><p>Choose what you need for the question in front of you. The live map stays one click away.</p></div><div class="feature-list">
-    {sections.filter((s) => s.id !== "analyst-mode").map((s, index) => <article id={s.id} class="feature-item"><span class="feature-number">{String(index + 1).padStart(2,"0")}</span><div><p class="eyebrow">{s.eyebrow}</p><h3>{s.title}</h3><p>{s.body}</p></div><a href={s.link.href}>{s.link.label} →</a></article>)}
+    {[...highlights.map(f => ({ id: f.id, eyebrow: f.label, title: f.title, body: f.body, link: { href: `/#showcase`, label: "See the feature" } })), ...sections.filter(s => !["analyst-mode", "radar-mode", "radar", "mosaic"].includes(s.id))].map((s, index) => <article id={s.id} class="feature-item"><span class="feature-number">{String(index + 1).padStart(2,"0")}</span><div><p class="eyebrow">{s.eyebrow}</p><h3>{s.title}</h3><p>{s.body}</p></div><a href={s.link.href}>{s.link.label} →</a></article>)}
   </div></div></section>
   <section class="feature-end"><div class="wrap"><h2>Try the real radar.</h2><p>No account or installation needed in your browser.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/download/">Download HookEcho</a></div></div></section>
 </Base>
