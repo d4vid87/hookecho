@@ -6,6 +6,7 @@
 
 use std::f64::consts::PI;
 
+pub const MAX_ZOOM: f64 = 20.0;
 /// Max latitude representable in web mercator (where y would go to infinity).
 pub const MAX_LAT: f64 = 85.05112878;
 
@@ -165,7 +166,7 @@ impl Camera {
         if self.globe {
             // Iterate the geographic anchor because the spherical projection is nonlinear.
             let anchor = self.pick_world(cursor_px, viewport_px);
-            self.zoom = (self.zoom + delta).clamp(-2.0, 20.0);
+            self.zoom = (self.zoom + delta).clamp(-2.0, MAX_ZOOM);
             let distance = (cursor_px.0 as f64 - viewport_px.0 as f64 / 2.0).hypot(cursor_px.1 as f64 - viewport_px.1 as f64 / 2.0);
             // Once the cursor lies in sky, no rotation can keep a surface point
             // underneath it. Keep the globe centered rather than spinning it.
@@ -184,7 +185,7 @@ impl Camera {
         // 20 rather than the tile providers' 18: `tile_cover` clamps the tile z on its own, so the
         // last two levels overzoom the resident tiles instead of turning a spread-pinch into a
         // silent no-op — which is what it felt like at the old ceiling.
-        self.zoom = (self.zoom + delta).clamp(-2.0, 20.0);
+        self.zoom = (self.zoom + delta).clamp(-2.0, MAX_ZOOM);
         let after = self.screen_to_world(cursor_px, viewport_px);
         self.center.0 += before.0 - after.0;
         self.center.1 += before.1 - after.1;

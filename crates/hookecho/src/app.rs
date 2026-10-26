@@ -3982,6 +3982,8 @@ pub struct HookEchoApp {
     /// Touch: when and where the last tap landed, so a drag that starts right on top of it is
     /// read as the second half of a double-tap-drag zoom rather than a pan.
     last_tap: Option<(f64, egui::Pos2)>,
+    /// Preserve the first click's station if loading recenters the map before the second click.
+    last_site_tap: Option<(usize, &'static str)>,
     /// Touch: the anchor of a double-tap-drag zoom in progress (`None` = a drag pans).
     tap_zoom: Option<egui::Pos2>,
     /// Rects covered by floating chrome this frame. Raw wheel/pinch input must not
@@ -4970,6 +4972,7 @@ impl HookEchoApp {
             pf_icon_tx,
             mobile_chrome_hidden: false,
             last_tap: None,
+            last_site_tap: None,
             tap_zoom: None,
             mobile_occlusion: Vec::new(),
             last_gesture_end: None,
@@ -6976,19 +6979,16 @@ impl HookEchoApp {
         self.cappi_key = Some(key);
     }
 
-    /// Reconstruct a vertical reflectivity cross-section along the two clicked endpoints from
-    /// pane `idx`'s volume, upload it as a texture, and open the cross-section window.
-    /// If the click landed on a radar-site ring (and not on a storm report/cell, which take
-    /// precedence), switch pane `idx` to that site and return true. `sync_pane` reacts to the
-    /// changed site — no extra plumbing here.
-    fn try_pick_site(
-        &mut self,
+    /// Hit-test the same visible radar rings and selected-site pill for either click gesture.
+    /// Storm reports and cells retain priority over a station beneath them.
+    fn radar_site_at(
+        &self,
         idx: usize,
         pos: egui::Pos2,
         cam: crate::render::mercator::Camera,
         prect: egui::Rect,
         vp: (f32, f32),
-    ) -> bool {
+    ) -> Option<&'static str> {
         let to_screen_hit = |lon: f64, lat: f64| {
             let w = crate::render::mercator::lonlat_to_world(lon, lat);
             let (sx, sy) = cam.world_to_screen(w, vp);
@@ -7007,7 +7007,7 @@ impl HookEchoApp {
                     .iter()
                     .any(|c| to_screen_hit(c.lon, c.lat) <= tap_r2(14.0)));
         if near_storm {
-            return false;
+            return None;
         }
         let hit = wxdata::sites::all()
             .filter(|s| self.settings.radar_site_marker_visible(wxdata::sites::network(s.id)))
@@ -7026,9 +7026,16 @@ impl HookEchoApp {
                 to_screen_hit(a.longitude as f64, a.latitude as f64)
                     .total_cmp(&to_screen_hit(b.longitude as f64, b.latitude as f64))
             });
+        hit.map(|s| s.id)
+    }
+
+    fn try_pick_site(&mut self, idx: usize, pos: egui::Pos2, cam: crate::render::mercator::Camera,
+        prect: egui::Rect, vp: (f32, f32)) -> bool {
+        let hit = self.radar_site_at(idx, pos, cam, prect, vp);
+        self.last_site_tap = hit.map(|site| (idx, site));
         match hit {
-            Some(s) if self.views[idx].site.as_deref() != Some(s.id) => {
-                self.views[idx].site = Some(s.id.to_string());
+            Some(site) if self.views[idx].site.as_deref() != Some(site) => {
+                self.views[idx].site = Some(site.to_string());
                 self.cell_popup = None;
                 self.warning_popup = None;
                 self.detail = None;
@@ -14565,14 +14572,31 @@ impl HookEchoApp {
         if double_click_zoom {
             if let Some(pos) = response.interact_pointer_pos() {
                 let cursor = (pos.x - prect.left(), pos.y - prect.top());
+                let prior_site = self.last_site_tap.take()
+                    .filter(|(pane, site)| *pane == idx && self.views[idx].site.as_deref() == Some(*site))
+                    .map(|(_, site)| site);
+                let site = self.show_radar_sites.then(|| prior_site.or_else(||
+                    self.radar_site_at(idx, pos, self.views[idx].camera, prect, vp))).flatten()
+                    .and_then(wxdata::sites::site_by_id);
                 let view = &mut self.views[idx];
-                if view.camera.pick_world(cursor, vp).is_some() {
+                if let Some(site) = site {
+                    self.active = idx;
+                    view.camera_placed = view.loaded_site.as_deref() != Some(site.id);
+                    view.site = Some(site.id.to_string());
+                    view.recenter_on_ready = false;
+                    view.camera.center = crate::render::mercator::lonlat_to_world(
+                        site.longitude as f64, site.latitude as f64);
+                    view.camera_motion.zoom_to(&mut view.camera, crate::render::mercator::MAX_ZOOM, vp, reduced);
+                    self.cell_popup = None;
+                    self.warning_popup = None;
+                    self.detail = None;
+                } else if view.camera.pick_world(cursor, vp).is_some() {
                     self.active = idx;
                     view.recenter_on_ready = false;
                     view.camera_motion.cancel();
                     view.camera_motion.wheel(&mut view.camera, 1.0, cursor, vp, reduced);
-                    self.last_tap = None;
                 }
+                self.last_tap = None;
             }
         }
         // Watch-zone tool: a double-click (or Enter) closes the ring being clicked out.
@@ -14752,6 +14776,7 @@ impl HookEchoApp {
             crate::platform::haptic(crate::platform::Haptic::Press);
         }
         if (response.clicked() || long_press) && quiet && !double_click_zoom {
+            self.last_site_tap = None;
             self.active = idx;
             // What this press means. A long press is always an interrogation; anything else is
             // whatever the toolbar says.

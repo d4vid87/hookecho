@@ -1,5 +1,5 @@
 //! Time-based wheel zoom and drag inertia. Touch pinch remains a direct camera operation.
-use crate::render::mercator::Camera;
+use crate::render::mercator::{Camera, MAX_ZOOM};
 
 #[derive(Debug, Default)]
 pub struct Motion {
@@ -105,7 +105,7 @@ impl Motion {
                 self.expected = Some(*cam);
             }
             let queued: f64 = self.zoom_impulses.iter().map(|impulse| impulse.remaining).sum();
-            let accepted = (cam.zoom + queued + delta).clamp(-2.0, 20.0) - cam.zoom - queued;
+            let accepted = (cam.zoom + queued + delta).clamp(-2.0, MAX_ZOOM) - cam.zoom - queued;
             if let Some(last) = self.zoom_impulses.last_mut().filter(|last| last.anchor == anchor) {
                 last.remaining += accepted;
                 // Reversals must not carry momentum past the new target.
@@ -114,6 +114,22 @@ impl Motion {
             } else if accepted.abs() > 1e-5 {
                 self.zoom_impulses.push(ZoomImpulse { remaining: accepted, velocity: 0.0, anchor });
             }
+        }
+    }
+
+    /// Explicit navigation may travel farther than the wheel's per-event safety limit.
+    pub fn zoom_to(&mut self, cam: &mut Camera, zoom: f64, vp: (f32, f32), reduced: bool) {
+        if !zoom.is_finite() { return; }
+        self.cancel();
+        self.sync(cam, vp);
+        let anchor = (vp.0 / 2.0, vp.1 / 2.0);
+        let remaining = zoom.clamp(-2.0, MAX_ZOOM) - cam.zoom;
+        if reduced {
+            cam.zoom_at(remaining, anchor, vp);
+            self.expected = Some(*cam);
+        } else if remaining.abs() > 1e-5 {
+            self.fresh_input = true;
+            self.zoom_impulses.push(ZoomImpulse { remaining, velocity: 0.0, anchor });
         }
     }
 
@@ -232,6 +248,26 @@ mod tests {
         assert!((cam.zoom - 8.25).abs() < 1e-4);
         let at = cam.world_to_screen(world, VP);
         assert!((at.0 - anchor.0).abs() < 0.01 && (at.1 - anchor.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn explicit_zoom_reaches_the_limit_and_keeps_the_station_centered() {
+        let vp = (1280.0, 800.0);
+        for (globe, reduced) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut cam = Camera::at_lonlat(-97.277, 35.333, 5.1);
+            cam.globe = globe;
+            cam.set_orientation(25.0, 30.0);
+            let center = cam.center;
+            let mut motion = Motion::default();
+            motion.wheel(&mut cam, -1.0, (50.0, 100.0), vp, false);
+            motion.zoom_to(&mut cam, MAX_ZOOM + 5.0, vp, reduced);
+            if reduced { assert_eq!(cam.zoom, MAX_ZOOM); }
+            for _ in 0..120 { motion.advance(&mut cam, 1.0 / 60.0, vp, reduced); }
+            assert!((cam.zoom - MAX_ZOOM).abs() < 1e-6);
+            assert!((cam.center.0 - center.0).abs() < 1e-9);
+            assert!((cam.center.1 - center.1).abs() < 1e-9);
+            assert!(!motion.active());
+        }
     }
     #[test]
     fn overlapping_wheel_events_keep_their_original_anchors() {
