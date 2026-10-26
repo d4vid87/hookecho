@@ -9,21 +9,21 @@ const products = [
 <div class="analyst-demo" id="analyst" data-analyst-demo>
   <div class="demo-heading">
     <div>
-      <p class="eyebrow">Recorded radar demonstration</p>
-      <h2>One storm. Four ways to read it.</h2>
-      <p>Start with an uncluttered map. Choose Compare 4 to follow the May 20, 2013 Moore tornado across four synchronized radar products.</p>
+      <p class="eyebrow">Explore HookEcho</p>
+      <h2>From the national picture to the storm.</h2>
+      <p>Begin with MRMS and Storm Prediction Center outlooks. Use the menu to choose a layout, then inspect the storm with four reflectivity tilts and linked maps.</p>
     </div>
     <div class="mode-switch" aria-label="Radar demonstration view">
-      <button type="button" data-mode="radar" aria-pressed="true">Radar</button>
+      <button type="button" data-mode="radar" aria-pressed="true">Feature tour</button>
       <button type="button" data-mode="analyst" aria-pressed="false">Four-product Analyst</button>
     </div>
   </div>
 
   <div class="demo-surface">
     <div class="stage stage-single" data-stage="single">
-      <img data-src="/showcase/moore-2013-single.webp?v=full-frame-20261016" alt="HookEcho single reflectivity map of the May 20, 2013 tornado near Moore, Oklahoma" width="1280" height="800" loading="lazy" />
-      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/moore-2013-single.mp4?v=full-frame-20261016" type="video/mp4" /></video>
-      <noscript><style>.stage-single > img { display: none; }</style><img src="/showcase/moore-2013-single.webp?v=full-frame-20261016" alt="HookEcho reflectivity map of the Moore tornado" width="1280" height="800" loading="lazy" /></noscript>
+      <img data-src="/showcase/national-to-local/mrms.png" alt="HookEcho feature walkthrough: MRMS, SPC outlooks, menu, layouts, and four tilts" width="1280" height="800" loading="lazy" />
+      <video muted loop playsinline preload="none" aria-hidden="true"><source data-src="/showcase/national-to-local/tour.mp4" type="video/mp4" /></video>
+      <noscript><style>.stage-single > img { display: none; }</style><img src="/showcase/national-to-local/mrms.png" alt="HookEcho national MRMS radar mosaic" width="1280" height="800" loading="lazy" /></noscript>
     </div>
     <div class="stage stage-four" data-stage="four" hidden>
       <img data-src="/showcase/moore-2013-four.webp?v=full-frame-20261016" alt="HookEcho Analyst showing synchronized reflectivity, velocity, correlation coefficient, and differential reflectivity from the same KTLX scan" width="1280" height="800" loading="lazy" />
@@ -42,7 +42,7 @@ const products = [
       <button type="button" data-action="play" aria-label="Pause demonstration">Pause</button>
       <button type="button" data-action="replay">Replay</button>
     </div>
-    <p class="capture">Actual HookEcho Radar Zeta capture · KTLX archive · Moore, Oklahoma · May 20, 2013 · recaptured October 16, 2026 · archived warning polygons</p>
+    <p class="capture">Feature tour: screenshot sequence captured October 26, 2026 · Four-product Analyst captured October 16, 2026 · KTLX archive: May 20, 2013 · MRMS / SPC: October 26, 2026</p>
   </div>
 
   <div class="product-nav" hidden>
@@ -54,7 +54,7 @@ const products = [
   <div class="desktop-explainer" hidden>
     {products.map((product, index) => <div class:list={["explainer", { "is-velocity": index === 1 }]}><span>{product.name}</span><p>{product.detail}</p></div>)}
   </div>
-  <p class="demo-caution">Recorded historical event, shown with the current HookEcho interface and warning styling. <a href="https://www.weather.gov/oun/events-20130520">Read the NWS Moore tornado event report</a>.</p>
+  <p class="demo-caution">Four tilts compare elevations; four products compare different radar measurements. Archived storm imagery is separate from the MRMS and SPC capture date. <a href="https://www.weather.gov/oun/events-20130520">Read the NWS Moore tornado event report</a>.</p>
   <noscript><p>The still images show the recorded radar view. <a href="/docs/radar-and-analyst/">Read the Analyst guide</a> or <a href="https://app.hookecho.io/">open the app</a>.</p></noscript>
 </div>
 
