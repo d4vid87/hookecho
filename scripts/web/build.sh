@@ -205,7 +205,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Allow 10 KB (0.21%) more than the previous cap; Lite/startup gates remain unchanged.
 # Radar/MRMS worker preparation and the cached smoothing pass add about 8 KB gzip.
 # Keep the measured feature increase explicit; Lite/startup budgets stay unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4700000}"
+# Signal rail category navigation measured 4,703,917 gzip bytes (about 0.08% over the prior bundle).
+# Allow a small main-bundle margin; Lite and startup budgets remain unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4710000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

@@ -269,7 +269,7 @@ impl HookEchoApp {
             let split_library = context_bar && all_controls && settings_page.is_none() && !alerts_tab && chrome.width() >= 650.0;
             (if sheets_layout {
                 egui::Frame::NONE
-            } else if split_library {
+            } else if split_library || settings_page == Some("Outlooks") {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgba_unmultiplied(23, 38, 56, 246))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(89, 123, 152)))
@@ -342,7 +342,7 @@ impl HookEchoApp {
                             }
                         }
                         ui.label(
-                            egui::RichText::new(section.unwrap_or(page))
+                            egui::RichText::new(if page == "Outlooks" { "Outlook library" } else { section.unwrap_or(page) })
                                 .size(20.0)
                                 .strong(),
                         );
@@ -693,6 +693,8 @@ impl HookEchoApp {
                 .show(ctx, |ui| {
                     ui.set_width(if wide_library {
                         (chrome.width() - 32.0).min(720.0)
+                    } else if settings_page_was == Some("Outlooks") {
+                        (chrome.width() - 48.0).min(460.0)
                     } else if phone(ctx) {
                         crate::ui::m3::RAIL_W
                     } else {

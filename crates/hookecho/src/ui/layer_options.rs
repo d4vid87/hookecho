@@ -213,18 +213,25 @@ pub(crate) fn show(
         .filter(|name| sections.iter().any(|(s, on)| s == name && *on))
         .unwrap_or(sections.iter().find(|(_, on)| *on).unwrap().0);
     ui.spacing_mut().item_spacing.y = 8.0;
-    egui::ComboBox::from_id_salt("settings_for")
-        .width(ui.available_width() - 8.0)
-        .selected_text(section)
-        .show_ui(ui, |ui| {
-            for (name, visible) in sections {
-                if visible {
-                    ui.selectable_value(&mut section, name, name);
+    let focused_outlooks = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<Option<&'static str>>(egui::Id::new("panel_settings_page")))
+        .flatten()
+        == Some("Outlooks");
+    if section != "Outlooks" || !focused_outlooks {
+        egui::ComboBox::from_id_salt("settings_for")
+            .width(ui.available_width() - 8.0)
+            .selected_text(section)
+            .show_ui(ui, |ui| {
+                for (name, visible) in sections {
+                    if visible {
+                        ui.selectable_value(&mut section, name, name);
+                    }
                 }
-            }
-        })
-        .response
-        .on_hover_text("Choose a layer to adjust");
+            })
+            .response
+            .on_hover_text("Choose a layer to adjust");
+    }
     ui.ctx().data_mut(|d| d.insert_temp(id, section));
     ui.add_space(4.0);
     if section == "Data details" {
@@ -617,330 +624,351 @@ pub(crate) fn show(
     }
 
     if section == "Outlooks" {
+        ui.visuals_mut().selection.bg_fill = egui::Color32::from_rgb(36, 62, 83);
+        ui.visuals_mut().selection.stroke.color = egui::Color32::from_rgb(143, 207, 255);
         let focus_id = egui::Id::new("outlook_menu_focus");
-        let outlook_focus = ui.ctx().data_mut(|d| {
+        let category_id = egui::Id::new("outlook_rail_category");
+        let mut category = ui.ctx().data_mut(|d| {
             let focus = d.get_temp::<&'static str>(focus_id);
             d.remove::<&'static str>(focus_id);
             focus
+                .or_else(|| d.get_temp::<&'static str>(category_id))
+                .unwrap_or("severe")
         });
-        if outlook_focus == Some("severe") {
-            ui.scroll_to_rect(ui.cursor(), Some(egui::Align::Min));
-        }
-        let accent = ui.visuals().selection.stroke.color;
-        egui::Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .stroke(ui.visuals().window_stroke)
-            .corner_radius(crate::ui::style::RADIUS_LG)
-            .inner_margin(12)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(egui_phosphor::regular::WARNING)
-                            .size(22.0)
-                            .color(accent),
-                    );
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("SPC Convective Outlook").strong());
-                        ui.weak("NOAA Storm Prediction Center");
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.colored_label(
-                            if filters.outlook_day == 0 {
-                                ui.visuals().weak_text_color()
-                            } else {
-                                accent
-                            },
-                            if filters.outlook_day == 0 {
-                                "OFF"
-                            } else {
-                                "ON"
-                            },
-                        );
-                    });
+        let rail_width = if ui.available_width() < 400.0 {
+            68.0
+        } else {
+            86.0
+        };
+        let detail_width = (ui.available_width() - rail_width - 28.0).max(160.0);
+        let detail_height =
+            (ui.clip_rect().bottom() - ui.cursor().top() - 24.0).clamp(120.0, 440.0);
+        ui.horizontal_top(|ui| {
+            ui.set_max_height(detail_height);
+            ui.vertical(|ui| {
+                ui.set_width(rail_width);
+                egui::ScrollArea::vertical().id_salt("outlook_categories")
+                    .max_height(detail_height).show(ui, |ui| {
+                        for (id, label, icon) in [
+                            ("severe", "Severe", egui_phosphor::regular::LIGHTNING),
+                            ("fire", "Fire", egui_phosphor::regular::FIRE),
+                            ("rainfall", "Rain", egui_phosphor::regular::CLOUD_RAIN),
+                            ("winter", "Winter", egui_phosphor::regular::SNOWFLAKE),
+                            ("climate", "Climate", egui_phosphor::regular::SUN),
+                        ] {
+                            if ui.add_sized([rail_width, 58.0], egui::Button::new(
+                                egui::RichText::new(format!("{icon}\n{label}")).size(13.0)
+                            ).selected(category == id)).clicked() { category = id; }
+                        }
                 });
-                ui.separator();
-                ui.label(egui::RichText::new("Forecast day").small().strong());
-                ui.horizontal_wrapped(|ui| {
-                    for day in 1u8..=3 {
-                        if ui
-                            .selectable_label(filters.outlook_day == day, format!("Day {day}"))
-                            .clicked()
-                        {
-                            filters.outlook_day = if filters.outlook_day == day { 0 } else { day };
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(detail_width);
+                egui::ScrollArea::vertical().id_salt(("outlook_detail", category))
+                    .max_height(detail_height).show(ui, |ui| {
+                        ui.set_width(detail_width - 10.0);
+                        let accent = egui::Color32::from_rgb(143, 207, 255);
+                        if category == "severe" {
+                            egui::Frame::new()
+                                .fill(ui.visuals().faint_bg_color)
+                                .stroke(ui.visuals().window_stroke)
+                                .corner_radius(crate::ui::style::RADIUS_LG)
+                                .inner_margin(12)
+                                .show(ui, |ui| {
+                                    ui.label(egui::RichText::new("SPC / CONVECTIVE OUTLOOK").small().color(accent));
+                                    ui.heading("Thunderstorm outlook");
+                                    ui.weak("NOAA Storm Prediction Center");
+                                    ui.separator();
+                                    let day_id = egui::Id::new("outlook_rail_day");
+                                    let mut day = if filters.outlook_day != 0 { filters.outlook_day }
+                                        else { ui.ctx().data_mut(|d| d.get_temp::<u8>(day_id)).unwrap_or(1) };
+                                    let mut visible = filters.outlook_day != 0;
+                                    crate::ui::style::toggle(ui, &mut visible, "Show on map");
+                                    ui.add_space(6.0);
+                                    ui.label(egui::RichText::new("Forecast day").small().strong());
+                                    ui.horizontal_wrapped(|ui| {
+                                        for choice in 1u8..=3 {
+                                            if ui.selectable_value(&mut day, choice, format!("Day {choice}")).clicked() {
+                                                visible = true;
+                                            }
+                                        }
+                                    });
+                                    let selected = if visible { day } else { 0 };
+                                    if filters.outlook_day != selected {
+                                        filters.outlook_day = selected;
+                                        changed = true;
+                                    }
+                                    ui.ctx().data_mut(|d| d.insert_temp(day_id, day));
+
+                                    // Day 1 is the only outlook with separate tornado, wind and hail probabilities.
+                                    if filters.outlook_day == 1 {
+                                        ui.add_space(4.0);
+                                        ui.label(egui::RichText::new("Layer").small().strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            for kind in wxdata::spc::OutlookKind::ALL {
+                                                if ui
+                                                    .selectable_value(&mut filters.outlook_kind, kind, kind.label())
+                                                    .changed()
+                                                {
+                                                    actions.outlook_kind_changed = true;
+                                                    changed = true;
+                                                }
+                                            }
+                                        });
+                                    }
+
+                                    ui.add_space(4.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        for (label, color) in [
+                                            ("TSTM", egui::Color32::from_rgb(85, 170, 85)),
+                                            ("MRGL", egui::Color32::from_rgb(65, 145, 75)),
+                                            ("SLGT", egui::Color32::from_rgb(235, 210, 45)),
+                                            ("ENH", egui::Color32::from_rgb(235, 145, 45)),
+                                            ("MDT", egui::Color32::from_rgb(220, 60, 55)),
+                                            ("HIGH", egui::Color32::from_rgb(220, 70, 190)),
+                                        ] {
+                                            ui.colored_label(color, egui::RichText::new(format!("● {label}")).small());
+                                        }
+                                    });
+                                });
+
+                        }
+                        if category == "climate" {
+                            ui.heading("Climate outlook");
+                            ui.weak("Temperature or precipitation probability compared with normal.");
+                            egui::ComboBox::from_id_salt("cpc_period")
+                                .width(ui.available_width() - 8.0)
+                                .selected_text(filters.cpc_period.map_or("Off", wxdata::cpc::Period::label))
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_value(&mut filters.cpc_period, None, "Off").changed() { actions.cpc_changed = true; changed = true; }
+                                    for period in wxdata::cpc::Period::ALL {
+                                        if ui.selectable_value(&mut filters.cpc_period, Some(period), period.label()).changed() {
+                                            actions.cpc_changed = true; changed = true;
+                                        }
+                                    }
+                                });
+                            if filters.cpc_period.is_some() {
+                                let (status, color) = match cpc_health.state() {
+                                    crate::app::HealthState::Fetching => ("Loading NOAA CPC outlook…", egui::Color32::LIGHT_BLUE),
+                                    crate::app::HealthState::Failed if cpc_feature_count > 0 =>
+                                        ("NOAA CPC refresh failed; showing previously loaded polygons.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Failed =>
+                                        ("NOAA CPC outlook unavailable. Try refreshing the layer.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Stale =>
+                                        ("NOAA CPC source refresh overdue; displayed polygons may be old.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Fresh if cpc_feature_count == 0 =>
+                                        ("NOAA CPC returned no outlook polygons for this selection.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Waiting =>
+                                        ("Waiting for NOAA CPC outlook data…", egui::Color32::LIGHT_BLUE),
+                                    crate::app::HealthState::Fresh => ("NOAA CPC outlook loaded.", egui::Color32::LIGHT_GREEN),
+                                };
+                                ui.colored_label(color, egui::RichText::new(status).small());
+                                ui.horizontal(|ui| {
+                                    for variable in [wxdata::cpc::Variable::Temperature, wxdata::cpc::Variable::Precipitation] {
+                                        if ui.selectable_value(&mut filters.cpc_variable, variable, variable.label()).changed() {
+                                            actions.cpc_changed = true; changed = true;
+                                        }
+                                    }
+                                });
+                                ui.weak("Select a colored area for issue date, valid period, and probability. Public CPC GIS data.");
+                                ui.horizontal(|ui| {
+                                    ui.label("Opacity");
+                                    if ui.add(egui::Slider::new(&mut filters.cpc_opacity_pct, 0..=100).suffix("%"))
+                                        .changed() { actions.overlays_changed = true; changed = true; }
+                                });
+                                if ui.button("Read NOAA forecast discussion").clicked() { actions.cpc_discussion = true; }
+                        }
+
+                        }
+                        if category == "fire" {
+                            ui.heading("Fire weather outlook");
+                            ui.weak("NOAA public outlook · tap a polygon for its source and valid time");
+                            let mut fire_changed = false;
+                            egui::ComboBox::from_id_salt("fire_weather_day")
+                                .selected_text(if filters.fire_weather_day == 0 { "Off".to_owned() } else { format!("Day {}", filters.fire_weather_day) })
+                                .show_ui(ui, |ui| {
+                                    for day in 0..=8 {
+                                        fire_changed |= ui.selectable_value(&mut filters.fire_weather_day, day, if day == 0 { "Off".to_owned() } else { format!("Day {day}") }).changed();
+                                    }
+                                });
+                            if filters.fire_weather_day != 0 {
+                                let (status, color) = match fire_weather_health.state() {
+                                    crate::app::HealthState::Fetching =>
+                                        ("Loading NOAA SPC fire-weather outlook…", egui::Color32::LIGHT_BLUE),
+                                    crate::app::HealthState::Failed if fire_weather_feature_count > 0 =>
+                                        ("NOAA SPC refresh failed; showing previously loaded areas.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Failed =>
+                                        ("NOAA SPC fire-weather outlook unavailable. Try refreshing the layer.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Stale =>
+                                        ("NOAA SPC source refresh overdue; displayed areas may be old.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Fresh if fire_weather_feature_count == 0 =>
+                                        ("NOAA SPC returned no areas for this selection.", egui::Color32::YELLOW),
+                                    crate::app::HealthState::Waiting =>
+                                        ("Waiting for NOAA SPC fire-weather data…", egui::Color32::LIGHT_BLUE),
+                                    crate::app::HealthState::Fresh =>
+                                        ("NOAA SPC fire-weather outlook loaded.", egui::Color32::LIGHT_GREEN),
+                                };
+                                ui.colored_label(color, egui::RichText::new(status).small());
+                                ui.horizontal_wrapped(|ui| {
+                                    for kind in [wxdata::fire_weather::Kind::Conditions, wxdata::fire_weather::Kind::DryThunderstorms] {
+                                        fire_changed |= ui.selectable_value(&mut filters.fire_weather_kind, kind, kind.label()).changed();
+                                    }
+                                });
+                                ui.weak("Conditions: elevated/critical risk; dry thunderstorms: isolated/scattered risk. Days 3–8 use probability contours.");
+                                if ui.button("Read NOAA forecast discussion").clicked() { actions.fire_weather_discussion = true; }
+                        }
+                        if fire_changed {
+                            actions.fire_weather_changed = true;
                             changed = true;
                         }
-                    }
-                });
 
-                // Day 1 is the only outlook with separate tornado, wind and hail probabilities.
-                if filters.outlook_day == 1 {
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Layer").small().strong());
-                    ui.horizontal_wrapped(|ui| {
-                        for kind in wxdata::spc::OutlookKind::ALL {
-                            if ui
-                                .selectable_value(&mut filters.outlook_kind, kind, kind.label())
-                                .changed()
-                            {
-                                actions.outlook_kind_changed = true;
-                                changed = true;
-                            }
                         }
-                    });
-                }
+                        if category == "rainfall" {
+                            ui.heading("Rainfall outlook");
+                            ui.weak("NOAA WPC · excessive rainfall risk");
+                            egui::ComboBox::from_id_salt("ero_day")
+                                .width(ui.available_width() - 8.0)
+                                .selected_text(if filters.ero_day == 0 {
+                                    "Off".to_string()
+                                } else {
+                                    format!("Day {}", filters.ero_day)
+                                })
+                                .show_ui(ui, |ui| {
+                                    for day in 0u8..=5 {
+                                        let label = if day == 0 {
+                                            "Off".to_string()
+                                        } else {
+                                            format!("Day {day}")
+                                        };
+                                        if ui
+                                            .selectable_value(&mut filters.ero_day, day, label)
+                                            .changed()
+                                        {
+                                            filters.ero_archive = None;
+                                            actions.ero_day_changed = true;
+                                            changed = true;
+                                        }
+                                    }
+                                });
 
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    for (label, color) in [
-                        ("TSTM", egui::Color32::from_rgb(85, 170, 85)),
-                        ("MRGL", egui::Color32::from_rgb(65, 145, 75)),
-                        ("SLGT", egui::Color32::from_rgb(235, 210, 45)),
-                        ("ENH", egui::Color32::from_rgb(235, 145, 45)),
-                        ("MDT", egui::Color32::from_rgb(220, 60, 55)),
-                        ("HIGH", egui::Color32::from_rgb(220, 70, 190)),
-                    ] {
-                        ui.colored_label(color, egui::RichText::new(format!("● {label}")).small());
-                    }
-                });
-            });
-
-        ui.separator();
-        let climate_heading = ui.label(egui::RichText::new("Climate outlook · NOAA CPC").strong());
-        if outlook_focus == Some("climate") {
-            ui.scroll_to_rect(climate_heading.rect, Some(egui::Align::Center));
-        }
-        ui.weak("Temperature or precipitation probability compared with normal.");
-        egui::ComboBox::from_id_salt("cpc_period")
-            .width(ui.available_width() - 8.0)
-            .selected_text(filters.cpc_period.map_or("Off", wxdata::cpc::Period::label))
-            .show_ui(ui, |ui| {
-                if ui.selectable_value(&mut filters.cpc_period, None, "Off").changed() { actions.cpc_changed = true; changed = true; }
-                for period in wxdata::cpc::Period::ALL {
-                    if ui.selectable_value(&mut filters.cpc_period, Some(period), period.label()).changed() {
-                        actions.cpc_changed = true; changed = true;
-                    }
-                }
-            });
-        if filters.cpc_period.is_some() {
-            let (status, color) = match cpc_health.state() {
-                crate::app::HealthState::Fetching => ("Loading NOAA CPC outlook…", egui::Color32::LIGHT_BLUE),
-                crate::app::HealthState::Failed if cpc_feature_count > 0 =>
-                    ("NOAA CPC refresh failed; showing previously loaded polygons.", egui::Color32::YELLOW),
-                crate::app::HealthState::Failed =>
-                    ("NOAA CPC outlook unavailable. Try refreshing the layer.", egui::Color32::YELLOW),
-                crate::app::HealthState::Stale =>
-                    ("NOAA CPC source refresh overdue; displayed polygons may be old.", egui::Color32::YELLOW),
-                crate::app::HealthState::Fresh if cpc_feature_count == 0 =>
-                    ("NOAA CPC returned no outlook polygons for this selection.", egui::Color32::YELLOW),
-                crate::app::HealthState::Waiting =>
-                    ("Waiting for NOAA CPC outlook data…", egui::Color32::LIGHT_BLUE),
-                crate::app::HealthState::Fresh => ("NOAA CPC outlook loaded.", egui::Color32::LIGHT_GREEN),
-            };
-            ui.colored_label(color, egui::RichText::new(status).small());
-            ui.horizontal(|ui| {
-                for variable in [wxdata::cpc::Variable::Temperature, wxdata::cpc::Variable::Precipitation] {
-                    if ui.selectable_value(&mut filters.cpc_variable, variable, variable.label()).changed() {
-                        actions.cpc_changed = true; changed = true;
-                    }
-                }
-            });
-            ui.weak("Select a colored area for issue date, valid period, and probability. Public CPC GIS data.");
-            ui.horizontal(|ui| {
-                ui.label("Opacity");
-                if ui.add(egui::Slider::new(&mut filters.cpc_opacity_pct, 0..=100).suffix("%"))
-                    .changed() { actions.overlays_changed = true; changed = true; }
-            });
-            if ui.button("Read NOAA forecast discussion").clicked() { actions.cpc_discussion = true; }
-        }
-
-        ui.add_space(8.0);
-        let fire_heading = ui.label(egui::RichText::new("SPC Fire Weather Outlook").strong());
-        if outlook_focus == Some("fire") {
-            ui.scroll_to_rect(fire_heading.rect, Some(egui::Align::Center));
-        }
-        ui.weak("NOAA public outlook · tap a polygon for its source and valid time");
-        let mut fire_changed = false;
-        egui::ComboBox::from_id_salt("fire_weather_day")
-            .selected_text(if filters.fire_weather_day == 0 { "Off".to_owned() } else { format!("Day {}", filters.fire_weather_day) })
-            .show_ui(ui, |ui| {
-                for day in 0..=8 {
-                    fire_changed |= ui.selectable_value(&mut filters.fire_weather_day, day, if day == 0 { "Off".to_owned() } else { format!("Day {day}") }).changed();
-                }
-            });
-        if filters.fire_weather_day != 0 {
-            let (status, color) = match fire_weather_health.state() {
-                crate::app::HealthState::Fetching =>
-                    ("Loading NOAA SPC fire-weather outlook…", egui::Color32::LIGHT_BLUE),
-                crate::app::HealthState::Failed if fire_weather_feature_count > 0 =>
-                    ("NOAA SPC refresh failed; showing previously loaded areas.", egui::Color32::YELLOW),
-                crate::app::HealthState::Failed =>
-                    ("NOAA SPC fire-weather outlook unavailable. Try refreshing the layer.", egui::Color32::YELLOW),
-                crate::app::HealthState::Stale =>
-                    ("NOAA SPC source refresh overdue; displayed areas may be old.", egui::Color32::YELLOW),
-                crate::app::HealthState::Fresh if fire_weather_feature_count == 0 =>
-                    ("NOAA SPC returned no areas for this selection.", egui::Color32::YELLOW),
-                crate::app::HealthState::Waiting =>
-                    ("Waiting for NOAA SPC fire-weather data…", egui::Color32::LIGHT_BLUE),
-                crate::app::HealthState::Fresh =>
-                    ("NOAA SPC fire-weather outlook loaded.", egui::Color32::LIGHT_GREEN),
-            };
-            ui.colored_label(color, egui::RichText::new(status).small());
-            ui.horizontal_wrapped(|ui| {
-                for kind in [wxdata::fire_weather::Kind::Conditions, wxdata::fire_weather::Kind::DryThunderstorms] {
-                    fire_changed |= ui.selectable_value(&mut filters.fire_weather_kind, kind, kind.label()).changed();
-                }
-            });
-            ui.weak("Conditions: elevated/critical risk; dry thunderstorms: isolated/scattered risk. Days 3–8 use probability contours.");
-            if ui.button("Read NOAA forecast discussion").clicked() { actions.fire_weather_discussion = true; }
-        }
-        if fire_changed {
-            actions.fire_weather_changed = true;
-            changed = true;
-        }
-
-        // Excessive Rainfall Outlook: the flood half of the day, directly under the severe half.
-        let rainfall_heading = ui.label("Rainfall outlook");
-        if outlook_focus == Some("rainfall") {
-            ui.scroll_to_rect(rainfall_heading.rect, Some(egui::Align::Center));
-        }
-        egui::ComboBox::from_id_salt("ero_day")
-            .width(ui.available_width() - 8.0)
-            .selected_text(if filters.ero_day == 0 {
-                "Off".to_string()
-            } else {
-                format!("Day {}", filters.ero_day)
-            })
-            .show_ui(ui, |ui| {
-                for day in 0u8..=5 {
-                    let label = if day == 0 {
-                        "Off".to_string()
-                    } else {
-                        format!("Day {day}")
-                    };
-                    if ui
-                        .selectable_value(&mut filters.ero_day, day, label)
-                        .changed()
-                    {
-                        filters.ero_archive = None;
-                        actions.ero_day_changed = true;
-                        changed = true;
-                    }
-                }
-            });
-
-        if filters.ero_day != 0 {
-            ui.label("Forecast issue");
-            egui::ComboBox::from_id_salt("ero_archive_issue")
-                .width(ui.available_width() - 8.0)
-                .selected_text(filters.ero_archive.as_ref().map_or_else(
-                    || "Current forecast".to_string(),
-                    |key| ero_issues.iter().find(|issue| &issue.key == key)
-                        .map_or_else(|| "Archived issue".to_string(), |issue| format!("Archive {}", issue.cycle.format("%b %d %HZ"))),
-                ))
-                .show_ui(ui, |ui| {
-                    ui.set_max_height(280.0);
-                    if ui.selectable_value(&mut filters.ero_archive, None, "Current forecast").changed() {
-                        actions.ero_day_changed = true; changed = true;
-                    }
-                    for issue in ero_issues.iter().filter(|issue| issue.day == filters.ero_day) {
-                        if ui.selectable_value(&mut filters.ero_archive, Some(issue.key.clone()),
-                            issue.cycle.format("%Y-%m-%d %HZ").to_string()).changed() {
-                            actions.ero_day_changed = true; changed = true;
+                            if filters.ero_day != 0 {
+                                ui.label("Forecast issue");
+                                egui::ComboBox::from_id_salt("ero_archive_issue")
+                                    .width(ui.available_width() - 8.0)
+                                    .selected_text(filters.ero_archive.as_ref().map_or_else(
+                                        || "Current forecast".to_string(),
+                                        |key| ero_issues.iter().find(|issue| &issue.key == key)
+                                            .map_or_else(|| "Archived issue".to_string(), |issue| format!("Archive {}", issue.cycle.format("%b %d %HZ"))),
+                                    ))
+                                    .show_ui(ui, |ui| {
+                                        ui.set_max_height(280.0);
+                                        if ui.selectable_value(&mut filters.ero_archive, None, "Current forecast").changed() {
+                                            actions.ero_day_changed = true; changed = true;
+                                        }
+                                        for issue in ero_issues.iter().filter(|issue| issue.day == filters.ero_day) {
+                                            if ui.selectable_value(&mut filters.ero_archive, Some(issue.key.clone()),
+                                                issue.cycle.format("%Y-%m-%d %HZ").to_string()).changed() {
+                                                actions.ero_day_changed = true; changed = true;
+                                            }
+                                        }
+                                        if ero_issues.is_empty() { ui.weak("Loading published WPC archive issues…"); }
+                                    });
+                                ui.horizontal(|ui| {
+                                    ui.label("Fill opacity");
+                                    if ui.add(egui::Slider::new(&mut filters.ero_opacity_pct, 0..=100).suffix("%"))
+                                        .changed() { actions.overlays_changed = true; changed = true; }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Border width");
+                                    if ui.add(egui::Slider::new(&mut filters.ero_border_px, 0.0..=6.0)
+                                        .step_by(0.2).suffix(" px"))
+                                        .changed() { actions.overlays_changed = true; changed = true; }
+                                });
+                                if filters.ero_archive.is_none() {
+                                    if ui.button("Read NOAA forecast discussion").clicked() {
+                                        actions.ero_discussion = true;
+                                    }
+                                } else {
+                                    ui.weak("Archive polygons use their stored issue and valid times. Current discussion hidden.");
+                                    if ero_archive_empty {
+                                        ui.weak("No risk areas in this archived issue.");
+                                    }
+                                }
                         }
-                    }
-                    if ero_issues.is_empty() { ui.weak("Loading published WPC archive issues…"); }
-                });
-            ui.horizontal(|ui| {
-                ui.label("Fill opacity");
-                if ui.add(egui::Slider::new(&mut filters.ero_opacity_pct, 0..=100).suffix("%"))
-                    .changed() { actions.overlays_changed = true; changed = true; }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Border width");
-                if ui.add(egui::Slider::new(&mut filters.ero_border_px, 0.0..=6.0)
-                    .step_by(0.2).suffix(" px"))
-                    .changed() { actions.overlays_changed = true; changed = true; }
-            });
-            if filters.ero_archive.is_none() {
-                if ui.button("Read NOAA forecast discussion").clicked() {
-                    actions.ero_discussion = true;
-                }
-            } else {
-                ui.weak("Archive polygons use their stored issue and valid times. Current discussion hidden.");
-                if ero_archive_empty {
-                    ui.weak("No risk areas in this archived issue.");
-                }
-            }
-        }
 
-        let winter_heading = ui.label("Winter precipitation probability");
-        if outlook_focus == Some("winter") {
-            ui.scroll_to_rect(winter_heading.rect, Some(egui::Align::Center));
-        }
-        ui.weak("NOAA WPC · probability of at least 4 in snow or 0.25 in ice in 24 hours");
-        for (id, label, day) in [
-            ("winter_snow_day", "Snow ≥4 in", &mut filters.winter_snow_day),
-            ("winter_ice_day", "Ice ≥0.25 in", &mut filters.winter_ice_day),
-        ] {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                egui::ComboBox::from_id_salt(id)
-                    .selected_text(if *day == 0 { "Off".to_owned() } else { format!("Day {}", *day) })
-                    .show_ui(ui, |ui| {
-                        for choice in 0..=3 {
-                            let text = if choice == 0 { "Off".to_owned() } else { format!("Day {choice}") };
-                            if ui.selectable_value(day, choice, text).changed() {
-                                actions.winter_prob_changed = true;
-                                changed = true;
-                            }
+                        }
+                        if category == "winter" {
+                            ui.heading("Winter outlook");
+                            ui.weak("NOAA WPC · probability of at least 4 in snow or 0.25 in ice in 24 hours");
+                            for (id, label, day) in [
+                                ("winter_snow_day", "Snow ≥4 in", &mut filters.winter_snow_day),
+                                ("winter_ice_day", "Ice ≥0.25 in", &mut filters.winter_ice_day),
+                            ] {
+                                ui.horizontal(|ui| {
+                                    ui.label(label);
+                                    egui::ComboBox::from_id_salt(id)
+                                        .selected_text(if *day == 0 { "Off".to_owned() } else { format!("Day {}", *day) })
+                                        .show_ui(ui, |ui| {
+                                            for choice in 0..=3 {
+                                                let text = if choice == 0 { "Off".to_owned() } else { format!("Day {choice}") };
+                                                if ui.selectable_value(day, choice, text).changed() {
+                                                    actions.winter_prob_changed = true;
+                                                    changed = true;
+                                                }
+                                            }
+                                        });
+                                });
+                        }
+                        for (day, name, health, count) in [
+                            (filters.winter_snow_day, "Snow", winter_snow_health, winter_snow_feature_count),
+                            (filters.winter_ice_day, "Ice", winter_ice_health, winter_ice_feature_count),
+                        ] {
+                            if day == 0 { continue; }
+                            let (status, color) = match health.state() {
+                                crate::app::HealthState::Fetching => ("loading", egui::Color32::LIGHT_BLUE),
+                                crate::app::HealthState::Failed if count > 0 => ("refresh failed; showing older areas", egui::Color32::YELLOW),
+                                crate::app::HealthState::Failed => ("NOAA WPC unavailable; try changing the day", egui::Color32::YELLOW),
+                                crate::app::HealthState::Stale => ("source refresh overdue", egui::Color32::YELLOW),
+                                crate::app::HealthState::Fresh if count == 0 => ("no ≥10% area forecast", egui::Color32::YELLOW),
+                                crate::app::HealthState::Waiting => ("waiting for NOAA WPC data", egui::Color32::LIGHT_BLUE),
+                                crate::app::HealthState::Fresh => ("outlook loaded", egui::Color32::LIGHT_GREEN),
+                            };
+                            ui.colored_label(color, egui::RichText::new(format!("{name}: {status}")).small());
+                        }
+
+                        // Winter Storm Severity Index: same off-plus-three-days shape as the outlook selector.
+                        ui.label("Winter impacts");
+                        egui::ComboBox::from_id_salt("wssi_day")
+                            .width(ui.available_width() - 8.0)
+                            .selected_text(if filters.wssi_day == 0 {
+                                "Off".to_string()
+                            } else {
+                                if filters.wssi_day == 4 { "Days 1–3".to_owned() } else { format!("Day {}", filters.wssi_day) }
+                            })
+                            .show_ui(ui, |ui| {
+                                for day in 0u8..=4 {
+                                    let label = if day == 0 {
+                                        "Off".to_string()
+                                    } else if day == 4 {
+                                        "Days 1–3".to_owned()
+                                    } else {
+                                        format!("Day {day}")
+                                    };
+                                    if ui
+                                        .selectable_value(&mut filters.wssi_day, day, label)
+                                        .changed()
+                                    {
+                                        actions.wssi_day_changed = true;
+                                        changed = true;
+                                    }
+                                }
+                            });
                         }
                     });
             });
-        }
-        for (day, name, health, count) in [
-            (filters.winter_snow_day, "Snow", winter_snow_health, winter_snow_feature_count),
-            (filters.winter_ice_day, "Ice", winter_ice_health, winter_ice_feature_count),
-        ] {
-            if day == 0 { continue; }
-            let (status, color) = match health.state() {
-                crate::app::HealthState::Fetching => ("loading", egui::Color32::LIGHT_BLUE),
-                crate::app::HealthState::Failed if count > 0 => ("refresh failed; showing older areas", egui::Color32::YELLOW),
-                crate::app::HealthState::Failed => ("NOAA WPC unavailable; try changing the day", egui::Color32::YELLOW),
-                crate::app::HealthState::Stale => ("source refresh overdue", egui::Color32::YELLOW),
-                crate::app::HealthState::Fresh if count == 0 => ("no ≥10% area forecast", egui::Color32::YELLOW),
-                crate::app::HealthState::Waiting => ("waiting for NOAA WPC data", egui::Color32::LIGHT_BLUE),
-                crate::app::HealthState::Fresh => ("outlook loaded", egui::Color32::LIGHT_GREEN),
-            };
-            ui.colored_label(color, egui::RichText::new(format!("{name}: {status}")).small());
-        }
-
-        // Winter Storm Severity Index: same off-plus-three-days shape as the outlook selector.
-        ui.label("Winter impacts");
-        egui::ComboBox::from_id_salt("wssi_day")
-            .width(ui.available_width() - 8.0)
-            .selected_text(if filters.wssi_day == 0 {
-                "Off".to_string()
-            } else {
-                if filters.wssi_day == 4 { "Days 1–3".to_owned() } else { format!("Day {}", filters.wssi_day) }
-            })
-            .show_ui(ui, |ui| {
-                for day in 0u8..=4 {
-                    let label = if day == 0 {
-                        "Off".to_string()
-                    } else if day == 4 {
-                        "Days 1–3".to_owned()
-                    } else {
-                        format!("Day {day}")
-                    };
-                    if ui
-                        .selectable_value(&mut filters.wssi_day, day, label)
-                        .changed()
-                    {
-                        actions.wssi_day_changed = true;
-                        changed = true;
-                    }
-                }
-            });
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(category_id, category));
     }
 
     if section == "Environment" {
