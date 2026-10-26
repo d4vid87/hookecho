@@ -285,6 +285,8 @@ pub struct Settings {
     pub reduce_motion: bool,
     /// Starred radar sites shown in the toolbox presets dropdown.
     pub presets: Vec<String>,
+    /// Most recently selected radars, newest first (at most twelve).
+    pub recent_sites: Vec<String>,
     /// Per-moment color-table override: moment short name (`REF`, `VEL`, …) -> `.pal` path.
     /// A missing key uses the built-in default table.
     pub palettes: BTreeMap<String, String>,
@@ -1406,6 +1408,7 @@ impl Default for Settings {
             accent: None,
             reduce_motion: false,
             presets: Vec::new(),
+            recent_sites: Vec::new(),
             palettes: BTreeMap::new(),
             velocity_unit: VelocityUnit::default(),
             temp_unit: TempUnit::default(),
@@ -1690,6 +1693,16 @@ impl Settings {
         loaded
     }
 
+    /// Record actual station changes rather than every opening of the selector.
+    pub(crate) fn remember_radar_site(&mut self, id: &str) -> bool {
+        let Some(site) = wxdata::sites::site_by_id(id) else { return false; };
+        if self.recent_sites.first().is_some_and(|id| id == site.id) { return false; }
+        self.recent_sites.retain(|id| id != site.id);
+        self.recent_sites.insert(0, site.id.to_string());
+        self.recent_sites.truncate(12);
+        true
+    }
+
     fn canonicalize_renamed_radar_sites(&mut self) -> bool {
         let mut changed = false;
         let mut canonicalize = |site: &mut String| {
@@ -1700,6 +1713,7 @@ impl Settings {
         };
         canonicalize(&mut self.default_site);
         for site in &mut self.presets { canonicalize(site); }
+        for site in &mut self.recent_sites { canonicalize(site); }
         for bookmark in &mut self.bookmarks { canonicalize(&mut bookmark.site); }
         for view in [&mut self.start_view, &mut self.last_view].into_iter().flatten() {
             canonicalize(&mut view.site);
@@ -2189,6 +2203,7 @@ mod tests {
             pause_while_panning: false,
             source_animation_speeds: SourceAnimationSpeeds::default(),
             presets: vec!["KTLX".to_string(), "KOUN".to_string()],
+            recent_sites: vec!["KTLX".to_string()],
             palettes: BTreeMap::from([("REF".to_string(), "/tmp/foo.pal".to_string())]),
             velocity_unit: VelocityUnit::Mph,
             temp_unit: TempUnit::Celsius,

@@ -13270,6 +13270,11 @@ impl HookEchoApp {
         let site_changed = self.views[idx].site != self.views[idx].loaded_site;
         if site_changed {
             self.record_interaction("switch_station");
+            if idx == self.active {
+                if let Some(site) = self.views[idx].site.as_deref() {
+                    if self.settings.remember_radar_site(site) { self.settings.save(); }
+                }
+            }
             if idx == self.active && self.analyst_open && self.link_cameras && self.views.len() == 4 {
                 let site = self.views[idx].site.clone();
                 for view in &mut self.views { view.site = site.clone(); }
@@ -23352,7 +23357,8 @@ impl eframe::App for HookEchoApp {
                 // the captions obscure one another.
                 let comparison_capture = self.views.len() > 1
                     && (self.share_card.is_some() || self.share_card_capture_frames > 0);
-                if !comparison_capture { self.scrubber(ctx); }
+                let site_picker_on_phone = phone_layout && self.site_dialog.is_some();
+                if !comparison_capture && !site_picker_on_phone { self.scrubber(ctx); }
                 if self.settings.radar_workspace && !phone_layout {
                     self.goes_time_bar(ctx);
                     workspace_imagery_bar_handled = true;
@@ -23365,7 +23371,7 @@ impl eframe::App for HookEchoApp {
                 }
                 self.basemap_panel(ctx);
                 if !phone_layout { self.info_chip(ctx); }
-                self.error_chip(ctx);
+                if !site_picker_on_phone { self.error_chip(ctx); }
                 if !phone_layout { self.update_chip(ctx); }
                 self.quality_chip(ctx);
             }
