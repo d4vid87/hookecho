@@ -3,7 +3,7 @@ export async function fixtureRadar(page, options = {}) {
  const fixture = await fs.readFile(new URL('../../../crates/wxdata/tests/data/kdmx-one-sweep.bin',import.meta.url));
  const abi = options.abi ? await fs.readFile(new URL("../../../crates/wxdata/tests/data/g19-c13-meso.nc", import.meta.url)) : null;
  const l3 = await fs.readFile(new URL('../../../crates/nexrad-level3/tests/data/n0g_tlx.l3',import.meta.url));
- const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[]};
+ const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[],outlookRequests:[]};
  const tile = options.satellite ? await fs.readFile(new URL("../../../web/icon-192.png", import.meta.url)) : null;
  await page.setRequestInterception(true);
  page.on('request',async request=>{
@@ -11,7 +11,10 @@ export async function fixtureRadar(page, options = {}) {
   if (url.href.includes("nexrad-level2.s3.amazonaws.com")) counts.radarRequests.push(url.href);
   if(options.networkState?.offline && (url.pathname.startsWith("/proxy/") || !["127.0.0.1", "localhost"].includes(url.hostname))) { counts.aborted.push(url.href); await request.abort("internetdisconnected"); return; }
   if(options.vectorResponse && url.href.includes('tiles.openfreemap.org')) { counts.vectorRequests.push(url.href); await request.respond(await options.vectorResponse(url)); return; }
-  if(options.vector && (url.href.includes('tiles.openfreemap.org') || url.pathname.startsWith('/vector-fixture/'))) {
+  if(options.outlooks && /\/products\/outlook\/day\d+otlk_.*\.geojson/.test(url.pathname)) {
+   counts.outlookRequests.push(url.href);
+   await request.respond({status:200,contentType:'application/geo+json',body:JSON.stringify({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Polygon',coordinates:[[[-94,41],[-93,41],[-93,42],[-94,42],[-94,41]]]},properties:{LABEL2:'SLGT',fill:'#ffff00',VALID:'202610251200'}}]})});
+  } else if(options.vector && (url.href.includes('tiles.openfreemap.org') || url.pathname.startsWith('/vector-fixture/'))) {
    counts.vectorRequests.push(url.href);
    if(url.href.includes('tiles.openfreemap.org')) await request.respond({status:200,contentType:'application/json',body:JSON.stringify({tiles:['http://127.0.0.1:8765/vector-fixture/{z}/{x}/{y}.pbf']})});
    else await request.respond({status:200,contentType:'application/x-protobuf',body:Buffer.alloc(0)});

@@ -485,6 +485,7 @@ impl HookEchoApp {
                                     ui.separator();
                                 }
                                 layout_choice = zeta_layout_menu(ui, self, &mut active_pane);
+                                if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
                                 if let Some(gap) = comparison_gap {
                                     ui.colored_label(accent, format!("Δ {}", humanize(gap)))
                                         .on_hover_text("Radar pane observation times differ.");
