@@ -20,6 +20,12 @@ impl HookEchoApp {
                 let name = frame.name();
                 if view.has_decoded_frame(name) || self.scan_cache.contains(&name.to_owned()) {
                     State::Ready
+                } else if view.timeline.current().is_none_or(|current| current.name() != name)
+                    && view.frame_history.iter().any(|(previous, state)|
+                        previous == name && *state == State::Skipped)
+                {
+                    // Retrying in the background does not undo the skip the user just saw.
+                    State::Skipped
                 } else if view.frame_request.pending_name() == Some(name) {
                     if view.load_phase == Some(level2::LoadPhase::Decoding) {
                         State::Decoding
