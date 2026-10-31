@@ -447,6 +447,7 @@ impl HookEchoApp {
                             if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
                             if zeta_button(ui, "MRMS", "Toggle MRMS reflectivity", self.views[idx].fields_on.contains(&crate::render::FieldLayer::Mrms)).clicked() { action = Some(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)); }
                             if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
+                                self.radar_opacity_menu(ui);
                             if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
                             if zeta_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
                             if zeta_button(ui, ph::PATH, "Draw a manual storm track", self.tool == MapTool::StormTrack).clicked() { action = Some(PaletteAction::Tool(MapTool::StormTrack)); }
@@ -474,7 +475,7 @@ impl HookEchoApp {
                         .corner_radius(18.0)
                         .inner_margin(egui::Margin::symmetric(10, 8))
                         .show(ui, |ui| {
-                            ui.set_width((if split { 520.0_f32 } else { 560.0_f32 })
+                            ui.set_width((if split { 600.0_f32 } else { 640.0_f32 })
                                 .min((self.chrome_rect.width() - 48.0).max(240.0)));
                             ui.spacing_mut().interact_size.y = if compact(ctx) { 44.0 } else { 30.0 };
                             ui.horizontal_wrapped(|ui| {
@@ -488,6 +489,7 @@ impl HookEchoApp {
                                 layout_choice = zeta_layout_menu(ui, self, &mut active_pane);
                                 if zeta_button(ui, "MRMS", "Toggle MRMS reflectivity", self.views[idx].fields_on.contains(&crate::render::FieldLayer::Mrms)).clicked() { action = Some(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)); }
                                 if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
+                                self.radar_opacity_menu(ui);
                                 if let Some(gap) = comparison_gap {
                                     ui.colored_label(accent, format!("Δ {}", humanize(gap)))
                                         .on_hover_text("Radar pane observation times differ.");

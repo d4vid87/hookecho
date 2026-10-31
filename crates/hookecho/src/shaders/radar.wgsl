@@ -23,7 +23,7 @@ struct Radar {
     gate_interval_km: f32,
     az_bins: f32,
     gate_count: f32,
-    smoothing: f32, // 0 = nearest, 1 = bilinear over valid gates
+    smoothing: f32, // 0 = nearest, 1 = bilinear, 2 = bilinear with range-fold classification
     srv: f32,       // 0 = ground-relative, 1 = subtract storm motion (velocity only)
     // Storm motion east/north, premultiplied into raw-index units (253 / value_span).
     motion_e: f32,
@@ -219,7 +219,11 @@ fn radar_color(in: VsOut) -> vec4<f32> {
     // lookup quantizes back to the table's bands, which is what made smoothed data still show
     // hard color edges. The nearest path rounds at the end and stays bit-identical.
     var rawf: f32;
-    if (radar.smoothing > 0.5) {
+    let center_raw = textureLoad(sweep_tex, vec2<i32>(i32(gate_f), i32(az_bin) % nbins), 0).r;
+    if (radar.smoothing > 1.5 && center_raw == 1u) {
+        // Range folding is a category, never a numeric input to interpolation.
+        rawf = 1.0;
+    } else if (radar.smoothing > 0.5) {
         // Bilinear over the four surrounding gates, blending only valid data cells
         // (raw >= 2). Interpolating raw indices is meaningful because each colormap is
         // monotonic in value across 2..=255.

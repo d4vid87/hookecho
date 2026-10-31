@@ -2272,6 +2272,9 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         let res: &RenderResources = resources.get().unwrap();
         if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.begin(pass); }
         res.record_pane(self.pane, pass);
+        if let Some(pane) = res.panes.get(&self.pane).filter(|pane| pane.frame_draw_radar) {
+            crate::gpu_metrics::mark_painted(self.pane as usize, pane.upload_token);
+        }
         if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.end(pass); }
     }
 }
@@ -2745,6 +2748,127 @@ mod smoothing_tests {
             gpu = resources.build_radar(&device, &queue, &upload, Some(gpu), false).unwrap();
             assert_ne!(first, read_cache(&device, &queue, &gpu), "changed gates rebuild smoothing");
             assert_eq!(gpu.shadow_bytes(), gpu.gate_bytes.len() + gpu.flag_bytes.len() + 256 * 12 + gates.len() * 4);
+        }
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_range_fold_visibility_preserves_classification_with_smoothing() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let instance = wgpu::Instance::default();
+        let adapter = rt.block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) = rt.block_on(adapter.request_device(&Default::default())).unwrap();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let resources = RenderResources::new(&device, format);
+        // The pixel lies inside folded gate 0, near the valid gate 1 boundary.
+        let (x, y) = mercator::lonlat_to_world(0.0, 0.008);
+        let camera = CameraUniform {
+            center: [x as f32, y as f32], scale: [1000.0, -1000.0],
+            world_per_pixel: 0.002, road_scale: 1.0, _pad: [0.0; 2],
+            globe: [0.0; 4], planar: [1.0, 0.0, 1.0, 0.0],
+        };
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None, contents: bytemuck::bytes_of(&camera),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None, layout: &resources.camera_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0, resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+        let vertices = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0],
+                        [-1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]
+            .map(|offset| RadarVertex {
+                world: [camera.center[0] + offset[0] * 0.001,
+                        camera.center[1] + offset[1] * 0.001],
+            });
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None, contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let size = wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None, size, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None, size: 256, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        });
+        let mut lut = vec![0u8; 256 * 3 * 4];
+        for row in lut.as_chunks_mut::<{ 256 * 4 }>().0 {
+            row[4..8].copy_from_slice(&[255, 0, 255, 255]);
+            for color in row[8..].as_chunks_mut::<4>().0 {
+                color.copy_from_slice(&[0, 255, 0, 255]);
+            }
+        }
+        for precision in [false, true] {
+            for multipass in [false, true] {
+                for mode in [1.0, 2.0] {
+                    let gates = [1u16, 50, 50].repeat(4);
+                    let mut uniform = [0.0; 20];
+                    uniform[3] = 1.0; uniform[4] = 4.0; uniform[5] = 3.0;
+                    uniform[6] = mode; uniform[17] = 1.0;
+                    uniform[18] = if precision { 65_535.0 } else { 255.0 };
+                    uniform[19] = if multipass { 1.0 } else { 0.0 };
+                    let upload = RadarUpload {
+                        upload_token: 1, cache_loop: false, az_bins: 4, gate_count: 3,
+                        data: gates.iter().map(|v| *v as u8).collect(),
+                        data16: precision.then_some(gates), uniform, sector_opacity: None,
+                        lut: lut.clone(), precip_flag: Vec::new(), world_min: [0.0; 2],
+                        world_max: [1.0; 2], lut_only: false,
+                    };
+                    let radar = resources.build_radar(&device, &queue, &upload, None, false).unwrap();
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: None,
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &target_view, depth_slice: None, resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None, timestamp_writes: None,
+                            occlusion_query_set: None, multiview_mask: None,
+                        });
+                        pass.set_pipeline(&resources.radar_pipeline);
+                        pass.set_bind_group(0, &camera_group, &[]);
+                        pass.set_bind_group(1, &radar.bind_group, &[]);
+                        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                        pass.draw(0..6, 0..1);
+                    }
+                    encoder.copy_texture_to_buffer(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &target, mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: &readback, layout: wgpu::TexelCopyBufferLayout {
+                                offset: 0, bytes_per_row: Some(256), rows_per_image: None,
+                            },
+                        }, size,
+                    );
+                    queue.submit(Some(encoder.finish()));
+                    let slice = readback.slice(..);
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+                    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                    rx.recv().unwrap().unwrap();
+                    {
+                        let bytes = slice.get_mapped_range();
+                        let expected = if mode == 2.0 { [255, 0, 255, 255] } else { [0, 255, 0, 255] };
+                        assert_eq!(&bytes[..4], &expected,
+                            "precision={precision}, multipass={multipass}, mode={mode}");
+                    }
+                    readback.unmap();
+                }
+            }
         }
     }
 }

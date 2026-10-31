@@ -21,6 +21,9 @@ pub struct RadarAppearance {
     pub precision: bool,
     #[serde(default)]
     pub multipass: bool,
+    /// Keep range-folded gates visibly classified when smoothing neighboring measurements.
+    #[serde(default)]
+    pub show_smoothed_range_folding: bool,
     #[serde(default)]
     pub fade_old_sectors: bool,
     #[serde(default)]
@@ -97,6 +100,7 @@ impl Default for RadarAppearance {
             blend_width: default_blend_width(),
             precision: false,
             multipass: false,
+            show_smoothed_range_folding: false,
             fade_old_sectors: false,
             upper_bounds: Default::default(),
             palettes: Default::default(),
@@ -147,6 +151,7 @@ impl RadarAppearance {
         self.blend_width.to_bits().hash(&mut h);
         self.precision.hash(&mut h);
         self.multipass.hash(&mut h);
+        self.show_smoothed_range_folding.hash(&mut h);
         self.fade_old_sectors.hash(&mut h);
         self.upper_bounds[moment.index()]
             .map(f32::to_bits)
@@ -167,6 +172,9 @@ impl RadarAppearance {
         scale_opacity(&mut upload.lut, self.opacity);
         upload.uniform[17] = self.blend_width;
         upload.uniform[19] = f32::from(self.multipass);
+        if upload.uniform[6] > 0.5 {
+            upload.uniform[6] = if self.show_smoothed_range_folding { 2.0 } else { 1.0 };
+        }
         if let Some(ceiling) = self.upper_bounds[moment.index()] {
             mask_above(&mut upload.lut, moment.value_range(), ceiling);
         }
@@ -210,6 +218,33 @@ mod tests {
         appearance.opacity = f32::NAN;
         appearance.sanitize();
         assert_eq!(appearance.opacity, 1.0);
+    }
+
+    #[test]
+    fn folded_visibility_is_saved_and_changes_only_display_uniforms() {
+        let mut appearance: RadarAppearance = serde_json::from_str("{}").unwrap();
+        assert!(!appearance.show_smoothed_range_folding);
+        let before = appearance.fingerprint(Moment::Reflectivity);
+        appearance.show_smoothed_range_folding = true;
+        assert_ne!(before, appearance.fingerprint(Moment::Reflectivity));
+        let restored: RadarAppearance = serde_json::from_str(&serde_json::to_string(&appearance).unwrap()).unwrap();
+        assert!(restored.show_smoothed_range_folding);
+        let mut upload = crate::render::RadarUpload {
+            upload_token: 1, cache_loop: false, az_bins: 1, gate_count: 3,
+            data: vec![0, 1, 20], data16: Some(vec![0, 1, 2048]), uniform: [0.0; 20],
+            sector_opacity: None, lut: vec![255; 256 * 3 * 4], precip_flag: Vec::new(),
+            world_min: [0.0; 2], world_max: [1.0; 2], lut_only: false,
+        };
+        appearance.apply_upload(&mut upload, Moment::Reflectivity);
+        assert_eq!(upload.uniform[6], 0.0, "does not turn smoothing on");
+        upload.uniform[6] = 1.0;
+        appearance.apply_upload(&mut upload, Moment::Reflectivity);
+        assert_eq!(upload.uniform[6], 2.0);
+        appearance.show_smoothed_range_folding = false;
+        appearance.apply_upload(&mut upload, Moment::Reflectivity);
+        assert_eq!(upload.uniform[6], 1.0);
+        assert_eq!(upload.data, [0, 1, 20]);
+        assert_eq!(upload.data16.unwrap(), [0, 1, 2048]);
     }
 
     #[test]

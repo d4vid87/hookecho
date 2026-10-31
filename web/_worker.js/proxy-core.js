@@ -18,6 +18,7 @@ export const ALLOWED_HOSTS = [
   "unidata-nexrad-level2.s3.amazonaws.com",
   "unidata-nexrad-level2-chunks.s3.amazonaws.com",
   "unidata-nexrad-level3.s3.amazonaws.com",
+  "mesonet-nexrad.agron.iastate.edu",
   // Gridded and satellite feeds.
   "noaa-mrms-pds.s3.amazonaws.com",
   "noaa-hrrr-bdp-pds.s3.amazonaws.com",
@@ -118,6 +119,7 @@ function modelRange(request, host) {
 // which is what keeps a front-page demo off NOAA's rate limits.
 // ponytail: two classes, not a per-host map — add one if a specific feed complains.
 export const LIVE_HOSTS = new Set([
+  "mesonet-nexrad.agron.iastate.edu", // ONDAS dir.list changes as each volume arrives.
   "unidata-nexrad-level2-chunks.s3.amazonaws.com",
   "api.weather.gov",
   // DWD republishes every `-LATEST-` sweep on a five-minute cycle at a URL that never changes,

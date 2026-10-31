@@ -22,6 +22,13 @@ pub fn uploads() -> [u64; 4] { *UPLOADS.lock().unwrap() }
 pub fn upload_acknowledged(pane: usize, token: u64) -> bool {
     token != 0 && uploads().get(pane) == Some(&token)
 }
+
+static PAINTED: Mutex<[u64; 4]> = Mutex::new([0; 4]);
+/// A map callback recorded this sweep into a render pass (not merely uploaded it).
+pub fn mark_painted(pane: usize, token: u64) {
+    if let Some(slot) = PAINTED.lock().unwrap().get_mut(pane) { *slot = token; }
+}
+pub fn painted_tokens() -> [u64; 4] { *PAINTED.lock().unwrap() }
 pub fn next_upload_token() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)

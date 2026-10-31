@@ -126,6 +126,16 @@ test("model byte ranges reach the upstream and remain partial responses", async 
   assert.deepEqual(calls[0].init.headers, { "user-agent": calls[0].init.headers["user-agent"], range: "bytes=0-3" });
 });
 
+test("IEM catalogue and volume URLs are allowed without caching the head for five minutes", async () => {
+  for (const path of ["dir.list", "KTLX_20261031_191524.bz2"]) {
+    const calls = stubFetch(upstream({}, "radar"));
+    const res = await proxy(ask("mesonet-nexrad.agron.iastate.edu/level2/raw/KTLX/" + path));
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("cache-control"), /max-age=15(?:,|$)/);
+    assert.equal(calls.length, 1);
+  }
+});
+
 test("ordinary radar objects ignore browser resume ranges", async () => {
   const calls = stubFetch(upstream({}, "TDWR"));
   const res = await proxy(ask("unidata-nexrad-level3.s3.amazonaws.com/DFW_TZ1_2026_10_15_18_26_23", { range: "bytes=0-100" }));

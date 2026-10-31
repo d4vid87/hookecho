@@ -3410,6 +3410,8 @@ pub struct HookEchoApp {
     /// Palette generation currently baked into each pane's LUT (see [`ShownKey`]).
     pane_lut: std::collections::HashMap<usize, u64>,
     pane_upload_tokens: std::collections::HashMap<usize, u64>,
+    linked_playback_wait: Option<(String, Instant)>,
+    radar_provider: level2::Level2Provider,
     /// Lazily measured shared scan payloads; weak identities do not retain volumes.
     radar_memory: crate::radar_memory::Inventory,
     radar_memory_highwater: usize,
@@ -4591,6 +4593,7 @@ impl HookEchoApp {
             tiles,
             ndfd_legends: Default::default(),
             saved: settings.clone(),
+            radar_provider: settings.radar_feed.provider(),
             settings,
             views: vec![view],
             active: 0,
@@ -4613,6 +4616,7 @@ impl HookEchoApp {
             pane_shown: std::collections::HashMap::new(),
             pane_lut: std::collections::HashMap::new(),
             pane_upload_tokens: Default::default(),
+            linked_playback_wait: None,
             pane_custom_sweep: std::collections::HashMap::new(),
             radar_memory: Default::default(),
             radar_memory_highwater: 0,
@@ -7660,7 +7664,7 @@ impl HookEchoApp {
         }
         self.warmed_site = Some((site.clone(), Instant::now()));
         log::debug!("chase: warming {site} ahead of the handoff");
-        self.spawner.spawn(crate::chase::warm(site));
+        self.spawner.spawn(crate::chase::warm(site, self.settings.radar_feed.provider()));
     }
 
     /// Start the Google sign-in: bind a loopback port, send the browser to Google, and wait for
@@ -12619,6 +12623,7 @@ impl HookEchoApp {
         let generation = self.views[view_idx].head_request.start(site.clone());
         let request_site = site.clone();
         let current_tdwr_revision = self.views[view_idx].tdwr_revision.clone();
+        let provider = self.settings.radar_feed.provider();
         let tx = self.msg_tx.clone();
         let network = wxdata::sites::network(&site);
         if network != wxdata::sites::Network::Nexrad {
@@ -12684,7 +12689,7 @@ impl HookEchoApp {
             // its metadata record lands can't be decoded at all. Falling back one volume shows
             // ~5-minute-old data instead of nothing.
             let msg = wxdata::task::timeout(VOLUME_TIMEOUT, async {
-                match level2::latest_identifiers(&site, 2).await.map(|mut v| {
+                match level2::latest_identifiers_from(&site, 2, provider).await.map(|mut v| {
                 let first = v.remove(0);
                 (first, v.pop())
                 }) {
@@ -12786,7 +12791,26 @@ impl HookEchoApp {
         }
     }
 
+    fn sync_radar_provider(&mut self) {
+        let provider = self.settings.radar_feed.provider();
+        if provider == self.radar_provider { return; }
+        self.radar_provider = provider;
+        self.warmed_site = None;
+        self.live_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.live_stream = None;
+        self.last_stream_attempt = None;
+        self.linked_playback_wait = None;
+        for (idx, view) in self.views.iter_mut().enumerate() {
+            if !view.site.as_deref().is_some_and(wxdata::sites::is_nexrad) { continue; }
+            view.reset_radar_provider();
+            self.pane_shown.remove(&idx);
+            self.pane_upload_tokens.insert(idx, 0);
+        }
+        // Source-tagged cache keys let existing prefetches finish without contaminating this feed.
+    }
+
     fn poll_messages(&mut self) {
+        self.sync_radar_provider();
         self.drain_feed_errors();
         self.speak_visible_warnings();
         while let Ok(msg) = self.msg_rx.try_recv() {
@@ -12924,7 +12948,7 @@ impl HookEchoApp {
                     status,
                     ..
                 } => {
-                    if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly
+                    if self.settings.radar_feed != crate::settings::RadarFeed::Automatic
                         || !live_update_is_current(self.live_stream.as_ref(), view, &site, gen)
                     {
                         continue; // queued results from a replaced stream cannot overwrite the feed
@@ -13043,7 +13067,7 @@ impl HookEchoApp {
                 self.live_stream = None;
                 // A new site shouldn't inherit the old one's 60 s retry gate.
                 self.last_stream_attempt = None;
-                if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly {
+                if self.settings.radar_feed != crate::settings::RadarFeed::Automatic {
                     self.views[idx].last_poll = None;
                     self.views[idx].live_stream_ended();
                     ctx.request_repaint(); // archive poll on the next frame
@@ -13076,6 +13100,7 @@ impl HookEchoApp {
         ctx: egui::Context,
         gen: u64,
     ) {
+        if self.settings.radar_feed != crate::settings::RadarFeed::Automatic { return; }
         let tx = self.msg_tx.clone();
         let live_gen = Arc::clone(&self.live_gen);
         let active = move || {
@@ -13402,8 +13427,10 @@ impl HookEchoApp {
         // A frame switch bins and uploads a full sweep. Holding animation while the map is under
         // the pointer keeps that unavoidable work out of the gesture; playback resumes on release.
         let next_pending = next_pending || (self.views[idx].show_radar && self.views[idx].volume.as_ref().is_some_and(Volume::display_pending));
+        let linked_pending = idx == self.active && self.linked_playback_pending(ctx);
+        let next_pending = next_pending || linked_pending;
         self.views[idx].buffering = next_pending;
-        if should_advance_timeline(next_pending, self.settings.pause_while_panning && self.gesture_live) {
+        if (!self.link_times || idx == self.active) && should_advance_timeline(next_pending, self.settings.pause_while_panning && self.gesture_live) {
             self.views[idx].advance_playback();
         }
         if self.views[idx].timeline.following {
@@ -13413,7 +13440,8 @@ impl HookEchoApp {
         self.views[idx].sync_cut_playback();
         // A cached volume can become ready during sync_timeline, so schedule after its cuts
         // are known instead of waiting for the idle heartbeat to resume playback.
-        if let Some(dt) = self.views[idx].timeline.time_to_next_frame() {
+        if let Some(dt) = self.views[idx].timeline.time_to_next_frame()
+            .filter(|_| !self.link_times || idx == self.active) {
             // A due playhead must not busy-loop while background preparation is still pending.
             let dt = if next_pending { dt.max(std::time::Duration::from_millis(50)) } else { dt };
             ctx.request_repaint_after(dt);
@@ -13423,6 +13451,24 @@ impl HookEchoApp {
         if idx == self.active {
             self.manage_stream(ctx);
         }
+    }
+
+    fn linked_playback_pending(&mut self, ctx: &egui::Context) -> bool {
+        if !self.link_times || self.views.len() < 2 || chrome::compact(ctx)
+            || !self.views[self.active].timeline.playing {
+            self.linked_playback_wait = None;
+            return false;
+        }
+        let leader = &self.views[self.active];
+        let key = format!("{}:{:?}:{:?}", self.active,
+            leader.timeline.current().map(|id| id.name()), leader.linked_requested_time());
+        let painted = crate::gpu_metrics::painted_tokens();
+        let ready = self.views.iter().enumerate().all(|(idx, view)| {
+            linked_pane_presented(view, self.pane_shown.get(&idx),
+                self.pane_upload_tokens.get(&idx).copied().unwrap_or(0),
+                painted.get(idx).copied().unwrap_or(0), self.settings.linked_time_limit_seconds)
+        });
+        wait_for_linked_presentation(&mut self.linked_playback_wait, key, ready, Instant::now())
     }
 
     /// Reconcile the frame listing and the displayed volume with the timeline: keep the
@@ -13474,7 +13520,7 @@ impl HookEchoApp {
                     .is_none_or(|t| t.elapsed().as_secs() >= self.poll_interval_secs());
                 let current_name = if looping {
                     v.timeline.frames.last().map(|id| id.name().to_string())
-                } else if self.settings.radar_feed == crate::settings::RadarFeed::ArchiveOnly
+                } else if self.settings.radar_feed != crate::settings::RadarFeed::Automatic
                     && v.volume.as_ref().is_some_and(|vol| vol.live_status.is_some())
                 {
                     // Replace a partial streamed scan with the complete archive object even
@@ -13758,6 +13804,11 @@ impl HookEchoApp {
     /// List the archive volumes for `site` on `date` (timeline frames).
     fn spawn_list_frames(&mut self, view_idx: usize, site: String, date: NaiveDate, ctx: egui::Context) {
         let identity = format!("{site}:{date}");
+        let provider = if date < Utc::now().date_naive() - chrono::Duration::days(1) {
+            level2::Level2Provider::S3
+        } else {
+            self.settings.radar_feed.provider()
+        };
         let generation = self.views[view_idx].list_request.start(identity.clone());
         let tx = self.msg_tx.clone();
         let http = self.http.clone();
@@ -13766,7 +13817,7 @@ impl HookEchoApp {
                 if wxdata::tdwr::is_tdwr(&site) {
                     wxdata::tdwr::list_volumes(&http, &site, date).await
                 } else {
-                    level2::list_volumes(&site, date).await
+                    level2::list_volumes_from(&site, date, provider).await
                 }
             }).await.unwrap_or_else(Err);
             let result = match fetched {
@@ -14118,6 +14169,7 @@ impl HookEchoApp {
                 .appearance
                 .table(&self.palettes, palette_moment, self.settings.theme);
         let mut upload = to_upload(sweep, &table, None, smooth, None, None, lut_only);
+        self.views[idx].appearance.apply_upload(&mut upload, palette_moment);
         apply_coverage_range(&mut upload, self.settings.full_coverage_radar,
             self.views[idx].displayed_station().is_some_and(wxdata::sites::is_nexrad)
             || self.views[idx].site.as_deref().is_some_and(wxdata::sites::is_nexrad));
@@ -14347,13 +14399,15 @@ impl HookEchoApp {
             format!(" · age {age}s")
         } else { String::new() };
         Some(format!(
-            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {:.0} ft\nGate {} · {:.3} km spacing\n{}{freshness}",
+            "{site} {vcp} · {}\n{value}{dealiased}{nyquist}\nElevation {:.2}° · azimuth {:.2}°\nGround {:.1} km · slant {:.1} km · beam {}\nGate {} · {:.3} km spacing\n{}{freshness}",
             moment.short_name(),
             sample.elevation_deg,
             sample.azimuth_deg,
             sample.ground_range_km,
             sample.slant_range_km,
-            sample.beam_height_ft,
+            self.settings.beam_height_label(sample.beam_height_ft,
+                wxdata::sites::site_by_id(&site).map(|site|
+                    site.elevation_meters as f64 + wxdata::towers::tower_m(site.id))),
             sample.gate,
             sample.gate_spacing_km,
             sample.collected_at.format("%Y-%m-%d %H:%M:%S UTC")
@@ -21473,6 +21527,30 @@ fn should_advance_timeline(next_pending: bool, gesture_live: bool) -> bool {
     !next_pending && !gesture_live
 }
 
+fn linked_pane_presented(
+    view: &MapView, shown: Option<&ShownKey>, token: u64, painted: u64, limit: Option<u32>,
+) -> bool {
+    if !view.show_radar || view.site.is_none() { return true; }
+    let Some(requested) = view.timeline.current() else { return false; };
+    let Some(volume) = &view.volume else { return false; };
+    volume.name == requested.name() && !volume.display_pending()
+        && view.alignment_acceptable(limit)
+        && shown.is_some_and(|shown| shown.0 == volume.name
+            && shown.2 == view.tilt && shown.8 == view.selected_cut_ms())
+        && token != 0 && painted == token
+}
+
+/// A missing pane may delay a loop, but must never park it permanently.
+fn wait_for_linked_presentation(
+    waiting: &mut Option<(String, Instant)>, key: String, ready: bool, now: Instant,
+) -> bool {
+    if ready { *waiting = None; return false; }
+    if waiting.as_ref().is_none_or(|(previous, _)| *previous != key) {
+        *waiting = Some((key, now));
+    }
+    waiting.as_ref().is_some_and(|(_, since)| now.duration_since(*since) < std::time::Duration::from_secs(8))
+}
+
 fn paint_scan_progress(
     painter: &egui::Painter,
     center: egui::Pos2,
@@ -23540,6 +23618,7 @@ impl eframe::App for HookEchoApp {
             &entries,
             &mut self.drawer,
         );
+        self.sync_radar_provider();
         if previous_optional_alerts.is_some_and(|previous| previous != self.settings.optional_alert_events) {
             self.alert_features.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
             self.arch_warns.clear();
@@ -25532,6 +25611,45 @@ mod tests {
         assert!(should_advance_timeline(false, false));
         assert!(!should_advance_timeline(true, false));
         assert!(!should_advance_timeline(false, true));
+    }
+
+    #[test]
+    fn linked_playback_requires_the_requested_sweep_to_be_painted() {
+        use super::{Arc, level2, Moment};
+        let camera = crate::render::mercator::Camera::at_lonlat(-93.72, 41.73, 6.0);
+        let mut view = crate::view::MapView::new(Some("KDMX".into()), camera);
+        let id = level2::Identifier::new("KDMX20261019_170000".into());
+        let time = id.date_time().unwrap();
+        view.timeline.frames = vec![id.clone()];
+        let scan = Arc::new(level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
+        view.volume = Some(crate::view::Volume::new(scan, id.name().into(), time));
+        let shown = (id.name().into(), Moment::Reflectivity, 0, None, false, None, false, None, None, None, false);
+        assert!(!super::linked_pane_presented(&view, None, 1, 1, Some(120)));
+        assert!(!super::linked_pane_presented(&view, Some(&shown), 2, 1, Some(120)), "upload is not presentation");
+        assert!(!super::linked_pane_presented(&view, Some(&shown), 0, 0, Some(120)));
+        assert!(super::linked_pane_presented(&view, Some(&shown), 2, 2, Some(120)));
+        view.timeline.alignment_target = Some(time + chrono::Duration::seconds(121));
+        assert!(!super::linked_pane_presented(&view, Some(&shown), 2, 2, Some(120)));
+        view.timeline.alignment_target = None;
+        view.tilt = 1;
+        assert!(!super::linked_pane_presented(&view, Some(&shown), 2, 2, Some(120)));
+        view.tilt = 0;
+        view.timeline.frames[0] = level2::Identifier::new("KDMX20261019_170600".into());
+        assert!(!super::linked_pane_presented(&view, Some(&shown), 2, 2, Some(120)), "retained old frame cannot release the barrier");
+        view.show_radar = false;
+        assert!(super::linked_pane_presented(&view, None, 0, 0, Some(120)), "hidden radar does not block playback");
+    }
+
+    #[test]
+    fn linked_playback_waits_for_presentation_but_times_out_per_frame() {
+        let now = Instant::now();
+        let mut waiting = None;
+        assert!(super::wait_for_linked_presentation(&mut waiting, "frame1".into(), false, now));
+        assert!(super::wait_for_linked_presentation(&mut waiting, "frame1".into(), false, now + std::time::Duration::from_secs(7)));
+        assert!(!super::wait_for_linked_presentation(&mut waiting, "frame1".into(), false, now + std::time::Duration::from_secs(8)));
+        assert!(super::wait_for_linked_presentation(&mut waiting, "frame2".into(), false, now + std::time::Duration::from_secs(9)));
+        assert!(!super::wait_for_linked_presentation(&mut waiting, "frame2".into(), true, now + std::time::Duration::from_secs(10)));
+        assert!(waiting.is_none());
     }
 
     #[test]

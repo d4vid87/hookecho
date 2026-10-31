@@ -64,9 +64,9 @@ pub fn next_site(track: &Track, current: Option<&str>, minutes: f64) -> Option<S
 ///
 /// Nothing is shown and nothing is reported: a failed warm-up is a handoff that behaves the way
 /// it did before this module existed.
-pub async fn warm(site: String) {
+pub async fn warm(site: String, provider: wxdata::level2::Level2Provider) {
     let date = chrono::Utc::now().date_naive();
-    let Ok(ids) = wxdata::level2::list_volumes(&site, date).await else {
+    let Ok(ids) = wxdata::level2::list_volumes_from(&site, date, provider).await else {
         return;
     };
     let Some(newest) = ids.into_iter().next_back() else {
@@ -124,7 +124,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         crate::paths::set_base(dir.clone());
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(warm("KTLX".to_string()));
+        rt.block_on(warm("KTLX".to_string(), wxdata::level2::Level2Provider::S3));
         let volumes = crate::paths::cache_dir().unwrap().join("volumes");
         let n = std::fs::read_dir(&volumes).map(|d| d.count()).unwrap_or(0);
         assert!(n > 0, "nothing cached in {}", volumes.display());
