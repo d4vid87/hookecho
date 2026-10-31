@@ -783,6 +783,16 @@ fn units_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             ui.selectable_value(&mut settings.temp_unit, u, u.label());
         }
     });
+    ui.label("Radar beam height (Analysis)");
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut settings.beam_height_msl, false, "Above radar (ARL)");
+        ui.selectable_value(&mut settings.beam_height_msl, true, "Sea level (MSL)");
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut settings.beam_height_meters, false, "Feet");
+        ui.selectable_value(&mut settings.beam_height_meters, true, "Meters");
+    });
+    ui.weak("Above radar is relative to the antenna, not the terrain under the beam.");
     ui.label("Time display");
     ui.horizontal_wrapped(|ui| {
         for d in TimeDisplay::ALL {
@@ -1277,14 +1287,19 @@ fn radar_defaults(ui: &mut egui::Ui, settings: &mut Settings) {
             egui::ComboBox::from_id_salt("radar_feed")
                 .selected_text(match settings.radar_feed {
                     crate::settings::RadarFeed::Automatic => "Automatic",
-                    crate::settings::RadarFeed::ArchiveOnly => "Archive polling",
+                    crate::settings::RadarFeed::ArchiveOnly => "S3 archive polling",
+                    crate::settings::RadarFeed::Iem => "Iowa State · recent volumes",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::Automatic, "Automatic · live chunks, archive fallback");
-                    ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::ArchiveOnly, "Archive polling only");
+                    ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::ArchiveOnly, "S3 · archive polling only");
+                    ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::Iem, "Iowa State · recent Level II volumes");
                 });
             ui.end_row();
         });
+    if settings.radar_feed == crate::settings::RadarFeed::Iem {
+        ui.weak("Iowa State supplies recent WSR-88D volumes. Older archive dates use S3. TDWR and European feeds are unchanged.");
+    }
     let valid = wxdata::sites::site_by_id(&settings.default_site).is_some();
     if !valid && !settings.default_site.is_empty() {
         ui.colored_label(egui::Color32::YELLOW, "⚠ unknown site id");

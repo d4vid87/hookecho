@@ -1537,6 +1537,7 @@ const ALLOWED_HOSTS: &[&str] = &[
     "unidata-nexrad-level2.s3.amazonaws.com",
     "unidata-nexrad-level2-chunks.s3.amazonaws.com",
     "unidata-nexrad-level3.s3.amazonaws.com",
+    "mesonet-nexrad.agron.iastate.edu",
     // Gridded and satellite feeds.
     "noaa-mrms-pds.s3.amazonaws.com",
     "noaa-hrrr-bdp-pds.s3.amazonaws.com",
@@ -1605,6 +1606,7 @@ const ALLOWED_HOSTS: &[&str] = &[
 
 /// The feeds that go stale in seconds. Mirrors `LIVE_HOSTS` in web/_worker.js/proxy-core.js.
 const LIVE_HOSTS: &[&str] = &[
+    "mesonet-nexrad.agron.iastate.edu", // ONDAS dir.list changes as each volume arrives.
     "unidata-nexrad-level2-chunks.s3.amazonaws.com",
     "api.weather.gov",
     // DWD republishes every `-LATEST-` sweep on a five-minute cycle at a URL that never changes,
@@ -2372,6 +2374,7 @@ mod tests {
         assert_eq!(cache_seconds("geo.weather.gc.ca", "SERVICE=WFS"), 15);
         assert_eq!(cache_seconds("api.weather.gov", ""), 15);
         assert_eq!(cache_seconds("opendata.dwd.de", ""), 15);
+        assert_eq!(cache_seconds("mesonet-nexrad.agron.iastate.edu", ""), 15);
         assert_eq!(cache_seconds("tgftp.nws.noaa.gov", ""), 300);
         assert_eq!(cache_seconds("cwwp2.dot.ca.gov", ""), 60);
         assert_eq!(cache_seconds("basemaps.cartocdn.com", ""), 300);

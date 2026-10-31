@@ -306,7 +306,12 @@ impl HookEchoApp {
             .and_then(|p| Moment::from_code(&p.palette))
             .unwrap_or(pane.moment);
         ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
+        aurora_frame().show(ui, |ui| {
+            radar_opacity_contents(ui, &mut pane.appearance.opacity, false);
+        });
         if smooth {
+            ui.checkbox(&mut pane.appearance.show_smoothed_range_folding, "Show range-folded areas")
+                .on_hover_text("Keep ambiguous radar returns in their range-fold color instead of blending valid neighbors over them.");
             ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Caches extra GPU data.");
             ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
                 .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
@@ -348,6 +353,100 @@ impl HookEchoApp {
         });
         ui.label("Appearance applies to the active pane and is saved with its workspace.");
     }
+
+    /// The same per-pane control is reachable without opening the product picker.
+    pub(super) fn radar_opacity_menu(&mut self, ui: &mut egui::Ui) {
+        let button = ui.add_sized([68.0, 44.0], egui::Button::new("Opacity"))
+            .named("Radar opacity").on_hover_text("Fade the active pane's radar");
+        egui::Popup::menu(&button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .frame(aurora_frame())
+            .show(|ui| {
+                ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(200.0, 300.0));
+                radar_opacity_contents(ui, &mut self.views[self.active].appearance.opacity, true);
+            });
+    }
+}
+
+fn aurora_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgba_unmultiplied(39, 28, 55, 235))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(187, 134, 255)))
+        .corner_radius(20.0)
+        .inner_margin(16)
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 0], blur: 18, spread: 1,
+            color: egui::Color32::from_rgba_unmultiplied(173, 117, 255, 28),
+        })
+}
+
+/// Scope the purple styling so it never recolors neighboring product controls.
+fn radar_opacity_contents(ui: &mut egui::Ui, opacity: &mut f32, close: bool) {
+    ui.scope(|ui| {
+        let purple = egui::Color32::from_rgb(201, 160, 255);
+        let text = egui::Color32::from_rgb(241, 234, 255);
+        ui.visuals_mut().override_text_color = Some(text);
+        ui.visuals_mut().selection.bg_fill = egui::Color32::from_rgb(112, 69, 159);
+        ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, text);
+        ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::from_rgb(57, 43, 75);
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(57, 43, 75);
+        ui.visuals_mut().widgets.hovered.bg_fill = egui::Color32::from_rgb(88, 58, 117);
+        ui.visuals_mut().widgets.active.bg_fill = purple;
+        ui.visuals_mut().widgets.active.fg_stroke = egui::Stroke::new(2.0, text);
+        ui.spacing_mut().item_spacing.y = 10.0;
+        ui.spacing_mut().interact_size.y = 44.0;
+        ui.horizontal(|ui| {
+            ui.strong("Radar appearance");
+            if close {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add_sized([44.0, 44.0], egui::Button::new("×"))
+                        .named("Close radar opacity").clicked() { ui.close(); }
+                });
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Radar opacity");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new(format!("{:.0}%", *opacity * 100.0))
+                    .size(28.0).color(purple));
+            });
+        });
+        ui.spacing_mut().slider_width = ui.available_width();
+        ui.scope(|ui| {
+            ui.visuals_mut().widgets.inactive.bg_fill = text;
+            ui.visuals_mut().widgets.hovered.bg_fill = text;
+            ui.add(egui::Slider::new(opacity, 0.0..=1.0)
+                .show_value(false).step_by(0.01).trailing_fill(true)
+                .handle_shape(egui::style::HandleShape::Circle))
+                .named("Radar opacity percentage")
+                .on_hover_text("Fade radar to reveal the map. Measurements remain unchanged.");
+        });
+        ui.horizontal(|ui| {
+            ui.small("Clear map · 0%");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.small("Full radar · 100%");
+            });
+        });
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.0;
+            for percent in [25, 50, 75, 100] {
+                let value = percent as f32 / 100.0;
+                if ui.add_sized([width, 44.0],
+                    egui::Button::new(format!("{percent}%"))
+                        .selected((*opacity - value).abs() < 0.005))
+                    .named(&format!("Set radar opacity to {percent}%")).clicked() {
+                    *opacity = value;
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.small("Map labels stay clear");
+            if ui.button("Reset · 100%").named("Reset radar opacity").clicked() {
+                *opacity = 1.0;
+            }
+        });
+    });
 }
 
 #[cfg(test)]
@@ -368,5 +467,46 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert!(restored.favorite_fields.contains(&relative));
         assert!(!restored.favorite_fields.contains(&velocity));
+    }
+
+    #[test]
+    fn aurora_presets_and_reset_update_the_same_opacity() {
+        let ctx = egui::Context::default();
+        let mut opacity = 1.0;
+        let mut draw = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO, egui::vec2(390.0, 844.0))),
+                events, ..Default::default()
+            }, |ui| {
+                ui.set_width(300.0);
+                aurora_frame().show(ui, |ui| {
+                    radar_opacity_contents(ui, &mut opacity, false);
+                });
+            })
+        };
+        let mut output = draw(Vec::new());
+        for label in ["25%", "50%", "75%", "100%", "25%", "Reset · 100%"] {
+            let pos = output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    (text.galley.text() == label)
+                        .then_some(text.pos + text.galley.rect.center().to_vec2())
+                } else { None }
+            }).unwrap_or_else(|| panic!("missing control: {label}"));
+            let _ = draw(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
+                    pressed: true, modifiers: egui::Modifiers::default() },
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
+                    pressed: false, modifiers: egui::Modifiers::default() },
+            ]);
+            // Read the next rendered percentage; controls must update the bound value.
+            output = draw(Vec::new());
+            let expected = if label.starts_with("Reset") { "100%" } else { label };
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == expected
+                    && text.galley.rect.height() > 25.0)));
+        }
+        assert_eq!(opacity, 1.0);
     }
 }

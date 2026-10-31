@@ -661,6 +661,22 @@ impl MapView {
         self.buffering = false;
     }
 
+    /// A source change invalidates asynchronous replies, but preserves the camera and requested time.
+    pub fn reset_radar_provider(&mut self) {
+        if !self.timeline.following && self.timeline.seek_target.is_none() {
+            self.timeline.seek_target = self.timeline.current().and_then(|id| id.date_time());
+        }
+        self.begin_station_switch();
+        self.volume = None;
+        self.retained_station = None;
+        self.timeline.frames.clear();
+        self.timeline.playhead = 0;
+        self.loading = false;
+        self.last_poll = None;
+        self.error = None;
+        self.fetch_failures = 0;
+    }
+
     pub fn show_volume(&mut self, scan: Arc<Scan>, name: String, time: DateTime<Utc>) {
         self.frame_history.retain(|(previous, _)| previous != &name);
         let was_retained = self.retained_station.is_some();
@@ -1374,6 +1390,36 @@ mod tests {
         // SRV never applies to non-velocity moments.
         v.moment = Moment::Reflectivity;
         assert_eq!(v.storm_motion_uv(), None);
+    }
+
+    #[test]
+    fn provider_switch_rejects_queued_replies_and_preserves_history_location() {
+        let camera = Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let mut view = MapView::new(Some("KTLX".into()), camera);
+        view.loaded_site = view.site.clone();
+        let id = wxdata::level2::Identifier::new("KTLX20261031_120000".into());
+        let target = id.date_time().unwrap();
+        view.timeline.following = false;
+        view.timeline.frames = vec![id];
+        view.show_volume(scan_at(&[0.5]), "old".into(), target);
+        view.loading = true;
+        view.last_poll = Some(Instant::now());
+        let head = view.head_request.start("KTLX".into());
+        let list = view.list_request.start("KTLX:2026-10-31".into());
+        let frame = view.frame_request.start("old".into());
+        view.reset_radar_provider();
+        assert!(!view.head_request.matches("KTLX", head));
+        assert!(!view.list_request.matches("KTLX:2026-10-31", list));
+        assert!(!view.frame_request.matches("old", frame));
+        assert!(view.volume.is_none());
+        assert!(view.timeline.frames.is_empty());
+        assert_eq!(view.timeline.seek_target, Some(target));
+        assert!(!view.timeline.following);
+        assert_eq!(view.camera.center, camera.center);
+        assert_eq!(view.camera.zoom, camera.zoom);
+        assert_eq!(view.site.as_deref(), Some("KTLX"));
+        assert!(!view.loading);
+        assert!(view.last_poll.is_none());
     }
 
     #[test]

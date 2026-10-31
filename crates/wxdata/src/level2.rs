@@ -20,6 +20,64 @@ pub fn scan_gate_bytes(scan: &Scan) -> usize {
     }).sum()
 }
 
+/// Explicit Level 2 source. IEM has recent volumes; S3 also supplies historical archives.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Level2Provider {
+    #[default]
+    S3,
+    Iem,
+}
+
+const IEM_BASE: &str = "https://mesonet-nexrad.agron.iastate.edu/level2/raw";
+
+fn valid_iem_site(site: &str) -> bool {
+    site.len() == 4 && site.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+/// Normalize only well-formed ONDAS filenames; the suffix keeps caches source-specific.
+fn iem_identifier(site: &str, filename: &str) -> Option<Identifier> {
+    if !valid_iem_site(site) || !filename.is_ascii() || filename.len() != 24
+        || !filename.starts_with(site) || filename.as_bytes()[4] != b'_'
+        || filename.as_bytes()[13] != b'_' || !filename.ends_with(".bz2")
+        || !filename[5..13].bytes().all(|b| b.is_ascii_digit())
+        || !filename[14..20].bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    chrono::NaiveDateTime::parse_from_str(&filename[5..20], "%Y%m%d_%H%M%S").ok()?;
+    Some(Identifier::new(format!("{site}{}_IEM.bz2", &filename[5..20])))
+}
+
+fn iem_volume_url(name: &str) -> anyhow::Result<Option<String>> {
+    if !name.contains("_IEM") {
+        return Ok(None);
+    }
+    anyhow::ensure!(name.is_ascii() && name.len() == 27, "invalid IEM volume identifier");
+    let site = &name[..4];
+    let filename = format!("{site}_{}.bz2", &name[4..19]);
+    anyhow::ensure!(
+        iem_identifier(site, &filename).is_some_and(|id| id.name() == name),
+        "invalid IEM volume identifier"
+    );
+    Ok(Some(format!("{IEM_BASE}/{site}/{filename}")))
+}
+
+fn parse_iem_listing(site: &str, body: &str, date: chrono::NaiveDate) -> Vec<Identifier> {
+    let mut ids: Vec<_> = body.lines().filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        let size = fields.next()?.parse::<u64>().ok()?;
+        let filename = fields.next()?;
+        if size == 0 || fields.next().is_some() {
+            return None;
+        }
+        let id = iem_identifier(site, filename)?;
+        (id.date_time()?.date_naive() == date).then_some(id)
+    }).collect();
+    ids.sort_by(|a, b| a.name().cmp(b.name()));
+    ids.dedup_by(|a, b| a.name() == b.name());
+    ids
+}
+
 /// Which radar moment to extract from a sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Moment {
@@ -377,18 +435,32 @@ pub fn sample_native_at(
     if moment == Moment::SpecificDifferentialPhase {
         return None; // KDP is derived during binning; there is no transmitted native gate.
     }
+    if !lon.is_finite() || !lat.is_finite() {
+        return None;
+    }
     let site = scan.site()?;
     let sweep = selected_sweep_at(scan, moment, tilt, cut_end_ms)?;
     let elevation_deg = sweep.elevation_angle_degrees()?;
     let (ground_range_km, bearing) =
         crate::xsection::dist_bearing(site.longitude() as f64, site.latitude() as f64, lon, lat);
+    if !ground_range_km.is_finite() || !bearing.is_finite() || !elevation_deg.is_finite() {
+        return None;
+    }
+    let delta =
+        |angle: f32| ((angle as f64 - bearing + 180.0).rem_euclid(360.0) - 180.0).abs();
     let radial = sweep
         .radials()
         .iter()
-        .filter(|radial| moment.select(radial).is_some())
+        .filter(|radial| {
+            let width = radial.azimuth_spacing_degrees() as f64;
+            // Missing sectors must not inherit a reading from the nearest measured ray.
+            moment.select(radial).is_some()
+                && width.is_finite()
+                && width > 0.0
+                && width <= 360.0
+                && delta(radial.azimuth_angle_degrees()) <= width * 0.5 + 1e-6
+        })
         .min_by(|a, b| {
-            let delta =
-                |angle: f32| ((angle as f64 - bearing + 180.0).rem_euclid(360.0) - 180.0).abs();
             delta(a.azimuth_angle_degrees()).total_cmp(&delta(b.azimuth_angle_degrees()))
         })?;
     let data = moment.select(radial)?;
@@ -484,10 +556,15 @@ pub async fn latest_identifier(site: &str) -> anyhow::Result<Identifier> {
 /// the radar writes it as it scans. A volume caught early enough can be missing the metadata
 /// record that carries its scan strategy, and the only cure is to fall back a volume.
 pub async fn latest_identifiers(site: &str, n: usize) -> anyhow::Result<Vec<Identifier>> {
+    latest_identifiers_from(site, n, Level2Provider::S3).await
+}
+
+/// Select an explicit feed without silently mixing providers.
+pub async fn latest_identifiers_from(site: &str, n: usize, provider: Level2Provider) -> anyhow::Result<Vec<Identifier>> {
     let today = chrono::Utc::now().date_naive();
     let mut out: Vec<Identifier> = Vec::new();
     for day in [today, today.pred_opt().unwrap_or(today)] {
-        let mut ids = list_day(site, day).await?;
+        let mut ids = list_day(site, day, provider).await?;
         while out.len() < n {
             match ids.pop() {
                 Some(id) => out.push(id),
@@ -514,11 +591,16 @@ pub async fn latest_identifiers(site: &str, n: usize) -> anyhow::Result<Vec<Iden
 /// Only for the current day, and only when it is short: a deliberate scrub back to a past date
 /// should show that date, not a few hours of the one before it.
 pub async fn list_volumes(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Identifier>> {
+    list_volumes_from(site, date, Level2Provider::S3).await
+}
+
+/// IEM exposes its recent rolling catalogue; older archives remain available through S3.
+pub async fn list_volumes_from(site: &str, date: chrono::NaiveDate, provider: Level2Provider) -> anyhow::Result<Vec<Identifier>> {
     /// Roughly two hours at a severe-weather VCP — comfortably more than any loop window, and
     /// still one extra listing at most.
     const MIN_FRAMES: usize = 24;
 
-    let ids = list_day(site, date).await?;
+    let ids = list_day(site, date, provider).await?;
     if ids.len() >= MIN_FRAMES || date != chrono::Utc::now().date_naive() {
         return Ok(ids);
     }
@@ -526,7 +608,7 @@ pub async fn list_volumes(site: &str, date: chrono::NaiveDate) -> anyhow::Result
         return Ok(ids);
     };
     // A failed listing for yesterday is not a failure: today's frames are still perfectly good.
-    let Ok(older) = list_day(site, prev).await else {
+    let Ok(older) = list_day(site, prev, provider).await else {
         return Ok(ids);
     };
     Ok(with_previous_tail(older, ids, MIN_FRAMES))
@@ -550,7 +632,7 @@ fn with_previous_tail(
 /// ponytail: a flat map with a short TTL, swept of expired entries on insert — a session touches
 /// a handful of site/day pairs at a time. Bound it by count if that ever stops being true.
 type DayListCache = std::collections::HashMap<
-    (String, chrono::NaiveDate),
+    (Level2Provider, String, chrono::NaiveDate),
     (crate::clock::Instant, Vec<Identifier>),
 >;
 static DAY_LIST_CACHE: std::sync::OnceLock<std::sync::Mutex<DayListCache>> =
@@ -571,9 +653,9 @@ fn is_volume(name: &str) -> bool {
     !name.ends_with("_MDM")
 }
 
-async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Identifier>> {
+async fn list_day(site: &str, date: chrono::NaiveDate, provider: Level2Provider) -> anyhow::Result<Vec<Identifier>> {
     use nexrad_data::aws::archive;
-    let key = (site.to_string(), date);
+    let key = (provider, site.to_string(), date);
     let cache = DAY_LIST_CACHE.get_or_init(Default::default);
     if let Ok(map) = cache.lock() {
         if let Some((at, ids)) = map.get(&key) {
@@ -587,9 +669,19 @@ async fn list_day(site: &str, date: chrono::NaiveDate) -> anyhow::Result<Vec<Ide
     // Catalog names use the same byte-flight machinery as object downloads. Keeping one
     // shared payload type avoids a second async coordination implementation in the web bundle.
     let owned_site = site.to_owned();
-    let body = crate::shared_read::bytes(format!("catalog:{site}:{date}"), async move {
-        let ids = archive::list_files(&owned_site, &date).await
-            .map_err(|e| anyhow::anyhow!("list_files({owned_site}, {date}): {e}"))?;
+    let body = crate::shared_read::bytes(format!("catalog:{provider:?}:{site}:{date}"), async move {
+        let ids = match provider {
+            Level2Provider::S3 => archive::list_files(&owned_site, &date).await
+                .map_err(|e| anyhow::anyhow!("list_files({owned_site}, {date}): {e}"))?,
+            Level2Provider::Iem => {
+                anyhow::ensure!(valid_iem_site(&owned_site), "invalid IEM radar site");
+                let url = format!("{IEM_BASE}/{owned_site}/dir.list");
+                let body = reqwest::Client::new().get(crate::net::fetch_url(&url))
+                    .timeout(crate::net::FEED_TIMEOUT).send().await?.error_for_status()?.text().await?;
+                anyhow::ensure!(body.len() <= 1024 * 1024, "IEM catalogue too large");
+                parse_iem_listing(&owned_site, &body, date)
+            }
+        };
         Ok(serde_json::to_vec(&ids.iter().map(Identifier::name).collect::<Vec<_>>())?)
     }).await?;
     let names: Vec<String> = serde_json::from_slice(&body)?;
@@ -658,10 +750,15 @@ pub fn scan_from_wire(bytes: &[u8]) -> anyhow::Result<Scan> {
 pub async fn volume_bytes(id: Identifier) -> anyhow::Result<Vec<u8>> {
     let key = format!("volume:{}", id.name());
     let bytes = crate::shared_read::bytes(key, async move {
-        let f = nexrad_data::aws::archive::download_file(id).await
-            .map_err(|e| anyhow::anyhow!("download_file: {e}"))?;
-        crate::stats::net(f.data().len());
-        Ok(f.data().to_vec())
+        let bytes = if let Some(url) = iem_volume_url(id.name())? {
+            reqwest::Client::new().get(crate::net::fetch_url(&url))
+                .timeout(crate::net::FEED_TIMEOUT).send().await?.error_for_status()?.bytes().await?.to_vec()
+        } else {
+            nexrad_data::aws::archive::download_file(id).await
+                .map_err(|e| anyhow::anyhow!("download_file: {e}"))?.data().to_vec()
+        };
+        crate::stats::net(bytes.len());
+        Ok(bytes)
     }).await?;
     Ok(bytes.as_ref().clone())
 }
@@ -702,6 +799,8 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
 pub async fn download_scan_with_progress(id: Identifier, cache_dir: Option<PathBuf>, progress: impl Fn(LoadPhase) + Send) -> anyhow::Result<Scan> {
     progress(LoadPhase::Downloading);
     let name = id.name().to_string();
+    // Validate normalized provider names before using them as disk paths, even on cache hits.
+    iem_volume_url(&name)?;
     let cache_file = cache_dir.map(|d| d.join("volumes").join(&name));
     let cached = cache_file
         .as_ref()
@@ -1316,6 +1415,71 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires the live IEM radar feed"]
+    async fn iem_recent_volume_decodes() {
+        let mut ids = latest_identifiers_from("KTLX", 2, Level2Provider::Iem).await.unwrap();
+        let id = ids.pop().unwrap(); // Avoid the newest file while it may still be arriving.
+        let scan = download_scan(id, None).await.unwrap();
+        assert_eq!(scan.site().unwrap().identifier_string(), "KTLX");
+        assert!(!scan.sweeps().is_empty());
+        assert!(scan_gate_bytes(&scan) > 0);
+    }
+
+    #[test]
+    fn iem_catalogue_validates_names_and_preserves_source_identity() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let ids = parse_iem_listing("KTLX", concat!(
+            "42 KTLX_20261031_193030.bz2\n",
+            "43 KTLX_20261031_191524.bz2\n",
+            "43 KTLX_20261031_191524.bz2\n",
+            "42 KTLX_20261030_193030.bz2\n",
+            "42 KDMX_20261031_193030.bz2\n",
+            "42 ../KTLX_20261031_193030.bz2\n",
+            "42 KTLX_20260230_193030.bz2\n",
+            "42 KTLX_20261031_253030.bz2\n",
+            "0 KTLX_20261031_192030.bz2\n",
+            "42 KTLX_20261031_193030.bz2 extra\n",
+            "invalid KTLX_20261031_193030.bz2\n",
+        ), date);
+        assert_eq!(ids.iter().map(Identifier::name).collect::<Vec<_>>(), [
+            "KTLX20261031_191524_IEM.bz2", "KTLX20261031_193030_IEM.bz2"
+        ]);
+        assert_eq!(ids[0].site(), Some("KTLX"));
+        assert_eq!(ids[0].date_time().unwrap().date_naive(), date);
+        assert_eq!(iem_volume_url(ids[0].name()).unwrap().unwrap(),
+            "https://mesonet-nexrad.agron.iastate.edu/level2/raw/KTLX/KTLX_20261031_191524.bz2");
+        assert!(iem_volume_url("KTLX20261031_191524_V06").unwrap().is_none());
+        for invalid in ["../KTLX20261031_191524_IEM.bz2", "KTLX20260230_191524_IEM.bz2",
+            "KTLX20261031_251524_IEM.bz2", "KTLX20261031_191524_IEM.bz2/../x",
+            "éé20261031_191524_IEM.bz2"] {
+            assert!(iem_volume_url(invalid).is_err(), "{invalid}");
+        }
+        assert!(iem_identifier("../x", "../x_20261031_191524.bz2").is_none());
+    }
+
+    #[tokio::test]
+    async fn iem_catalogue_cache_is_separate_from_s3() {
+        let day = chrono::Utc::now().date_naive();
+        let name = format!("KZZZ{}_120000", day.format("%Y%m%d"));
+        let aws = Identifier::new(format!("{name}_V06"));
+        let iem = Identifier::new(format!("{name}_IEM.bz2"));
+        {
+            let mut cache = DAY_LIST_CACHE.get_or_init(Default::default).lock().unwrap();
+            cache.insert((Level2Provider::S3, "KZZZ".into(), day),
+                (crate::clock::Instant::now(), vec![aws.clone()]));
+            cache.insert((Level2Provider::Iem, "KZZZ".into(), day),
+                (crate::clock::Instant::now(), vec![iem.clone()]));
+        }
+        assert_eq!(latest_identifiers("KZZZ", 1).await.unwrap()[0].name(), aws.name());
+        assert_eq!(latest_identifiers_from("KZZZ", 1, Level2Provider::Iem).await.unwrap()[0].name(), iem.name());
+        assert_ne!(aws.name(), iem.name(), "disk and decoded caches use these identifiers");
+        let mut cache = DAY_LIST_CACHE.get().unwrap().lock().unwrap();
+        cache.remove(&(Level2Provider::S3, "KZZZ".into(), day));
+        cache.remove(&(Level2Provider::Iem, "KZZZ".into(), day));
+    }
+
     use nexrad_model::data::{MomentData, Radial};
 
     /// The bucket carries a metadata-message sidecar next to the volumes. It parses as an
@@ -1400,6 +1564,55 @@ mod tests {
         assert!((sample.gate_spacing_km as f64 - data.gate_interval_km()).abs() < 1e-6);
         assert!((sample.slant_range_km as f64 - slant).abs() < data.gate_interval_km());
         assert!(sample.beam_height_ft > 0.0);
+    }
+
+    #[test]
+    fn native_sampling_respects_ray_coverage_and_wraps_north() {
+        let make_scan = |centers: &[f32], width: f32| {
+            let radials = centers.iter().enumerate().map(|(index, &center)| {
+                Radial::new(
+                    1_000, index as u16, center, width,
+                    nexrad_model::data::RadialStatus::ScanStart, 1, 0.5,
+                    Some(MomentData::from_fixed_point(
+                        1, 2125, 250, 8, 2.0, 66.0, vec![106u8],
+                    )),
+                    None, None, None, None, None, None,
+                )
+            }).collect();
+            Scan::with_site(
+                nexrad_model::meta::Site::new(*b"KTLX", 35.33, -97.28, 380, 0),
+                minimal_vcp(), vec![Sweep::new(1, radials)],
+            )
+        };
+        let sample = |scan: &Scan, bearing| {
+            let site = scan.site().unwrap();
+            let (lon, lat) = destination(
+                site.longitude() as f64, site.latitude() as f64, bearing, 2.25,
+            );
+            sample_native(scan, Moment::Reflectivity, 0, lon, lat)
+        };
+
+        let partial = make_scan(&[0.0, 0.5], 0.5);
+        for bearing in [359.8, 0.0, 0.25, 0.5, 0.75] {
+            assert!(sample(&partial, bearing).is_some(), "{bearing}");
+        }
+        for bearing in [359.7, 0.8, 90.0, 180.0] {
+            assert!(sample(&partial, bearing).is_none(), "{bearing}");
+        }
+        let one_degree = make_scan(&[90.0], 1.0);
+        for bearing in [89.5, 90.0, 90.5] {
+            assert!(sample(&one_degree, bearing).is_some(), "{bearing}");
+        }
+        for bearing in [89.49, 90.51] {
+            assert!(sample(&one_degree, bearing).is_none(), "{bearing}");
+        }
+        for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(sample(&make_scan(&[0.0], width), 0.0).is_none());
+        }
+        assert!(sample(&make_scan(&[f32::NAN], 0.5), 0.0).is_none());
+        for (lon, lat) in [(f64::NAN, 35.35), (-97.28, f64::INFINITY)] {
+            assert!(sample_native(&partial, Moment::Reflectivity, 0, lon, lat).is_none());
+        }
     }
 
     #[test]

@@ -36,6 +36,14 @@ The standalone app uses a separate profile identifier, `hookecho-radar-workspace
 
 XDG overrides and other operating systems use their normal `ProjectDirs` locations. A fresh standalone profile defaults to Radar workspace, Presentation map and a separate MQTT prefix. Existing saved preferences win, including a user's choice to disable the layout or change the map/prefix. Switching the layout inside ordinary HookEcho does not change its storage profile. Android's existing app-private directory layout remains unchanged.
 
+## Radar inspection and feed controls
+
+- Radar appearance includes the **Aurora Glass** opacity panel: a purple glass card with a percentage slider, 25/50/75/100% presets and a reset to full radar. **Opacity** in minimal and full Radar Zeta playback opens the same active-pane control; close is on the right. Map labels remain unchanged. The default remains 100%. With smoothing enabled, **Show range-folded areas** preserves the range-fold palette color instead of blending neighboring valid gates over it. These are saved per pane and included in appearance presets; they do not change native measurements.
+- **Settings → Units & time → Radar beam height (Analysis)** selects feet/meters and above-radar (ARL) or mean-sea-level (MSL) references. ARL remains the default. MSL adds the station and antenna elevation; missing elevation is reported as unavailable. Neither reference means height above local terrain.
+- Native Analysis probes reject bearings outside a measured radial, including gaps in partial scans.
+- Linked playback waits for visible radar panes to record the requested sweep in a render pass before advancing. An unavailable or misaligned pane may hold a frame for up to eight seconds. Hidden radar and inactive compact-screen panes do not hold playback.
+- **Settings → Radar & map → Radar feed** offers Iowa State's recent Level II volumes alongside the existing S3 automatic/chunk and archive-polling modes. IEM applies to WSR-88D sites; archive dates before yesterday use S3, and TDWR/European feeds retain their existing sources. Source changes cancel old display requests and keep separate cache identities. This is an explicit source choice, not a latency guarantee or automatic provider failover.
+
 ## What remains unfinished
 
 The machine-readable [61-group parity ledger](reference-parity.json) records implementation scope, source references, acceptance criteria and remaining gaps for every observed group. **Implemented-related** means a related capability exists; it does not mean that its provider, algorithm, UI or behavior matches.

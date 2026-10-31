@@ -65,6 +65,16 @@ pub enum RadarFeed {
     #[default]
     Automatic,
     ArchiveOnly,
+    Iem,
+}
+
+impl RadarFeed {
+    pub fn provider(self) -> wxdata::level2::Level2Provider {
+        match self {
+            Self::Iem => wxdata::level2::Level2Provider::Iem,
+            Self::Automatic | Self::ArchiveOnly => wxdata::level2::Level2Provider::S3,
+        }
+    }
 }
 
 /// Priority dock proximity and storm-track display preferences. Map alerts and notifications remain independent.
@@ -304,6 +314,9 @@ pub struct Settings {
     /// Whether radar timestamps read in the site's local time or in UTC.
     #[serde(default)]
     pub time_display: TimeDisplay,
+    /// Analysis beam height reference; ARL preserves the existing numeric readout.
+    pub beam_height_msl: bool,
+    pub beam_height_meters: bool,
     /// Optional global override for cross-source valid-time matching. `None` uses product policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alignment_tolerance_minutes: Option<u16>,
@@ -751,6 +764,24 @@ pub struct Settings {
     pub linked_time_limit_seconds: Option<u32>,
     #[serde(default)]
     pub link_satellite_times: bool,
+}
+
+impl Settings {
+    pub fn beam_height_label(&self, above_radar_ft: f64, antenna_msl_m: Option<f64>) -> String {
+        let mut meters = above_radar_ft / 3280.84 * 1000.0;
+        let reference = if self.beam_height_msl {
+            let Some(altitude) = antenna_msl_m.filter(|v| v.is_finite()) else {
+                return "unavailable MSL".into();
+            };
+            meters += altitude;
+            "MSL"
+        } else { "ARL" };
+        if self.beam_height_meters {
+            format!("{meters:.0} m {reference}")
+        } else {
+            format!("{:.0} ft {reference}", meters * 3.28084)
+        }
+    }
 }
 
 /// Where the dual-pol signature detectors and the GLM flash-extent grid draw their lines.
@@ -1413,6 +1444,8 @@ impl Default for Settings {
             velocity_unit: VelocityUnit::default(),
             temp_unit: TempUnit::default(),
             time_display: TimeDisplay::default(),
+            beam_height_msl: false,
+            beam_height_meters: false,
             alignment_tolerance_minutes: None,
             // 1.0 everywhere: this multiplies the native scale factor, and Android's display
             // density already sizes widgets for touch — an extra 1.3 shrank the S24's logical
@@ -2195,7 +2228,9 @@ mod tests {
             density: Density::Compact,
             accent: Some([255, 0, 128]),
             poll_interval_secs: 45,
-            radar_feed: RadarFeed::ArchiveOnly,
+            radar_feed: RadarFeed::Iem,
+            beam_height_msl: true,
+            beam_height_meters: true,
             theme: Theme::Synthwave,
             radar_workspace: true,
             show_tdwr_sites: true,
@@ -2481,6 +2516,19 @@ mod tests {
         assert_eq!(TempUnit::Celsius.from_c(21.0), 21.0);
         assert!((TempUnit::Fahrenheit.from_c(0.0) - 32.0).abs() < 1e-4);
         assert!((TempUnit::Fahrenheit.from_c(-40.0) + 40.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn beam_height_reference_units_and_settings_roundtrip() {
+        let mut s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.beam_height_label(3280.84, Some(500.0)), "3281 ft ARL");
+        s.beam_height_meters = true;
+        assert_eq!(s.beam_height_label(3280.84, Some(500.0)), "1000 m ARL");
+        s.beam_height_msl = true;
+        assert_eq!(s.beam_height_label(3280.84, Some(500.0)), "1500 m MSL");
+        assert_eq!(s.beam_height_label(3280.84, None), "unavailable MSL");
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert!(restored.beam_height_msl && restored.beam_height_meters);
     }
 
     #[test]
