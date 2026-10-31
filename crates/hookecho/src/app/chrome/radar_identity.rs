@@ -416,11 +416,14 @@ fn radar_opacity_contents(ui: &mut egui::Ui, opacity: &mut f32, close: bool) {
         ui.scope(|ui| {
             ui.visuals_mut().widgets.inactive.bg_fill = text;
             ui.visuals_mut().widgets.hovered.bg_fill = text;
-            ui.add(egui::Slider::new(opacity, 0.0..=1.0)
+            let response = ui.add(egui::Slider::new(opacity, 0.0..=1.0)
                 .show_value(false).step_by(0.01).trailing_fill(true)
                 .handle_shape(egui::style::HandleShape::Circle))
                 .named("Radar opacity percentage")
                 .on_hover_text("Fade radar to reveal the map. Measurements remain unchanged.");
+            if response.drag_started() || response.dragged() {
+                response.request_focus();
+            }
         });
         ui.horizontal(|ui| {
             ui.small("Clear map · 0%");
@@ -508,5 +511,42 @@ mod tests {
                     && text.galley.rect.height() > 25.0)));
         }
         assert_eq!(opacity, 1.0);
+    }
+
+    #[test]
+    fn aurora_slider_takes_keyboard_focus_after_drag() {
+        let ctx = egui::Context::default();
+        let mut opacity = 0.5;
+        let mut draw = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO, egui::vec2(390.0, 844.0))),
+                events, ..Default::default()
+            }, |ui| {
+                ui.set_width(300.0);
+                radar_opacity_contents(ui, &mut opacity, false);
+            })
+        };
+        let output = draw(Vec::new());
+        let pos = output.shapes.iter().find_map(|shape| {
+            if let egui::Shape::Circle(circle) = &shape.shape {
+                (circle.radius > 10.0).then_some(circle.center)
+            } else { None }
+        }).expect("slider thumb");
+        let _ = draw(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
+                pressed: true, modifiers: egui::Modifiers::default() },
+        ]);
+        let _ = draw(vec![egui::Event::PointerButton {
+            pos, button: egui::PointerButton::Primary, pressed: false,
+            modifiers: egui::Modifiers::default(),
+        }]);
+        assert!(ctx.memory(|memory| memory.focused().is_some()));
+        let _ = draw(vec![egui::Event::Key {
+            key: egui::Key::ArrowRight, physical_key: None, pressed: true,
+            repeat: false, modifiers: egui::Modifiers::default(),
+        }]);
+        assert!((opacity - 0.51).abs() < 0.001);
     }
 }
