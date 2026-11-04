@@ -622,6 +622,8 @@ mod tests {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
+                            // Windows can inherit the listener's nonblocking mode.
+                            stream.set_nonblocking(false).unwrap();
                             stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
                             let mut request = [0; 8192];
                             assert!(stream.read(&mut request).unwrap() > 0);
