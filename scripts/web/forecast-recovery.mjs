@@ -30,6 +30,7 @@ async function start(forecastResponse, markers = [], context = browser) {
   page.on('pageerror', error => errors.push(error.message));
   await page.evaluateOnNewDocument(markers => {
     Object.defineProperty(navigator, 'gpu', {value: undefined});
+    globalThis.__hookechoMapTraceEnabled = true;
     if (!localStorage.getItem('hookecho-settings')) localStorage.setItem('hookecho-settings', JSON.stringify({
       setup_done: true, seeded_workspaces: true, default_site: 'KDMX', radar_feed: 'ArchiveOnly',
       radar_workspace: true, ui_scale: 1, markers,
@@ -37,12 +38,22 @@ async function start(forecastResponse, markers = [], context = browser) {
   }, markers);
   await page.goto(base, {waitUntil: 'domcontentloaded'});
   await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
-  await wait(2000);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.panes[0]?.time,
+    {timeout: 90000});
+  await page.focus('#hookecho');
+  await rendered(page);
   return page;
+}
+async function rendered(page) {
+  const frame = await page.evaluate(() => globalThis.__hookechoMapTrace?.frames.at(-1)?.[2] ?? 0);
+  await page.waitForFunction(previous => globalThis.__hookechoMapTrace?.frames.at(-1)?.[2] >= previous + 2,
+    {timeout: 30000}, frame);
 }
 async function command(page, text) {
   await page.keyboard.down('Control'); await page.keyboard.press('KeyK'); await page.keyboard.up('Control');
-  await wait(400); await page.keyboard.type(text); await wait(400); await page.keyboard.press('Enter'); await wait(400);
+  // Wait for egui to focus/render the search before sending the next input on slower CI GPUs.
+  await rendered(page); await page.keyboard.type(text); await rendered(page);
+  await page.keyboard.press('Enter'); await rendered(page);
 }
 async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await wait(100); }
@@ -61,8 +72,8 @@ try {
     return response(delayed ? 99 : 20);
   });
   await command(page, 'Tool: Point forecast');
-  await page.mouse.click(702, 202); // Close the search panel without leaving the forecast tool.
-  await wait(300); await page.mouse.click(500, 450);
+  await page.mouse.click(702, 202, {delay: 60}); // Close search; Escape also disarms the forecast tool.
+  await rendered(page); await page.mouse.click(500, 450, {delay: 60});
   await until(() => basicCount === 1 && modelCount === 3);
   await wait(1000);
   const clip = {x: 535, y: 195, width: 110, height: 65};
@@ -114,6 +125,11 @@ try {
   checks.push('Saved-place cards fetch only the basic forecast');
   assert.deepEqual(errors, []);
   await context.close();
+} catch (error) {
+  errors.push(error.message);
+  const page = (await browser.pages()).at(-1);
+  if (page) await page.screenshot({path: `${output}/failure.png`});
+  throw error;
 } finally {
   await fs.writeFile(`${output}/report.json`, JSON.stringify({checks, errors}, null, 2));
   await browser.close();
