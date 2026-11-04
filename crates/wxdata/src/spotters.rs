@@ -23,6 +23,8 @@ pub struct Spotter {
     pub heading: Option<f32>,
     /// Free-text status line ("STATIONARY", "25 mph NE", …).
     pub status: String,
+    /// Explicit public YouTube link supplied in this record; never inferred from a name.
+    pub youtube_url: Option<String>,
 }
 
 impl Spotter {
@@ -60,6 +62,7 @@ struct Acc {
     name: Option<String>,
     time: Option<DateTime<Utc>>,
     status: String,
+    youtube_url: Option<String>,
 }
 
 /// Parse the placefile text into spotters. A line state machine over `Object:` / `Icon:` / `End:`.
@@ -112,10 +115,14 @@ pub fn parse_spotters(text: &str) -> Vec<Spotter> {
                             .map(|dt| dt.and_utc());
                     }
                     // Only segment 3 is the movement status ("STATIONARY"/"25 mph NE"). Any later
-                    // segments (Phone/Twitter/Ham/Web/Email/…) are personal contact info — never kept.
+                    // segments remain private except an explicit public YouTube Web/Website link.
                     if let Some(st) = segs.get(2) {
                         acc.status = st.to_string();
                     }
+                    acc.youtube_url = segs.iter().skip(3)
+                        .filter_map(|segment| segment.split_once(':'))
+                        .filter(|(label, _)| matches!(label.trim().to_ascii_lowercase().as_str(), "web" | "website" | "youtube"))
+                        .find_map(|(_, value)| crate::youtube::Target::parse(value).map(|target| target.url()));
                 }
             }
         } else if line.starts_with("End:") {
@@ -129,6 +136,7 @@ pub fn parse_spotters(text: &str) -> Vec<Spotter> {
                     time,
                     heading: acc.heading,
                     status: std::mem::take(&mut acc.status),
+                    youtube_url: acc.youtube_url.take(),
                 });
             }
             acc = Acc::default();
@@ -153,6 +161,7 @@ mod tests {
             time: now,
             heading: None,
             status: String::new(),
+            youtube_url: None,
         };
         for minutes in [5, 15, 30, 60] {
             let cutoff = now - chrono::Duration::minutes(i64::from(minutes));
@@ -181,6 +190,26 @@ mod tests {
             );
             assert!(parse_spotters(&feed).is_empty());
         }
+    }
+
+    #[test]
+    fn public_video_links_stay_with_their_record_even_when_names_match() {
+        let feed = r#"Object: 35.0,-97.0
+Icon: 0,0,0,6,10,"Same Name\n2026-11-03 12:00:00 UTC\nSTATIONARY\nPhone: 5551234567\nWeb: https://youtu.be/abcdefghijk?t=4"
+End:
+Object: 36.0,-98.0
+Icon: 0,0,0,6,10,"Same Name\n2026-11-03 12:00:00 UTC\nSTATIONARY\nWebsite: https://www.youtube.com/@different/live\nEmail: secret@example.com"
+End:
+Object: 37.0,-99.0
+Icon: 0,0,0,6,10,"Same Name\n2026-11-03 12:00:00 UTC\nSTATIONARY\nWeb: https://youtube.com.evil.test/@different"
+End:"#;
+        let spots = parse_spotters(feed);
+        assert_eq!(spots.len(), 3);
+        assert_eq!(spots[0].youtube_url.as_deref(), Some("https://www.youtube.com/watch?v=abcdefghijk"));
+        assert_eq!(spots[1].youtube_url.as_deref(), Some("https://www.youtube.com/@different/live"));
+        assert!(spots[2].youtube_url.is_none());
+        assert!(!format!("{spots:?}").contains("5551234567"));
+        assert!(!format!("{spots:?}").contains("secret@example.com"));
     }
 
     #[test]

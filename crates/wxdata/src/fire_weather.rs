@@ -40,7 +40,7 @@ pub async fn fetch_discussion(client: &reqwest::Client, day: u8) -> anyhow::Resu
     parse_discussion(&body, day)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     #[default]
     Conditions,

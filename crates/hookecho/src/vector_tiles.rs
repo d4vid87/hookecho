@@ -9,7 +9,7 @@
 use crate::basemap_style;
 use crate::render::mercator::Camera;
 use crate::render::{OverlayVertex, PendingVectorTile, TileId, VisibleTile};
-use crate::tiles::{load_tile_bytes, tile_cover};
+use crate::tiles::tile_cover;
 use lru::LruCache;
 use lyon::path::Path;
 use lyon::tessellation::{
@@ -262,18 +262,14 @@ fn append(
 }
 
 /// Gunzip if the bytes are a gzip stream, else pass through (OpenFreeMap serves `.pbf` gzipped).
-fn maybe_gunzip(bytes: &[u8]) -> Vec<u8> {
+fn maybe_gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
         use std::io::Read;
         let mut out = Vec::new();
-        if flate2::read::GzDecoder::new(bytes)
-            .read_to_end(&mut out)
-            .is_ok()
-        {
-            return out;
-        }
+        flate2::read::GzDecoder::new(bytes).read_to_end(&mut out)?;
+        return Ok(out);
     }
-    bytes.to_vec()
+    Ok(bytes.to_vec())
 }
 
 /// Background geometry, foreground geometry, and labels for one vector tile.
@@ -292,7 +288,7 @@ pub fn build_tile(
     id: TileId,
     palette: basemap_style::Palette,
     tess_zoom: f64,
-) -> TileGeometry {
+) -> anyhow::Result<TileGeometry> {
     build_tile_with_theme(bytes, id, palette, tess_zoom, crate::settings::Theme::Dark)
 }
 
@@ -303,14 +299,14 @@ pub fn build_tile_with_theme(
     palette: basemap_style::Palette,
     tess_zoom: f64,
     theme: crate::settings::Theme,
-) -> TileGeometry {
+) -> anyhow::Result<TileGeometry> {
     build_tile_detail(bytes, id, palette, tess_zoom, theme, false, basemap_style::MapDetailStyle::default())
 }
 
 fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
     tess_zoom: f64, theme: crate::settings::Theme, simplified: bool,
     details: basemap_style::MapDetailStyle,
-) -> TileGeometry {
+) -> anyhow::Result<TileGeometry> {
     let (z, tx, ty) = id;
     let n = (1u64 << z) as f64;
     let (txf, tyf) = (tx as f64, ty as f64);
@@ -353,12 +349,9 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
-    let data = maybe_gunzip(bytes);
-    let Ok(reader) = Reader::new(data) else {
-        return (verts, indices, foreground_verts, foreground_indices, Vec::new());
-    };
-    let names = reader.get_layer_names().unwrap_or_default();
-    let meta = reader.get_layer_metadata().unwrap_or_default();
+    let reader = Reader::new(maybe_gunzip(bytes)?)?;
+    let names = reader.get_layer_names()?;
+    let meta = reader.get_layer_metadata()?;
     let extent_of = |i: usize| meta.get(i).map(|m| m.extent as f64).unwrap_or(4096.0);
 
     let mut fill_t = FillTessellator::new();
@@ -373,7 +366,7 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
             continue;
         };
         let extent = extent_of(i);
-        let feats = reader.get_features(i).unwrap_or_default();
+        let feats = reader.get_features(i)?;
         for f in &feats {
             if *layer == "building"
                 && tess_zoom < if details.extrude_buildings { 13.0 } else { 14.0 }
@@ -448,14 +441,19 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
         }
     }
 
-    // Strokes.
+    // Both road passes share decoded geometry and properties.
+    let mut stroke_features = Vec::new();
+    let mut stroke_layer = None;
     for (layer, key, pass) in STROKE_LAYERS {
         let Some(i) = names.iter().position(|nm| nm == layer) else {
             continue;
         };
         let extent = extent_of(i);
-        let feats = reader.get_features(i).unwrap_or_default();
-        for f in &feats {
+        if stroke_layer != Some(i) {
+            stroke_features = reader.get_features(i)?;
+            stroke_layer = Some(i);
+        }
+        for f in &stroke_features {
             if *layer == "boundary" && prop(&f.properties, "maritime") == "1" {
                 continue;
             }
@@ -554,7 +552,7 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
     let labels = if details.show_city_roads {
         extract_labels(&reader, &names, n, txf, tyf, simplified)
     } else { Vec::new() };
-    (verts, indices, foreground_verts, foreground_indices, labels)
+    Ok((verts, indices, foreground_verts, foreground_indices, labels))
 }
 
 /// Pull place, road, and selected POI labels from the vector tile.
@@ -901,11 +899,15 @@ pub async fn fetch_tilejson(
             }
         }
     }
+    let fallback = crate::offline::snapshot().and_then(|pack| pack.vector_template.clone());
+    #[cfg(target_arch = "wasm32")]
+    if !web_sys::window().is_some_and(|w| w.navigator().on_line()) { return fallback; }
     let http = client.clone();
     let body = wxdata::shared_read::bytes(format!("tilejson:{TILEJSON_URL}"), async move {
         Ok(http.get(wxdata::net::fetch_url(TILEJSON_URL))
             .timeout(TILE_TIMEOUT).send().await?.error_for_status()?.bytes().await?.to_vec())
-    }).await.ok()?;
+    }).await;
+    let body = match body { Ok(bytes) => bytes, Err(_) => return fallback };
     let v: serde_json::Value = serde_json::from_slice(&body).ok()?;
     let t = v["tiles"].get(0)?.as_str()?.to_string();
     if let Some(dir) = cache_dir {
@@ -948,17 +950,14 @@ pub async fn fetch_visible_vector(
     for v in visible {
         let (z, x, y) = v.id;
         let url = fill_template(template, z, x, y);
-        match load_tile_bytes(client, &url, None).await {
-            Ok(bytes) => {
-                let (verts, indices, foreground_vertices, foreground_indices, lbls) =
-                    build_tile(&bytes, v.id, palette, tess_zoom);
+        let id = v.id;
+        match crate::tiles::load_tile_decoded(client, &url, None, |bytes| async move {
+            wxdata::task::blocking(move || build_tile(&bytes, id, palette, tess_zoom)).await?
+        }).await {
+            Ok((verts, indices, foreground_vertices, foreground_indices, lbls)) => {
                 labels.extend(lbls);
                 out.push(PendingVectorTile {
-                    id: v.id,
-                    vertices: verts,
-                    indices,
-                    foreground_vertices,
-                    foreground_indices,
+                    id, vertices: verts, indices, foreground_vertices, foreground_indices,
                 });
             }
             Err(e) => log::warn!("vector tile {url}: {e}"),
@@ -999,13 +998,13 @@ struct FetchedVector {
 type VectorJob = (Vec<u8>, TileId, basemap_style::Palette, f64, crate::settings::Theme, bool, basemap_style::MapDetailStyle);
 
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) fn build_worker_tile(payload: &[u8]) -> Result<Vec<u8>, postcard::Error> {
+pub(crate) fn build_worker_tile(payload: &[u8]) -> anyhow::Result<Vec<u8>> {
     let (bytes, id, palette, zoom, theme, simplified, details): VectorJob = postcard::from_bytes(payload)?;
     let (vertices, indices, foreground_vertices, foreground_indices, labels) =
-        build_tile_detail(&bytes, id, palette, zoom, theme, simplified, details);
-    postcard::to_allocvec(&FetchedVector {
+        build_tile_detail(&bytes, id, palette, zoom, theme, simplified, details)?;
+    Ok(postcard::to_allocvec(&FetchedVector {
         id, vertices, indices, foreground_vertices, foreground_indices, labels,
-    })
+    })?)
 }
 
 /// Async vector-tile manager for the GUI (mirrors [`crate::tiles::TileManager`]).
@@ -1284,63 +1283,37 @@ impl VectorTileManager {
             let tx = self.tx.clone();
             let id = v.id;
             let ctx = self.ctx.clone();
-            #[cfg(not(target_arch = "wasm32"))]
-            let blocking = self.spawner.clone();
             let inflight = self.inflight.clone();
             self.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.spawner.spawn(async move {
-                let fetch_started = wxdata::clock::Instant::now();
-                let bytes = wxdata::task::timeout(
+                let started = wxdata::clock::Instant::now();
+                let result = wxdata::task::timeout(
                     TILE_TIMEOUT + crate::tiles::BACKSTOP,
-                    load_tile_bytes(&client, &url, path.as_deref()),
-                )
-                .await
-                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")));
-                let Ok(bytes) = bytes else {
-                    // Say so rather than going quiet: an id that stays in `requested` with nothing
-                    // coming is a permanently missing tile, and a slot that is never given back.
-                    let _ = tx.send((generation, Err(id)));
-                    inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    if let Some(ctx) = ctx {
-                        ctx.request_repaint();
-                    }
-                    return;
-                };
-                log::debug!("basemap tile {id:?}: fetch/cache {:.1} ms, {} bytes",
-                    fetch_started.elapsed().as_secs_f64() * 1000.0, bytes.len());
-                let processing_started = wxdata::clock::Instant::now();
-                let finish = move |result| {
-                    log::debug!("basemap tile {id:?}: processing {:.1} ms",
-                        processing_started.elapsed().as_secs_f64() * 1000.0);
-                    let _ = tx.send((generation, result));
-                    inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    if let Some(ctx) = ctx { ctx.request_repaint(); }
-                };
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme, simplified, details));
-                    let result = match payload {
-                        Ok(payload) => {
+                    crate::tiles::load_tile_decoded(&client, &url, path.as_deref(), |bytes| async move {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let payload = postcard::to_allocvec(&(bytes, id, palette, tess_zoom, theme, simplified, details))?;
                             let encoded = match wxdata::wasm_worker::tessellate_vector(payload.clone()).await {
-                                Ok(encoded) => Some(encoded),
-                                Err(wxdata::wasm_worker::Error::Unavailable) => build_worker_tile(&payload).ok(),
-                                Err(e) => { log::warn!("vector tile worker: {e}"); None }
+                                Ok(encoded) => encoded,
+                                Err(wxdata::wasm_worker::Error::Unavailable) => build_worker_tile(&payload)?,
+                                Err(e) => return Err(anyhow::anyhow!("vector tile worker: {e}")),
                             };
-                            encoded.and_then(|data| postcard::from_bytes::<FetchedVector>(&data).ok())
-                                .filter(|tile| tile.id == id).ok_or(id)
+                            let tile = postcard::from_bytes::<FetchedVector>(&encoded)?;
+                            anyhow::ensure!(tile.id == id, "Vector tile worker returned a different tile");
+                            Ok(tile)
                         }
-                        Err(_) => Err(id),
-                    };
-                    finish(result);
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                blocking.spawn_blocking(move || {
-                    let (vertices, indices, foreground_vertices, foreground_indices, labels) =
-                        build_tile_detail(&bytes, id, palette, tess_zoom, theme, simplified, details);
-                    finish(Ok(FetchedVector {
-                        id, vertices, indices, foreground_vertices, foreground_indices, labels,
-                    }));
-                });
+                        #[cfg(not(target_arch = "wasm32"))]
+                        wxdata::task::blocking(move || {
+                            let (vertices, indices, foreground_vertices, foreground_indices, labels) =
+                                build_tile_detail(&bytes, id, palette, tess_zoom, theme, simplified, details)?;
+                            Ok(FetchedVector { id, vertices, indices, foreground_vertices, foreground_indices, labels })
+                        }).await?
+                    }),
+                ).await.ok().and_then(Result::ok).ok_or(id);
+                log::debug!("basemap tile {id:?}: fetch and processing {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
+                let _ = tx.send((generation, result));
+                inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                if let Some(ctx) = ctx { ctx.request_repaint(); }
             });
         }
     }
@@ -1356,6 +1329,10 @@ impl VectorTileManager {
         MAX_VECTOR_Z
     }
 
+    pub fn offline_template(&self) -> Option<String> {
+        self.template.clone()
+    }
+
     /// Build the `(url, cache_path)` jobs for an offline chase pack of the lon/lat bbox over
     /// `z_lo..=z_hi` (capped at the vector max zoom). Empty until the URL template is known. The
     /// `.pbf` cache path is snapshot-agnostic so a dark/light switch keeps the pre-downloads.
@@ -1368,8 +1345,8 @@ impl VectorTileManager {
         z_lo: u8,
         z_hi: u8,
     ) -> Vec<crate::tiles::PackJob> {
-        let (Some(template), Some(root)) = (self.template.as_ref(), self.cache_root.as_ref())
-        else {
+        let root = self.cache_root.clone().or_else(|| cfg!(target_arch = "wasm32").then(|| PathBuf::from("vector")));
+        let (Some(template), Some(root)) = (self.template.as_ref(), root.as_ref()) else {
             return Vec::new();
         };
         let z_hi = z_hi.min(MAX_VECTOR_Z);
@@ -1585,13 +1562,13 @@ mod tests {
         let id = (14, 4203, 6089);
         let default = basemap_style::MapDetailStyle::default();
         let flat = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 14.0,
-            crate::settings::Theme::Dark, false, default);
+            crate::settings::Theme::Dark, false, default).unwrap();
         assert!(flat.0.len() > 4 && flat.1.len() >= 6, "building footprint decoded");
         assert!(flat.2.is_empty(), "flat view keeps no building wall/roof payload");
 
         let raised = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 14.0,
             crate::settings::Theme::Dark, false,
-            basemap_style::MapDetailStyle { extrude_buildings: true, ..default });
+            basemap_style::MapDetailStyle { extrude_buildings: true, ..default }).unwrap();
         assert_eq!(raised.0.len(), 4, "footprint moves to the elevated draw band");
         assert!(raised.2.len() >= 8 && raised.3.len() >= 12);
         assert!(raised.2.iter().any(|v| v.offset[2] == -33.0), "32-metre roof");
@@ -1671,14 +1648,21 @@ mod tests {
         let id = (8, 65, 95);
         let defaults = basemap_style::MapDetailStyle::default();
         let roads = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 8.0,
-            crate::settings::Theme::Dark, false, defaults);
+            crate::settings::Theme::Dark, false, defaults).unwrap();
         let no_roads = build_tile_detail(&bytes, id, basemap_style::Palette::Dark, 8.0,
             crate::settings::Theme::Dark, false,
-            basemap_style::MapDetailStyle { show_city_roads: false, ..defaults });
+            basemap_style::MapDetailStyle { show_city_roads: false, ..defaults }).unwrap();
         assert_eq!(roads.0.len(), no_roads.0.len(), "base geometry excludes every road class");
         assert_eq!(roads.1, no_roads.1);
         assert!(roads.2.len() > no_roads.2.len(), "roads and casings occupy the foreground");
         assert!(roads.3.len() > no_roads.3.len());
+        let casing = color(basemap_style::casing_with_details(basemap_style::Palette::Dark,
+            "transportation", "motorway", defaults).unwrap().0);
+        let road = color(basemap_style::stroke_with_details(basemap_style::Palette::Dark,
+            "transportation", "motorway", defaults).unwrap().0);
+        let last_casing = roads.2.iter().rposition(|vertex| vertex.color == casing).unwrap();
+        let first_road = roads.2.iter().position(|vertex| vertex.color == road).unwrap();
+        assert!(last_casing < first_road, "all casings must be drawn before the road surfaces");
     }
 
     #[test]
@@ -1688,7 +1672,7 @@ mod tests {
         let palette = basemap_style::Palette::Presentation;
         let theme = crate::settings::Theme::Dark;
         let defaults = basemap_style::MapDetailStyle::default();
-        let all = build_tile_detail(&bytes, id, palette, 8.0, theme, false, defaults);
+        let all = build_tile_detail(&bytes, id, palette, 8.0, theme, false, defaults).unwrap();
         assert!(all.0.len() > 4 && !all.2.is_empty());
         let hidden = basemap_style::MapDetailStyle {
             states: basemap_style::BoundaryAppearance { enabled: false, ..Default::default() },
@@ -1696,14 +1680,14 @@ mod tests {
             show_city_roads: false,
             extrude_buildings: false,
         };
-        let nothing = build_tile_detail(&bytes, id, palette, 8.0, theme, false, hidden);
+        let nothing = build_tile_detail(&bytes, id, palette, 8.0, theme, false, hidden).unwrap();
         assert_eq!(nothing.0.len(), 4, "only the land quad remains");
         assert!(nothing.2.is_empty() && nothing.4.is_empty());
         let only_county = basemap_style::MapDetailStyle {
             counties: basemap_style::BoundaryAppearance { enabled: true, color: Some([40,90,150]), width: Some(2.5) },
             ..hidden
         };
-        let direct = build_tile_detail(&bytes, id, palette, 8.0, theme, false, only_county);
+        let direct = build_tile_detail(&bytes, id, palette, 8.0, theme, false, only_county).unwrap();
         assert!(direct.0.len() > 4 && direct.0.len() < all.0.len());
         assert!(direct.0[4..].iter().all(|vertex| vertex.color == color([40,90,150,255])));
         let payload = postcard::to_allocvec(&(bytes, id, palette, 8.0, theme, false, only_county)).unwrap();
@@ -2020,12 +2004,15 @@ mod tests {
         let encoded = build_worker_tile(&payload).unwrap();
         let result: FetchedVector = postcard::from_bytes(&encoded).unwrap();
         let (vertices, indices, _, _, labels) =
-            build_tile_with_theme(&[], id, palette, 8.0, theme);
+            build_tile_with_theme(&[], id, palette, 8.0, theme).unwrap();
         assert_eq!(result.id, id);
         assert_eq!(bytemuck::cast_slice::<_, u8>(&result.vertices), bytemuck::cast_slice::<_, u8>(&vertices));
         assert_eq!(result.indices, indices);
         assert_eq!(result.labels.len(), labels.len());
         assert!(build_worker_tile(b"not a tile job").is_err());
+        let invalid = postcard::to_allocvec(&(b"not MVT".to_vec(), id, palette, 8.0, theme, false, basemap_style::MapDetailStyle::default())).unwrap();
+        assert!(build_worker_tile(&invalid).is_err(), "invalid MVT must not become a successful land-only tile");
+        assert!(build_tile(&[0x1f, 0x8b, 0x08], id, palette, 8.0).is_err(), "truncated gzip must fail decoding");
     }
 
     #[tokio::test]
@@ -2103,7 +2090,7 @@ mod tests {
     fn empty_bytes_yield_background_quad_only() {
         // Not a valid tile: build_tile still emits the background land quad (2 triangles).
         let (verts, indices, foreground, foreground_indices, labels) =
-            build_tile(b"", (7, 30, 49), basemap_style::Palette::Dark, 7.0);
+            build_tile(b"", (7, 30, 49), basemap_style::Palette::Dark, 7.0).unwrap();
         assert_eq!(verts.len(), 4);
         assert_eq!(indices.len(), 6);
         assert!(labels.is_empty());
@@ -2115,7 +2102,7 @@ mod tests {
     #[test]
     fn overlay_palette_emits_no_background_quad() {
         let (verts, indices, _, _, _) =
-            build_tile(b"", (7, 30, 49), basemap_style::Palette::HybridOverlay, 7.0);
+            build_tile(b"", (7, 30, 49), basemap_style::Palette::HybridOverlay, 7.0).unwrap();
         assert!(verts.is_empty());
         assert!(indices.is_empty());
     }
@@ -2162,14 +2149,14 @@ mod tests {
             117, 115, 45, 105, 110, 116, 101, 114, 115, 116, 97, 116, 101, 34, 4, 10, 2, 51, 53, 40,
             128, 32, 120, 2,
         ];
-        let (_, _, _, _, labels) = build_tile(bytes, (5, 7, 12), basemap_style::Palette::Dark, 5.0);
+        let (_, _, _, _, labels) = build_tile(bytes, (5, 7, 12), basemap_style::Palette::Dark, 5.0).unwrap();
         assert_eq!(labels.len(), 3);
         assert_eq!(labels[0].name, "35");
         assert_eq!(labels[0].shield, RoadShield::Interstate);
         assert!(labels[0].min_zoom <= 5.3);
         let hidden = basemap_style::MapDetailStyle { show_city_roads: false, ..Default::default() };
         let (_, _, _, _, hidden_labels) = build_tile_detail(bytes, (5,7,12), basemap_style::Palette::Dark,
-            5.0, crate::settings::Theme::Dark, false, hidden);
+            5.0, crate::settings::Theme::Dark, false, hidden).unwrap();
         assert!(hidden_labels.is_empty());
     }
 

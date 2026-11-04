@@ -17,6 +17,14 @@ HookEcho opens in **Radar**: one map, one timeline, and a short menu. **Analyst*
 
 Click the gear for Settings in one step. **Ctrl+S** opens and focuses global search. **Space** plays or pauses radar; **Escape** hides or restores the map controls.
 
+The Radar Zeta playback bar's **pin** button customizes up to four shortcuts. MRMS and SPC remain the defaults. Starred products appear first in the chooser; pinned products unavailable at the current radar remain saved for other sites. The same choices appear in minimal and full playback controls.
+
+**Custom locations → Your places** shows current matching alerts from the loaded feed, nearby loaded radar age, and a forecast for each saved place. Forecasts load one place at a time while the window is open. **View radar here** opens the nearest radar over that place; **Forecast details** opens the existing detailed forecast. Missing or stale information is labeled explicitly; these cards do not infer an all-clear from an unavailable feed.
+
+**Map → Offline readiness** brings saved map coverage and browser weather replay packs together. Download a small area before disconnecting, then use **Check saved area** to verify its files. A new map download replaces the previous saved area; interrupted replacements stay incomplete. Saved weather is dated replay, not live radar or new warnings. Browser storage can be cleared by the browser. Map downloads are limited to 3,000 tiles, 50 MB and four concurrent requests.
+
+**Storm chasers** and map beacons can open a chaser's self-published YouTube link when their source record supplies one. An optional YouTube Data API key under **Settings → Integrations** enables broadcast-status checks. Unchecked, failed or expired checks say **unknown**; a recent position alone never means the video is live. Links do not independently verify someone's identity.
+
 ## Regional Clusters
 
 At national and regional zooms (below zoom 7), blue regional chips replace repeated polygon labels. Each chip counts unique visible bulletins, rather than county polygon pieces. Click it to browse the region's warnings, watches, advisories, special weather statements and mesoscale discussions, then open the full bulletin. Shared county edges inside the same bulletin are suppressed at wide zoom. All enabled hazard footprints remain on the map; priority-dock thresholds do not filter them. Emergency labels stay prominent.
@@ -36,6 +44,8 @@ Outline meshes are cached per pane and viewport. New feeds, camera changes, scal
 ![Four-pane Analyst Workstation with the inspector open](shots/analyst-mode.jpg)
 
 The app remembers each mode's site, camera, product, overlays, thresholds (including disabled thresholds), active pane, links, and selected live or archive time for the current session. It does not keep extra inactive renderers or downloads running. Save a workspace in Tools if you need the arrangement after restarting. Ordinary single-pane workspaces open in Radar; multi-pane and explicitly analyst workspaces open in Analyst. Older workspace files remain readable.
+
+To send the arrangement to someone else, open **Share** or search for **Share live view** / **Share this exact time**. Both links include every visible pane, its products and layers, and camera/time links. Live opens with current data; exact-time opens paused at the displayed timestamps. The link uses the web app even when copied from desktop. Archives must still be available from their original source. Saved places, credentials, placefiles, custom palettes and user-defined radar products are not included; the Share page explains any unavailable choice.
 
 On a phone, the mode switch remains available and sections open in a sheet. The menu header stays fixed while content scrolls, and the pane picker lets you move between analyst panes.
 

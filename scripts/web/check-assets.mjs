@@ -1,32 +1,27 @@
+import {shellAssets} from './shell-assets.mjs';
+
 // Check production aliases too: a healthy deployment URL can hide a poisoned CDN response.
 for (const origin of process.argv.slice(2)) {
   const page = await fetch(origin);
   if (!page.ok) throw new Error(`${origin}: HTTP ${page.status}`);
   const html = await page.text();
-  const paths = [...html.matchAll(/(?:href=")(\.\/dist\/hookecho[^" ]+\.(?:js|wasm)(?:\?[^" ]*)?)/g)].map(m => m[1]);
-  if (paths.length !== 2) throw new Error(`${origin}: missing bundle references`);
-  paths.push("./decode-bridge.js", "./decode-worker.js?v=radar-fields", "./video-player.js", "./vendor/hls-1.7.3.min.js");
-  for (const path of paths) {
+  const paths = await shellAssets(html, async path => {
     const response = await fetch(new URL(path, origin));
-    const expected = path.includes(".wasm") ? "application/wasm" : "javascript";
-    if (!response.ok || !response.headers.get("content-type")?.includes(expected)) {
-      throw new Error(`${origin} ${path}: ${response.status} ${response.headers.get("content-type")}`);
+    if (!response.ok || !response.headers.get('content-type')?.includes('javascript')) {
+      throw new Error(`${origin} ${path}: ${response.status} ${response.headers.get('content-type')}`);
     }
-    if (path.endsWith(".js?boot=2")) {
-      const glue = await response.text();
-      for (const [, snippet] of glue.matchAll(/^import .*? from ["']\.\/(snippets\/[^"']+\.js)["']/gm)) {
-        if (!/inline\d+-[a-f0-9]{8}\.js$/.test(snippet)) {
-          throw new Error(`${origin}: snippet lacks a content-hashed URL: ${snippet}`);
-        }
-        const asset = await fetch(new URL(`./dist/${snippet}`, origin));
-        if (!asset.ok || !asset.headers.get("content-type")?.includes("javascript")) {
-          throw new Error(`${origin} ${snippet}: ${asset.status} ${asset.headers.get("content-type")}`);
-        }
-        await asset.body.cancel();
-      }
-    } else {
-      await response.body.cancel();
+    return response.text();
+  });
+  // HLS is optional and loads on demand; verify its deployment without precaching it.
+  paths.push('/vendor/hls-1.7.3.min.js');
+  for (const path of paths.filter(path => path !== '/')) {
+    const response = await fetch(new URL(path, origin));
+    const type = response.headers.get('content-type') || '';
+    const expected = path.includes('.wasm') ? 'application/wasm' : path.includes('.js') ? 'javascript' : null;
+    if (!response.ok || (expected ? !type.includes(expected) : type.includes('text/html'))) {
+      throw new Error(`${origin} ${path}: ${response.status} ${type}`);
     }
+    await response.body.cancel();
   }
-  console.log(`${origin}: executable bundle assets OK`);
+  console.log(`${origin}: complete app shell assets OK`);
 }

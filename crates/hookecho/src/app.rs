@@ -164,6 +164,8 @@ fn short_place_name(s: &str) -> &str {
 }
 
 /// Which severe-weather overlays are shown.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct OverlayFilters {
     pub show_alerts: bool,
     pub alert_cats: [bool; 6],
@@ -258,8 +260,14 @@ impl Default for OverlayFilters {
 /// few refresh cycles and the set is complete and stays complete.
 const TFR_BATCH: usize = 25;
 
+struct ChaserVideoCheck {
+    requested: Instant,
+    result: Option<Result<wxdata::youtube::Status, String>>,
+}
+
 /// Background overlay fetch results.
 enum OverlayMsg {
+    ChaserVideo { url: String, requested: Instant, result: Result<wxdata::youtube::Status, String> },
     Alerts(Vec<GeoFeature>),
     /// Last run's alert overlay, read from disk off the launch path. Applied only if no live
     /// fetch has landed yet; it seeds the known-warning ids either way, so a restart mid-event
@@ -2227,8 +2235,10 @@ pub(crate) enum PaletteAction {
     GoLive,
     /// Hand the current view off to windy.com in the browser.
     OpenInWindy,
-    /// Copy a `hookecho://goto/…` link to this view (site, center, zoom, archive time).
+    /// Share the full scene, preserving whether it is live or pinned to a time.
     CopyViewLink,
+    CopyLiveSceneLink,
+    CopyExactSceneLink,
     /// Open Help at the glossary entry that explains a label's abbreviation. An index into
     /// `ui::glossary::ENTRIES` rather than the term itself, so the action stays `Copy`.
     Explain(usize),
@@ -2690,12 +2700,14 @@ fn web_loop_window_for_bytes(scan_bytes: usize, budget: usize) -> usize {
 fn shared_head_source(views: &[MapView], idx: usize, poll_secs: u64) -> Option<usize> {
     let target = &views[idx];
     if !target.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
-        || !target.timeline.following || target.timeline.live_looping() { return None; }
+        || !target.timeline.following || target.timeline.live_looping()
+        || target.feed_recovery.probe.is_some() { return None; }
     views.iter().enumerate().filter(|(i, source)| {
         *i != idx && target.site.is_some() && source.site == target.site
             && source.loaded_site == source.site
             && source.timeline.following && !source.timeline.live_looping()
             && source.retained_station.is_none() && !source.loading && source.error.is_none()
+            && source.feed_recovery.probe.is_none()
             && source.head_request.pending_name().is_none()
             && source.last_poll.is_some_and(|at| at.elapsed().as_secs() < poll_secs)
             && source.volume.as_ref().is_some_and(|volume| {
@@ -2708,6 +2720,7 @@ fn shared_head_source(views: &[MapView], idx: usize, poll_secs: u64) -> Option<u
 }
 
 enum DataMsg {
+    Head { view: usize, site: String, provider: level2::Level2Provider, time: Option<DateTime<Utc>>, result: Box<DataMsg> },
     ListingFailed { view: usize, site: String, date: NaiveDate },
     Guarded { view: usize, site: String, generation: u64, head: bool, result: Box<DataMsg> },
     FramePhase { view: usize, site: String, name: String, generation: u64, phase: level2::LoadPhase },
@@ -2780,7 +2793,8 @@ fn live_update_is_current(
 impl DataMsg {
     fn view(&self) -> usize {
         match self {
-            DataMsg::ListingFailed { view, .. }
+            DataMsg::Head { view, .. }
+            | DataMsg::ListingFailed { view, .. }
             | DataMsg::Guarded { view, .. }
             | DataMsg::Volume { view, .. }
             | DataMsg::Live { view, .. }
@@ -2795,7 +2809,8 @@ impl DataMsg {
     }
     fn site(&self) -> &str {
         match self {
-            DataMsg::ListingFailed { site, .. }
+            DataMsg::Head { site, .. }
+            | DataMsg::ListingFailed { site, .. }
             | DataMsg::Guarded { site, .. }
             | DataMsg::Volume { site, .. }
             | DataMsg::Live { site, .. }
@@ -2834,7 +2849,8 @@ type ShownKey = (
 /// An in-progress offline chase-pack download: the worker outcome channel, a cancel flag the
 /// workers poll, and running tallies for the Map ▸ offline-pack progress bar.
 struct ChasePack {
-    rx: Receiver<(bool, u64)>,
+    rx: Receiver<Result<u64, String>>,
+    manifest: crate::offline::MapPack,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     total: u64,
     done: u64,
@@ -3003,6 +3019,7 @@ fn parse_goto(v: &str) -> Option<Goto> {
 /// The shareable link for a view. Native gets the `hookecho://` scheme the OS has registered; the
 /// browser build gets its own origin with the state in the fragment, which never leaves the client
 /// — no server, cache or worker ever sees where someone is looking.
+#[cfg(test)]
 fn goto_link(g: &Goto) -> String {
     let site = &g.site;
     let (lon, lat, zoom) = (g.lon, g.lat, g.zoom);
@@ -3411,7 +3428,7 @@ pub struct HookEchoApp {
     pane_lut: std::collections::HashMap<usize, u64>,
     pane_upload_tokens: std::collections::HashMap<usize, u64>,
     linked_playback_wait: Option<(String, Instant)>,
-    radar_provider: level2::Level2Provider,
+    radar_provider: crate::settings::RadarFeed,
     /// Lazily measured shared scan payloads; weak identities do not retain volumes.
     radar_memory: crate::radar_memory::Inventory,
     radar_memory_highwater: usize,
@@ -4048,6 +4065,7 @@ pub struct HookEchoApp {
     mosaic_provenance: Option<wxdata::mosaic::Provenance>,
     mosaic_bounds: Option<(f64, f64, f64, f64)>,
     spotters: Vec<wxdata::spotters::Spotter>,
+    chaser_video_checks: std::collections::HashMap<String, ChaserVideoCheck>,
     spotters_last_fetch: Option<Instant>,
     radar_site_status: Option<wxdata::radar_status::Report>,
     radar_site_status_last_fetch: Option<Instant>,
@@ -4593,7 +4611,7 @@ impl HookEchoApp {
             tiles,
             ndfd_legends: Default::default(),
             saved: settings.clone(),
-            radar_provider: settings.radar_feed.provider(),
+            radar_provider: settings.radar_feed,
             settings,
             views: vec![view],
             active: 0,
@@ -5019,6 +5037,7 @@ impl HookEchoApp {
             mosaic_provenance: None,
             mosaic_bounds: None,
             spotters: Vec::new(),
+            chaser_video_checks: std::collections::HashMap::new(),
             spotters_last_fetch: None,
             radar_site_status: None,
             radar_site_status_last_fetch: None,
@@ -5183,10 +5202,10 @@ impl HookEchoApp {
         // Recovery is only a fallback. A user-directed link or pending notification must win
         // over the saved session; otherwise its camera is restored after the link is applied and
         // the permalink writer promptly replaces the requested URL with that stale view.
-        app.apply_goto_env();
-        app.drain_goto_file();
+        app.apply_goto_env(&cc.egui_ctx);
+        app.drain_goto_file(&cc.egui_ctx);
         #[cfg(target_arch = "wasm32")]
-        app.apply_goto_hash();
+        app.apply_goto_hash(&cc.egui_ctx);
         #[cfg(target_arch = "wasm32")]
         if opened_on_default && !recovered_session {
             app.locate_by_ip(&cc.egui_ctx.clone());
@@ -5205,17 +5224,17 @@ impl HookEchoApp {
     /// This exists for the screenshot harness (`scripts/shots/`): staging a historic storm by
     /// driving the UI means hunting for a window's row coordinates, which breaks the moment the
     /// layout moves. Companion to the headless `HOOKECHO_CAM`/`HOOKECHO_BASEMAP` knobs.
-    fn apply_goto_env(&mut self) {
+    fn apply_goto_env(&mut self, ctx: &egui::Context) {
         let Ok(v) = std::env::var("HOOKECHO_GOTO") else {
             return;
         };
-        self.apply_goto(&v);
+        self.apply_goto(&v, ctx);
     }
 
     /// Consume a `goto.txt` dropped in the storage base by the Android notification tap
     /// (`MainActivity`), which is how a background alert deep-links into the storm it fired on.
     /// The file is deleted as it's read so the jump happens once, not on every resume.
-    fn drain_goto_file(&mut self) {
+    fn drain_goto_file(&mut self, ctx: &egui::Context) {
         let Some(path) = crate::paths::goto_file() else {
             return;
         };
@@ -5223,11 +5242,12 @@ impl HookEchoApp {
             return;
         };
         let _ = std::fs::remove_file(&path);
-        self.apply_goto(v.trim());
+        self.apply_goto(v.trim(), ctx);
     }
 
     /// `SITE[,lon,lat,zoom][,extra…]`, with or without the `hookecho://goto/` prefix.
-    fn apply_goto(&mut self, v: &str) {
+    fn apply_goto(&mut self, v: &str, ctx: &egui::Context) {
+        if self.apply_scene_link(v, ctx) { return; }
         let Some(g) = parse_goto(v) else {
             log::warn!("HOOKECHO_GOTO: want SITE[,lon,lat,zoom[,RFC3339|product|tilt]], got {v:?}");
             return;
@@ -5279,7 +5299,7 @@ impl HookEchoApp {
     /// Percent-escapes are decoded by `parse_goto`, so a fragment that came back from a chat
     /// client with its commas and colons escaped still opens.
     #[cfg(target_arch = "wasm32")]
-    fn apply_goto_hash(&mut self) {
+    fn apply_goto_hash(&mut self, ctx: &egui::Context) {
         let Some(h) = web_sys::window().and_then(|w| w.location().hash().ok()) else {
             return;
         };
@@ -5287,8 +5307,10 @@ impl HookEchoApp {
             return;
         }
         self.last_goto_hash = Some(h.clone());
-        if let Some(v) = h.strip_prefix("#goto=") {
-            self.apply_goto(v);
+        if h.starts_with("#scene=") {
+            self.apply_scene_link(&h, ctx);
+        } else if let Some(v) = h.strip_prefix("#goto=") {
+            self.apply_goto(v, ctx);
             // A shared link points at one moment on purpose. Auto-playing away from it would
             // throw away the thing the sender was pointing at.
             self.autoplay_pending = false;
@@ -5305,7 +5327,7 @@ impl HookEchoApp {
         let Some(win) = web_sys::window() else {
             return;
         };
-        if win.location().hash().is_ok_and(|h| h.starts_with("#goto=")) {
+        if win.location().hash().is_ok_and(|h| h.starts_with("#goto=") || h.starts_with("#scene=")) {
             return;
         }
         let Ok(origin) = win.location().origin() else {
@@ -7100,24 +7122,21 @@ impl HookEchoApp {
     }
 
     /// Detail card for a tapped Spotter Network beacon.
-    fn open_spotter(&mut self, sp: &wxdata::spotters::Spotter) {
+    fn open_spotter(&mut self, sp: &wxdata::spotters::Spotter, ctx: &egui::Context) {
         let age = (Utc::now() - sp.time).num_minutes().max(0);
+        let stream = sp.youtube_url.as_deref().and_then(wxdata::youtube::Target::parse).map(|target| target.url());
+        if let Some(url) = &stream { self.request_chaser_status(url, ctx); }
+        let video = stream.as_ref().map_or_else(|| "No public YouTube link supplied".into(), |url| self.chaser_video_label(url));
         let body = format!(
-            "SPOTTER NETWORK  ·  {} min ago\n{}\n{:.4}°, {:.4}°\n{}\nLive video unavailable",
-            age,
-            sp.status,
-            sp.lat,
-            sp.lon,
-            crate::timefmt::fmt_date_clock(sp.time, self.active_tz())
+            "SPOTTER NETWORK  ·  {} min ago\n{}\n{:.4}°, {:.4}°\n{}\nVideo: {}",
+            age, sp.status, sp.lat, sp.lon,
+            crate::timefmt::fmt_date_clock(sp.time, self.active_tz()), video,
         );
         self.cell_popup = None;
         self.detail = Some(Detail {
-            title: sp.name.clone(),
-            body,
-            color: [105, 203, 255, 255],
-            image: None,
-            link: None,
-            stream: None,
+            title: sp.name.clone(), body, color: [105, 203, 255, 255], image: None,
+            link: stream.as_ref().map(|url| ("Self-published YouTube".into(), url.clone())),
+            stream,
         });
     }
 
@@ -7985,6 +8004,8 @@ impl HookEchoApp {
     /// re-hit the API.
     fn fetch_point_forecast(&mut self, ctx: &egui::Context, lon: f64, lat: f64) {
         let key = ((lat * 20.0).round() as i32, (lon * 20.0).round() as i32);
+        // Drop the previous receiver even when this location is already cached.
+        self.forecast_rx = None;
         self.forecast_at = Some((lon, lat));
         self.forecast_open = true;
         self.fetch_point_obs(key, lon, lat);
@@ -7999,21 +8020,35 @@ impl HookEchoApp {
             self.spawn_overlay(ctx, OverlaySource::PointGfs { point, lon, lat });
         }
 
-        if let Some((when, f)) = self.forecast_cache.get(&key) {
-            if when.elapsed().as_secs() < 900 {
-                self.forecast_state = ui::forecast_window::State::Ready(Box::new(f.clone()));
-                return;
-            }
-        }
-        self.forecast_state = ui::forecast_window::State::Loading;
+        let cached = self.forecast_cache.get(&key)
+            .filter(|(when, _)| when.elapsed().as_secs() < 900).map(|(_, forecast)| forecast.clone());
+        self.forecast_state = cached.as_ref().map_or(ui::forecast_window::State::Loading,
+            |forecast| ui::forecast_window::State::Ready(Box::new(forecast.clone())));
+        // An enriched forecast always has the three model entries, even when unavailable.
+        if cached.as_ref().is_some_and(|forecast| !forecast.models.is_empty()) { return; }
         let (tx, rx) = std::sync::mpsc::channel();
         self.forecast_rx = Some((key, rx));
         let http = self.http.clone();
+        let repaint = ctx.clone();
         self.spawner.spawn(async move {
-            let res = wxdata::forecast::fetch(&http, lat, lon)
-                .await
-                .map_err(|e| e.to_string());
-            let _ = tx.send(res);
+            let forecast = match cached {
+                Some(forecast) => forecast,
+                None => match wxdata::forecast::fetch_basic(&http, lat, lon).await {
+                    Ok(forecast) => {
+                        if tx.send(Ok(forecast.clone())).is_err() { return; }
+                        repaint.request_repaint();
+                        forecast
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(error.to_string()));
+                        repaint.request_repaint();
+                        return;
+                    }
+                },
+            };
+            let forecast = wxdata::forecast::enrich(&http, lat, lon, forecast).await;
+            let _ = tx.send(Ok(forecast));
+            repaint.request_repaint();
         });
     }
 
@@ -8596,6 +8631,7 @@ impl HookEchoApp {
     /// volume kept forever is worse than one frame missing from a saved loop.
     #[cfg(target_arch = "wasm32")]
     fn save_offline_pack(&mut self, ctx: &egui::Context) {
+        let Some(guard) = crate::webcache::begin_save() else { return };
         let tl = &self.views[self.active].timeline;
         let ids: Vec<_> = tl.frames.iter().take(tl.playhead + 1).cloned().collect();
         let site = self.views[self.active].site.clone().unwrap_or_default();
@@ -8665,10 +8701,12 @@ impl HookEchoApp {
         let ctx = ctx.clone();
         let abi_scene = self.settings.abi_scene;
         self.spawner.spawn(async move {
+            let _guard = guard;
             let mut satellite: std::collections::BTreeSet<String> =
                 current_satellite.into_iter().collect();
             for time in ids.iter().filter_map(|id| id.date_time()) {
                 for &band in &satellite_bands {
+                    if crate::webcache::save_cancelled() { return; }
                     if let Ok(image) = wxdata::abi::fetch_at(
                         &http,
                         wxdata::abi::Satellite::East,
@@ -8700,10 +8738,24 @@ impl HookEchoApp {
     /// anything over the network. Playback then reads each volume back out of IndexedDB.
     #[cfg(target_arch = "wasm32")]
     fn load_offline_pack(&mut self, pack: &crate::webcache::Pack) {
+        if !pack.available {
+            self.toast(ToastKind::Error, "Saved weather is incomplete; save this replay again while connected");
+            return;
+        }
         let Ok(date) = chrono::NaiveDate::parse_from_str(&pack.date, "%Y-%m-%d") else {
             return;
         };
-        self.views[self.active].site = Some(pack.site.clone());
+        let view = &mut self.views[self.active];
+        if view.site.as_deref() != Some(&pack.site) {
+            ui::site_dialog::center_on_site(&mut view.camera, &pack.site);
+            self.storm_cells.clear();
+            self.cells_site = None;
+            self.cell_trends.clear();
+            self.cell_popup = None;
+        }
+        view.restore_replay_frames(pack.site.clone(), date,
+            pack.volumes.iter().map(|name| Identifier::new(name.clone())).collect());
+        self.settings.remember_radar_site(&pack.site);
         self.settings.web_files.extend(pack.overlays.clone());
         for config in &pack.placefiles {
             if !self.settings.placefiles.iter().any(|old| old.url == config.url) {
@@ -8711,15 +8763,6 @@ impl HookEchoApp {
             }
         }
         let tl = &mut self.views[self.active].timeline;
-        tl.date = date;
-        tl.following = false;
-        tl.listing = false;
-        tl.frames = pack
-            .volumes
-            .iter()
-            .map(|n| Identifier::new(n.clone()))
-            .collect();
-        tl.playhead = 0;
         tl.playing = true;
         tl.loop_enabled = true;
     }
@@ -9033,7 +9076,7 @@ impl HookEchoApp {
         )
     }
 
-    /// Fixed chase-pack zoom span for the current view: `z_lo = floor(zoom)`, four levels deeper,
+    /// Fixed chase-pack zoom span for the current view: `z_lo = floor(zoom)`, two levels deeper,
     /// both capped to the active basemap's max (zooming past the style's deepest level packs that
     /// deepest level instead of an empty range).
     fn chasepack_zoom(&self) -> (u8, u8) {
@@ -9048,7 +9091,7 @@ impl HookEchoApp {
             z_lo
         };
         let z_lo = z_lo.min(max_z);
-        (z_lo, (z_lo + 4).min(max_z))
+        (z_lo, (z_lo + 2).min(max_z))
     }
 
     /// Per-frame chase-pack estimate + progress [`map_rows`](Self::map_rows) renders.
@@ -9057,7 +9100,7 @@ impl HookEchoApp {
         // Dark and Light pack the same vector tiles (the `.pbf` cache is palette-agnostic), so
         // resolving `Auto` either way gives the same pack.
         let style = self.views[self.active].basemap.resolve(true);
-        let packable = !cfg!(target_arch = "wasm32") && if style.is_raster() {
+        let packable = if style.is_raster() {
             self.tiles.packable(style)
         } else if matches!(style, BasemapStyle::Dark | BasemapStyle::Light) {
             self.vtiles.packable()
@@ -9089,7 +9132,7 @@ impl HookEchoApp {
                 );
             }
             if !style.is_raster() && self.settings.pack_include_satellite {
-                let sz_hi = z_hi.min(self.tiles.max_pack_z(BasemapStyle::HybridSatellite));
+                let sz_hi = z_hi.min(self.tiles.max_pack_z(BasemapStyle::Satellite));
                 n += crate::tiles::pack_tile_count(
                     min_lon,
                     min_lat,
@@ -9120,7 +9163,6 @@ impl HookEchoApp {
     }
 
     /// Kick off an offline chase-pack download of the current view's basemap tiles (4 workers).
-    #[cfg(not(target_arch = "wasm32"))]
     fn start_chasepack(&mut self) {
         use crate::tiles::BasemapStyle;
         if self.chasepack.is_some() {
@@ -9154,7 +9196,7 @@ impl HookEchoApp {
         }
         // And imagery alongside the streets, for the packs that went the other way round.
         if !style.is_raster() && self.settings.pack_include_satellite {
-            let sat = BasemapStyle::HybridSatellite;
+            let sat = BasemapStyle::Satellite;
             let sz_hi = z_hi.min(self.tiles.max_pack_z(sat));
             jobs.extend(self.tiles.pack_jobs(
                 sat,
@@ -9169,15 +9211,28 @@ impl HookEchoApp {
         // The DEM rides along with every pack, whatever the basemap: offline chase mode wants the
         // blockage overlay as much as it wants the map under it.
         jobs.extend(self.tiles.dem_pack_jobs(min_lon, min_lat, max_lon, max_lat));
-        if jobs.is_empty() {
+        let total = jobs.len() as u64;
+        if !crate::offline::within_budget(total, total.saturating_mul(25_000)) {
+            self.toast(ToastKind::Error, "Offline area is too large; zoom in before downloading");
             return;
         }
-        let total = jobs.len() as u64;
+        let manifest = crate::offline::MapPack {
+            label: style.label().into(), bounds: (min_lon, min_lat, max_lon, max_lat),
+            zoom: (z_lo, z_hi), files: jobs.iter().map(|(url, path)| (url.clone(), path.to_string_lossy().into_owned())).collect(),
+            completed: 0, bytes: 0, finished: false, error: None,
+            saved_at: chrono::Utc::now().timestamp(), verified: false,
+            vector_template: self.vtiles.offline_template(),
+        };
+        if let Err(error) = crate::offline::save(manifest.clone()) {
+            self.toast(ToastKind::Error, format!("Could not prepare offline area: {error}"));
+            return;
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        crate::tiles::start_pack_download(self._rt.handle(), jobs, cancel.clone(), tx);
+        crate::tiles::start_pack_download(&self.spawner, jobs, cancel.clone(), tx);
         self.chasepack = Some(ChasePack {
             rx,
+            manifest,
             cancel,
             total,
             done: 0,
@@ -9348,7 +9403,6 @@ impl HookEchoApp {
         if actions.instant_replay {
             self.instant_replay();
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if actions.download_chasepack {
             self.start_chasepack();
         }
@@ -9356,7 +9410,6 @@ impl HookEchoApp {
             if let Some(p) = &self.chasepack {
                 p.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            self.chasepack = None;
         }
         if actions.outlook_kind_changed && self.filters.outlook_day == 1 {
             // Hazard switched: drop the stale Day-1 features so the empty-check refetches it.
@@ -9540,6 +9593,7 @@ impl HookEchoApp {
                 }
             }
         });
+        self.offline_readiness_rows(ui);
         let (view, settings) = (&mut self.views[self.active], &mut self.settings);
 
         // A download in flight stays above the disclosure — progress you can't find reads as a hang.
@@ -9595,16 +9649,11 @@ impl HookEchoApp {
                 }
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        ui.collapsing("Offline maps", |ui| {
+        ui.collapsing("Download offline map area", |ui| {
             // Offline chase pack: pre-cache this view's basemap tiles so it renders with no signal.
             ui.separator();
             if !chasepack.packable {
-                if cfg!(target_arch = "wasm32") {
-                    ui.weak("Offline packs are available in the desktop and Android apps");
-                } else {
-                    ui.weak("Offline pack: pick a raster or vector basemap");
-                }
+                ui.weak("Choose Dark, Light, or a USGS basemap for offline downloads.");
             } else {
                 ui.weak(format!(
                     "Offline pack: {} tiles ≈ {:.0} MB (z{}–{}, current view)",
@@ -9615,7 +9664,7 @@ impl HookEchoApp {
                         "Pack vector street tiles beside raster imagery, so road names still \
                          render offline",
                     );
-                ui.checkbox(&mut settings.pack_include_satellite, "Include satellite")
+                ui.checkbox(&mut settings.pack_include_satellite, "Include USGS satellite imagery")
                     .on_hover_text(
                         "Pack satellite imagery beside the vector streets, so terrain still \
                          renders offline",
@@ -9624,11 +9673,13 @@ impl HookEchoApp {
                     .on_hover_text(
                         "z12 terrain (~40 m/px) instead of z10 — sixteen times the tiles",
                     );
-                let too_big = chasepack.mb > 2000.0;
+                let too_big = !crate::offline::within_budget(chasepack.tiles, (chasepack.mb * 1e6) as u64);
+                let replacing = crate::offline::snapshot().is_some();
+                if replacing { ui.weak("Replaces the saved map area. An interrupted replacement stays incomplete."); }
                 if ui
-                    .add_enabled(!too_big, egui::Button::new("⬇ Download offline pack"))
+                    .add_enabled(!too_big, egui::Button::new(if replacing { "Replace saved offline map area" } else { "⬇ Download offline pack" }))
                     .on_hover_text(
-                        "Cache this view's basemap tiles to disk for offline use in the field",
+                        "Save this map area and terrain on this device. Browser storage can be cleared by the browser.",
                     )
                     .clicked()
                 {
@@ -9637,11 +9688,52 @@ impl HookEchoApp {
                 if too_big {
                     ui.colored_label(
                         egui::Color32::from_rgb(230, 90, 90),
-                        "Too large (>2 GB) — zoom in or narrow the view",
+                        "Limit: 3,000 tiles / 50 MB per area. Zoom in or turn off extra imagery.",
                     );
                 }
             }
         });
+    }
+
+    fn offline_readiness_rows(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(egui::RichText::new("Offline readiness").strong());
+        ui.weak("Maps are saved geography. Saved weather is a dated replay; live radar and new warnings need a connection.");
+        if let Some(pack) = crate::offline::snapshot() {
+            ui.label(format!("{} · {:.1} MB", pack.label, pack.bytes as f64 / 1e6));
+            ui.small(pack.coverage());
+            ui.label(if pack.ready() { "Map + terrain: ready" } else if !pack.verified && pack.finished {
+                "Map + terrain: saved — check availability"
+            } else { "Map + terrain: incomplete" });
+            ui.small(format!("{} / {} tiles saved", pack.completed, pack.files.len()));
+            if let Some(error) = &pack.error { ui.colored_label(egui::Color32::from_rgb(230, 120, 60), error); }
+            if self.chasepack.is_none() && pack.finished && ui.button("Check saved area").clicked() {
+                crate::offline::verify(&self.spawner, ui.ctx().clone());
+            }
+        } else {
+            ui.label("Map + terrain: not downloaded");
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let packs = self.packs();
+            ui.label(format!("Saved weather: {} replay pack(s)", packs.len()));
+            if let Some(status) = crate::webcache::status() { ui.small(status); }
+            if crate::webcache::is_saving() {
+                if ui.button("Cancel weather download").clicked() { crate::webcache::cancel_save(); }
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            } else if ui.button("Save displayed weather for offline replay").clicked() {
+                self.save_offline_pack(ui.ctx());
+            }
+            for pack in packs {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("{} · {}", pack.label(), if pack.available { "Ready (saved weather)" } else { "Missing files" }));
+                    if ui.add_enabled(pack.available, egui::Button::new("Open replay").small()).clicked() { self.load_offline_pack(&pack); }
+                    if ui.add_enabled(!crate::webcache::is_saving(), egui::Button::new("Delete").small()).clicked() { crate::webcache::spawn_remove(pack.key()); }
+                });
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        ui.weak("Weather: recently viewed scans may be cached; use saved radar files for a guaranteed replay.");
     }
 
     /// Whether distances should read in kilometres: they should everywhere the US networks do not
@@ -10381,37 +10473,10 @@ impl HookEchoApp {
                 view.pin_low_cut();
             }
             PaletteAction::CopyViewLink => {
-                let v = &self.views[self.active];
-                let c = v.camera.center;
-                let (lon, lat) = crate::render::mercator::world_to_lonlat(c.0, c.1);
-                // A live view shares as live; a scrubbed one carries its timestamp, so the link
-                // lands on the frame the sender was looking at.
-                let time = (!v.timeline.following)
-                    .then(|| v.timeline.current().and_then(|id| id.date_time()))
-                    .flatten();
-                let link = goto_link(&Goto {
-                    site: v.site.clone().unwrap_or_default(),
-                    lon,
-                    lat,
-                    zoom: v.camera.zoom,
-                    time,
-                    moment: Some(v.moment),
-                    tilt: Some(v.tilt),
-                    basemap: Some(v.basemap.slug().to_string()),
-                    globe: Some(v.camera.globe),
-                    pitch_deg: Some(v.camera.pitch_deg),
-                    bearing_deg: Some(v.camera.bearing_deg),
-                    threshold: v.threshold_enabled[v.moment.index()]
-                        .then(|| v.thresholds[v.moment.index()]),
-                    srv: v.srv,
-                });
-                // A phone or a tablet has a share sheet, and pasting into a chat is what this is
-                // for; the clipboard is the fallback for everything that does not.
-                if !crate::platform::share_link("HookEcho", &link) {
-                    ctx.copy_text(link.clone());
-                    self.banner("Link copied".to_string(), link);
-                }
+                self.share_scene_link(self.current_scene_time_mode(), ctx);
             }
+            PaletteAction::CopyLiveSceneLink => self.share_scene_link(crate::workspace::SceneTimeMode::Live, ctx),
+            PaletteAction::CopyExactSceneLink => self.share_scene_link(crate::workspace::SceneTimeMode::Exact, ctx),
             PaletteAction::UndoWorkspaceAction => self.undo_workspace_action(ctx),
             PaletteAction::SaveDiagnostics => self.export_diagnostics(),
             PaletteAction::SaveWorkspace => {
@@ -10871,6 +10936,11 @@ impl HookEchoApp {
                 OverlayMsg::Tfr(new, remaining) => {
                     self.tfr_features.extend(new);
                     self.tfr_pending = remaining;
+                }
+                OverlayMsg::ChaserVideo { url, requested, result } => {
+                    if let Some(check) = self.chaser_video_checks.get_mut(&url).filter(|check| check.requested == requested) {
+                        check.result = Some(result);
+                    }
                 }
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
                 OverlayMsg::RadarSiteStatus(report) => self.radar_site_status = Some(report),
@@ -12623,7 +12693,10 @@ impl HookEchoApp {
         let generation = self.views[view_idx].head_request.start(site.clone());
         let request_site = site.clone();
         let current_tdwr_revision = self.views[view_idx].tdwr_revision.clone();
-        let provider = self.settings.radar_feed.provider();
+        let automatic = self.settings.radar_feed == crate::settings::RadarFeed::Automatic
+            && self.views[view_idx].timeline.following;
+        let provider = if automatic { self.views[view_idx].feed_recovery.requested() }
+            else { self.settings.radar_feed.provider() };
         let tx = self.msg_tx.clone();
         let network = wxdata::sites::network(&site);
         if network != wxdata::sites::Network::Nexrad {
@@ -12685,6 +12758,7 @@ impl HookEchoApp {
         }
         let handle = self.spawner.spawn_abortable(async move {
             let timeout_site = site.clone();
+            let current_time = current_name.as_ref().and_then(|name| Identifier::new(name.clone()).date_time());
             // Ask for two: the newest volume is usually still uploading, and one caught before
             // its metadata record lands can't be decoded at all. Falling back one volume shows
             // ~5-minute-old data instead of nothing.
@@ -12752,6 +12826,14 @@ impl HookEchoApp {
                 site: timeout_site,
                 err: e.to_string(),
             });
+            let msg = if automatic {
+                let time = match &msg {
+                    DataMsg::Volume { time, .. } => Some(*time),
+                    DataMsg::UpToDate { .. } => current_time,
+                    _ => None,
+                };
+                DataMsg::Head { view: view_idx, site: request_site.clone(), provider, time, result: Box::new(msg) }
+            } else { msg };
             let _ = tx.send(DataMsg::Guarded { view: view_idx, site: request_site, generation, head: true, result: Box::new(msg) });
             ctx.request_repaint();
         });
@@ -12792,7 +12874,7 @@ impl HookEchoApp {
     }
 
     fn sync_radar_provider(&mut self) {
-        let provider = self.settings.radar_feed.provider();
+        let provider = self.settings.radar_feed;
         if provider == self.radar_provider { return; }
         self.radar_provider = provider;
         self.warmed_site = None;
@@ -12847,6 +12929,28 @@ impl HookEchoApp {
             if idx >= self.views.len() || self.views[idx].site.as_deref() != Some(msg.site()) {
                 continue; // view gone or its site changed since the fetch spawned
             }
+            let msg = match msg {
+                DataMsg::Head { provider, time, result, .. } => {
+                    let pane = &mut self.views[idx];
+                    if self.settings.radar_feed != crate::settings::RadarFeed::Automatic || !pane.timeline.following {
+                        continue;
+                    }
+                    let retained = pane.volume.as_ref().filter(|_| pane.retained_station.is_none()).map(|volume| volume.time);
+                    let success = matches!(*result, DataMsg::Volume { .. } | DataMsg::UpToDate { .. })
+                        || matches!(result.as_ref(), DataMsg::Error { err, .. } if err.contains("missing coverage pattern"));
+                    let decision = pane.feed_recovery.observe(provider, success, time, retained, Utc::now(), Instant::now());
+                    if decision.retry { pane.last_poll = None; }
+                    if decision.switched { pane.recovered_provider(); }
+                    if success && decision.accept { pane.error = None; }
+                    if !decision.accept {
+                        pane.loading = false;
+                        pane.load_phase = None;
+                        continue;
+                    }
+                    *result
+                }
+                msg => msg,
+            };
             match msg {
                 DataMsg::FramePhase { view, name, generation, phase, .. } => {
                     if self.views[view].frame_request.matches(&name, generation) && frame_result_is_current(&self.views[view].timeline, &name) { self.views[view].load_phase = Some(phase); }
@@ -12949,6 +13053,7 @@ impl HookEchoApp {
                     ..
                 } => {
                     if self.settings.radar_feed != crate::settings::RadarFeed::Automatic
+                        || self.views[view].feed_recovery.requested() != level2::Level2Provider::S3
                         || !live_update_is_current(self.live_stream.as_ref(), view, &site, gen)
                     {
                         continue; // queued results from a replaced stream cannot overwrite the feed
@@ -12971,6 +13076,7 @@ impl HookEchoApp {
                         }
                     }
                     v.pin_low_cut();
+                    v.feed_recovery.live_received(time);
                     v.loading = false;
                     v.error = None;
                     v.fetch_failures = 0;
@@ -13007,6 +13113,7 @@ impl HookEchoApp {
                         let stale = v.volume.as_ref().is_none_or(|volume|
                             (chrono::Utc::now() - volume.time).num_minutes() >= 10);
                         if v.fetch_failures >= 3 && stale && v.timeline.following
+                            && self.settings.radar_feed != crate::settings::RadarFeed::Automatic
                             && wxdata::sites::is_nexrad(&site)
                         {
                             if let Some(next) = nearest_alternate_nexrad(&site) {
@@ -13021,7 +13128,7 @@ impl HookEchoApp {
                     }
                 }
                 DataMsg::LiveEnded { .. } => unreachable!("handled above"),
-                DataMsg::Guarded { .. } => continue,
+                DataMsg::Guarded { .. } | DataMsg::Head { .. } => continue,
             }
         }
         self.trim_radar_memory();
@@ -13043,6 +13150,8 @@ impl HookEchoApp {
             let want = v.timeline.following
                 && !v.timeline.playing
                 && self.settings.radar_feed == crate::settings::RadarFeed::Automatic
+                && v.feed_recovery.provider == level2::Level2Provider::S3
+                && v.feed_recovery.probe.is_none()
                 && v.site.as_deref().is_some_and(wxdata::sites::is_nexrad)
                 && v.volume.is_some()
                 && v.retained_station.is_none();
@@ -13067,7 +13176,8 @@ impl HookEchoApp {
                 self.live_stream = None;
                 // A new site shouldn't inherit the old one's 60 s retry gate.
                 self.last_stream_attempt = None;
-                if self.settings.radar_feed != crate::settings::RadarFeed::Automatic {
+                if self.settings.radar_feed != crate::settings::RadarFeed::Automatic
+                    || self.views[idx].feed_recovery.probe.is_some() {
                     self.views[idx].last_poll = None;
                     self.views[idx].live_stream_ended();
                     ctx.request_repaint(); // archive poll on the next frame
@@ -13307,7 +13417,9 @@ impl HookEchoApp {
                     if self.settings.remember_radar_site(site) { self.settings.save(); }
                 }
             }
-            if idx == self.active && self.analyst_open && self.link_cameras && self.views.len() == 4 {
+            if idx == self.active && self.analyst_open && self.link_cameras && self.views.len() == 4
+                && !self.views[idx].camera_placed {
+                // A restored workspace or deep link owns each pane's station independently.
                 let site = self.views[idx].site.clone();
                 for view in &mut self.views { view.site = site.clone(); }
             }
@@ -13537,6 +13649,7 @@ impl HookEchoApp {
                     let source = &self.views[source];
                     let volume = source.volume.as_ref().expect("shared head has a volume");
                     let (scan, name, time, polled, revision) = (Arc::clone(&volume.scan), volume.name.clone(), volume.time, source.last_poll, source.tdwr_revision.clone());
+                    let recovery = source.feed_recovery.clone();
                     let view = &mut self.views[idx];
                     if view.retained_station.is_some() || view.volume.as_ref().is_none_or(|volume| volume.name != name) {
                         if view.retained_station.is_some() { self.pane_shown.remove(&idx); }
@@ -13551,6 +13664,7 @@ impl HookEchoApp {
                         view.timeline.append_head(Identifier::new(view.volume.as_ref().expect("shared head displayed").name.clone()));
                     }
                     view.last_poll = polled;
+                    view.feed_recovery = recovery;
                     view.tdwr_revision = revision;
                     view.error = None;
                     view.fetch_failures = 0;
@@ -13561,6 +13675,7 @@ impl HookEchoApp {
             let head_pending = self.views.iter().enumerate().any(|(i, view)| {
                 i != idx && site.as_deref().is_some_and(wxdata::sites::is_nexrad) && view.site == site
                     && view.head_request.pending_name() == site.as_deref()
+                    && view.feed_recovery.requested() == self.views[idx].feed_recovery.requested()
             });
             if site.is_some() && !self.views[idx].loading && !head_pending && (site_changed || due) {
                 if let Some(s) = site {
@@ -13806,6 +13921,9 @@ impl HookEchoApp {
         let identity = format!("{site}:{date}");
         let provider = if date < Utc::now().date_naive() - chrono::Duration::days(1) {
             level2::Level2Provider::S3
+        } else if self.settings.radar_feed == crate::settings::RadarFeed::Automatic
+            && self.views[view_idx].timeline.following {
+            self.views[view_idx].feed_recovery.provider
         } else {
             self.settings.radar_feed.provider()
         };
@@ -19840,9 +19958,14 @@ impl HookEchoApp {
         }
         if section == Some("Share") {
             ui.scope(|ui| {
-                if ui.button("Copy link to this view").clicked() {
-                    self.apply_palette(PaletteAction::CopyViewLink, ui.ctx());
+                ui.label("Share all visible panes, products, layers and linked times.");
+                if ui.button("Share live view").on_hover_text("The recipient opens this setup with the newest available data").clicked() {
+                    self.apply_palette(PaletteAction::CopyLiveSceneLink, ui.ctx());
                 }
+                if ui.button("Share this exact time").on_hover_text("Pin each pane to its displayed time; historical availability varies by source").clicked() {
+                    self.apply_palette(PaletteAction::CopyExactSceneLink, ui.ctx());
+                }
+                ui.small("Links exclude saved places, credentials, placefiles and custom palettes. Private basemaps use the dark map.");
                 if ui.button("Export field verification…").clicked() {
                     self.export_forecast_verification();
                 }
@@ -20527,17 +20650,9 @@ impl HookEchoApp {
                     }
                     for (view, pane) in self.views.iter_mut().zip(case.panes) {
                         if !pane.radar_objects.is_empty() {
-                            view.timeline.frames = pane
-                                .radar_objects
-                                .into_iter()
-                                .map(Identifier::new)
-                                .collect();
-                            view.timeline.frames_key = Some((
-                                pane.site,
-                                pane.selected_time
-                                    .map(|time| time.date_naive())
-                                    .unwrap_or_else(|| view.timeline.date),
-                            ));
+                            let date = pane.selected_time.map(|time| time.date_naive()).unwrap_or(view.timeline.date);
+                            view.restore_replay_frames(pane.site, date,
+                                pane.radar_objects.into_iter().map(Identifier::new).collect());
                         }
                         if let Some(time) = pane.selected_time {
                             view.timeline.date = time.date_naive();
@@ -22487,7 +22602,7 @@ impl eframe::App for HookEchoApp {
             }
             // A resume is also how a notification tap arrives: the activity wrote the target
             // before handing us back the surface.
-            self.drain_goto_file();
+            self.drain_goto_file(ctx);
         }
         // A deep link that arrives while the app is already on screen never produces a resume, so
         // the drain above would never see it — on Android the activity is reused
@@ -22499,9 +22614,9 @@ impl eframe::App for HookEchoApp {
             .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1))
         {
             self.goto_poll = Some(Instant::now());
-            self.drain_goto_file();
+            self.drain_goto_file(ctx);
             #[cfg(target_arch = "wasm32")]
-            self.apply_goto_hash();
+            self.apply_goto_hash(ctx);
         }
         // The settings window has no HTTP client or runtime, so the voice-download button raises
         // a flag and the work happens here, on the same spawner everything else fetches on.
@@ -23762,6 +23877,7 @@ impl eframe::App for HookEchoApp {
             }
         }
         let metric = self.metric();
+        self.refresh_place_briefings(ctx);
         let query = self.marker_window.show(
             ctx,
             &mut self.settings,
@@ -23769,6 +23885,21 @@ impl eframe::App for HookEchoApp {
             &mut self.drawer,
             metric,
         );
+        if let Some(index) = self.marker_window.view_place.take() {
+            if let Some(marker) = self.settings.markers.get(index) {
+                let (lon, lat) = (marker.lon, marker.lat);
+                if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
+                    self.goto_view(&site, lon, lat, 9.0, None);
+                    self.views[self.active].show_radar = true;
+                    self.marker_window.open = false;
+                }
+            }
+        }
+        if let Some(index) = self.marker_window.forecast_place.take() {
+            if let Some(marker) = self.settings.markers.get(index) {
+                self.fetch_point_forecast(ctx, marker.lon, marker.lat);
+            }
+        }
         if let Some((index, marker)) = self.marker_window.deleted.take() {
             self.push_undo(UndoEntry::Marker { marker, index });
             self.record_interaction("delete_marker");
@@ -23809,17 +23940,35 @@ impl eframe::App for HookEchoApp {
                 ctx2.request_repaint();
             });
         }
-        // Drain chase-pack worker outcomes; drop the download state once every tile is accounted for.
+        // Disconnection also completes cancelled and failed packs; neither can look ready.
         if let Some(pack) = &mut self.chasepack {
-            while let Ok((ok, n)) = pack.rx.try_recv() {
-                pack.done += 1;
-                pack.bytes += n;
-                if !ok {
-                    pack.errors += 1;
+            let mut finished = false;
+            loop {
+                match pack.rx.try_recv() {
+                    Ok(result) => {
+                        pack.done += 1;
+                        match result {
+                            Ok(bytes) => pack.bytes += bytes,
+                            Err(error) => { pack.errors += 1; pack.manifest.error.get_or_insert(error); }
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => { finished = true; break; }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 }
             }
-            if pack.done >= pack.total {
+            if finished {
+                pack.manifest.completed = pack.done.saturating_sub(pack.errors);
+                pack.manifest.bytes = pack.bytes;
+                pack.manifest.finished = true;
+                pack.manifest.verified = true;
+                if pack.done < pack.total && pack.manifest.error.is_none() {
+                    pack.manifest.error = Some("Download cancelled; some tiles are missing".into());
+                }
+                let result = crate::offline::save(pack.manifest.clone());
                 self.chasepack = None;
+                if let Err(error) = result {
+                    self.toast(ToastKind::Error, format!("Could not save offline readiness: {error}"));
+                }
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
@@ -24055,19 +24204,28 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
+        let mut forecast_finished = false;
         if let Some((key, rx)) = &self.forecast_rx {
-            if let Ok(res) = rx.try_recv() {
-                let key = *key;
-                self.forecast_rx = None;
-                self.forecast_state = match res {
-                    Ok(f) => {
-                        self.forecast_cache.insert(key, (Instant::now(), f.clone()));
-                        ui::forecast_window::State::Ready(Box::new(f))
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        // The basic result and optional comparisons arrive separately.
+                        let current = self.forecast_at.map(|(lon, lat)| ((lat * 20.0).round() as i32, (lon * 20.0).round() as i32));
+                        if current != Some(*key) { continue; }
+                        self.forecast_state = match result {
+                            Ok(forecast) => {
+                                self.forecast_cache.insert(*key, (Instant::now(), forecast.clone()));
+                                ui::forecast_window::State::Ready(Box::new(forecast))
+                            }
+                            Err(error) => ui::forecast_window::State::Failed(error),
+                        };
                     }
-                    Err(e) => ui::forecast_window::State::Failed(e),
-                };
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => { forecast_finished = true; break; }
+                }
             }
         }
+        if forecast_finished { self.forecast_rx = None; }
         if let Some((key, rx)) = &self.forecast_obs_rx {
             if let Ok(station) = rx.try_recv() {
                 let key = *key;
@@ -24203,6 +24361,7 @@ impl eframe::App for HookEchoApp {
         }
         let window_chrome_ms = window_chrome_started.elapsed().as_secs_f32() * 1000.0;
         let secondary_chrome_started = Instant::now();
+        self.refresh_chaser_detail();
         if let Some(detail) = &self.detail {
             let tex = detail
                 .image
@@ -24377,7 +24536,7 @@ impl eframe::App for HookEchoApp {
         self.zone_popup_card(ctx);
         self.zone_naming_dialog(ctx);
         if let Some(sp) = self.pending_spotter.take() {
-            self.open_spotter(&sp);
+            self.open_spotter(&sp, ctx);
         }
         if let Some(p) = &mut self.video_player {
             if !p.show(ctx, &mut self.drawer) {
@@ -24622,17 +24781,14 @@ impl eframe::App for HookEchoApp {
                 }
             }
 
-            self.tiles
+            let mut clear_tiles = self.tiles
                 .set_keys(&self.settings.mapbox_key, &self.settings.maptiler_key);
-            self.tiles
-                .set_custom_template(&self.settings.custom_tile_url);
+            clear_tiles |= self.tiles.set_custom_template(&self.settings.custom_tile_url);
             self.tiles.set_custom_max_z(self.settings.custom_tile_max_z);
             // Ask for `@2x` tiles where the provider serves them: same tile count, twice the
             // pixels, labels drawn for the density instead of magnified. Off on a metered link —
             // a double-resolution tile is roughly double the bytes.
-            let clear_tiles = self
-                .tiles
-                .set_retina(ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered());
+            clear_tiles |= self.tiles.set_retina(ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered());
             if self.settings.link_satellite_times {
                 let selection = self.views[self.active.min(n - 1)].satellite.clone();
                 for view in &mut self.views { view.satellite = selection.clone(); }

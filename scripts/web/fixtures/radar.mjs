@@ -3,11 +3,25 @@ export async function fixtureRadar(page, options = {}) {
  const fixture = await fs.readFile(new URL('../../../crates/wxdata/tests/data/kdmx-one-sweep.bin',import.meta.url));
  const abi = options.abi ? await fs.readFile(new URL("../../../crates/wxdata/tests/data/g19-c13-meso.nc", import.meta.url)) : null;
  const l3 = await fs.readFile(new URL('../../../crates/nexrad-level3/tests/data/n0g_tlx.l3',import.meta.url));
- const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[],outlookRequests:[]};
+ const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[],outlookRequests:[],spotterRequests:[]};
  const tile = options.satellite ? await fs.readFile(new URL("../../../web/icon-192.png", import.meta.url)) : null;
  await page.setRequestInterception(true);
  page.on('request',async request=>{
   const url = new URL(request.url());
+  if(options.spottersResponse && url.href.includes('www.spotternetwork.org/feeds/gr.txt')) {
+   counts.spotterRequests.push(url.href);
+   await request.respond(await options.spottersResponse(url)); return;
+  }
+  if(options.forecastResponse && url.href.includes('api.open-meteo.com')) {
+   await request.respond(await options.forecastResponse(url)); return;
+  }
+  if(options.forecast && url.href.includes('api.open-meteo.com')) {
+   const time = Math.floor(Date.now() / 3600000) * 3600 + 3600;
+   await request.respond({status:200,contentType:'application/json',headers:{'Access-Control-Allow-Origin':'*'},body:JSON.stringify({
+    daily:{time:[time],temperature_2m_max:[70],precipitation_probability_max:[20],weather_code:[0]},
+    hourly:{time:[time],temperature_2m:[70],precipitation_probability:[20],precipitation:[0]}
+   })}); return;
+  }
   if (url.href.includes("nexrad-level2.s3.amazonaws.com")) counts.radarRequests.push(url.href);
   if(options.networkState?.offline && (url.pathname.startsWith("/proxy/") || !["127.0.0.1", "localhost"].includes(url.hostname))) { counts.aborted.push(url.href); await request.abort("internetdisconnected"); return; }
   if(options.vectorResponse && url.href.includes('tiles.openfreemap.org')) { counts.vectorRequests.push(url.href); await request.respond(await options.vectorResponse(url)); return; }

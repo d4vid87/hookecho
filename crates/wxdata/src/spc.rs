@@ -49,7 +49,7 @@ pub(crate) fn risk_color(label: &str) -> [u8; 3] {
 }
 
 /// Which Day-1 outlook to fetch: the categorical risk, or a hazard probability grid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OutlookKind {
     #[default]
     Categorical,

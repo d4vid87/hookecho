@@ -80,6 +80,14 @@ rm -f web/dist/video-export-*.js
 video_export_hash="$(hash_of web/video-export.js)"
 cp web/video-export.js "web/dist/video-export-$video_export_hash.js"
 
+# Keep startup helpers tied to their app shell when an older worker still controls a tab.
+for name in decode-worker decode-bridge video-player amy-bootstrap; do
+  rm -f "web/dist/$name-"*.js
+  hash="$(hash_of "web/$name.js")"
+  cp "web/$name.js" "web/dist/$name-$hash.js"
+  printf -v "${name//-/_}_hash" '%s' "$hash"
+done
+
 # The four default font faces, which the web build fetches instead of compiling in (see
 # crates/hookecho/src/fonts.rs and web/fonts/README.md). Hashed into /dist/ like everything else,
 # so the year-long immutable `_headers` rule covers them and a face is downloaded once, ever.
@@ -113,25 +121,16 @@ sed \
   -e "s#dist/hookecho\.js#dist/hookecho-$glue_hash.js#g" \
   -e "s#dist/hookecho_bg\.wasm#dist/hookecho_bg-$wasm_hash.wasm#g" \
   -e "s#video-export\.js#dist/video-export-$video_export_hash.js#g" \
+  -e "s#decode-worker\.js#dist/decode-worker-$decode_worker_hash.js#g" \
+  -e "s#decode-bridge\.js#dist/decode-bridge-$decode_bridge_hash.js#g" \
+  -e "s#video-player\.js#dist/video-player-$video_player_hash.js#g" \
+  -e "s#amy-bootstrap\.js#dist/amy-bootstrap-$amy_bootstrap_hash.js#g" \
   -e "s#__FONT_URLS__#$font_urls#" \
   web/index.src.html > web/index.html
 
-# web/sw.js is generated the same way, from web/sw.src.js: the shell list has to name the hashed
-# assets of *this* build, and the body doubles as the worker's version — a byte-identical script is
-# a worker the browser never bothers to install.
-font_shell=""
-for f in web/dist/font-*.ttf; do font_shell="$font_shell,\"/${f#web/}\""; done
-shell_json="[\"/\",\"/dist/hookecho-$glue_hash.js?boot=2\",\"/dist/hookecho_bg-$wasm_hash.wasm\",\"/dist/video-export-$video_export_hash.js\",\"/decode-worker.js?v=radar-fields\",\"/decode-bridge.js\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"$font_shell]"
-sed \
-  -e "s#__SHELL__#$shell_json#" \
-  -e "s#__VERSION__#\"$glue_hash-$wasm_hash\"#" \
-  web/sw.src.js > web/sw.js
-
-# A sed that silently matched nothing ships a 404 instead of an app. Assert every dist reference
-# in the deployed HTML actually exists on disk.
-grep -oh 'dist/[A-Za-z0-9_.-]*' web/index.html web/sw.js | sort -u | while read -r ref; do
-  [ -f "web/$ref" ] || { echo "build.sh: a deployed file references missing web/$ref" >&2; exit 1; }
-done
+# Derive the complete offline shell (including wasm-bindgen imports) from the generated page.
+# Its version includes HTML and helper bytes, so a JS-only fix also installs a new shell.
+node scripts/web/shell-assets.mjs web
 
 # Size gate. The wire cost is the compressed size, so that is what is budgeted. Runs here rather
 # than in a workflow so a local build fails the same way CI does.
@@ -207,7 +206,12 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Keep the measured feature increase explicit; Lite/startup budgets stay unchanged.
 # Signal rail category navigation measured 4,703,917 gzip bytes (about 0.08% over the prior bundle).
 # Allow a small main-bundle margin; Lite and startup budgets remain unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4710000}"
+# Provider recovery, scene links, toolbar pins, place briefings, offline readiness and chaser
+# links measured 4,774,907 gzip bytes (about 1.5% over the previous measured bundle).
+# Keep less than 10 KB of margin; Lite and startup budgets stay unchanged.
+# Cache recovery, transactional offline packs and visible-row chaser rendering measured
+# 4,786,591 gzip bytes. Allow 3,409 bytes of headroom; Lite/startup budgets stay unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4790000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

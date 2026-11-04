@@ -164,7 +164,7 @@ pub static THUNDER_PROBABILITY_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
 /// the same fields, assimilated from observations rather than projected forward, which is what
 /// people mean when they ask for "mesoanalysis" (SPC's own surface objective analysis is RAP plus
 /// surface obs). It costs one URL and one grid spacing — everything downstream is identical.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Model {
     #[default]
     Hrrr,
@@ -582,7 +582,7 @@ pub async fn fetch_fields_one_run_capped(
 }
 
 /// Which wind the particle layer flies on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WindLevel {
     /// 10 m above ground — the wind you stand in, and what surface obs report.
     #[default]

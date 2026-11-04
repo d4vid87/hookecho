@@ -297,15 +297,15 @@ fn main() -> eframe::Result<()> {
         let (lat, lon, radius, zmax) = (
             num(1, 35.3),
             num(2, -97.5),
-            num(3, 100.0),
-            (num(4, 12.0) as u8).min(18),
+            num(3, 20.0),
+            (num(4, 10.0) as u8).min(18),
         );
         let slug = args
             .iter()
             .position(|a| a == "--basemap")
             .and_then(|i| args.get(i + 1))
             .map(String::as_str)
-            .unwrap_or("carto-dark");
+            .unwrap_or("usgs-topo");
         if let Err(e) = headless::run_chasepack(lat, lon, radius, zmax, slug) {
             eprintln!("headless chasepack failed: {e}");
             std::process::exit(1);

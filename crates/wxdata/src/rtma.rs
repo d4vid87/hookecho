@@ -9,7 +9,7 @@ use chrono::{DateTime, Timelike, Utc};
 const RTMA_ROOT: &str = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/rtma/v2.10";
 const URMA_ROOT: &str = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     Rtma,
     Urma,

@@ -1048,6 +1048,9 @@ fn integrations_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
     ui.add_space(6.0);
     key_field(ui, "Windy API key", &mut settings.windy_key);
+    ui.add_space(8.0);
+    key_field(ui, "YouTube Data API key", &mut settings.youtube_key);
+    ui.weak("Optional: check a selected chaser's self-published YouTube link. Without a key, links still open and live status stays unknown. Checks use your API quota; restrict this key to YouTube Data API and your app's allowed origins.");
     ui.add_space(12.0);
     ui.separator();
     ui.label("Air quality");
@@ -1291,12 +1294,15 @@ fn radar_defaults(ui: &mut egui::Ui, settings: &mut Settings) {
                     crate::settings::RadarFeed::Iem => "Iowa State · recent volumes",
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::Automatic, "Automatic · live chunks, archive fallback");
+                    ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::Automatic, "Automatic · live chunks, S3 / Iowa State recovery");
                     ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::ArchiveOnly, "S3 · archive polling only");
                     ui.selectable_value(&mut settings.radar_feed, crate::settings::RadarFeed::Iem, "Iowa State · recent Level II volumes");
                 });
             ui.end_row();
         });
+    if settings.radar_feed == crate::settings::RadarFeed::Automatic {
+        ui.weak("After repeated failures or a scan over 10 minutes old, checks the alternate WSR-88D provider. Keeps your station and last valid scan; retries are limited to once every 5 minutes.");
+    }
     if settings.radar_feed == crate::settings::RadarFeed::Iem {
         ui.weak("Iowa State supplies recent WSR-88D volumes. Older archive dates use S3. TDWR and European feeds are unchanged.");
     }

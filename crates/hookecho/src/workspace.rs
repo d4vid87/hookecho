@@ -53,6 +53,399 @@ pub struct Workspace {
     pub chrome: Option<Chrome>,
 }
 
+
+/// Public scene links carry map state only; settings, markers and source credentials never enter
+/// this schema. Keep the uncompressed URL bounded before allocating or parsing JSON.
+pub const MAX_SCENE_TOKEN_BYTES: usize = 32_768;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTimeMode { Live, Exact }
+
+
+/// Public selectors required to interpret national/model field IDs consistently.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneProducts {
+    pub global_model: wxdata::global::GlobalModel,
+    pub global_fcst_hour: u16,
+    pub analysis_source: wxdata::rtma::Source,
+    pub hrrr_fcst_hour: u8,
+    pub refs_fcst_hour: u8,
+    pub refs_dbz_threshold: u8,
+    pub env_model: wxdata::hrrr::Model,
+    pub env_cape_ml: bool,
+    pub env_srh_km: u8,
+    pub snow_hours: u16,
+    pub lightning_minutes: u16,
+    pub hail_minutes: u16,
+    pub rotation_minutes: u16,
+    pub wind_level: wxdata::hrrr::WindLevel,
+    pub diff_field: crate::fielddiff::DiffField,
+    pub tropical_wind_kt: Option<u8>,
+    pub tropical_surge: bool,
+    pub storm_motion: Vec<(f32, f32)>,
+}
+
+impl SceneProducts {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.global_fcst_hour <= 384 && self.hrrr_fcst_hour <= 48
+            && (1..=60).contains(&self.refs_fcst_hour) && self.refs_dbz_threshold <= 80
+            && matches!(self.env_srh_km, 1 | 3) && (1..=168).contains(&self.snow_hours)
+            && (1..=1440).contains(&self.lightning_minutes)
+            && (1..=1440).contains(&self.hail_minutes) && (1..=1440).contains(&self.rotation_minutes)
+            && self.tropical_wind_kt.is_none_or(|kt| matches!(kt, 34 | 50 | 64)),
+            "Invalid public product selection");
+        anyhow::ensure!(!matches!(self.global_model, wxdata::global::GlobalModel::GefsMember(member) if member > 30),
+            "Invalid GEFS member");
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharedScene {
+    version: u8,
+    pub workspace: Workspace,
+    pub time_mode: SceneTimeMode,
+    pub times: Vec<Option<chrono::DateTime<chrono::Utc>>>,
+    pub filters: crate::app::OverlayFilters,
+    pub products: SceneProducts,
+    pub lock_source_frame: bool,
+    pub link_satellite_times: bool,
+}
+
+impl SharedScene {
+    pub fn new(
+        mut workspace: Workspace,
+        time_mode: SceneTimeMode,
+        mut times: Vec<Option<chrono::DateTime<chrono::Utc>>>,
+        filters: crate::app::OverlayFilters,
+        products: SceneProducts,
+        lock_source_frame: bool,
+        link_satellite_times: bool,
+    ) -> anyhow::Result<Self> {
+        // Saved workspace titles and drawer names may contain personal information.
+        workspace.name = "Shared scene".into();
+        workspace.adopt_site = false;
+        workspace.chrome = workspace.chrome.map(|chrome| Chrome {
+            analyst_open: chrome.analyst_open,
+            analyst_inspector_open: chrome.analyst_inspector_open,
+            ..Default::default()
+        });
+        workspace.overlays_on.retain(|slug| public_scene_overlay(slug));
+        for pane in &mut workspace.panes {
+            anyhow::ensure!(pane.custom_product.is_none(),
+                "Switch user-defined products to a built-in radar product before sharing");
+            // Palettes are public color tables, but can make a chat URL enormous. Named custom
+            // products and private/provider-key maps are not portable between installations.
+            pane.appearance.palettes.clear();
+            let style = crate::tiles::BasemapStyle::from_slug(&pane.basemap);
+            if style == crate::tiles::BasemapStyle::CustomXyz
+                || style.provider_kind() != crate::tiles::Provider::Builtin
+            {
+                pane.basemap = "dark".into();
+            }
+            if time_mode == SceneTimeMode::Live {
+                pane.satellite.time = None;
+                pane.satellite.follow_radar = true;
+            }
+        }
+        if time_mode == SceneTimeMode::Live { times.fill(None); }
+        let scene = Self { version: 1, workspace, time_mode, times, filters, products,
+            lock_source_frame, link_satellite_times };
+        scene.validate()?;
+        Ok(scene)
+    }
+
+    pub fn encode(&self) -> anyhow::Result<String> {
+        use base64::Engine;
+        self.validate()?;
+        let json = serde_json::to_vec(self)?;
+        anyhow::ensure!(json.len() <= MAX_SCENE_TOKEN_BYTES / 4 * 3,
+            "This scene is too large for a share link");
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json))
+    }
+
+    pub fn decode(token: &str) -> anyhow::Result<Self> {
+        use base64::Engine;
+        anyhow::ensure!(!token.is_empty() && token.len() <= MAX_SCENE_TOKEN_BYTES,
+            "Scene link is empty or too large");
+        let json = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token)?;
+        let scene: Self = serde_json::from_slice(&json)?;
+        scene.validate()?;
+        Ok(scene)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        let ws = &self.workspace;
+        self.products.validate()?;
+        anyhow::ensure!(self.products.storm_motion.len() == ws.panes.len()
+            && self.products.storm_motion.iter().all(|(direction, speed)|
+                direction.is_finite() && (0.0..=360.0).contains(direction)
+                && speed.is_finite() && (0.0..=300.0).contains(speed)),
+            "Invalid storm-relative motion");
+        anyhow::ensure!(self.version == 1, "Unsupported scene link version");
+        anyhow::ensure!((1..=MAX_PANES).contains(&ws.panes.len())
+            && ws.active < ws.panes.len() && self.times.len() == ws.panes.len(),
+            "Invalid scene pane count");
+        anyhow::ensure!(ws.name == "Shared scene" && !ws.adopt_site,
+            "Invalid public workspace");
+        if let Some(chrome) = &ws.chrome {
+            anyhow::ensure!(!chrome.panel_open && !chrome.alerts_tab && !chrome.basemap_open
+                && chrome.drawer.is_none() && chrome.drawer_id.is_none(),
+                "Scene links cannot open settings or private drawers");
+        }
+        anyhow::ensure!(ws.overlays_on.len() <= 64
+            && ws.overlays_on.iter().all(|slug| public_scene_overlay(slug)),
+            "Invalid public overlay");
+        validate_scene_fields(&ws.fields_on)?;
+        for pane in &ws.panes {
+            anyhow::ensure!(pane.site.as_ref().is_none_or(|site|
+                site.len() <= 8 && wxdata::sites::site_by_id(site).is_some()),
+                "Unknown radar station in scene");
+            anyhow::ensure!(pane.lon.is_finite() && (-180.0..=180.0).contains(&pane.lon)
+                && pane.lat.is_finite() && (-85.051_129..=85.051_129).contains(&pane.lat)
+                && pane.zoom.is_finite() && (-2.0..=crate::render::mercator::MAX_ZOOM).contains(&pane.zoom)
+                && pane.pitch_deg.is_finite() && (0.0..=60.0).contains(&pane.pitch_deg)
+                && pane.bearing_deg.is_finite() && (0.0..=360.0).contains(&pane.bearing_deg)
+                && pane.tilt <= 64, "Invalid scene camera or radar tilt");
+            let style = crate::tiles::BasemapStyle::from_slug(&pane.basemap);
+            anyhow::ensure!(style.slug() == pane.basemap
+                && style != crate::tiles::BasemapStyle::CustomXyz
+                && style.provider_kind() == crate::tiles::Provider::Builtin,
+                "Scene basemap must be a public built-in source");
+            anyhow::ensure!(pane.custom_product.is_none() && pane.appearance.palettes.is_empty(),
+                "Scene links do not import custom products or palettes");
+            if let Some(fields) = &pane.fields_on { validate_scene_fields(fields)?; }
+            anyhow::ensure!(pane.thresholds.len() <= wxdata::level2::Moment::ALL.len()
+                && pane.thresholds.iter().all(|(moment, value)| {
+                    let (lo, hi) = moment.value_range();
+                    value.is_finite() && (lo..=hi).contains(value)
+                }), "Invalid scene threshold");
+            let mut appearance = pane.appearance.clone();
+            appearance.sanitize();
+            anyhow::ensure!(appearance == pane.appearance, "Invalid scene display settings");
+            anyhow::ensure!(pane.satellite.source_slug.as_ref().is_none_or(|slug|
+                slug.len() <= 80 && crate::tiles::BasemapStyle::from_slug(slug).slug() == slug),
+                "Invalid imagery source");
+            if let Some(time) = pane.satellite.time { validate_scene_time(time)?; }
+            if self.time_mode == SceneTimeMode::Live {
+                anyhow::ensure!(pane.satellite.time.is_none(), "Live scene contains a fixed imagery time");
+            }
+        }
+        match self.time_mode {
+            SceneTimeMode::Live => anyhow::ensure!(self.times.iter().all(Option::is_none),
+                "Live scene contains an archive time"),
+            SceneTimeMode::Exact => {
+                anyhow::ensure!(self.times.iter().any(Option::is_some)
+                    && ws.panes.iter().zip(&self.times).all(|(pane, time)|
+                        time.is_some() || (!pane.show_radar && pane.fields_on.as_ref().is_none_or(Vec::is_empty))),
+                    "Wait for every visible data pane to load before sharing this exact time");
+            },
+        }
+        for time in self.times.iter().flatten() { validate_scene_time(*time)?; }
+        let f = &self.filters;
+        anyhow::ensure!(f.outlook_day <= 8 && f.fire_weather_day <= 8
+            && f.wssi_day <= 4 && f.winter_snow_day <= 3 && f.winter_ice_day <= 3
+            && f.ero_day <= 5 && f.cpc_opacity_pct <= 100 && f.ero_opacity_pct <= 100
+            && f.ero_border_px.is_finite() && (0.1..=10.0).contains(&f.ero_border_px)
+            && f.nowcast_lead_min <= 120, "Invalid outlook settings");
+        anyhow::ensure!(f.ero_archive.as_ref().is_none_or(|key|
+            key.len() <= 40 && key.ends_with(".zip")
+                && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')),
+            "Invalid WPC archive key");
+        Ok(())
+    }
+
+    /// Discard any previous playback cursor before applying a public scene to an existing pane.
+    pub fn apply_times(&self, views: &mut [MapView]) {
+        for ((view, time), (direction, speed)) in views.iter_mut().zip(&self.times).zip(&self.products.storm_motion) {
+            view.storm_dir_deg = *direction;
+            view.storm_speed_kt = *speed;
+            view.timeline = Default::default();
+            if let Some(time) = time {
+                view.timeline.date = time.date_naive();
+                view.timeline.following = false;
+                view.timeline.playing = false;
+                view.timeline.seek_target = Some(*time);
+            }
+        }
+    }
+}
+
+fn public_scene_overlay(slug: &str) -> bool {
+    crate::app::OverlayToggle::from_slug(slug).is_some_and(|toggle|
+        !toggle.session_only() && !matches!(toggle,
+            crate::app::OverlayToggle::Sensors | crate::app::OverlayToggle::Strikes))
+}
+
+fn validate_scene_fields(fields: &[String]) -> anyhow::Result<()> {
+    anyhow::ensure!(fields.len() <= 256 && fields.iter().all(|slug|
+        slug.len() <= 96 && crate::render::FieldLayer::from_stable_id(slug).is_some()),
+        "Invalid scene field");
+    Ok(())
+}
+
+fn validate_scene_time(time: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
+    use chrono::Datelike;
+    anyhow::ensure!((1970..=2100).contains(&time.year()), "Invalid scene time");
+    Ok(())
+}
+
+
+#[cfg(test)]
+mod scene_tests {
+    use super::*;
+    use base64::Engine;
+
+    fn at(hour: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()
+            .and_hms_opt(hour, 0, 0).unwrap().and_utc()
+    }
+
+    fn scene(mode: SceneTimeMode) -> SharedScene {
+        let mut workspace = starters().remove(2);
+        for (pane, site) in workspace.panes.iter_mut().zip(["KTLX", "KFWS", "KDMX", "KLOT"]) {
+            pane.site = Some(site.into());
+        }
+        workspace.panes[1].moment = wxdata::level2::Moment::Velocity;
+        workspace.panes[1].appearance.opacity = 0.5;
+        workspace.panes[2].fields_on = Some(vec!["mrms".into()]);
+        workspace.active = 1;
+        workspace.chrome = Some(Chrome { analyst_open: true, ..Default::default() });
+        let products = SceneProducts {
+            global_model: wxdata::global::GlobalModel::Ecmwf,
+            global_fcst_hour: 12,
+            analysis_source: wxdata::rtma::Source::Urma,
+            hrrr_fcst_hour: 3,
+            refs_fcst_hour: 6,
+            refs_dbz_threshold: 40,
+            env_model: wxdata::hrrr::Model::Rap,
+            env_cape_ml: true,
+            env_srh_km: 3,
+            snow_hours: 24,
+            lightning_minutes: 5,
+            hail_minutes: 60,
+            rotation_minutes: 60,
+            wind_level: wxdata::hrrr::WindLevel::Steering,
+            diff_field: crate::fielddiff::DiffField::Cape,
+            tropical_wind_kt: Some(34),
+            tropical_surge: true,
+            storm_motion: vec![(240.0, 25.0); 4],
+        };
+        let filters = crate::app::OverlayFilters { outlook_day: 2, ero_day: 3,
+            cpc_period: Some(wxdata::cpc::Period::Day8To14), ..Default::default() };
+        SharedScene::new(workspace, mode, vec![Some(at(12)), Some(at(13)), Some(at(14)), Some(at(15))],
+            filters, products, true, false).unwrap()
+    }
+
+    #[test]
+    fn shared_scene_roundtrip_retains_four_sites_products_layers_and_time_links() {
+        let scene = scene(SceneTimeMode::Exact);
+        let token = scene.encode().unwrap();
+        assert!(token.len() < MAX_SCENE_TOKEN_BYTES);
+        let round = SharedScene::decode(&token).unwrap();
+        assert_eq!(round, scene);
+        assert_eq!(round.workspace.panes[1].site.as_deref(), Some("KFWS"));
+        assert_eq!(round.workspace.panes[1].appearance.opacity, 0.5);
+        assert!(round.workspace.link_times && round.workspace.link_cameras && round.lock_source_frame);
+        assert!(!round.link_satellite_times);
+        assert_eq!(round.filters.outlook_day, 2);
+    }
+
+    #[test]
+    fn shared_scene_live_drops_all_times_and_fixed_resets_previous_playback() {
+        let live = scene(SceneTimeMode::Live);
+        assert!(live.times.iter().all(Option::is_none));
+        let mut views: Vec<_> = live.workspace.panes.iter().map(|pane| {
+            let mut view = MapView::new(pane.site.clone(),
+                crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 2.0));
+            view.timeline.seek_target = Some(at(1));
+            view.timeline.following = false;
+            view.timeline.playing = true;
+            view.timeline.replay = Some((3, 8));
+            view
+        }).collect();
+        live.apply_times(&mut views);
+        assert!(views.iter().all(|v| v.timeline.following && v.timeline.seek_target.is_none()
+            && v.timeline.replay.is_none()));
+        let fixed = scene(SceneTimeMode::Exact);
+        fixed.apply_times(&mut views);
+        assert_eq!(views[1].timeline.seek_target, Some(at(13)));
+        assert!(views.iter().all(|v| !v.timeline.following && !v.timeline.playing));
+        assert_eq!(views[1].storm_speed_kt, 25.0);
+        let mut invalid = fixed;
+        invalid.times[0] = None;
+        assert!(invalid.encode().is_err(), "An unloaded radar pane must not silently become live");
+    }
+
+    #[test]
+    fn shared_scene_restored_camera_preserves_independent_station_intent() {
+        let scene = scene(SceneTimeMode::Exact);
+        let views: Vec<_> = scene.workspace.panes.iter().map(|pane| {
+            let mut view = MapView::new(Some("KTLX".into()),
+                crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 2.0));
+            pane.apply(&mut view);
+            view
+        }).collect();
+        // sync_pane propagates explicit station selection only when camera_placed is false.
+        assert!(views.iter().all(|view| view.camera_placed));
+        assert_eq!(views.iter().filter_map(|v| v.site.as_deref()).collect::<Vec<_>>(),
+            ["KTLX", "KFWS", "KDMX", "KLOT"]);
+    }
+
+    #[test]
+    fn shared_scene_rejects_malformed_oversized_unknown_and_unsafe_values() {
+        assert!(SharedScene::decode("not json").is_err());
+        assert!(SharedScene::decode(&"a".repeat(MAX_SCENE_TOKEN_BYTES + 1)).is_err());
+        let baseline = serde_json::to_value(scene(SceneTimeMode::Exact)).unwrap();
+        for (pointer, value) in [
+            ("/version", serde_json::json!(9)),
+            ("/workspace/active", serde_json::json!(99)),
+            ("/workspace/panes/0/site", serde_json::json!("../../evil")),
+            ("/workspace/panes/0/lon", serde_json::json!(999)),
+            ("/workspace/panes/0/zoom", serde_json::json!(90)),
+            ("/workspace/panes/0/basemap", serde_json::json!("custom")),
+            ("/workspace/panes/0/custom_product", serde_json::json!("private")),
+            ("/workspace/panes/0/fields_on", serde_json::json!(["https://evil.invalid"])),
+            ("/workspace/overlays_on", serde_json::json!(["Sensors"])),
+            ("/filters/outlook_day", serde_json::json!(250)),
+            ("/filters/ero_archive", serde_json::json!("../../secret.zip")),
+            ("/products/global_model", serde_json::json!({"GefsMember": 255})),
+            ("/time_mode", serde_json::json!("live")),
+        ] {
+            let mut invalid = baseline.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            let token = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(&invalid).unwrap());
+            assert!(SharedScene::decode(&token).is_err(), "{pointer}");
+        }
+        let mut invalid = baseline;
+        invalid["mapbox_key"] = serde_json::json!("do-not-import");
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&invalid).unwrap());
+        assert!(SharedScene::decode(&token).is_err());
+    }
+
+    #[test]
+    fn shared_scene_scrubs_private_workspace_names_and_keyed_basemaps() {
+        let baseline = scene(SceneTimeMode::Exact);
+        let mut workspace = baseline.workspace;
+        workspace.name = "My secret home".into();
+        workspace.chrome = Some(Chrome { drawer: Some("Secret".into()), drawer_id: Some("Settings".into()),
+            panel_open: true, ..Default::default() });
+        workspace.overlays_on.push("Sensors".into());
+        workspace.panes[0].basemap = "mapbox-dark".into();
+        let public = SharedScene::new(workspace, baseline.time_mode, baseline.times,
+            baseline.filters, baseline.products, baseline.lock_source_frame, baseline.link_satellite_times).unwrap();
+        let json = serde_json::to_string(&public).unwrap();
+        assert!(!json.contains("secret") && !json.contains("Secret") && !json.contains("mapbox"));
+        assert_eq!(public.workspace.panes[0].basemap, "dark");
+        assert!(public.workspace.chrome.unwrap().drawer.is_none());
+    }
+}
+
 impl Workspace {
     pub fn adopted_site(&self, current: Option<&str>, default: &str) -> Option<String> {
         self.adopt_site

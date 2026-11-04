@@ -28,6 +28,19 @@ pub fn builtin_icon(icon: Option<&str>, home: bool) -> Option<&'static str> {
         .or_else(|| (icon.is_none() && home).then_some(egui_phosphor::regular::HOUSE))
 }
 
+
+#[derive(Default, Clone)]
+pub(crate) struct PlaceBriefing {
+    pub alerts: Vec<String>,
+    pub alerts_status: String,
+    pub radar: String,
+    pub forecast: String,
+    pub forecast_source: String,
+}
+
+pub(crate) type ForecastKey = (i32, i32);
+pub(crate) type ForecastReply = std::sync::mpsc::Receiver<Result<wxdata::forecast::PointForecast, String>>;
+
 #[derive(Default)]
 pub struct MarkerWindow {
     pub open: bool,
@@ -41,6 +54,13 @@ pub struct MarkerWindow {
     pub pending_icon: Option<String>,
     pub results: Vec<(String, String, f64, f64)>,
     pub chosen: Option<(String, f64, f64)>,
+    pub(crate) briefings: HashMap<String, PlaceBriefing>,
+    pub(crate) briefings_at: Option<wxdata::clock::Instant>,
+    pub(crate) forecast_pending: Option<(ForecastKey, ForecastReply)>,
+    pub(crate) forecast_errors: HashMap<ForecastKey, (wxdata::clock::Instant, String)>,
+    pub(crate) forecast_place: Option<usize>,
+    pub(crate) view_place: Option<usize>,
+
     selected: Option<String>,
     adding: bool,
     new_name: String,
@@ -65,6 +85,8 @@ impl MarkerWindow {
         self.removed = None;
         self.focus = None;
         self.chosen = None;
+        self.forecast_place = None;
+        self.view_place = None;
         let Some(window) = drawer.page_sized_fixed(
             ctx, "Location Markers", &mut open, 420.0,
             egui::Window::new("Location Markers"),
@@ -82,7 +104,7 @@ impl MarkerWindow {
                     ui.add_space(8.0);
                     ui.label(RichText::new("YOUR MAP / LOCATIONS").monospace().size(10.0).color(MUTED));
                     ui.label(RichText::new("Your places").size(24.0).strong().color(Color32::WHITE));
-                    ui.label(RichText::new("Save the places you check most.").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Current alerts and forecasts for the places you check most.").size(12.0).color(MUTED));
                     ui.add_space(15.0);
                     ui.horizontal(|ui| {
                         let width = (ui.available_width() - 89.0).max(90.0);
@@ -154,11 +176,25 @@ impl MarkerWindow {
                                         ui.label(RichText::new(egui_phosphor::regular::CARET_RIGHT).color(MUTED));
                                     });
                                 });
+                                if let Some(briefing) = self.briefings.get(&marker.id) {
+                                    ui.add_space(5.0);
+                                    for alert in &briefing.alerts {
+                                        ui.label(RichText::new(alert).strong().color(Color32::from_rgb(255, 199, 94)));
+                                    }
+                                    ui.label(RichText::new(&briefing.alerts_status).small().color(MUTED));
+                                    ui.label(RichText::new(&briefing.radar).small().color(MUTED));
+                                    ui.label(&briefing.forecast);
+                                    ui.label(RichText::new(&briefing.forecast_source).small().color(MUTED));
+                                }
                             });
                         if ui.interact(card.response.rect, ui.id().with(("marker_card", &marker.id)), egui::Sense::click()).clicked() {
                             self.selected = Some(marker.id.clone());
                             self.focus = Some(i);
                         }
+                        ui.horizontal(|ui| {
+                            if ui.button("View radar here").clicked() { self.view_place = Some(i); }
+                            if ui.button("Forecast details").clicked() { self.forecast_place = Some(i); }
+                        });
                         ui.add_space(5.0);
                     }
                     ui.add_space(5.0);

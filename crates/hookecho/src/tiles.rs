@@ -11,8 +11,7 @@ use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::runtime::Handle;
+
 
 // Browser-prefixed so imagery hosts (e.g. Esri) that 403 bare library UAs still serve tiles,
 // while still identifying the app.
@@ -1574,9 +1573,10 @@ const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 pub struct TileManager {
     spawner: crate::rt::Spawner,
     client: reqwest::Client,
-    tx: Sender<TileResult>,
-    rx: Receiver<TileResult>,
-    deferred_ready: Option<TileResult>,
+    tx: Sender<(u64, TileResult)>,
+    rx: Receiver<(u64, TileResult)>,
+    deferred_ready: Option<(u64, TileResult)>,
+    generation: u64,
     /// Repaint handle. Tile fetches finish on a worker thread; without this the frame that would
     /// show them waits for whatever wakes egui next — on Android an idle heartbeat up to 250 ms
     /// away, per tile.
@@ -1613,8 +1613,8 @@ pub struct TileManager {
     custom_max_z: u8,
     /// Picker thumbnails, keyed by [`BasemapStyle::key`].
     thumbs: std::collections::HashMap<u8, Thumb>,
-    thumb_tx: Sender<(u8, Option<FetchedTile>)>,
-    thumb_rx: Receiver<(u8, Option<FetchedTile>)>,
+    thumb_tx: Sender<(u64, u8, Option<FetchedTile>)>,
+    thumb_rx: Receiver<(u64, u8, Option<FetchedTile>)>,
 }
 
 impl TileManager {
@@ -1649,6 +1649,7 @@ impl TileManager {
             thumb_tx,
             thumb_rx,
             deferred_ready: None,
+            generation: 0,
             cache_root,
             mapbox_key: String::new(),
             maptiler_key: String::new(),
@@ -1691,13 +1692,21 @@ impl TileManager {
     /// Turn `@2x` tiles on or off (high-DPI screen, and not on a metered link). Returns true if it
     /// changed, so the caller can clear the GPU cache: the old tiles are a different size.
     pub fn set_retina(&mut self, retina: bool) -> bool {
-        if self.retina == retina {
-            return false;
-        }
+        if self.retina == retina { return false; }
         self.retina = retina;
+        self.invalidate_configuration();
+        true
+    }
+
+    fn invalidate_configuration(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.requested.clear();
         self.uploaded.clear();
-        true
+        self.failed.clear();
+        self.evicted.clear();
+        self.deferred_ready = None;
+        self.thumbs.clear();
+        self.frame_visible = 0;
     }
 
     /// Whether `style` is being fetched at double resolution right now — the caller drops its
@@ -1708,13 +1717,12 @@ impl TileManager {
 
     /// Update the provider API keys (from Settings). Clears fetch state if a key changed so the
     /// active provider style refetches. Keys are held in memory only — never written to a path.
-    pub fn set_keys(&mut self, mapbox: &str, maptiler: &str) {
-        if self.mapbox_key != mapbox || self.maptiler_key != maptiler {
-            self.mapbox_key = mapbox.to_string();
-            self.maptiler_key = maptiler.to_string();
-            self.requested.clear();
-            self.uploaded.clear();
-        }
+    pub fn set_keys(&mut self, mapbox: &str, maptiler: &str) -> bool {
+        if self.mapbox_key == mapbox && self.maptiler_key == maptiler { return false; }
+        self.mapbox_key = mapbox.to_string();
+        self.maptiler_key = maptiler.to_string();
+        self.invalidate_configuration();
+        true
     }
 
     /// This style's picker thumbnail, fetching it the first time it is asked for.
@@ -1728,7 +1736,8 @@ impl TileManager {
         style: BasemapStyle,
         ctx: &egui::Context,
     ) -> Option<egui::TextureHandle> {
-        while let Ok((key, fetched)) = self.thumb_rx.try_recv() {
+        while let Ok((generation, key, fetched)) = self.thumb_rx.try_recv() {
+            if generation != self.generation { continue; }
             let state = match fetched {
                 Some(f) => {
                     let img = egui::ColorImage::from_rgba_unmultiplied(
@@ -1776,29 +1785,14 @@ impl TileManager {
         let client = self.client.clone();
         let tx = self.thumb_tx.clone();
         let ctx2 = self.ctx.clone();
-        let blocking = self.spawner.clone();
+        let generation = self.generation;
         self.spawner.spawn(async move {
-            let bytes = load_tile_bytes(&client, &url, path.as_deref()).await;
-            blocking.spawn_blocking(move || {
-                let decoded = bytes
-                    .ok()
-                    .and_then(|b| image::load_from_memory(&b).ok())
-                    .map(|img| {
-                        let rgba = img.to_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        FetchedTile {
-                            id: (6, 14, 24),
-                            style: u64::from(key),
-                            rgba: rgba.into_raw(),
-                            width: w,
-                            height: h,
-                        }
-                    });
-                let _ = tx.send((key, decoded));
-                if let Some(ctx) = ctx2 {
-                    ctx.request_repaint();
-                }
+            let decoded = load_raster_tile(&client, &url, path.as_deref()).await.ok().map(|rgba| {
+                let (width, height) = rgba.dimensions();
+                FetchedTile { id: (6, 14, 24), style: u64::from(key), rgba: rgba.into_raw(), width, height }
             });
+            let _ = tx.send((generation, key, decoded));
+            if let Some(ctx) = ctx2 { ctx.request_repaint(); }
         });
         None
     }
@@ -1811,12 +1805,11 @@ impl TileManager {
         self.custom_max_z = z.clamp(1, 22);
     }
 
-    pub fn set_custom_template(&mut self, template: &str) {
-        if self.custom_template != template {
-            self.custom_template = template.to_string();
-            self.requested.clear();
-            self.uploaded.clear();
-        }
+    pub fn set_custom_template(&mut self, template: &str) -> bool {
+        if self.custom_template == template { return false; }
+        self.custom_template = template.to_string();
+        self.invalidate_configuration();
+        true
     }
 
     /// Integer tile ids covering the current view, and their world-space rects. `zoom_bias`
@@ -1916,41 +1909,19 @@ impl TileManager {
             let tx = self.tx.clone();
             let ctx = self.ctx.clone();
             let inflight = self.inflight.clone();
-            let blocking = self.spawner.clone();
+            let generation = self.generation;
             self.inflight.fetch_add(1, Ordering::Relaxed);
             self.spawner.spawn(async move {
-                // Finite on purpose. A tile fetch that is neither answered nor refused — a
-                // captive portal, a proxy that swallows the connection — used to hold its slot
-                // for the life of the tab, and six of them meant the basemap simply stopped.
-                let bytes = wxdata::task::timeout(
+                let decoded = wxdata::task::timeout(
                     TILE_TIMEOUT + BACKSTOP,
-                    load_tile_bytes(&client, &url, path.as_deref()),
-                )
-                .await
-                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")));
-                // PNG/JPEG decode is pure CPU and would otherwise run on the async worker, where
-                // it stalls every other fetch sharing that thread.
-                blocking.spawn_blocking(move || {
-                    let decoded = bytes
-                        .ok()
-                        .and_then(|b| image::load_from_memory(&b).ok())
-                        .map(|img| {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            FetchedTile {
-                                id: (z, x, y),
-                                style: skey,
-                                rgba: rgba.into_raw(),
-                                width: w,
-                                height: h,
-                            }
-                        });
-                    let _ = tx.send(decoded.ok_or((skey, (z, x, y))));
-                    inflight.fetch_sub(1, Ordering::Relaxed);
-                    if let Some(ctx) = ctx {
-                        ctx.request_repaint();
-                    }
+                    load_raster_tile(&client, &url, path.as_deref()),
+                ).await.ok().and_then(Result::ok).map(|rgba| {
+                    let (width, height) = rgba.dimensions();
+                    FetchedTile { id: (z, x, y), style: skey, rgba: rgba.into_raw(), width, height }
                 });
+                let _ = tx.send((generation, decoded.ok_or((skey, (z, x, y)))));
+                inflight.fetch_sub(1, Ordering::Relaxed);
+                if let Some(ctx) = ctx { ctx.request_repaint(); }
             });
         }
     }
@@ -1964,7 +1935,7 @@ impl TileManager {
     /// time-tagged layer). Takes the style explicitly so it doesn't depend on which pane the
     /// tile manager last rendered.
     pub fn packable(&self, style: BasemapStyle) -> bool {
-        !style.timed()
+        matches!(style, BasemapStyle::Satellite | BasemapStyle::UsgsTopo | BasemapStyle::UsgsImageryTopo)
             && style
                 .url(
                     0,
@@ -1992,12 +1963,9 @@ impl TileManager {
         z_lo: u8,
         z_hi: u8,
     ) -> Vec<PackJob> {
-        let Some(root) = self.cache_root.as_ref() else {
-            return Vec::new();
-        };
-        if style.timed() {
-            return Vec::new();
-        }
+        let root = self.cache_root.clone().or_else(|| cfg!(target_arch = "wasm32").then(|| std::path::PathBuf::from("tiles")));
+        let Some(root) = root else { return Vec::new() };
+        if !self.packable(style) { return Vec::new(); }
         let z_hi = z_hi.min(self.max_z(style));
         // Packs are always 1x: a pack is written once and read on whatever device opens it later.
         let dir = root
@@ -2032,15 +2000,14 @@ impl TileManager {
         max_lat: f64,
     ) -> Vec<PackJob> {
         let z = crate::elevation::zoom();
-        let Some(root) = self.cache_root.as_ref() else {
-            return Vec::new();
-        };
+        let root = self.cache_root.clone().or_else(|| cfg!(target_arch = "wasm32").then(|| std::path::PathBuf::from("tiles")));
+        let Some(root) = root else { return Vec::new() };
         pack_tile_ids(min_lon, min_lat, max_lon, max_lat, z, z)
             .into_iter()
             .map(|(_, x, y)| {
                 (
                     crate::elevation::tile_url(x, y),
-                    crate::elevation::tile_path(root, x, y),
+                    crate::elevation::tile_path(&root, x, y),
                 )
             })
             .collect()
@@ -2059,7 +2026,8 @@ impl TileManager {
         let mut examined = 0;
         while !budget.exhausted() && examined < 32 {
             examined += 1;
-            let Some(t) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) else { break };
+            let Some((generation, t)) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) else { break };
+            if generation != self.generation { continue; }
             let t = match t {
                 Ok(t) => t,
                 Err(id) => {
@@ -2072,7 +2040,7 @@ impl TileManager {
             };
             let key = (t.style, t.id);
             if !budget.take(t.width as usize * t.height as usize * 4) {
-                self.deferred_ready = Some(Ok(t));
+                self.deferred_ready = Some((generation, Ok(t)));
                 break;
             }
             self.failed.remove(&key);
@@ -2184,22 +2152,12 @@ pub async fn fetch_visible(
         let Some(url) = style.url(z, x, y, false, mapbox_key, maptiler_key, "") else {
             continue;
         };
-        match load_tile_bytes(client, &url, None).await {
-            Ok(bytes) => match image::load_from_memory(&bytes) {
-                Ok(img) => {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    out.push(PendingTile {
-                        id: v.id,
-                        style: u64::from(style.key()),
-                        rgba: rgba.into_raw(),
-                        width: w,
-                        height: h,
-                    });
-                }
-                Err(e) => log::warn!("tile decode {url}: {e}"),
-            },
-            Err(e) => log::warn!("tile fetch {url}: {e}"),
+        match load_raster_tile(client, &url, None).await {
+            Ok(rgba) => {
+                let (width, height) = rgba.dimensions();
+                out.push(PendingTile { id: v.id, style: u64::from(style.key()), rgba: rgba.into_raw(), width, height });
+            }
+            Err(e) => log::warn!("tile fetch/decode {url}: {e}"),
         }
     }
     out
@@ -2207,18 +2165,21 @@ pub async fn fetch_visible(
 
 /// Read-through disk cache: return the cached PNG if present, else fetch and store it.
 ///
-/// A corrupt/partial cache file just fails to decode upstream and gets re-fetched next view,
-/// so no locking or temp-rename dance is needed. Bounded by the startup sweep (see [`sweep_later`]).
+/// Decoders use `load_tile_decoded` to evict corrupt entries and retry once.
 pub(crate) async fn load_tile_bytes(
     client: &reqwest::Client,
     url: &str,
     path: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<u8>> {
-    // ponytail: sync std::fs in the async task — tiles are ~20KB, not worth the tokio `fs`
-    // feature + spawn_blocking hops.
-    if let Some(p) = path {
-        if let Ok(bytes) = std::fs::read(p) {
-            return Ok(bytes);
+    load_tile_bytes_inner(client, url, path, false).await
+}
+
+async fn load_tile_bytes_inner(client: &reqwest::Client, url: &str, path: Option<&std::path::Path>, refresh: bool) -> anyhow::Result<Vec<u8>> {
+    if !refresh {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(bytes) = crate::offline::cached_tile(url).await { return Ok(bytes); }
+        if let Some(p) = path {
+            if let Ok(bytes) = std::fs::read(p) { return Ok(bytes); }
         }
     }
     // Browser builds cannot fetch most tile hosts directly — they send no CORS header — so the
@@ -2228,15 +2189,18 @@ pub(crate) async fn load_tile_bytes(
     // user's API key in a shared cache. Native builds get the URL back unchanged.
     let http = client.clone();
     let request_url = wxdata::net::fetch_url(url);
-    let bytes = wxdata::shared_read::bytes(format!("tile:{request_url}"), async move {
-        Ok(http.get(request_url).timeout(TILE_TIMEOUT).send().await?
+    let bytes = wxdata::shared_read::bytes(format!("tile:{refresh}:{request_url}"), async move {
+        let mut request = http.get(request_url).timeout(TILE_TIMEOUT);
+        if refresh { request = request.header(reqwest::header::CACHE_CONTROL, "no-cache"); }
+        Ok(request.send().await?
             .error_for_status()?.bytes().await?.to_vec())
     }).await?;
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(p) = path {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(p, bytes.as_slice());
+        let _ = write_tile_cache(p, bytes.as_slice());
         if let Some(root) = crate::paths::cache_dir() {
             for sub in ["tiles", "vector"] {
                 let cache = root.join(sub);
@@ -2247,6 +2211,45 @@ pub(crate) async fn load_tile_bytes(
         }
     }
     Ok(bytes.as_ref().clone())
+}
+
+/// A bad cached response must not survive every subsequent decode attempt.
+pub(crate) async fn load_tile_decoded<T, F, Fut>(
+    client: &reqwest::Client, url: &str, path: Option<&std::path::Path>, decode: F,
+) -> anyhow::Result<T>
+where
+    F: Fn(Vec<u8>) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    for attempt in 0..2 {
+        let bytes = load_tile_bytes_inner(client, url, path, attempt > 0).await?;
+        match decode(bytes).await {
+            Ok(tile) => return Ok(tile),
+            Err(error) => {
+                if let Some(path) = path { let _ = std::fs::remove_file(path); }
+                crate::offline::invalidate_tile(url).await;
+                if attempt == 1 { return Err(error); }
+            }
+        }
+    }
+    unreachable!()
+}
+
+async fn load_raster_tile(client: &reqwest::Client, url: &str, path: Option<&std::path::Path>) -> anyhow::Result<image::RgbaImage> {
+    load_tile_decoded(client, url, path, |bytes| async move {
+        wxdata::task::blocking(move || image::load_from_memory(&bytes).map(|image| image.to_rgba8())).await?
+            .map_err(Into::into)
+    }).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_tile_cache(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let pending = path.with_extension(format!("{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    // Cache files can be re-downloaded; atomic replacement needs no per-tile fsync.
+    let result = std::fs::write(&pending, bytes).and_then(|_| crate::settings::replace_file(&pending, path));
+    if result.is_err() { let _ = std::fs::remove_file(pending); }
+    result
 }
 
 /// How much GPU memory the uploaded raster tiles may rest at. This is the budget the entry cap
@@ -2395,6 +2398,7 @@ pub(crate) fn sweep_cache_dir(root: &std::path::Path, label: &str, cap: u64) {
     }
     let mut files = Vec::new();
     walk(root, &mut files);
+    let pinned = crate::offline::pinned_paths();
     let total: u64 = files.iter().map(|(_, n, _)| *n).sum();
     if total <= cap {
         return;
@@ -2405,7 +2409,7 @@ pub(crate) fn sweep_cache_dir(root: &std::path::Path, label: &str, cap: u64) {
         if total - freed <= cap {
             break;
         }
-        if std::fs::remove_file(&path).is_ok() {
+        if !pinned.contains(&path) && std::fs::remove_file(&path).is_ok() {
             freed += n;
         }
     }
@@ -2496,52 +2500,128 @@ pub(crate) fn pack_tile_ids(
     ids
 }
 
-/// Download `jobs` into the disk tile cache with 4 fixed workers, reporting each tile's outcome
-/// on `tx` as `(ok, downloaded_bytes)` — `bytes == 0` means it was already cached (skipped). Stops
-/// early when `cancel` is set. // ponytail: 4 fixed workers pulling a shared queue, no semaphore crate.
-#[cfg(not(target_arch = "wasm32"))]
+/// Download a user-selected area with at most four requests; every success is persisted.
 pub fn start_pack_download(
-    rt: &Handle,
+    spawner: &crate::rt::Spawner,
     jobs: Vec<PackJob>,
     cancel: Arc<AtomicBool>,
-    tx: Sender<(bool, u64)>,
+    tx: Sender<Result<u64, String>>,
 ) {
-    let queue = Arc::new(Mutex::new(jobs.into_iter()));
-    let client = reqwest::Client::builder()
-        .user_agent(USER_AGENT) // browser-ish UA: imagery hosts 403 bare UAs (matches live tile traffic)
-        .build()
-        .expect("build reqwest client");
-    for _ in 0..4 {
-        let queue = queue.clone();
-        let cancel = cancel.clone();
-        let tx = tx.clone();
-        let client = client.clone();
-        rt.spawn(async move {
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    break;
+    let spawner = spawner.clone();
+    let worker_spawner = spawner.clone();
+    spawner.spawn(async move {
+        if !crate::offline::within_budget(jobs.len() as u64, 0) {
+            let _ = tx.send(Err("Area exceeds 3,000 tiles; zoom in before downloading".into()));
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Err(error) = crate::offline::prepare((jobs.len() as u64 * 25_000).min(crate::offline::BYTE_LIMIT)).await {
+            let _ = tx.send(Err(error.to_string()));
+            return;
+        }
+        let queue = Arc::new(Mutex::new(jobs.into_iter()));
+        let bytes_used = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let client = reqwest::Client::builder().user_agent(USER_AGENT).build().expect("build reqwest client");
+        for _ in 0..4 {
+            let (queue, cancel, tx, client, bytes_used) = (queue.clone(), cancel.clone(), tx.clone(), client.clone(), bytes_used.clone());
+            worker_spawner.spawn(async move {
+                loop {
+                    if cancel.load(Ordering::Relaxed) { break; }
+                    let Some((url, path)) = queue.lock().unwrap().next() else { break };
+                    let result: anyhow::Result<u64> = async {
+                        let bytes = load_tile_bytes(&client, &url, Some(&path)).await?;
+                        anyhow::ensure!(!bytes.is_empty(), "Tile was empty");
+                        let total = bytes_used.fetch_add(bytes.len() as u64, Ordering::Relaxed).saturating_add(bytes.len() as u64);
+                        anyhow::ensure!(total <= crate::offline::BYTE_LIMIT, "Area exceeds 50 MB; choose a smaller area");
+                        anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Download cancelled");
+                        #[cfg(target_arch = "wasm32")]
+                        crate::offline::store_tile(&url, &bytes).await?;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+                            // A pack must propagate disk-full errors; the ordinary cache is best effort.
+                            write_tile_cache(&path, &bytes)?;
+                        }
+                        Ok(bytes.len() as u64)
+                    }.await;
+                    if result.is_err() { cancel.store(true, Ordering::Relaxed); }
+                    let _ = tx.send(result.map_err(|e| e.to_string()));
                 }
-                let job = queue.lock().unwrap().next();
-                let Some((url, path)) = job else { break };
-                if path.exists() {
-                    let _ = tx.send((true, 0));
-                    continue;
-                }
-                match load_tile_bytes(&client, &url, Some(&path)).await {
-                    Ok(bytes) => {
-                        let _ = tx.send((true, bytes.len() as u64));
-                    }
-                    Err(_) => {
-                        let _ = tx.send((false, 0));
-                    }
-                }
-            }
-        });
-    }
+            });
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn corrupt_tile_cache_is_replaced_once_and_bad_responses_are_removed() {
+        use std::io::{Read, Write};
+        let client = reqwest::Client::new();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .write_to(&mut png, image::ImageFormat::Png).unwrap();
+        for (index, (body, vector, valid)) in [(png.into_inner(), false, true),
+            (Vec::new(), true, true), (b"<html>upstream error</html>".to_vec(), false, false)].into_iter().enumerate() {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/tile-{index}", listener.local_addr().unwrap());
+            let expected = body.clone();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+                let mut request = [0; 2048];
+                assert!(stream.read(&mut request).unwrap() > 0);
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            });
+            let path = std::env::temp_dir().join(format!("hookecho-corrupt-tile-{}-{index}", std::process::id()));
+            std::fs::write(&path, b"not a tile").unwrap();
+            let result = super::load_tile_decoded(&client, &url, Some(&path), |bytes| async move {
+                if vector {
+                    crate::vector_tiles::build_tile(&bytes, (2, 1, 1), crate::basemap_style::Palette::Dark, 2.0).map(|_| ())
+                } else { image::load_from_memory(&bytes).map(|_| ()).map_err(Into::into) }
+            }).await;
+            server.join().unwrap();
+            assert_eq!(result.is_ok(), valid);
+            if valid {
+                assert_eq!(std::fs::read(&path).unwrap(), expected);
+                std::fs::remove_file(path).unwrap();
+            } else { assert!(!path.exists(), "a failed retry must not leave another poisoned entry"); }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn configuration_changes_reject_late_tiles_and_reset_all_derived_state() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut manager = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let id = (4, 3, 5);
+        let key = (manager.frame_key(BasemapStyle::CustomXyz), id);
+        for change in 0..3 {
+            let old = manager.generation;
+            manager.failed.insert(key, wxdata::clock::Instant::now());
+            manager.thumbs.insert(BasemapStyle::CustomXyz.key(), Thumb::Failed);
+            manager.deferred_ready = Some((old, Err(key)));
+            assert!(match change {
+                0 => manager.set_custom_template("https://new.test/{z}/{x}/{y}"),
+                1 => manager.set_keys("new-key", ""),
+                _ => manager.set_retina(true),
+            });
+            assert!(manager.failed.is_empty() && manager.thumbs.is_empty() && manager.deferred_ready.is_none());
+            manager.requested.insert(key);
+            let tile = |pixel| FetchedTile { id, style: key.0, rgba: vec![pixel; 4], width: 1, height: 1 };
+            manager.tx.send((old, Err(key))).unwrap();
+            manager.tx.send((manager.generation, Ok(tile(2)))).unwrap();
+            manager.tx.send((old, Ok(tile(1)))).unwrap();
+            let ready = manager.drain_ready();
+            assert_eq!(ready.len(), 1);
+            assert_eq!(ready[0].rgba, vec![2; 4]);
+            assert!(manager.requested.contains(&key));
+            assert!(!manager.failed.contains_key(&key));
+        }
+        assert!(!manager.set_retina(true));
+    }
     use super::*;
 
     #[test]
@@ -2600,9 +2680,9 @@ mod tests {
         assert!(!manager.requested.contains(&forecast));
         assert!(manager.uploaded.contains(&forecast), "keep the old forecast visible during refresh");
         assert!(manager.requested.contains(&streets), "do not reload unrelated map sources");
-        manager.tx.send(Ok(FetchedTile {
+        manager.tx.send((manager.generation, Ok(FetchedTile {
             id: forecast.1, style: forecast.0, rgba: vec![4, 3, 2, 1], width: 1, height: 1,
-        })).unwrap();
+        }))).unwrap();
         let ready = manager.drain_ready();
         assert_eq!(ready.len(), 1, "a resident key must accept replacement pixels");
         assert_eq!(ready[0].rgba, vec![4, 3, 2, 1]);
@@ -2617,13 +2697,13 @@ mod tests {
             .expect("runtime");
         let mut m = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
         for x in 0..5 {
-            m.tx.send(Ok(FetchedTile {
+            m.tx.send((m.generation, Ok(FetchedTile {
                 id: (4, x, 5),
                 style: 0,
                 rgba: vec![0; 4],
                 width: 1,
                 height: 1,
-            }))
+            })))
             .unwrap();
         }
         assert_eq!(m.drain_ready().len(), 2);

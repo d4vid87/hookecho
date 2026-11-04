@@ -790,10 +790,13 @@ instead of the configured default site. No third-party lookup and no browser
 permission prompt; a `#goto=` deep link still wins. A host without it just opens
 on the default.
 
-The address bar is a permalink: the `#goto=` fragment follows the active pane as
-you pan, zoom and scrub, so copying the URL sends someone to the frame you were
-looking at, archive time and 2D/3D orientation included. The share button in the control column does
-the same thing through the platform's share sheet where there is one.
+The address bar is a permalink: the `#scene=` fragment follows the visible pane
+arrangement as you pan, zoom and scrub. It carries each station, product, tilt,
+camera, opacity, public layer selection and the camera/time links. Live views stay
+live; a scrubbed arrangement carries each pane's displayed time. The Share page
+and command palette also offer **Share live view** and **Share this exact time**
+explicitly, through the platform share sheet or clipboard. Legacy `#goto=` links
+continue to open normally.
 
 **Cloudflare Pages** — `web/_worker.js/`, deployed by
 `.github/workflows/demo.yml`. That's what `app.hookecho.io` is (`hookecho.pages.dev`
@@ -850,8 +853,25 @@ the client — no server sees where you are looking:
 https://app.hookecho.io/#goto=KTLX,-97.28,35.33,9,VEL
 ```
 
-"Copy link to this view" in the command palette writes the right form for
-whichever build you are running.
+"Copy link to this view" in the command palette now shares the full scene as an
+HTTPS link that works even when the recipient has not installed HookEcho. Native
+handoffs also accept `hookecho://scene/<payload>` through the existing OS protocol
+registration. The browser accepts `#scene=<payload>` at startup and when the hash
+changes without a reload.
+
+Scene links use a versioned, base64url JSON payload in the URL fragment, limited to
+32 KiB before decoding and at most four panes. Unknown versions, invalid stations,
+out-of-range cameras/products and private source selectors are rejected before
+changing the current view. They contain no API keys, saved places, workspace
+names, placefile URLs, custom palette tables or account preferences. A private or
+key-required basemap shares as the public dark map. User-defined radar products
+must be switched to a built-in product before sharing. Sharing map coordinates
+is intentional: the recipient can see the location represented by the scene.
+
+Exact-time sharing requires a loaded timestamp for each visible data pane and
+opens paused. Historical radar and imagery still depend on upstream archive
+availability; a scene link does not upload or permanently store weather data.
+Layers without historical retrieval retain their normal source-time labels.
 
 ## Keyboard
 

@@ -4,6 +4,7 @@
 
 mod chips;
 mod chaser_dashboard;
+mod place_briefings;
 mod issues;
 pub(super) use issues::RadarIssueLog;
 mod clearview;

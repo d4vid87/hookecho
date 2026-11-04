@@ -69,14 +69,14 @@ pub async fn fetch_discussion(client: &reqwest::Client, period: Period) -> anyho
     parse_discussion(&body, period)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Variable { Temperature, Precipitation }
 
 impl Variable {
     pub fn label(self) -> &'static str { match self { Self::Temperature => "Temperature", Self::Precipitation => "Precipitation" } }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Period { Day6To10, Day8To14, Week3To4, Month1, Month3 }
 
 impl Period {

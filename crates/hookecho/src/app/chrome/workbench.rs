@@ -56,6 +56,10 @@ impl HookEchoApp {
             });
         }
         let view = &mut self.views[self.active];
+        ui.label(format!("Radar source: {}", view.radar_source_label()));
+        if view.timeline.following {
+            if let Some(notice) = &view.feed_recovery.notice { ui.weak(notice); }
+        }
         if ui.checkbox(&mut view.follow_low_cut, "Follow newest 0.5° cut")
             .on_hover_text("Keep this pane on the newest low-level radar revisit while live")
             .changed()
