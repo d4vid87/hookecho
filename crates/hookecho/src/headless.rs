@@ -2072,50 +2072,44 @@ pub fn run_gauges(site: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Offline chase-pack verifier: pre-download the raster basemap around `(lat, lon)` within
-/// `radius_km` over a 4-level zoom span ending at `zmax`, then print how many tiles were cached vs
-/// fetched. Re-running should report everything cached (the read-through disk cache is transparent).
 pub fn run_chasepack(
-    lat: f64,
-    lon: f64,
-    radius_km: f64,
-    zmax: u8,
-    style_slug: &str,
+    lat: f64, lon: f64, radius_km: f64, zmax: u8, style_slug: &str,
 ) -> anyhow::Result<()> {
     use crate::tiles::{start_pack_download, BasemapStyle, TileManager};
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let style = BasemapStyle::from_slug(style_slug);
     let dlat = radius_km / 111.0;
     let dlon = radius_km / (111.0 * lat.to_radians().cos().abs().max(0.01));
-    let (min_lon, min_lat, max_lon, max_lat) = (lon - dlon, lat - dlat, lon + dlon, lat + dlat);
-    let z_lo = zmax.saturating_sub(4).max(2);
-    let mgr = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
-    let jobs = mgr.pack_jobs(style, min_lon, min_lat, max_lon, max_lat, z_lo, zmax);
-    let total = jobs.len();
-    if total == 0 {
-        anyhow::bail!(
-            "no jobs for style '{style_slug}' (pick a raster basemap slug, e.g. carto-dark)"
-        );
-    }
+    let bounds = (lon - dlon, lat - dlat, lon + dlon, lat + dlat);
+    let z_lo = zmax.saturating_sub(2).max(2);
+    let spawner = crate::rt::Spawner::new(rt.handle().clone());
+    let mgr = TileManager::new(spawner.clone());
+    let jobs = mgr.pack_jobs(style, bounds.0, bounds.1, bounds.2, bounds.3, z_lo, zmax);
+    let total = jobs.len() as u64;
+    anyhow::ensure!(crate::offline::within_budget(total, total.saturating_mul(25_000)),
+        "Choose a USGS raster basemap and an area below 3,000 tiles / 50 MB");
+    let mut manifest = crate::offline::MapPack {
+        label: style.label().into(), bounds, zoom: (z_lo, zmax),
+        files: jobs.iter().map(|(url, path)| (url.clone(), path.to_string_lossy().into_owned())).collect(),
+        completed: 0, bytes: 0, finished: false, error: None,
+        saved_at: chrono::Utc::now().timestamp(), vector_template: None, verified: false,
+    };
+    crate::offline::save(manifest.clone())?;
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    start_pack_download(rt.handle(), jobs, cancel, tx);
-    let (mut cached, mut fetched, mut errors, mut bytes) = (0u64, 0u64, 0u64, 0u64);
-    for _ in 0..total {
-        match rx.recv() {
-            Ok((true, 0)) => cached += 1,
-            Ok((true, n)) => {
-                fetched += 1;
-                bytes += n;
-            }
-            Ok((false, _)) => errors += 1,
-            Err(_) => break,
+    start_pack_download(&spawner, jobs, cancel, tx);
+    while let Ok(result) = rx.recv() {
+        match result {
+            Ok(bytes) => { manifest.completed += 1; manifest.bytes += bytes; }
+            Err(error) => { manifest.error.get_or_insert(error); }
         }
     }
-    let mb = bytes as f64 / 1e6;
-    println!("{total} tiles (z{z_lo}-{zmax}, {style_slug}): {cached} cached, {fetched} fetched, {errors} errors, {mb:.1} MB");
+    manifest.finished = true;
+    manifest.verified = true;
+    println!("{}/{} tiles (z{z_lo}-{zmax}, {style_slug}), {:.1} MB",
+        manifest.completed, total, manifest.bytes as f64 / 1e6);
+    crate::offline::save(manifest.clone())?;
+    anyhow::ensure!(manifest.ready(), "Offline area incomplete: {}", manifest.error.as_deref().unwrap_or("missing tiles"));
     Ok(())
 }
 

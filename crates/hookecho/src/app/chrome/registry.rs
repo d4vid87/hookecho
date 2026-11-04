@@ -1166,9 +1166,25 @@ impl HookEchoApp {
         push(
             "Copy link to this view",
             "Reference",
-            "A link to this site, place, zoom, time and product \u{2014} opens HookEcho here",
+            "Share all panes, products, layers and linked times; live stays live",
             true,
             PaletteAction::CopyViewLink,
+            None,
+        );
+        push(
+            "Share live view",
+            "Reference",
+            "Share all panes and layers with the newest available data",
+            true,
+            PaletteAction::CopyLiveSceneLink,
+            None,
+        );
+        push(
+            "Share this exact time",
+            "Reference",
+            "Share all panes pinned to their displayed time",
+            true,
+            PaletteAction::CopyExactSceneLink,
             None,
         );
         push(

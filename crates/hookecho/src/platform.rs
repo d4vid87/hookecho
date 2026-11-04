@@ -205,15 +205,23 @@ pub fn request_battery_exemption() {
     android_alerts::call_void("requestExemption");
 }
 
-/// Open `url` in the system browser. Used by the Google sign-in, which has to hand the user off
-/// to a real browser and get them back. Desktop shells out to the platform opener; Android goes
-/// through an `ACTION_VIEW` intent.
+/// Open a link in a browser tab, the desktop browser, or Android's ACTION_VIEW handler.
 pub fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let parsed = web_sys::Url::new(url).map_err(|_| "Invalid browser URL".to_string())?;
+        if !matches!(parsed.protocol().as_str(), "http:" | "https:") {
+            return Err("Browser links must use HTTP or HTTPS".into());
+        }
+        web_sys::window().ok_or("Browser window unavailable")?
+            .open_with_url_and_target_and_features(url, "_blank", "noopener,noreferrer")
+            .map(|_| ()).map_err(|error| format!("Could not open browser link: {error:?}"))
+    }
     #[cfg(target_os = "android")]
     {
         android_browser::open(url).map_err(|e| format!("could not open a browser: {e:?}"))
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     {
         let opener = if cfg!(target_os = "macos") {
             "open"

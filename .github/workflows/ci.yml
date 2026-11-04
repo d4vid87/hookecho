@@ -137,7 +137,7 @@ jobs:
       # the browser smoke test can ask for on demand, so the bridge takes its spawn as a callback
       # and this drives it with a stub.
       - name: Test the decode bridge
-        run: node --test web/decode-bridge.test.mjs
+        run: node --test web/decode-bridge.test.mjs web/offline-maps.test.mjs web/sw.test.mjs scripts/web/shell-assets.test.mjs
 
       - name: Install puppeteer
         run: npm install --no-save puppeteer@23
@@ -156,6 +156,10 @@ jobs:
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/frame-continuity.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/outlook-rail.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/site-selector.mjs
+          HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/workflow-upgrades.mjs
+          node scripts/web/offline-shell.mjs
+          node scripts/web/offline-weather.mjs
+          HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/forecast-recovery.mjs
 
       - name: Upload reliability evidence
         if: always()
@@ -168,6 +172,8 @@ jobs:
             outputs/frame-continuity
             outputs/outlook-rail
             outputs/site-selector
+            outputs/workflow-upgrades
+            outputs/forecast-recovery
 
   # Golden-image test for the wgpu radar pipeline. Runs on the software rasterizer
   # (mesa lavapipe) via HOOKECHO_GPU_FALLBACK=1 so the render is deterministic across

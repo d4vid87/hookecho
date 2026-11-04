@@ -95,11 +95,13 @@ impl HookEchoApp {
                 .num_seconds()
                 .max(0);
             format!(
-                "{} {} ago",
+                "{} · {} {} ago",
+                self.views[self.active].radar_source_label(),
                 if latest_cut.is_some() { "Cut" } else { "Scan" },
                 humanize(secs)
             )
         });
+        let feed_notice = self.views[self.active].feed_recovery.notice.clone().unwrap_or_default();
         let retained_station = self.views[self.active].retained_station.clone();
         let station_failed = self.views[self.active].error.is_some();
         let loading = self.views[self.active].loading;
@@ -413,7 +415,7 @@ impl HookEchoApp {
                         else if skipped_recently { "Skipped unavailable radar frame".to_owned() }
                         else { status };
                     let response = ui.label(egui::RichText::new(status).small().color(egui::Color32::from_rgb(217, 231, 255)));
-                    response.clone().on_hover_text(format!("Displayed scan: {}\nRequested scan: {}", loaded_time.map_or_else(|| "unavailable".into(), |time| time.to_rfc3339()), requested_time.map_or_else(|| "unavailable".into(), |time| time.to_rfc3339())));
+                    response.clone().on_hover_text(format!("Displayed scan: {}\nRequested scan: {}\n{}", loaded_time.map_or_else(|| "unavailable".into(), |time| time.to_rfc3339()), requested_time.map_or_else(|| "unavailable".into(), |time| time.to_rfc3339()), feed_notice));
                     if let Some(rect) = &mut scrub_rect {
                         *rect = rect.union(response.rect);
                     }
@@ -964,7 +966,7 @@ pub(super) fn history_controls(
                 if ui.button(p.label()).clicked() {
                     result.load_pack = Some(p.clone());
                 }
-                if ui.small_button("\u{d7}").on_hover_text("Delete").clicked() {
+                if ui.add_enabled(!crate::webcache::is_saving(), egui::Button::new("\u{d7}").small()).on_hover_text("Delete").clicked() {
                     result.load_pack = None;
                     crate::webcache::spawn_remove(p.key());
                 }

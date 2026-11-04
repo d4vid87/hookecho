@@ -94,8 +94,8 @@ impl HookEchoApp {
             .filter(|view| view.show_radar).filter_map(MapView::displayed_time));
         let age = loaded_time.map(|time| {
             format!(
-                "{} {} ago",
-                "Displayed scan",
+                "{} · displayed scan {} ago",
+                v.radar_source_label(),
                 humanize((Utc::now() - time).num_seconds().max(0))
             )
         });
@@ -146,6 +146,7 @@ impl HookEchoApp {
         } else if let Some(previous) = &retained {
             format!("Showing {previous} · {site} {}", if error.is_some() { "unavailable" } else { "loading" })
         } else if let Some(error) = &error { format!("{site}: {error}") }
+        else if v.feed_recovery.probe.is_some() { v.feed_recovery.notice.clone().unwrap_or_default() }
         else if buffering { format!("Buffering · {cached_loop}/{listed_loop} frames ready") }
         else if loading { load_label.into() }
         else if skipped { "Skipped unavailable radar frame".into() }
@@ -157,8 +158,9 @@ impl HookEchoApp {
         } else if radar_visible {
             loaded_time.map(|time| crate::timefmt::fmt_clock(time, tz, v.timeline.cut_playback))
         } else { field_time.map(|(time, _, _, _)| crate::timefmt::fmt_clock(time, tz, false)) };
-        let status_hint = format!("Displayed scan: {}\nRequested scan: {}\nNewest received cut: {}\n{}",
-            scan_timestamp(loaded_time), scan_timestamp(requested_time), scan_timestamp(latest_cut), status);
+        let status_hint = format!("Source: {}\nDisplayed scan: {}\nRequested scan: {}\nNewest received cut: {}\n{}\n{}",
+            v.radar_source_label(), scan_timestamp(loaded_time), scan_timestamp(requested_time), scan_timestamp(latest_cut),
+            status, v.feed_recovery.notice.as_deref().unwrap_or_default());
         let mut action = None;
         let mut layout_choice = None;
         let mut active_pane = idx;
@@ -445,8 +447,7 @@ impl HookEchoApp {
                             }
                             if zeta_button(ui, ph::MAP_PIN, "Set chase location", self.tool == MapTool::Chase).clicked() { action = Some(PaletteAction::Tool(MapTool::Chase)); }
                             if zeta_button(ui, ph::CROSSHAIR, "Inspect radar value", self.tool == MapTool::Interrogate).clicked() { action = Some(PaletteAction::Tool(MapTool::Interrogate)); }
-                            if zeta_button(ui, "MRMS", "Toggle MRMS reflectivity", self.views[idx].fields_on.contains(&crate::render::FieldLayer::Mrms)).clicked() { action = Some(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)); }
-                            if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
+                            if let Some(shortcut) = self.transport_shortcuts(ui) { action = Some(shortcut); }
                                 self.radar_opacity_menu(ui);
                             if zeta_button(ui, ph::STACK, "Layers", self.panel_open && self.panel_section == PanelSection::Overlays).clicked() { show_layers = true; }
                             if zeta_button(ui, ph::RULER, "Measure distance and bearing", self.tool == MapTool::Measure).clicked() { action = Some(PaletteAction::Tool(MapTool::Measure)); }
@@ -487,8 +488,7 @@ impl HookEchoApp {
                                     ui.separator();
                                 }
                                 layout_choice = zeta_layout_menu(ui, self, &mut active_pane);
-                                if zeta_button(ui, "MRMS", "Toggle MRMS reflectivity", self.views[idx].fields_on.contains(&crate::render::FieldLayer::Mrms)).clicked() { action = Some(PaletteAction::ToggleField(crate::render::FieldLayer::Mrms)); }
-                                if zeta_button(ui, "SPC", "Choose outlooks", self.filters.outlook_day != 0).clicked() { action = Some(PaletteAction::OpenOutlooks); }
+                                if let Some(shortcut) = self.transport_shortcuts(ui) { action = Some(shortcut); }
                                 self.radar_opacity_menu(ui);
                                 if let Some(gap) = comparison_gap {
                                     ui.colored_label(accent, format!("Δ {}", humanize(gap)))
@@ -654,8 +654,142 @@ impl HookEchoApp {
             None => {}
         }
     }
+
+    fn transport_shortcuts(&mut self, ui: &mut egui::Ui) -> Option<PaletteAction> {
+        type Pinned = (Vec<String>, [bool; Moment::ALL.len()], Vec<PaletteEntry>);
+        let cache_id = ui.id().with("toolbar_shortcuts");
+        let have = self.available_moments();
+        let cached = ui.data_mut(|data| data.get_temp::<Pinned>(cache_id));
+        let pinned = match cached {
+            Some((keys, moments, entries)) if keys == self.settings.compact_shortcuts && moments == have => entries,
+            _ => {
+                let catalog = self.palette_entries();
+                let entries: Vec<_> = normalized_shortcuts(&self.settings.compact_shortcuts, &catalog).iter()
+                    .filter_map(|key| catalog.iter().find(|entry| shortcut_key(entry.action).as_ref() == Some(key)).cloned()).collect();
+                ui.data_mut(|data| data.insert_temp(cache_id, (self.settings.compact_shortcuts.clone(), have, entries.clone())));
+                entries
+            }
+        };
+        let mut action = None;
+        for entry in &pinned {
+            let on = match entry.action {
+                PaletteAction::SetMoment(moment, relative) => self.views[self.active].moment == moment
+                    && (moment != Moment::Velocity || self.views[self.active].srv == relative),
+                PaletteAction::ToggleField(layer) => self.views[self.active].fields_on.contains(&layer),
+                PaletteAction::OpenOutlooks => self.filters.outlook_day != 0,
+                PaletteAction::ToggleOverlay(overlay) => *self.overlay_flag(overlay),
+                PaletteAction::Tool(tool) => self.tool == tool,
+                PaletteAction::OpenWindow(AppWindow::Markers) => self.marker_window.open,
+                _ => false,
+            };
+            let label = shortcut_label(entry);
+            if zeta_button(ui, &label, &entry.label, on).on_hover_text(entry.desc).clicked() {
+                action = Some(entry.action);
+            }
+        }
+        let mut changed = false;
+        let pin_size = if compact(ui.ctx()) { 44.0 } else { 34.0 };
+        egui::containers::menu::MenuButton::from_button(egui::Button::new(egui_phosphor::regular::PUSH_PIN)
+            .min_size(egui::vec2(pin_size, pin_size))).ui(ui, |ui| {
+            let entries = self.palette_entries();
+            let mut choices: Vec<_> = entries.iter().filter(|entry| shortcut_key(entry.action).is_some()).collect();
+            choices.sort_by_key(|entry| (!entry.favorite, !entry.common));
+            let mut seen = std::collections::HashSet::new();
+            choices.retain(|entry| seen.insert(shortcut_key(entry.action)));
+            ui.set_max_width(330.0);
+            ui.strong("Toolbar shortcuts");
+            ui.weak("Choose up to four. Your starred products appear first.");
+            let keys = normalized_shortcuts(&self.settings.compact_shortcuts, &entries);
+            let mut selected = keys.clone();
+            for (index, key) in keys.iter().enumerate() {
+                let label = entries.iter().find(|entry| shortcut_key(entry.action).as_ref() == Some(key))
+                    .map(|entry| entry.label.clone()).unwrap_or_else(|| {
+                        let (moment, relative) = shortcut_moment(key).expect("normalized product");
+                        format!("{} · unavailable at this site", if relative { "SRV" } else { moment.short_name() })
+                    });
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(index > 0, egui::Button::new("↑")).on_hover_text("Move shortcut left").clicked() {
+                        selected.swap(index, index - 1);
+                        changed = true;
+                    }
+                    if ui.button("×").on_hover_text("Unpin shortcut").clicked() {
+                        selected.retain(|saved| saved != key);
+                        changed = true;
+                    }
+                    ui.label(label);
+                });
+            }
+            ui.separator();
+            let search_id = ui.id().with("shortcut_search");
+            let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
+            ui.add(egui::TextEdit::singleline(&mut search).hint_text("Find a product or tool"));
+            let query = search.to_lowercase();
+            ui.data_mut(|data| data.insert_temp(search_id, search));
+            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                for entry in choices.iter().filter(|entry| query.is_empty() || entry.label.to_lowercase().contains(&query)) {
+                    let key = shortcut_key(entry.action).expect("filtered shortcut");
+                    let mut pinned = selected.contains(&key);
+                    if ui.add_enabled(pinned || selected.len() < 4,
+                        egui::Checkbox::new(&mut pinned, format!("{}{}", if entry.favorite { "★ " } else { "" }, entry.label)))
+                        .on_hover_text(entry.desc).changed() {
+                        if pinned { selected.push(key); } else { selected.retain(|saved| saved != &key); }
+                        changed = true;
+                    }
+                }
+            });
+            if ui.button("Reset to MRMS + SPC").clicked() {
+                selected = crate::settings::default_compact_shortcuts();
+                changed = true;
+            }
+            if changed { self.settings.compact_shortcuts = selected; }
+        }).0.named("Customize toolbar shortcuts").on_hover_text("Pin your favorite products and tools");
+        if changed { self.settings.save(); }
+        action
+    }
 }
 
+
+fn shortcut_key(action: PaletteAction) -> Option<String> {
+    match action {
+        PaletteAction::SetMoment(moment, relative) => Some(radar_favorite_id(moment, relative)),
+        PaletteAction::ToggleField(layer) => Some(layer.stable_id().into()),
+        PaletteAction::OpenOutlooks => Some("outlooks".into()),
+        PaletteAction::ToggleOverlay(overlay) => serde_json::to_string(&overlay).ok().map(|key| format!("overlay:{key}")),
+        PaletteAction::Tool(tool) => serde_json::to_string(&tool).ok().map(|key| format!("tool:{key}")),
+        PaletteAction::OpenWindow(AppWindow::Markers) => Some("places".into()),
+        _ => None,
+    }
+}
+
+fn shortcut_moment(key: &str) -> Option<(Moment, bool)> {
+    Moment::ALL.iter().copied().flat_map(|moment| [(moment, false), (moment, true)])
+        .find(|(moment, relative)| (!relative || *moment == Moment::Velocity) && radar_favorite_id(*moment, *relative) == key)
+}
+
+fn normalized_shortcuts(keys: &[String], entries: &[PaletteEntry]) -> Vec<String> {
+    let mut selected = Vec::new();
+    for key in keys {
+        if selected.len() == 4 { break; }
+        if !selected.contains(key) && (shortcut_moment(key).is_some()
+            || entries.iter().any(|entry| shortcut_key(entry.action).as_ref() == Some(key))) {
+            selected.push(key.clone());
+        }
+    }
+    selected
+}
+
+fn shortcut_label(entry: &PaletteEntry) -> String {
+    match entry.action {
+        PaletteAction::ToggleField(crate::render::FieldLayer::Mrms) => "MRMS".into(),
+        PaletteAction::OpenOutlooks => "SPC".into(),
+        PaletteAction::SetMoment(moment, relative) => if relative { "SRV".into() } else { moment.short_name().into() },
+        _ => {
+            let mut label: String = entry.label.chars().take(14).collect();
+            if entry.label.chars().count() > 14 { label.push('…'); }
+            label
+        }
+    }
+}
 enum ZetaLayoutChoice { Radar, Workspace(usize), Panes(usize) }
 
 fn zeta_layout_menu(ui: &mut egui::Ui, app: &mut HookEchoApp, active: &mut usize) -> Option<ZetaLayoutChoice> {
@@ -760,6 +894,44 @@ mod tests {
         assert_eq!(radar_playback_mode(true, false, true, None, now), "Waiting");
         assert_eq!(radar_playback_mode(true, false, true, Some(now), now), "Live");
         assert_eq!(radar_playback_mode(true, false, false, Some(now - chrono::Duration::minutes(5)), now), "Paused");
+    }
+
+
+    #[test]
+    fn toolbar_defaults_roundtrip_and_unknown_shortcuts_do_not_execute() {
+        let settings: crate::settings::Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.compact_shortcuts, crate::settings::default_compact_shortcuts());
+        let mut entries = Vec::new();
+        for action in [
+            PaletteAction::ToggleField(crate::render::FieldLayer::Mrms),
+            PaletteAction::OpenOutlooks,
+            PaletteAction::SetMoment(Moment::Velocity, false),
+            PaletteAction::Tool(MapTool::Measure),
+            PaletteAction::Tool(MapTool::Draw),
+        ] {
+            entries.push(PaletteEntry {
+                label: "Test".into(), category: "Tools", action, on: None, desc: "",
+                common: true, key: None, health: None, favorite: false, recent: None,
+            });
+        }
+        let defaults = normalized_shortcuts(&settings.compact_shortcuts, &entries);
+        assert_eq!(defaults, settings.compact_shortcuts);
+        let mut keys = vec!["unknown".into(), defaults[0].clone(), defaults[0].clone()];
+        keys.extend(entries.iter().filter_map(|entry| shortcut_key(entry.action)));
+        let selected = normalized_shortcuts(&keys, &entries);
+        assert_eq!(selected.len(), 4);
+        assert_eq!(selected[0], defaults[0]);
+        assert!(!selected.contains(&"unknown".into()));
+        assert!(shortcut_key(PaletteAction::Reload).is_none());
+        assert!(shortcut_key(PaletteAction::ApplyWorkspace(0)).is_none());
+        let settings = crate::settings::Settings { compact_shortcuts: selected.clone(), ..settings };
+        let restored: crate::settings::Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.compact_shortcuts, selected);
+        assert!(normalized_shortcuts(&[], &entries).is_empty());
+        let product = radar_favorite_id(Moment::Reflectivity, false);
+        let stored = vec![product.clone(), "outlooks".into()];
+        assert_eq!(normalized_shortcuts(&stored, &entries), stored,
+            "editing shortcuts at a site without a pinned product must retain that product");
     }
 
     #[test]

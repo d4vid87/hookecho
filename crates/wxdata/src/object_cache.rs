@@ -229,10 +229,22 @@ mod browser {
 
     async fn put_meta(db: &IdbDatabase, meta: &Meta) -> anyhow::Result<()> {
         let json = serde_json::to_string(meta)?;
-        let request = store(db, META, IdbTransactionMode::Readwrite)?
-            .put_with_key(&json.into(), &meta.key.as_str().into())
-            .map_err(|error| anyhow!("{error:?}"))?;
-        await_request(request).await.map(|_| ())
+        let store = store(db, META, IdbTransactionMode::Readwrite)?;
+        let tx = store.transaction();
+        // A successful request can still be rolled back when the transaction hits storage quota.
+        let committed = js_sys::Promise::new(&mut |resolve, reject| {
+            let ok = Closure::once_into_js(move |_: JsValue| { let _ = resolve.call0(&JsValue::NULL); });
+            tx.set_oncomplete(Some(ok.unchecked_ref()));
+            let failed = Closure::once_into_js(move |_: JsValue| {
+                let _ = reject.call1(&JsValue::NULL, &"Object metadata write aborted".into());
+            });
+            tx.set_onabort(Some(failed.unchecked_ref()));
+        });
+        let queued = store.put_with_key(&json.into(), &meta.key.as_str().into());
+        if queued.is_err() { let _ = tx.abort(); }
+        let result = JsFuture::from(committed).await.map_err(|error| anyhow!("{error:?}"));
+        queued.map_err(|error| anyhow!("{error:?}"))?;
+        result.map(|_| ())
     }
 
     async fn delete(db: &IdbDatabase, key: &str) {

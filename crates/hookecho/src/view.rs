@@ -290,6 +290,88 @@ pub(crate) struct RecoveryCut {
     pub(crate) selection: (i64, Moment, usize),
 }
 
+/// Live provider recovery is pane-local and never changes the selected station.
+#[derive(Clone, Debug, Default)]
+pub struct FeedRecovery {
+    pub provider: level2::Level2Provider,
+    pub probe: Option<level2::Level2Provider>,
+    failures: u8,
+    latest_time: Option<DateTime<Utc>>,
+    last_probe: Option<Instant>,
+    pub notice: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct FeedDecision {
+    pub accept: bool,
+    pub retry: bool,
+    pub switched: bool,
+}
+
+impl FeedRecovery {
+    pub fn label(provider: level2::Level2Provider) -> &'static str {
+        match provider {
+            level2::Level2Provider::S3 => "NOAA S3",
+            level2::Level2Provider::Iem => "Iowa State",
+        }
+    }
+
+    pub fn requested(&self) -> level2::Level2Provider {
+        self.probe.unwrap_or(self.provider)
+    }
+
+    pub fn live_received(&mut self, time: DateTime<Utc>) {
+        self.latest_time = Some(self.latest_time.map_or(time, |old| old.max(time)));
+        self.failures = 0;
+    }
+
+    /// Two failed polls or ten-minute-old observations allow one alternate probe per five minutes.
+    pub fn observe(
+        &mut self,
+        requested: level2::Level2Provider,
+        success: bool,
+        time: Option<DateTime<Utc>>,
+        retained: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+        clock: Instant,
+    ) -> FeedDecision {
+        let retained = retained.into_iter().chain(self.latest_time).max();
+        let stale = |time: DateTime<Utc>| (now - time).num_seconds() >= 600;
+        let advances = time.is_some_and(|candidate| retained.is_none_or(|old|
+            candidate > old || (candidate == old && !stale(candidate))));
+        if self.probe == Some(requested) {
+            self.probe = None;
+            if success && advances {
+                self.provider = requested;
+                self.latest_time = time;
+                self.failures = 0;
+                self.notice = Some(format!("Recovered through {} · station unchanged", Self::label(requested)));
+                return FeedDecision { accept: true, retry: false, switched: true };
+            }
+            self.notice = Some(format!("{} {} · keeping the last scan",
+                Self::label(requested), if success { "has no newer scan" } else { "is unavailable" }));
+            return FeedDecision { accept: false, retry: false, switched: false };
+        }
+        self.failures = if success { 0 } else { self.failures.saturating_add(1) };
+        let reference = time.into_iter().chain(retained).max();
+        let can_probe = self.last_probe.is_none_or(|last| clock.duration_since(last).as_secs() >= 300);
+        let retry = can_probe && (self.failures >= 2 || reference.is_some_and(stale));
+        if retry {
+            let alternate = match self.provider {
+                level2::Level2Provider::S3 => level2::Level2Provider::Iem,
+                level2::Level2Provider::Iem => level2::Level2Provider::S3,
+            };
+            self.probe = Some(alternate);
+            self.last_probe = Some(clock);
+            self.notice = Some(format!("Checking {} · keeping the last scan", Self::label(alternate)));
+        }
+        // A delayed provider reply must not rewind live radar, including while a loop is running.
+        let accept = !success || time.zip(retained).is_none_or(|(new, old)| new >= old);
+        if success && accept { self.latest_time = time.into_iter().chain(retained).max(); }
+        FeedDecision { accept, retry, switched: false }
+    }
+}
+
 pub struct MapView {
     pub camera: crate::render::mercator::Camera,
     pub camera_motion: crate::camera_motion::Motion,
@@ -353,6 +435,7 @@ pub struct MapView {
     pub tdwr_revision: Option<String>,
     pub error: Option<String>,
     pub fetch_failures: u8,
+    pub feed_recovery: FeedRecovery,
     pub failover_from: Option<String>,
     /// National field layers drawn in this pane. Per-pane rather than app-wide: two panes is how
     /// you compare two fields, and the model-difference layer would rather be a pair of panes
@@ -559,6 +642,7 @@ impl MapView {
             tdwr_revision: None,
             error: None,
             fetch_failures: 0,
+            feed_recovery: FeedRecovery::default(),
             failover_from: None,
             fields_on: Default::default(),
             moments_seen: [false; Moment::ALL.len()],
@@ -645,6 +729,7 @@ impl MapView {
             self.retained_station = self.loaded_site.clone();
         }
         self.loaded_site = self.site.clone();
+        self.feed_recovery = FeedRecovery::default();
         self.tdwr_revision = None;
         self.head_request.cancel();
         self.list_request.cancel();
@@ -659,6 +744,51 @@ impl MapView {
         self.load_phase = None;
         self.failed_frame = None;
         self.buffering = false;
+    }
+
+    /// Install a saved frame list after invalidating requests for the previous timeline.
+    pub fn restore_replay_frames(&mut self, site: String, date: chrono::NaiveDate, frames: Vec<level2::Identifier>) {
+        self.site = Some(site.clone());
+        self.begin_station_switch();
+        self.moments_seen = [false; Moment::ALL.len()];
+        self.loading = false;
+        self.error = None;
+        self.recovery_cut = None;
+        let previous = std::mem::take(&mut self.timeline);
+        self.timeline.date = date;
+        self.timeline.frames = frames;
+        self.timeline.frames_key = Some((site, date));
+        self.timeline.following = false;
+        self.timeline.playing = previous.playing;
+        self.timeline.speed = previous.speed;
+        self.timeline.loop_enabled = previous.loop_enabled;
+        self.timeline.cut_playback = previous.cut_playback;
+    }
+
+    /// Report the provider of the displayed scan, even while an alternate feed is being checked.
+    pub fn radar_source_label(&self) -> &'static str {
+        let site = self.displayed_station();
+        if !site.is_some_and(wxdata::sites::is_nexrad) { return "Radar feed"; }
+        match self.volume.as_ref() {
+            Some(volume) if volume.name.ends_with("_IEM.bz2") => "Iowa State",
+            Some(volume) if volume.live_status.as_ref().is_some_and(|status| status.stream_active) => "NOAA live",
+            _ => "NOAA S3",
+        }
+    }
+
+    /// Invalidate old feed replies and listings without removing the last valid image.
+    pub fn recovered_provider(&mut self) {
+        self.list_request.cancel();
+        self.frame_request.cancel();
+        self.timeline.listing = false;
+        self.timeline.frames_key = None;
+        self.last_list_failure = None;
+        self.load_phase = None;
+        self.failed_frame = None;
+        self.buffering = false;
+        self.error = None;
+        self.fetch_failures = 0;
+        if let Some(volume) = &mut self.volume { volume.end_live(); }
     }
 
     /// A source change invalidates asynchronous replies, but preserves the camera and requested time.
@@ -1390,6 +1520,109 @@ mod tests {
         // SRV never applies to non-velocity moments.
         v.moment = Moment::Reflectivity;
         assert_eq!(v.storm_motion_uv(), None);
+    }
+
+    #[test]
+    fn feed_recovery_requires_repeated_errors_and_limits_alternate_probes() {
+        use level2::Level2Provider::{Iem, S3};
+        let now = Utc::now();
+        let clock = Instant::now();
+        let mut feed = FeedRecovery::default();
+        let old = Some(now - chrono::Duration::minutes(2));
+        assert!(!feed.observe(S3, false, None, old, now, clock).retry);
+        assert!(feed.observe(S3, false, None, old, now, clock).retry);
+        assert_eq!(feed.requested(), Iem);
+        assert!(!feed.observe(Iem, false, None, old, now, clock).accept);
+        assert_eq!(feed.provider, S3);
+        assert!(!feed.observe(S3, false, None, old, now, clock + std::time::Duration::from_secs(299)).retry);
+        assert!(feed.observe(S3, false, None, old, now, clock + std::time::Duration::from_secs(300)).retry);
+    }
+
+    #[test]
+    fn feed_recovery_checks_stale_success_and_never_rewinds_the_scan() {
+        use level2::Level2Provider::{Iem, S3};
+        let now = Utc::now();
+        let clock = Instant::now();
+        let old = now - chrono::Duration::minutes(12);
+        let mut feed = FeedRecovery::default();
+        assert!(feed.observe(S3, true, Some(old), Some(old), now, clock).retry);
+        let older = old - chrono::Duration::minutes(1);
+        assert!(!feed.observe(Iem, true, Some(older), Some(old), now, clock).accept);
+        assert_eq!(feed.provider, S3);
+        let later = clock + std::time::Duration::from_secs(300);
+        assert!(feed.observe(S3, true, Some(old), Some(old), now, later).retry);
+        assert!(feed.observe(Iem, true, Some(now), Some(old), now, later).switched);
+        assert_eq!(feed.provider, Iem);
+        // A loop may be displaying an older frame, but the delivered head still prevents rewind.
+        assert!(!feed.observe(Iem, true, Some(old), Some(older), now, later).accept);
+        assert!(!feed.observe(Iem, false, None, Some(old), now, later).retry);
+    }
+
+    #[test]
+    fn feed_recovery_can_recover_back_to_s3_and_healthy_polls_reset_failures() {
+        use level2::Level2Provider::{Iem, S3};
+        let now = Utc::now();
+        let clock = Instant::now();
+        let mut feed = FeedRecovery { provider: Iem, ..Default::default() };
+        assert!(!feed.observe(Iem, false, None, None, now, clock).retry);
+        assert!(!feed.observe(Iem, true, Some(now), None, now, clock).retry);
+        assert!(!feed.observe(Iem, false, None, Some(now), now, clock).retry);
+        assert!(feed.observe(Iem, false, None, Some(now), now, clock).retry);
+        assert_eq!(feed.requested(), S3);
+        assert!(feed.observe(S3, true, Some(now), Some(now), now, clock).switched);
+        assert_eq!(feed.provider, S3);
+    }
+
+    #[test]
+    fn feed_recovery_preserves_station_image_and_rejects_old_frame_and_list_replies() {
+        let camera = Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let mut view = MapView::new(Some("KTLX".into()), camera);
+        view.loaded_site = view.site.clone();
+        let scan = scan_at(&[0.5]);
+        view.show_volume(Arc::clone(&scan), "KTLX20261031_120000".into(), Utc::now());
+        let list = view.list_request.start("KTLX:2026-10-31".into());
+        let frame = view.frame_request.start("old".into());
+        view.feed_recovery.provider = level2::Level2Provider::Iem;
+        view.recovered_provider();
+        assert!(!view.list_request.matches("KTLX:2026-10-31", list));
+        assert!(!view.frame_request.matches("old", frame));
+        assert!(Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &scan));
+        assert_eq!(view.radar_source_label(), "NOAA S3");
+        assert_eq!(view.site.as_deref(), Some("KTLX"));
+        assert_eq!(view.camera.center, camera.center);
+        assert_eq!(view.camera.zoom, camera.zoom);
+        view.begin_station_switch();
+        assert_eq!(view.feed_recovery.provider, level2::Level2Provider::S3);
+        assert!(view.feed_recovery.probe.is_none());
+    }
+
+    #[test]
+    fn saved_replay_supersedes_same_and_different_station_requests() {
+        for old_site in ["KDMX", "KTLX"] {
+            let mut view = MapView::new(Some(old_site.into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+            view.loaded_site = view.site.clone();
+            let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
+            let identity = format!("{old_site}:{day}");
+            let list = view.list_request.start(identity.clone());
+            let head = view.head_request.start(old_site.into());
+            let frame = view.frame_request.start("old".into());
+            view.timeline.listing = true;
+            view.loading = true;
+            view.timeline.seek_target = Some(Utc::now());
+            view.timeline.replay = Some((200, 300));
+            let names = ["KTLX20261103_170000_V06", "KTLX20261103_170500_V06"];
+            view.restore_replay_frames("KTLX".into(), day,
+                names.iter().map(|name| level2::Identifier::new((*name).into())).collect());
+            assert_eq!(view.loaded_site, view.site); // The next sync must not clear these frames.
+            assert_eq!(view.timeline.frames_key, Some(("KTLX".into(), day)));
+            assert_eq!(view.timeline.frames.iter().map(|id| id.name()).collect::<Vec<_>>(), names);
+            assert!(!view.list_request.matches(&identity, list));
+            assert!(!view.head_request.matches(old_site, head));
+            assert!(!view.frame_request.matches("old", frame));
+            assert!(!view.loading && !view.timeline.listing && !view.timeline.following);
+            assert!(view.timeline.seek_target.is_none() && view.timeline.replay.is_none());
+            assert_eq!(view.timeline.playhead, 0);
+        }
     }
 
     #[test]

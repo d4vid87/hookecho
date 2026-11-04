@@ -143,7 +143,7 @@ fn parse_periods(body: &str) -> anyhow::Result<Vec<Period>> {
 /// URLs it hands back. Two round trips, same shape as [`crate::obs::fetch_nearest`].
 pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<PointForecast> {
     let (official, models, risk) = futures_util::join!(
-        fetch_official(http, lat, lon),
+        fetch_basic(http, lat, lon),
         fetch_models(http, lat, lon),
         fetch_spc_risk(http, lat, lon),
     );
@@ -151,6 +151,14 @@ pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result
     forecast.models = models;
     forecast.spc_risk = risk;
     Ok(forecast)
+}
+
+/// Add comparisons after the basic forecast is already visible.
+pub async fn enrich(http: &reqwest::Client, lat: f64, lon: f64, mut forecast: PointForecast) -> PointForecast {
+    let (models, risk) = futures_util::join!(fetch_models(http, lat, lon), fetch_spc_risk(http, lat, lon));
+    forecast.models = models;
+    forecast.spc_risk = risk;
+    forecast
 }
 
 async fn fetch_models(http: &reqwest::Client, lat: f64, lon: f64) -> Vec<ModelRain> {
@@ -189,7 +197,8 @@ async fn fetch_spc_risk(http: &reqwest::Client, lat: f64, lon: f64) -> Option<St
         .max_by_key(|label| rank(label)).unwrap_or("NONE").to_string())
 }
 
-async fn fetch_official(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<PointForecast> {
+/// Fetch the daily/hourly forecast without optional model or SPC requests.
+pub async fn fetch_basic(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<PointForecast> {
     let get = |url: String| {
         let http = http.clone();
         async move {

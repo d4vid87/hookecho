@@ -1,0 +1,120 @@
+import puppeteer from 'puppeteer';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import {fixtureRadar} from './fixtures/radar.mjs';
+
+const base = process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/';
+const output = process.env.HOOKECHO_WORKFLOW_OUTPUT ?? 'outputs/workflow-upgrades';
+await fs.mkdir(output, {recursive: true});
+const browser = await puppeteer.launch({
+  executablePath: process.env.CHROME_BIN ?? puppeteer.executablePath(), headless: true,
+  args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader'],
+});
+const errors = [];
+const checks = [];
+const page = await browser.newPage();
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+try {
+  await page.setViewport({width: 1280, height: 900});
+  await page.setBypassServiceWorker(true);
+  await fixtureRadar(page, {loopFrames: true, forecast: true, vector: true, vectorResponse: async () => ({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({tiles: [base + 'vector-fixture/{z}/{x}/{y}.pbf']}),
+  })});
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (/panicked at|RuntimeError: unreachable/.test(message.text())) errors.push(message.text()); });
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'gpu', {value: undefined});
+    globalThis.__hookechoMapTraceEnabled = true;
+    if (!localStorage.getItem('hookecho-settings')) localStorage.setItem('hookecho-settings', JSON.stringify({
+      setup_done: true, seeded_workspaces: true, default_site: 'KDMX', radar_feed: 'ArchiveOnly',
+      radar_workspace: true, ui_scale: 1, youtube_key: 'PRIVATE-KEY-MUST-NOT-BE-SHARED',
+      markers: [{id: 'test-dfw', name: 'Private home label', lon: -97.3, lat: 32.8, home: true}],
+    }));
+  });
+  await page.goto(base, {waitUntil: 'domcontentloaded'});
+  await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
+  await page.waitForFunction(() => location.hash.startsWith('#scene='), {timeout: 30000});
+  await wait(2500);
+  await page.screenshot({path: `${output}/desktop.png`});
+  await page.mouse.click(737, 846);
+  await wait(400);
+  await page.screenshot({path: `${output}/shortcut-chooser.png`});
+  await page.mouse.click(736, 592); // Pin the available ZDR product.
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho-settings')).compact_shortcuts?.length === 3);
+  const pinned = await page.evaluate(() => JSON.parse(localStorage.getItem('hookecho-settings')).compact_shortcuts);
+  assert.equal(pinned[0], 'mrms.composite-reflectivity');
+  assert.equal(pinned[1], 'outlooks');
+  assert.match(pinned[2], /^radar\.moment\./);
+  await page.keyboard.press('Escape');
+  await page.reload({waitUntil: 'domcontentloaded'});
+  await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('hookecho-settings')).compact_shortcuts), pinned);
+  checks.push('Toolbar product pin persists across reload alongside default MRMS and SPC');
+  const scene = await page.evaluate(() => JSON.parse(atob(location.hash.slice(7).replaceAll('-', '+').replaceAll('_', '/'))));
+  assert.equal(scene.time_mode, 'live');
+  const serialized = JSON.stringify(scene);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('hookecho-settings')).youtube_key), 'PRIVATE-KEY-MUST-NOT-BE-SHARED');
+  assert(!serialized.includes('PRIVATE-KEY') && !serialized.includes('Private home label'), 'shared scenes must exclude credentials and saved places');
+  checks.push('Live scene URL excludes credentials and saved places');
+
+  scene.workspace.panes = [scene.workspace.panes[0], structuredClone(scene.workspace.panes[0])];
+  scene.workspace.panes[1].site = 'KTLX';
+  scene.workspace.panes[1].moment = 'DifferentialReflectivity';
+  scene.workspace.active = 1;
+  scene.workspace.link_cameras = true;
+  scene.workspace.link_times = false;
+  scene.workspace.chrome = {...scene.workspace.chrome, analyst_open: true};
+  scene.products.storm_motion = [scene.products.storm_motion[0], scene.products.storm_motion[0]];
+  scene.time_mode = 'exact';
+  scene.times = ['2026-11-03T17:00:00Z', '2026-11-03T17:01:00Z'];
+  await page.evaluate(token => { location.hash = 'scene=' + token; }, Buffer.from(JSON.stringify(scene)).toString('base64url'));
+  await page.waitForFunction(() => {
+    const state = JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session;
+    return state?.workspace.panes.length === 2 && state.workspace.panes[1].site === 'KTLX';
+  }, {timeout: 30000});
+  await wait(2500);
+  const restored = await page.evaluate(() => JSON.parse(atob(location.hash.slice(7).replaceAll('-', '+').replaceAll('_', '/'))));
+  assert.deepEqual(restored.workspace.panes.map(p => p.site), ['KDMX', 'KTLX']);
+  assert.equal(restored.workspace.panes[1].moment, 'DifferentialReflectivity');
+  assert.equal(restored.time_mode, 'exact');
+  assert.equal(restored.workspace.link_cameras, true);
+  assert.equal(restored.workspace.link_times, false);
+  checks.push('Same-tab scene restores independent radar sites and products with linked cameras');
+  await page.screenshot({path: `${output}/two-pane-scene.png`});
+  for (const [width, height] of [[390, 844], [320, 568]]) {
+    await page.setViewport({width, height});
+    await wait(1000);
+    await page.screenshot({path: `${output}/phone-${width}.png`});
+  }
+  await page.setViewport({width: 1280, height: 900});
+  await wait(500);
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyK');
+  await page.keyboard.up('Control');
+  await wait(500);
+  await page.keyboard.type('Location markers');
+  await wait(400);
+  await page.keyboard.press('Enter');
+  await wait(1000);
+  await page.screenshot({path: `${output}/saved-places.png`});
+  await page.mouse.click(83, 515); // The saved DFW place's View radar here button.
+  await page.waitForFunction(() => {
+    const session = JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session;
+    const pane = session?.workspace.panes[session.workspace.active];
+    return pane && pane.site !== 'KTLX' && Math.abs(pane.lon + 97.3) < 0.001
+      && Math.abs(pane.lat - 32.8) < 0.001 && session.panes[session.workspace.active].following;
+  }, {timeout: 15000});
+  checks.push('Saved-place radar action loads a nearby station, centers the place and returns to live');
+  assert.deepEqual(errors, []);
+} catch (error) {
+  await page.screenshot({path: `${output}/failure.png`});
+  await fs.writeFile(`${output}/failure-state.json`, JSON.stringify(await page.evaluate(() => ({
+    hash: location.hash, recovery: JSON.parse(localStorage.getItem('hookecho.recovery.v1')),
+  })), null, 2));
+  throw error;
+} finally {
+  await fs.writeFile(`${output}/report.json`, JSON.stringify({checks, errors}, null, 2));
+  await browser.close();
+}
+console.log(JSON.stringify({checks, errors}));

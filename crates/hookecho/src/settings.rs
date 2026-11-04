@@ -262,6 +262,10 @@ pub struct WindowGeom {
     pub maximized: bool,
 }
 
+pub(crate) fn default_compact_shortcuts() -> Vec<String> {
+    vec![crate::render::FieldLayer::Mrms.stable_id().into(), "outlooks".into()]
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -373,6 +377,9 @@ pub struct Settings {
     /// gives the layer any coverage outside the United States. Held locally, same as the rest.
     #[serde(default)]
     pub windy_key: String,
+    /// Optional personal YouTube Data API key for explicit live-video status checks.
+    #[serde(default)]
+    pub youtube_key: String,
     /// A ground field mill publishing JSON (`{"time":…, "kv_per_m":…}`, or an array of those).
     /// When set, the station cards chart real kV/m instead of NOAA's ionospheric model.
     #[serde(default)]
@@ -730,6 +737,9 @@ pub struct Settings {
     /// Starred registry products, persisted by stable field ID rather than display label.
     #[serde(default)]
     pub favorite_fields: Vec<String>,
+    /// Ordered action IDs shown in the compact radar toolbar. Unknown IDs are ignored.
+    #[serde(default = "default_compact_shortcuts")]
+    pub(crate) compact_shortcuts: Vec<String>,
     /// Most recently enabled registry products, newest first and bounded by the action path.
     #[serde(default)]
     pub recent_fields: Vec<String>,
@@ -1423,6 +1433,7 @@ impl Default for Settings {
             broadcast_branding: String::new(),
             layer_order: Vec::new(),
             favorite_fields: Vec::new(),
+            compact_shortcuts: default_compact_shortcuts(),
             recent_fields: Vec::new(),
             radar_products: Vec::new(),
             mping_key: String::new(),
@@ -1464,6 +1475,7 @@ impl Default for Settings {
             field_opacity: Default::default(),
             airnow_key: String::new(),
             windy_key: String::new(),
+            youtube_key: String::new(),
             field_mill_url: String::new(),
             start_view: None,
             sync_client_id: String::new(),
@@ -1892,12 +1904,12 @@ pub fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
 }
 
 #[cfg(not(target_os = "windows"))]
-fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }
 
 #[cfg(target_os = "windows")]
-fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -2220,6 +2232,7 @@ mod tests {
             broadcast_branding: String::new(),
             layer_order: Vec::new(),
             favorite_fields: vec!["mrms.mesh".into()],
+            compact_shortcuts: default_compact_shortcuts(),
             recent_fields: vec!["mrms.composite-reflectivity".into()],
             radar_products: Vec::new(),
             mping_key: String::new(),
@@ -2280,6 +2293,7 @@ mod tests {
             field_opacity: Default::default(),
             airnow_key: String::new(),
             windy_key: String::new(),
+            youtube_key: String::new(),
             field_mill_url: String::new(),
             maptiler_key: "mt.test".to_string(),
             start_view: Some(StartView {
