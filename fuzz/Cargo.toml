@@ -19,6 +19,8 @@ hookecho = { path = "../crates/hookecho" }
 [patch.crates-io]
 gribberish = { path = "../vendor/gribberish" }
 nexrad-data = { path = "../vendor/nexrad-data" }
+nexrad-model = { path = "../vendor/nexrad-model" }
+nexrad-decode = { path = "../vendor/nexrad-decode" }
 
 # Fuzzing wants the optimizer on and debug assertions kept; overflow checks stay on so an
 # arithmetic bug is a finding rather than a wrap.

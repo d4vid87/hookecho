@@ -440,7 +440,7 @@ impl HookEchoApp {
             wxdata::radar_status::Availability::NotOperating => "NOAA RDA: not operating",
             wxdata::radar_status::Availability::Unknown => "NOAA network status: unavailable",
         };
-        let scan_status = self.views[self.active].displayed_time().map_or_else(
+        let scan_status = self.views[self.active].presented_time().map_or_else(
             || "Displayed scan: not loaded".to_owned(),
             |time| format!("Displayed scan: {} min old", Utc::now().signed_duration_since(time).num_minutes().max(0)),
         );

@@ -163,6 +163,7 @@ impl super::HookEchoApp {
             || self.basemap_open
             || self.panel_open
             || self.mobile_chrome_hidden
+            || self.tool != crate::app::MapTool::Interrogate
     }
 
     /// What Android's back gesture dismisses, innermost first. Returns without doing anything when
@@ -216,6 +217,7 @@ impl super::HookEchoApp {
             self.panel_open,
             self.mobile_chrome_hidden,
         );
+        self.tool = crate::app::MapTool::Interrogate;
     }
 
     /// The phone-only chrome, drawn before the shared floating chrome: the back wiring, the color
@@ -292,48 +294,7 @@ impl super::HookEchoApp {
             }
         }
 
-        if !self.forecast_open {
-            self.mobile_tool_hint(ctx, content);
-        }
         true
-    }
-
-    /// The armed-tool hint: the desktop says this in its status bar, which the phone hides, so a
-    /// two-point tool otherwise reads as "the first tap did nothing".
-    fn mobile_tool_hint(&mut self, ctx: &egui::Context, content: Rect) {
-        let text = match self.tool {
-            crate::app::MapTool::Measure => "Tap two points to measure",
-            crate::app::MapTool::StormTrack => "Tap storm center, then projected endpoint",
-            crate::app::MapTool::RegionStats => "Tap two corners for area statistics",
-            crate::app::MapTool::Marker => "Tap the map to drop a marker",
-            crate::app::MapTool::CrossSection => "Tap two points for a cross-section",
-            crate::app::MapTool::Sounding => "Tap a point for a sounding",
-            crate::app::MapTool::Climatology => "Tap a point for tornado climatology",
-            crate::app::MapTool::Forecast => "Tap the map for a point forecast",
-            crate::app::MapTool::Route => "Tap start, waypoints, and destination",
-            _ => return,
-        };
-        let accent = crate::theme::accent(self.settings.theme);
-        egui::Area::new(Id::new("m_toolhint"))
-            .anchor(Align2::CENTER_TOP, vec2(0.0, 140.0))
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(accent)
-                    .corner_radius(crate::ui::m3::R_FULL)
-                    .inner_margin(egui::Margin::symmetric(
-                        crate::ui::m3::SP_4 as i8,
-                        crate::ui::m3::SP_2 as i8,
-                    ))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(text)
-                                .size(crate::ui::m3::T_LABEL_LG)
-                                .strong()
-                                .color(Color32::BLACK),
-                        );
-                    });
-            });
-        let _ = content;
     }
 
     /// The basemap picker, as chips.

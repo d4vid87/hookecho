@@ -107,7 +107,17 @@ impl HookEchoApp {
         }).collect();
         let mut workspace = self.capture_workspace();
         for pane in &mut workspace.panes { pane.abi_scene = Some(pane.abi_scene.unwrap_or(self.settings.abi_scene)); }
-        let products = crate::workspace::SceneProducts {
+        let state = self.capture_scene_state();
+        crate::workspace::SharedScene::new(workspace, mode, times, state.filters,
+            state.products, state.lock_source_frame, state.link_satellite_times)
+    }
+
+    pub(in crate::app) fn capture_scene_state(&self) -> SceneState {
+        SceneState {
+            filters: self.filters.clone(),
+            lock_source_frame: self.lock_source_frame,
+            link_satellite_times: self.settings.link_satellite_times,
+            products: crate::workspace::SceneProducts {
             global_model: self.global_model,
             global_fcst_hour: self.global_fcst_hour,
             analysis_source: self.analysis_source,
@@ -126,9 +136,8 @@ impl HookEchoApp {
             tropical_wind_kt: self.tropical_wind_kt,
             tropical_surge: self.tropical_surge,
             storm_motion: self.views.iter().map(|view| (view.storm_dir_deg, view.storm_speed_kt)).collect(),
-        };
-        crate::workspace::SharedScene::new(workspace, mode, times, self.filters.clone(),
-            products, self.lock_source_frame, self.settings.link_satellite_times)
+            },
+        }
     }
 
     pub(crate) fn share_scene_link(&mut self, mode: crate::workspace::SceneTimeMode, ctx: &egui::Context) {
@@ -163,10 +172,30 @@ impl HookEchoApp {
         self.detail = None;
         self.apply_workspace(&scene.workspace, ctx);
         scene.apply_times(&mut self.views);
-        self.lock_source_frame = scene.lock_source_frame;
-        self.settings.link_satellite_times = scene.link_satellite_times;
-        self.filters = scene.filters;
-        let products = scene.products;
+        self.restore_scene_state(SceneState {
+            filters: scene.filters,
+            products: scene.products,
+            lock_source_frame: scene.lock_source_frame,
+            link_satellite_times: scene.link_satellite_times,
+        });
+        self.fetch_overlays(ctx);
+        self.autoplay_pending = false;
+        self.toast(ToastKind::Success, match scene.time_mode {
+            crate::workspace::SceneTimeMode::Live => "Opened live scene",
+            crate::workspace::SceneTimeMode::Exact => "Opened shared time; archive availability varies by layer",
+        });
+        true
+    }
+
+    pub(in crate::app) fn restore_scene_state(&mut self, state: SceneState) {
+        self.lock_source_frame = state.lock_source_frame;
+        self.settings.link_satellite_times = state.link_satellite_times;
+        self.filters = state.filters;
+        let products = state.products;
+        for (view, (direction, speed)) in self.views.iter_mut().zip(&products.storm_motion) {
+            view.storm_dir_deg = *direction;
+            view.storm_speed_kt = *speed;
+        }
         self.global_model = products.global_model;
         self.global_fcst_hour = products.global_fcst_hour;
         self.analysis_source = products.analysis_source;
@@ -200,14 +229,7 @@ impl HookEchoApp {
         self.wssi_features.clear();
         self.winter_snow_features.clear();
         self.winter_ice_features.clear();
-        self.fetch_overlays(ctx);
         self.rebuild_overlays();
-        self.autoplay_pending = false;
-        self.toast(ToastKind::Success, match scene.time_mode {
-            crate::workspace::SceneTimeMode::Live => "Opened live scene",
-            crate::workspace::SceneTimeMode::Exact => "Opened shared time; archive availability varies by layer",
-        });
-        true
     }
 }
 

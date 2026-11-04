@@ -404,6 +404,8 @@ pub struct MapView {
     pub skipped_frames: u64,
     pub last_skipped_at: Option<wxdata::clock::Instant>,
     pub volume: Option<Volume>,
+    pending_presentation: Option<(u64, DateTime<Utc>)>,
+    presented_at: Option<DateTime<Utc>>,
     /// Volumes the playhead has moved off, with their binned sweeps intact. See
     /// [`RECENT_VOLUMES`]; use [`MapView::show_volume`] rather than touching this.
     recent: LruCache<String, Volume>,
@@ -421,6 +423,8 @@ pub struct MapView {
     pub smooth: bool,
     /// Storm-relative velocity (velocity moment only); session state, not persisted.
     pub srv: bool,
+    /// None inherits the app setting; comparison panes explicitly select raw/corrected velocity.
+    pub dealias_override: Option<bool>,
     /// Storm motion the SRV subtracts: direction toward (deg from north) and speed (knots).
     pub storm_dir_deg: f32,
     pub storm_speed_kt: f32,
@@ -555,6 +559,33 @@ impl MapView {
         Some(volume.time)
     }
 
+    /// The clock for the radar image actually painted, not a newly decoded pending scan.
+    pub fn presented_time(&self) -> Option<DateTime<Utc>> {
+        self.presented_at.filter(|_| self.show_radar)
+    }
+
+    pub fn stage_presentation(&mut self, token: u64) {
+        self.pending_presentation = self.displayed_time().filter(|_| token != 0).map(|time| (token, time));
+    }
+
+    pub fn acknowledge_presentation(&mut self, painted: u64) {
+        if let Some((token, time)) = self.pending_presentation.filter(|(token, _)| *token == painted) {
+            debug_assert_ne!(token, 0);
+            self.presented_at = Some(time);
+            self.pending_presentation = None;
+        }
+    }
+
+    pub fn clear_presentation(&mut self) {
+        self.pending_presentation = None;
+        self.presented_at = None;
+    }
+
+    pub fn product_unavailable(&self) -> bool {
+        self.custom_product.is_none()
+            && self.volume.as_ref().is_some_and(|volume| !volume.moments[self.moment.index()])
+    }
+
     /// Time linked panes should request. A new playhead or archive seek takes priority over a
     /// retained scan; only a cut from the selected, already-loaded volume overrides its head.
     pub fn linked_requested_time(&self) -> Option<DateTime<Utc>> {
@@ -623,6 +654,8 @@ impl MapView {
             skipped_frames: 0,
             last_skipped_at: None,
             volume: None,
+            pending_presentation: None,
+            presented_at: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,
             retained_station: None,
@@ -631,6 +664,7 @@ impl MapView {
             timeline: crate::timeline::Timeline::default(),
             smooth: true,
             srv: false,
+            dealias_override: None,
             storm_dir_deg: 240.0,
             storm_speed_kt: 25.0,
             basemap: crate::tiles::BasemapStyle::default(),
@@ -647,6 +681,17 @@ impl MapView {
             fields_on: Default::default(),
             moments_seen: [false; Moment::ALL.len()],
         }
+    }
+
+    pub fn effective_dealias(&self, global: bool) -> bool {
+        self.dealias_override.unwrap_or(global)
+    }
+
+    /// Processing identity is separate from the product and never describes TDWR as corrected.
+    pub fn velocity_processing_label(&self, global: bool) -> Option<&'static str> {
+        (self.moment == Moment::Velocity && !self.srv && self.custom_product.is_none()
+            && !self.site.as_deref().is_some_and(wxdata::tdwr::is_tdwr))
+            .then(|| if self.effective_dealias(global) { "Corrected velocity" } else { "Raw velocity" })
     }
 
     /// The active threshold for the current moment, if enabled.
@@ -954,18 +999,11 @@ impl MapView {
         }
     }
 
-    /// Snap the selected product to one this volume actually carries — a TDWR has no dual-pol
-    /// moments, and neither does anything from before the 2011-13 upgrade.
-    pub fn clamp_moment(&mut self) {
+    /// Remember available products without replacing the user's requested measurement.
+    pub fn refresh_moments(&mut self) {
         let Some(v) = &self.volume else { return };
         for (seen, got) in self.moments_seen.iter_mut().zip(v.moments) {
             *seen |= got;
-        }
-        let have = self.moments();
-        if !have[self.moment.index()] {
-            if let Some(m) = Moment::ALL.into_iter().find(|m| have[m.index()]) {
-                self.moment = m;
-            }
         }
         self.clamp_tilt_to_moment();
     }
@@ -1489,19 +1527,51 @@ mod tests {
         let mut v = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
         // Nothing loaded yet: assume the radar sends everything rather than hiding rows.
         assert_eq!(v.moments(), [true; Moment::ALL.len()]);
+        v.moment = Moment::Velocity;
         v.volume = Some(Volume::new(scan_at(&[0.5]), "a".into(), chrono::Utc::now()));
-        v.clamp_moment();
+        v.refresh_moments();
+        assert_eq!(v.moment, Moment::Velocity, "even the first partial scan must retain the requested measurement");
+        assert!(v.product_unavailable());
         let refl_only = v.moments();
         assert!(refl_only[Moment::Reflectivity.index()]);
         assert!(!refl_only[Moment::Velocity.index()], "REF-only volume");
         // A later volume carrying velocity adds to the union and never subtracts from it.
         v.moments_seen[Moment::Velocity.index()] = true;
+        v.moment = Moment::Velocity;
         v.volume = Some(Volume::new(scan_at(&[0.5]), "b".into(), chrono::Utc::now()));
-        v.clamp_moment();
+        v.refresh_moments();
         assert!(v.moments()[Moment::Velocity.index()], "still velocity");
-        // The union is for the UI rows; the volume keeps its own list so the renderer can fall
-        // back instead of drawing nothing for a frame that lacks the selected product.
+        // The union offers the product without relabeling reflectivity as velocity in a partial scan.
         assert!(!v.volume.as_ref().unwrap().moments[Moment::Velocity.index()]);
+        assert_eq!(v.moment, Moment::Velocity);
+        assert!(v.product_unavailable());
+    }
+
+    #[test]
+    fn displayed_clock_waits_for_paint_and_clears_with_the_image() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        let first = DateTime::from_timestamp(1_000, 0).unwrap();
+        let second = DateTime::from_timestamp(1_300, 0).unwrap();
+        view.show_volume(scan_at(&[0.5]), "first".into(), first);
+        view.stage_presentation(41);
+        assert_eq!(view.presented_time(), None, "decoded data is not a painted image");
+        view.acknowledge_presentation(41);
+        assert_eq!(view.presented_time(), Some(first));
+        view.show_volume(scan_at(&[0.5]), "second".into(), second);
+        assert_eq!(view.displayed_time(), Some(second), "fetch alignment still sees decoded state");
+        assert_eq!(view.presented_time(), Some(first), "background preparation retains the old image clock");
+        view.stage_presentation(42);
+        view.acknowledge_presentation(41);
+        assert_eq!(view.presented_time(), Some(first), "an old paint cannot acknowledge a new scan");
+        view.acknowledge_presentation(42);
+        assert_eq!(view.presented_time(), Some(second));
+        view.clear_presentation();
+        view.acknowledge_presentation(42);
+        assert_eq!(view.presented_time(), None, "hidden and replaced GPU images have no displayed time");
+        view.stage_presentation(42);
+        assert_eq!(view.presented_time(), None, "revealing a retained texture still waits for paint");
+        view.acknowledge_presentation(42);
+        assert_eq!(view.presented_time(), Some(second));
     }
 
     #[test]

@@ -230,7 +230,7 @@ mod tests {
         let restored: RadarAppearance = serde_json::from_str(&serde_json::to_string(&appearance).unwrap()).unwrap();
         assert!(restored.show_smoothed_range_folding);
         let mut upload = crate::render::RadarUpload {
-            upload_token: 1, cache_loop: false, az_bins: 1, gate_count: 3,
+            upload_token: 1, shared_sweep: None, cache_loop: false, az_bins: 1, gate_count: 3,
             data: vec![0, 1, 20], data16: Some(vec![0, 1, 2048]), uniform: [0.0; 20],
             sector_opacity: None, lut: vec![255; 256 * 3 * 4], precip_flag: Vec::new(),
             world_min: [0.0; 2], world_max: [1.0; 2], lut_only: false,

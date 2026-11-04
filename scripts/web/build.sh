@@ -211,7 +211,8 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Keep less than 10 KB of margin; Lite and startup budgets stay unchanged.
 # Cache recovery, transactional offline packs and visible-row chaser rendering measured
 # 4,786,591 gzip bytes. Allow 3,409 bytes of headroom; Lite/startup budgets stay unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4790000}"
+# These fixes measure 4,792,941 gzip bytes; keep 7,059 bytes of headroom and unchanged Lite/startup gates.
+budget="${HOOKECHO_WASM_BUDGET:-4800000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

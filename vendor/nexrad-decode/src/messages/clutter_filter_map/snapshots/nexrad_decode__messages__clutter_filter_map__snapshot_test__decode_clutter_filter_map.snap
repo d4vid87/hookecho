@@ -1,0 +1,91 @@
+---
+source: nexrad-decode/src/messages/clutter_filter_map/snapshot_test.rs
+expression: summary
+---
+CfmSummary {
+    map_generation_date: 19056,
+    map_generation_time: 1232,
+    elevation_segment_count: 5,
+    elevations: [
+        ElevationSummary {
+            segment_number: 0,
+            azimuth_count: 360,
+            first_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+            last_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+        },
+        ElevationSummary {
+            segment_number: 1,
+            azimuth_count: 360,
+            first_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+            last_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+        },
+        ElevationSummary {
+            segment_number: 2,
+            azimuth_count: 360,
+            first_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+            last_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+        },
+        ElevationSummary {
+            segment_number: 3,
+            azimuth_count: 360,
+            first_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+            last_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+        },
+        ElevationSummary {
+            segment_number: 4,
+            azimuth_count: 350,
+            first_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+            last_azimuth_range_zones: [
+                (
+                    1,
+                    511,
+                ),
+            ],
+        },
+    ],
+}

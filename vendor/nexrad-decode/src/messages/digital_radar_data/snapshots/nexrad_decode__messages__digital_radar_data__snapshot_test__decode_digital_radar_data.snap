@@ -1,0 +1,397 @@
+---
+source: nexrad-decode/src/messages/digital_radar_data/snapshot_test.rs
+expression: "messages[0]"
+---
+Message {
+    headers: Single(
+        MessageHeader {
+            rpg_unknown: BinaryData {
+                len: 12,
+                sha256: "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+                head: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                tail: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            },
+            segment_size: 4972,
+            redundant_channel: 8,
+            message_type: 31,
+            sequence_number: 4109,
+            date: 19057,
+            time: 84205395,
+            segment_count: 1,
+            segment_number: 1,
+        },
+    ),
+    contents: DigitalRadarData(
+        Message {
+            header: Header {
+                inner: Header {
+                    radar_identifier: [
+                        75,
+                        68,
+                        77,
+                        88,
+                    ],
+                    time: 84204299,
+                    date: 19057,
+                    azimuth_number: 1,
+                    azimuth_angle: 155.22308,
+                    compression_indicator: 0,
+                    spare: 0,
+                    radial_length: 9928,
+                    azimuth_resolution_spacing: 1,
+                    radial_status: 3,
+                    elevation_number: 1,
+                    cut_sector_number: 1,
+                    elevation_angle: 0.6097412,
+                    radial_spot_blanking_status: 0,
+                    azimuth_indexing_mode: 25,
+                    data_block_count: 8,
+                },
+            },
+            volume_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 82,
+                            data_name: [
+                                86,
+                                79,
+                                76,
+                            ],
+                        },
+                    },
+                    inner: VolumeDataBlock {
+                        inner: Modern(
+                            VolumeDataBlock {
+                                lrtup: 52,
+                                major_version_number: 3,
+                                minor_version_number: 0,
+                                latitude: 41.7312,
+                                longitude: -93.72287,
+                                site_height: 299,
+                                tower_height: 34,
+                                calibration_constant: -42.71957,
+                                horizontal_shv_tx_power: 191.59677,
+                                vertical_shv_tx_power: 201.11363,
+                                system_differential_reflectivity: -0.8766898,
+                                initial_system_differential_phase: 60.0,
+                                volume_coverage_pattern_number: 212,
+                                processing_status: 3,
+                                zdr_bias_estimate_weighted_mean: 421,
+                                spare: BinaryData {
+                                    len: 6,
+                                    sha256: "b0f66adc83641586656866813fd9dd0b8ebb63796075661ba45d1aa8089e1d44",
+                                    head: [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                    ],
+                                    tail: [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                    ],
+                                },
+                            },
+                        ),
+                    },
+                },
+            ),
+            elevation_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 82,
+                            data_name: [
+                                69,
+                                76,
+                                86,
+                            ],
+                        },
+                    },
+                    inner: ElevationDataBlock {
+                        inner: ElevationDataBlock {
+                            lrtup: 12,
+                            atmos: -12,
+                            calibration_constant: -41.75,
+                        },
+                    },
+                },
+            ),
+            radial_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 82,
+                            data_name: [
+                                82,
+                                65,
+                                68,
+                            ],
+                        },
+                    },
+                    inner: RadialDataBlock {
+                        inner: Modern(
+                            RadialDataBlock {
+                                lrtup: 28,
+                                unambiguous_range: 4670,
+                                horizontal_channel_noise_level: -82.29915,
+                                vertical_channel_noise_level: -81.92849,
+                                nyquist_velocity: 885,
+                                radial_flags: 0,
+                                horizontal_channel_calibration_constant: -41.97316,
+                                vertical_channel_calibration_constant: -42.10892,
+                            },
+                        ),
+                    },
+                },
+            ),
+            reflectivity_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 68,
+                            data_name: [
+                                82,
+                                69,
+                                70,
+                            ],
+                        },
+                    },
+                    inner: GenericDataBlock {
+                        header: GenericDataBlockHeader {
+                            inner: GenericDataBlockHeader {
+                                reserved: 0,
+                                number_of_data_moment_gates: 1832,
+                                data_moment_range: 2125,
+                                data_moment_range_sample_interval: 250,
+                                tover: 50,
+                                snr_threshold: 16,
+                                control_flags: 0,
+                                data_word_size: 8,
+                                scale: 2.0,
+                                offset: 66.0,
+                            },
+                        },
+                        encoded_data: BinaryData {
+                            len: 1832,
+                            sha256: "cdff6c84364d51f345bd3fa2df34ed33a9051f7a349576e54bca8f5227ab6596",
+                            head: [
+                                148,
+                                135,
+                                124,
+                                124,
+                            ],
+                            tail: [
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],
+                        },
+                    },
+                },
+            ),
+            velocity_data_block: None,
+            spectrum_width_data_block: None,
+            differential_reflectivity_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 68,
+                            data_name: [
+                                90,
+                                68,
+                                82,
+                            ],
+                        },
+                    },
+                    inner: GenericDataBlock {
+                        header: GenericDataBlockHeader {
+                            inner: GenericDataBlockHeader {
+                                reserved: 0,
+                                number_of_data_moment_gates: 1192,
+                                data_moment_range: 2125,
+                                data_moment_range_sample_interval: 250,
+                                tover: 50,
+                                snr_threshold: 16,
+                                control_flags: 0,
+                                data_word_size: 16,
+                                scale: 32.0,
+                                offset: 418.0,
+                            },
+                        },
+                        encoded_data: BinaryData {
+                            len: 2384,
+                            sha256: "54631ca25760cf401abf792230ec43460b9238f02934193f4a95d0e92e02f4fd",
+                            head: [
+                                1,
+                                253,
+                                1,
+                                227,
+                            ],
+                            tail: [
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],
+                        },
+                    },
+                },
+            ),
+            differential_phase_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 68,
+                            data_name: [
+                                80,
+                                72,
+                                73,
+                            ],
+                        },
+                    },
+                    inner: GenericDataBlock {
+                        header: GenericDataBlockHeader {
+                            inner: GenericDataBlockHeader {
+                                reserved: 0,
+                                number_of_data_moment_gates: 1192,
+                                data_moment_range: 2125,
+                                data_moment_range_sample_interval: 250,
+                                tover: 50,
+                                snr_threshold: 16,
+                                control_flags: 0,
+                                data_word_size: 16,
+                                scale: 2.8361,
+                                offset: 2.0,
+                            },
+                        },
+                        encoded_data: BinaryData {
+                            len: 2384,
+                            sha256: "b9498549c8d1d88945c5fc2df5d5e2f8165f446cdba63ca41b010c5cd870cbf5",
+                            head: [
+                                0,
+                                219,
+                                0,
+                                185,
+                            ],
+                            tail: [
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],
+                        },
+                    },
+                },
+            ),
+            correlation_coefficient_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 68,
+                            data_name: [
+                                82,
+                                72,
+                                79,
+                            ],
+                        },
+                    },
+                    inner: GenericDataBlock {
+                        header: GenericDataBlockHeader {
+                            inner: GenericDataBlockHeader {
+                                reserved: 0,
+                                number_of_data_moment_gates: 1192,
+                                data_moment_range: 2125,
+                                data_moment_range_sample_interval: 250,
+                                tover: 50,
+                                snr_threshold: 16,
+                                control_flags: 0,
+                                data_word_size: 8,
+                                scale: 300.0,
+                                offset: -60.5,
+                            },
+                        },
+                        encoded_data: BinaryData {
+                            len: 1192,
+                            sha256: "fe6e7bcab83faf9aff3d0441430a7660788409d345688e44ff8816746e6d4cff",
+                            head: [
+                                239,
+                                239,
+                                239,
+                                239,
+                            ],
+                            tail: [
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],
+                        },
+                    },
+                },
+            ),
+            clutter_filter_power_data_block: Some(
+                DataBlock {
+                    id: DataBlockId {
+                        inner: DataBlockId {
+                            data_block_type: 68,
+                            data_name: [
+                                67,
+                                70,
+                                80,
+                            ],
+                        },
+                    },
+                    inner: GenericDataBlock {
+                        header: GenericDataBlockHeader {
+                            inner: GenericDataBlockHeader {
+                                reserved: 0,
+                                number_of_data_moment_gates: 1832,
+                                data_moment_range: 2125,
+                                data_moment_range_sample_interval: 250,
+                                tover: 50,
+                                snr_threshold: 16,
+                                control_flags: 0,
+                                data_word_size: 8,
+                                scale: 1.0,
+                                offset: 8.0,
+                            },
+                        },
+                        encoded_data: BinaryData {
+                            len: 1832,
+                            sha256: "67b8a73e70525928da2a1971383b53e692a38033f85acba9a14d7d7cb57005f9",
+                            head: [
+                                8,
+                                9,
+                                12,
+                                9,
+                            ],
+                            tail: [
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],
+                        },
+                    },
+                },
+            ),
+        },
+    ),
+    offset: 0,
+    size: 9956,
+}

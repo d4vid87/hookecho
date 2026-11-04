@@ -80,7 +80,10 @@ impl HookEchoApp {
                 .and_then(|_| volume.cuts.last())
                 .and_then(|cut| chrono::DateTime::from_timestamp_millis(cut.ended_at_ms))
         });
-        let loaded_time = v.displayed_time();
+        let loaded_time = v.presented_time();
+        let product_unavailable = v.product_unavailable();
+        let preparing = v.volume.is_some() && (v.displayed_time() != loaded_time
+            || v.volume.as_ref().is_some_and(Volume::display_pending));
         let requested_time = v.timeline.selected_time();
         let site = v.site.clone().unwrap_or_else(|| "No site".into());
         let retained = v.retained_station.clone();
@@ -91,7 +94,7 @@ impl HookEchoApp {
             .last_skipped_at
             .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
         let comparison_gap = comparison_time_gap(self.views.iter()
-            .filter(|view| view.show_radar).filter_map(MapView::displayed_time));
+            .filter(|view| view.show_radar).filter_map(MapView::presented_time));
         let age = loaded_time.map(|time| {
             format!(
                 "{} · displayed scan {} ago",
@@ -117,9 +120,10 @@ impl HookEchoApp {
         let forecast_valid = self.hrrr_valid.filter(|_| self.hrrr_fetched_hour == forecast_hour);
         let at_latest = v.timeline.at_head() && (!v.timeline.cut_playback || latest_cut.is_none_or(|latest| loaded_time.is_some_and(|shown| shown >= latest)));
         let radar_mode = if forecast_hour.is_some() { "Forecast" }
+        else if product_unavailable { "Product unavailable" }
         else if retained.is_some() || error.is_some() {
             if error.is_some() { "Unavailable" } else { "Loading" }
-        } else if buffering { "Buffering" }
+        } else if buffering || preparing { "Buffering" }
         else if loading { "Loading" }
         else { radar_playback_mode(v.timeline.following, v.timeline.playing, at_latest, loaded_time, Utc::now()) };
         let mode = if radar_visible { radar_mode } else {
@@ -143,10 +147,14 @@ impl HookEchoApp {
         } else if let Some(hour) = forecast_hour {
             forecast_valid.map_or_else(|| format!("HRRR F+{hour}h · awaiting forecast"),
                 |valid| format!("HRRR F+{hour}h · valid {}", crate::timefmt::fmt_date_clock(valid, tz)))
+        } else if product_unavailable {
+            format!("{} unavailable in selected scan{}", crate::products::info(v.moment).short,
+                if loaded_time.is_some() { " · showing previous scan" } else { "" })
         } else if let Some(previous) = &retained {
             format!("Showing {previous} · {site} {}", if error.is_some() { "unavailable" } else { "loading" })
         } else if let Some(error) = &error { format!("{site}: {error}") }
         else if v.feed_recovery.probe.is_some() { v.feed_recovery.notice.clone().unwrap_or_default() }
+        else if preparing { "Preparing selected radar scan…".into() }
         else if buffering { format!("Buffering · {cached_loop}/{listed_loop} frames ready") }
         else if loading { load_label.into() }
         else if skipped { "Skipped unavailable radar frame".into() }

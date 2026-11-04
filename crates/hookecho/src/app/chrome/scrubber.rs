@@ -71,33 +71,25 @@ impl HookEchoApp {
         );
         let accent = egui::Color32::WHITE;
         let tz = self.active_tz();
-        let latest_cut = self.views[self.active].volume.as_ref().and_then(|volume| {
-            volume
-                .live_status
-                .as_ref()
-                .filter(|status| status.stream_active)
-                .and_then(|_| volume.cuts.last())
-                .and_then(|cut| chrono::DateTime::from_timestamp_millis(cut.ended_at_ms))
-        });
-        let selected_cut = self.views[self.active]
-            .selected_cut_ms()
-            .and_then(chrono::DateTime::from_timestamp_millis);
-        let fresh = self.views[self.active].volume.as_ref().is_some_and(|v| {
-            (chrono::Utc::now() - latest_cut.unwrap_or(v.time)).num_seconds() < 900
-        });
+        let loaded_time = self.views[self.active].presented_time();
+        let product_unavailable = self.views[self.active].product_unavailable();
+        let preparing = self.views[self.active].volume.is_some()
+            && (self.views[self.active].displayed_time() != loaded_time
+                || self.views[self.active].volume.as_ref().is_some_and(Volume::display_pending));
+        let fresh = loaded_time.is_some_and(|time| (Utc::now() - time).num_seconds() < 900);
         // Site and data age used to live in the docked status bar; the clock belongs with the clock.
         let site = self.views[self.active]
             .site
             .clone()
             .unwrap_or_else(|| "no site".to_string());
-        let age = self.views[self.active].volume.as_ref().map(|v| {
-            let secs = (Utc::now() - latest_cut.unwrap_or(v.time))
+        let age = loaded_time.map(|time| {
+            let secs = (Utc::now() - time)
                 .num_seconds()
                 .max(0);
             format!(
                 "{} · {} {} ago",
                 self.views[self.active].radar_source_label(),
-                if latest_cut.is_some() { "Cut" } else { "Scan" },
+                "Displayed scan",
                 humanize(secs)
             )
         });
@@ -105,10 +97,6 @@ impl HookEchoApp {
         let retained_station = self.views[self.active].retained_station.clone();
         let station_failed = self.views[self.active].error.is_some();
         let loading = self.views[self.active].loading;
-        let loaded_time = self.views[self.active]
-            .volume
-            .as_ref()
-            .map(|volume| volume.time);
         let requested_time = self.views[self.active].timeline.selected_time();
         let buffering = self.views[self.active].buffering;
         let skipped_recently = self.views[self.active]
@@ -273,9 +261,7 @@ impl HookEchoApp {
                             // "5:10:35 PM CDT" ran off the edge and under the age readout. When
                             // the room is not there the seconds and the zone go first: a phone's
                             // zone is the one it is standing in.
-                            None => selected_cut
-                                .or_else(|| latest_cut.filter(|_| t.following && !t.playing))
-                                .or(loaded_time)
+                            None => loaded_time
                                 .map(|d| match tz {
                                     Some(tz) if compact_live || ui.available_width() < 190.0 => {
                                         d.with_timezone(&tz).format("%-I:%M %p").to_string()
@@ -300,6 +286,12 @@ impl HookEchoApp {
                     let (col, text, hint) = if retained_station.is_some() {
                         (egui::Color32::from_rgb(255, 218, 140), if station_failed { "Unavailable" } else { "Loading" }.to_string(),
                             "The selected station is not ready. The map retains the explicitly identified previous station's scan.")
+                    } else if product_unavailable {
+                        (egui::Color32::from_rgb(255, 218, 140), "Product unavailable".to_string(),
+                            "This scan does not contain the selected measurement. Any retained image is from the previous scan of the same product.")
+                    } else if preparing {
+                        (egui::Color32::from_rgb(255, 218, 140), "Preparing".to_string(),
+                            "Preparing the selected radar scan. The clock still identifies the image on screen.")
                     } else if t.following && fresh {
                         (
                             mobile::ZETA_GREEN,
@@ -410,7 +402,9 @@ impl HookEchoApp {
                     };
                     let status = if let Some(previous) = &retained_station {
                         format!("Showing {previous} · {} {site}", if station_failed { "unavailable" } else { "loading" })
-                    } else if buffering { "Buffering next radar frame…".to_owned() }
+                    } else if product_unavailable { "Selected product unavailable in this scan".to_owned() }
+                        else if preparing { "Preparing selected radar scan…".to_owned() }
+                        else if buffering { "Buffering next radar frame…".to_owned() }
                         else if loading { load_label.to_owned() }
                         else if skipped_recently { "Skipped unavailable radar frame".to_owned() }
                         else { status };
@@ -473,8 +467,10 @@ impl HookEchoApp {
         let frame_statuses = self.timeline_frame_statuses();
         use egui_phosphor::regular as ph;
         let tz = self.active_tz();
-        let volume = self.views[self.active].volume.as_ref();
-        let fresh = volume.is_some_and(|v| (Utc::now() - v.time).num_seconds() < 900);
+        let fresh = self.views[self.active].presented_time().is_some_and(|time| (Utc::now() - time).num_seconds() < 900);
+        let product_unavailable = self.views[self.active].product_unavailable();
+        let preparing = self.views[self.active].volume.is_some()
+            && self.views[self.active].displayed_time() != self.views[self.active].presented_time();
         let mut go_head = false;
         let area = egui::Area::new(egui::Id::new("signal_scrubber"))
             .order(egui::Order::Foreground)
@@ -587,6 +583,10 @@ impl HookEchoApp {
                                 |ui| {
                                     let status = if let Some(previous) = &retained_station {
                                         format!("Showing {previous}")
+                                    } else if product_unavailable {
+                                        "Product unavailable".into()
+                                    } else if preparing {
+                                        "Preparing radar".into()
                                     } else if !t.following {
                                         "Archive radar".into()
                                     } else if fresh {

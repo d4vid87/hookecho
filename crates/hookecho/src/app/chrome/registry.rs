@@ -1514,6 +1514,7 @@ impl HookEchoApp {
                 on,
             );
         }
+        push("Compare raw / corrected velocity", "Tools", "Two linked panes of the same scan, with raw and corrected velocity", true, PaletteAction::CompareVelocity, None);
         push(
             "Compare 4 tilts",
             "Tools",

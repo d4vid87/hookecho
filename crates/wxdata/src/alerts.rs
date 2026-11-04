@@ -350,7 +350,8 @@ async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec
     let rings = |body: &str| {
         let mut out: ZonePolys = Vec::new();
         for_each_feature(body, |geom, _| out.extend(polygons_of(geom))).ok()?;
-        Some(out)
+        out.retain(|polygon| polygon.first().is_some_and(|ring| ring.len() >= 3));
+        (!out.is_empty()).then_some(out)
     };
     if let Some(hit) = file
         .as_ref()
@@ -360,7 +361,7 @@ async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec
         cache.lock().unwrap().insert(url.to_string(), hit.clone());
         return hit;
     }
-    let polys = async {
+    let Some(polys) = (async {
         let body = client
             .get(crate::net::fetch_url(url))
             .timeout(crate::net::FEED_TIMEOUT)
@@ -383,9 +384,10 @@ async fn fetch_zone_geometry(client: &reqwest::Client, url: &str) -> Vec<Vec<Vec
             let _ = std::fs::write(p, &body);
         }
         Some(out)
-    }
-    .await
-    .unwrap_or_default();
+    }).await else {
+        // A failed or empty response must not suppress this zone for the rest of the session.
+        return Vec::new();
+    };
     cache.lock().unwrap().insert(url.to_string(), polys.clone());
     polys
 }
@@ -598,6 +600,57 @@ pub async fn fetch_active_excluding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn zone_geometry_retries_failures_and_empty_responses_then_caches_success() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        const POLYGON: &str = r#"{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[-98,32],[-97,32],[-97,33],[-98,32]]]},"properties":{}}"#;
+        for (case, (status, body)) in [
+            ("503 Service Unavailable", "temporarily unavailable"),
+            ("200 OK", r#"{"type":"FeatureCollection","features":[]}"#),
+            ("200 OK", r#"{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[]]},"properties":{}}"#),
+        ].into_iter().enumerate() {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("http://{}/zones/test-{case}", listener.local_addr().unwrap());
+            let done = Arc::new(AtomicBool::new(false));
+            let stop = Arc::clone(&done);
+            let server = std::thread::spawn(move || {
+                let mut requests = 0;
+                while !stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            // Windows can inherit the listener's nonblocking mode.
+                            stream.set_nonblocking(false).unwrap();
+                            stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+                            let mut request = [0; 8192];
+                            assert!(stream.read(&mut request).unwrap() > 0);
+                            let (status, body) = if requests == 0 { (status, body) } else { ("200 OK", POLYGON) };
+                            requests += 1;
+                            write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(2));
+                        }
+                        Err(error) => panic!("fixture server: {error}"),
+                    }
+                }
+                requests
+            });
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let first = fetch_zone_geometry(&client, &url).await;
+            let recovered = fetch_zone_geometry(&client, &url).await;
+            let cached = fetch_zone_geometry(&client, &url).await;
+            done.store(true, Ordering::SeqCst);
+            let requests = server.join().unwrap();
+            assert!(first.is_empty());
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(cached, recovered);
+            assert_eq!(requests, 2, "only successful geometry is cached");
+        }
+    }
 
     #[test]
     fn optional_events_are_filtered_before_inline_and_zone_geometry() {

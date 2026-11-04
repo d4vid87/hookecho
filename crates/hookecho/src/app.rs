@@ -2204,6 +2204,7 @@ pub(crate) enum PaletteAction {
     SetMoment(Moment, bool),
     /// Four panes, one product, four distinct tilts, cameras linked.
     AllTilts,
+    CompareVelocity,
     ToggleField(crate::render::FieldLayer),
     ToggleFavorite(crate::render::FieldLayer),
     ToggleRadarFavorite(Moment, bool),
@@ -3164,6 +3165,14 @@ struct ModeSession {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+struct SceneState {
+    filters: OverlayFilters,
+    products: crate::workspace::SceneProducts,
+    lock_source_frame: bool,
+    link_satellite_times: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct RecoverySnapshot {
     version: u8,
     session: ModeSession,
@@ -3171,6 +3180,8 @@ struct RecoverySnapshot {
     playing: Vec<bool>,
     speed: Vec<f32>,
     loop_enabled: Vec<bool>,
+    #[serde(default)]
+    scene: Option<Box<SceneState>>,
 }
 
 #[derive(serde::Serialize)]
@@ -3188,6 +3199,19 @@ impl RecoverySnapshot {
             && self.playing.len() == self.session.panes.len()
             && self.speed.len() == self.session.panes.len()
             && self.loop_enabled.len() == self.session.panes.len()
+            && self.scene.as_ref().is_none_or(|scene| {
+                let f = &scene.filters;
+                scene.products.validate().is_ok()
+                    && scene.products.storm_motion.len() == self.session.panes.len()
+                    && scene.products.storm_motion.iter().all(|(direction, speed)|
+                        direction.is_finite() && (0.0..=360.0).contains(direction)
+                            && speed.is_finite() && (0.0..=300.0).contains(speed))
+                    && f.outlook_day <= 8 && f.fire_weather_day <= 8 && f.wssi_day <= 4
+                    && f.winter_snow_day <= 3 && f.winter_ice_day <= 3 && f.ero_day <= 5
+                    && f.cpc_opacity_pct <= 100 && f.ero_opacity_pct <= 100
+                    && f.ero_border_px.is_finite() && (0.1..=10.0).contains(&f.ero_border_px)
+                    && f.nowcast_lead_min <= 120
+            })
             && self.session.workspace.panes.iter().all(|pane| pane.lon.is_finite() && pane.lat.is_finite() && pane.zoom.is_finite())
             && self.speed.iter().all(|speed| speed.is_finite() && *speed > 0.0 && *speed <= 60.0)
     }
@@ -3221,6 +3245,10 @@ impl GeocodeNavigation {
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct PaneSession {
+    #[serde(default)]
+    storm_motion: Option<(f32, f32)>,
+    #[serde(default)]
+    dealias_override: Option<bool>,
     thresholds: [Option<f32>; Moment::ALL.len()],
     threshold_enabled: [bool; Moment::ALL.len()],
     date: chrono::NaiveDate,
@@ -3242,8 +3270,33 @@ struct PaneSession {
 }
 
 impl PaneSession {
+    /// Start a processing comparison at one archive volume, never two independently moving heads.
+    fn velocity_comparison(view: &MapView) -> Option<Self> {
+        let volume = view.volume.as_ref().filter(|_| view.retained_station.is_none())?;
+        let mut session = Self::capture(view);
+        session.following = false;
+        session.date = volume.time.date_naive();
+        session.time = Some(volume.time);
+        session.forecast_hour = None;
+        session.replay_times = None;
+        session.follow_low_cut = false;
+        session.cut_playback = false;
+        session.cut_index = 0;
+        session.cut_volume_ms = Some(volume.time.timestamp_millis());
+        session.cut = view.cut_selection.filter(|(ended, moment, tilt)| {
+            *moment == Moment::Velocity && view.moment == Moment::Velocity
+                && view.custom_product.is_none() && *tilt == view.tilt
+                && volume.cuts.iter().any(|cut| cut.ended_at_ms == *ended
+                    && level2::cut_has_moment(&volume.scan, *cut, Moment::Velocity)
+                    && volume.elevations.get(*tilt).is_some_and(|angle| (*angle - cut.elevation_deg).abs() < 0.15))
+        });
+        Some(session)
+    }
+
     fn capture(view: &MapView) -> Self {
         Self {
+            storm_motion: Some((view.storm_dir_deg, view.storm_speed_kt)),
+            dealias_override: view.dealias_override,
             thresholds: view.thresholds,
             threshold_enabled: view.threshold_enabled,
             date: view.timeline.date,
@@ -3264,6 +3317,13 @@ impl PaneSession {
     }
 
     fn restore(self, view: &mut MapView) {
+        if let Some((direction, speed)) = self.storm_motion.filter(|(direction, speed)|
+            direction.is_finite() && (0.0..=360.0).contains(direction)
+                && speed.is_finite() && (0.0..=300.0).contains(speed)) {
+            view.storm_dir_deg = direction;
+            view.storm_speed_kt = speed;
+        }
+        view.dealias_override = self.dealias_override;
         view.thresholds = self.thresholds;
         view.threshold_enabled = self.threshold_enabled;
         view.timeline.date = self.date;
@@ -3292,6 +3352,57 @@ mod mode_session_tests {
     use super::*;
 
     #[test]
+    fn velocity_comparison_pins_one_archive_and_preserves_only_a_valid_velocity_cut() {
+        use nexrad_model::data::{MomentData, PulseWidth, Radial, RadialStatus, Sweep, VolumeCoveragePattern};
+        let vcp = VolumeCoveragePattern::new(212, 0, 0.5, PulseWidth::Short,
+            false, 0, false, 0, false, false, 0, false, false, vec![]);
+        let scan = Arc::new(Scan::new(vcp, [400_000, 500_000].into_iter().enumerate().map(|(i, at)| {
+            let velocity = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 129.0, vec![140u8]);
+            Sweep::new((i + 1) as u8, vec![Radial::new(at, 1, 0.0, 0.5,
+                RadialStatus::ElevationEnd, (i + 1) as u8, 0.5, None, Some(velocity),
+                None, None, None, None, None).with_nyquist_velocity_mps(Some(25.0))])
+        }).collect()));
+        let camera = crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let mut source = MapView::new(Some("KTLX".into()), camera);
+        let time = DateTime::from_timestamp(300, 0).unwrap();
+        source.show_volume(scan.clone(), "selected".into(), time);
+        source.volume.as_mut().unwrap().live_status = Some(wxdata::live::ScanStatus {
+            provider: "test", volume_start_ms: Some(time.timestamp_millis()), vcp: 212,
+            cuts_received: 2, cuts_expected: 14, radials_received: 2,
+            current_elevation_deg: Some(0.5), latency: std::time::Duration::ZERO,
+            oldest_radial_age: None, sails_cuts: 0, mrle_cuts: 0, retries: 0, stream_active: true,
+        });
+        source.moment = Moment::Velocity;
+        source.cut_selection = Some((400_000, Moment::Velocity, 0));
+        source.timeline.following = true;
+        source.timeline.cut_playback = true;
+        source.timeline.seek_target = Some(time + chrono::Duration::minutes(5));
+        source.timeline.seek_forecast_hour = Some(3);
+        let session = PaneSession::velocity_comparison(&source).unwrap();
+        assert_eq!(session.time, Some(time), "the loaded volume wins over a pending playhead");
+        assert!(!session.following);
+        assert!(!session.cut_playback);
+        assert_eq!(session.forecast_hour, None);
+        for corrected in [false, true] {
+            let mut pane = MapView::new(source.site.clone(), camera);
+            pane.moment = Moment::Velocity;
+            session.restore(&mut pane);
+            pane.dealias_override = Some(corrected);
+            assert!(pane.volume.is_none(), "live scan allocations are not masqueraded as complete volumes");
+            assert!(!pane.timeline.following && !pane.timeline.playing);
+            assert_eq!(pane.timeline.seek_target, Some(time));
+            pane.show_volume(scan.clone(), "selected".into(), time);
+            assert_eq!(pane.selected_cut_ms(), Some(400_000));
+        }
+        source.cut_selection = Some((450_000, Moment::Velocity, 0));
+        assert!(PaneSession::velocity_comparison(&source).unwrap().cut.is_none());
+        source.cut_selection = Some((400_000, Moment::Reflectivity, 0));
+        assert!(PaneSession::velocity_comparison(&source).unwrap().cut.is_none());
+        source.retained_station = Some("KFWS".into());
+        assert!(PaneSession::velocity_comparison(&source).is_none());
+    }
+
+    #[test]
     fn recovery_roundtrip_keeps_unsaved_appearance_and_archive_position() {
         let mut view = MapView::new(Some("KFWS".into()), crate::render::mercator::Camera::at_lonlat(-97.3, 32.6, 8.0));
         view.timeline.following = false;
@@ -3299,6 +3410,9 @@ mod mode_session_tests {
         view.thresholds[Moment::Reflectivity.index()] = Some(27.0);
         view.appearance.blend_width = 0.83;
         view.appearance.precision = true;
+        view.storm_dir_deg = 90.0;
+        view.storm_speed_kt = 50.0;
+        view.dealias_override = Some(false);
         let workspace = crate::workspace::Workspace {
             name: "Recovery".into(), panes: vec![crate::workspace::PaneSnap::capture(&view)], active: 0,
             link_cameras: false, link_times: false, overlays_on: vec![], adopt_site: false,
@@ -3307,6 +3421,7 @@ mod mode_session_tests {
         let snapshot = RecoverySnapshot {
             version: 1, session: ModeSession { workspace, panes: vec![PaneSession::capture(&view)], inspector: true },
             analyst: true, playing: vec![true], speed: vec![2.0], loop_enabled: vec![false],
+            scene: None,
         };
         let mut back: RecoverySnapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
         assert!(back.valid());
@@ -3314,7 +3429,12 @@ mod mode_session_tests {
         assert!(back.session.workspace.panes[0].appearance.precision);
         view.timeline.seek_target = None;
         view.thresholds[Moment::Reflectivity.index()] = None;
+        view.storm_dir_deg = 270.0;
+        view.storm_speed_kt = 10.0;
+        view.dealias_override = Some(true);
         back.session.panes[0].restore(&mut view);
+        assert_eq!((view.storm_dir_deg, view.storm_speed_kt), (90.0, 50.0));
+        assert_eq!(view.dealias_override, Some(false));
         assert_eq!(view.thresholds[Moment::Reflectivity.index()], Some(27.0));
         assert_eq!(view.timeline.selected_time(), snapshot.session.panes[0].time);
         assert!(back.playing[0]);
@@ -4203,10 +4323,9 @@ pub struct HookEchoApp {
     obs_tour: bool,
     obs_tour_last: Option<Instant>,
     obs_tour_idx: usize,
-    /// Warning dedupe keys already seen (VTEC event keys), so a new warning is detected on
-    /// arrival and a continuation of one already announced is not.
-    known_warning_ids: std::collections::HashSet<String>,
-    /// False until the first alert fetch seeds `known_warning_ids` (avoids alerting on startup).
+    /// Highest observed impact tier per VTEC event; ordinary continuations stay silent.
+    known_warning_tiers: std::collections::HashMap<String, u8>,
+    /// False until the first alert fetch seeds `known_warning_tiers` (avoids alerting on startup).
     warnings_seeded: bool,
     spoken_alerts: crate::spoken_alerts::SpokenAlerts,
     spoken_check: Option<Instant>,
@@ -4479,7 +4598,7 @@ impl HookEchoApp {
         // the known-warning ids, so a restart during an event doesn't re-banner and re-speak
         // every warning already on the map.
         let seeded_alerts: Vec<GeoFeature> = Vec::new();
-        let known_warning_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let known_warning_tiers = std::collections::HashMap::new();
         // Zone geometry (county and forecast-zone shapes) never changes, so it outlives the run.
         if let Some(dir) = crate::paths::cache_dir() {
             wxdata::alerts::set_zone_cache_dir(dir);
@@ -5110,7 +5229,7 @@ impl HookEchoApp {
             obs_tour: false,
             obs_tour_last: None,
             obs_tour_idx: 0,
-            known_warning_ids,
+            known_warning_tiers,
             warnings_seeded: false,
             spoken_alerts: crate::spoken_alerts::SpokenAlerts::default(),
             spoken_check: None,
@@ -5186,6 +5305,9 @@ impl HookEchoApp {
                 if let Ok(snapshot) = serde_json::from_str::<RecoverySnapshot>(&json) {
                     if snapshot.valid() {
                         app.restore_mode_session(snapshot.session, &cc.egui_ctx);
+                        if let Some(scene) = snapshot.scene {
+                            app.restore_scene_state(*scene);
+                        }
                         #[cfg(target_arch = "wasm32")]
                         { recovered_session = true; }
                         app.analyst_open = snapshot.analyst;
@@ -6197,8 +6319,7 @@ impl HookEchoApp {
         }
     }
 
-    /// Detect warning-tier alerts whose id we haven't seen, raising a banner + audible cue for
-    /// each new one. The first fetch only seeds the known set (no alert on already-active warnings).
+    /// Notify on new warning events or increased impact tiers. The first fetch only seeds state.
     fn detect_new_warnings(&mut self, feats: &[GeoFeature]) {
         let metric = self.metric();
         let mut alerted = false;
@@ -6207,28 +6328,13 @@ impl HookEchoApp {
         // Only banner warnings within the selected radar's coverage — a warning covering a saved
         // location still banners + pushes regardless (that's a watched place, not the viewed site).
         let site_box = self.active_site_bounds(250.0);
-        for f in feats {
-            if f.kind != overlay::FeatureKind::Warning {
-                continue;
-            }
-            let Some(a) = &f.alert else { continue };
-            // Mark every warning seen so it can't re-banner later, but only alert on genuinely new
-            // ones after the first (seeding) pass. Keyed by VTEC event, not message id — an office
-            // re-issues a continuation of the same warning every few minutes with a fresh id, and
-            // deduping on that is why the same tornado warning announced itself over and over.
-            if self.known_warning_ids.insert(a.dedupe_key()) && self.warnings_seeded {
-                let esc = wxdata::alerts::escalation(a);
+        for (a, parts) in warning_events(feats) {
+            // County parts share an event, and a CON bulletin can raise its impact tier.
+            let esc = wxdata::alerts::escalation(a);
+            if !self.warnings_seeded || self.known_warning_tiers.get(&a.event_key())
+                .is_none_or(|known| esc > *known)
+            {
                 let urgent = esc >= 2;
-                // The polygon's middle, computed once: the rule pass below uses it as the
-                // warning's stand-in detection, and the spoken line uses it to say which way the
-                // warning lies from a watched place.
-                let centroid: Option<[f64; 2]> = f.rings.first().filter(|r| !r.is_empty()).map(|ring| {
-                    let n = ring.len() as f64;
-                    let (x, y) = ring
-                        .iter()
-                        .fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
-                    [x / n, y / n]
-                });
                 // Severity floor: below the tier the user set, the warning still banners and
                 // still joins the alert list — it just doesn't push, speak or make noise.
                 let notify_ok = esc >= self.settings.alert_min_escalation;
@@ -6242,12 +6348,12 @@ impl HookEchoApp {
                     .markers
                     .iter()
                     .filter_map(|m| {
-                        let km = f.distance_km(m.lon, m.lat);
+                        let (part, km) = nearest_warning_part(&parts, m.lon, m.lat)?;
                         (km <= m.alert_radius_mi * crate::geo::KM_PER_MILE).then(|| {
                             // Distance to the nearest edge, bearing to the middle: the edge is
                             // what "how far" means for a polygon, and the middle is what "which
                             // way" means. Mixing them is fine at the scale of one sentence.
-                            let bearing = centroid
+                            let bearing = warning_centroid(part)
                                 .map(|c| crate::geo::great_circle([m.lon, m.lat], c).1 as f32);
                             (m.name.clone(), m.home, km, bearing)
                         })
@@ -6264,63 +6370,62 @@ impl HookEchoApp {
                     .alert_polygons
                     .iter()
                     .find(|z| {
-                        f.rings
-                            .first()
-                            .is_some_and(|outer| wxdata::overlay::rings_intersect(outer, &z.ring))
+                        warning_zone_part(&parts, &z.ring).is_some()
                     })
                     .map(|z| z.name.clone());
-                if let (Some(z), true) = (zone.as_deref(), notify_ok) {
-                    self.notify_alert(
-                        &format!("⚠ {} — {z}", a.event),
-                        if a.headline.is_empty() {
-                            &a.area
-                        } else {
-                            &a.headline
-                        },
-                        urgent,
-                    );
-                }
-                // User rules that watch warnings. The id-dedupe above is their cooldown: a
-                // warning is announced once, however long it stands.
+                // User rules reuse the same event and impact-tier dedupe.
+                let mut rule_hits = Vec::new();
                 for rule in self.settings.alert_rules.clone() {
                     if !rule.enabled || !crate::rules::warning_matches(&rule, &a.event) {
                         continue;
                     }
                     // Anywhere: the warning polygon is somewhere on this radar. A place: the
                     // polygon has to reach it, using the same distance the built-in alert uses.
-                    let reaches = match &rule.place {
-                        crate::settings::RulePlace::Anywhere => true,
+                    let part = match &rule.place {
+                        crate::settings::RulePlace::Anywhere => parts.first().copied(),
                         crate::settings::RulePlace::Marker { id } => self
                             .settings
                             .markers
                             .iter()
                             .find(|m| &m.id == id)
-                            .is_some_and(|m| {
-                                f.distance_km(m.lon, m.lat)
-                                    <= m.alert_radius_mi * crate::geo::KM_PER_MILE
+                            .and_then(|m| {
+                                nearest_warning_part(&parts, m.lon, m.lat)
+                                    .filter(|(_, km)| *km <= m.alert_radius_mi * crate::geo::KM_PER_MILE)
+                                    .map(|(part, _)| part)
                             }),
                         crate::settings::RulePlace::Zone { name } => self
                             .settings
                             .alert_polygons
                             .iter()
                             .find(|z| &z.name == name)
-                            .is_some_and(|z| {
-                                f.rings.first().is_some_and(|outer| {
-                                    wxdata::overlay::rings_intersect(outer, &z.ring)
-                                })
-                            }),
+                            .and_then(|z| warning_zone_part(&parts, &z.ring)),
                     };
-                    if reaches {
+                    if let Some(part) = part {
                         // The warning's own centroid stands in for a detection, so a warning rule
                         // can carry extra conditions like every other rule ("a tornado warning,
                         // and also rotation within 20 km").
-                        let hit = centroid
+                        let hit = warning_centroid(part)
                             .map(|c| crate::rules::Detection::at(c[0], c[1]))
                             .unwrap_or(crate::rules::Detection::at(0.0, 0.0));
                         if crate::rules::compound_ok(&rule, &hit, &self.recent_for_rules()) {
-                            self.fire_rule_named(&rule, &hit, Some(a.event.clone()));
+                            rule_hits.push((rule, hit));
                         }
                     }
+                }
+                let near_site = site_box.is_some_and(|bx| parts.iter().any(|part| feature_in_box(part, bx)));
+                let relevant = hit.is_some() || zone.is_some() || near_site || !rule_hits.is_empty();
+                if !take_warning_notification(&mut self.known_warning_tiers, a, self.warnings_seeded, relevant) {
+                    continue;
+                }
+                if let (Some(z), true) = (zone.as_deref(), notify_ok) {
+                    self.notify_alert(
+                        &format!("⚠ {} — {z}", a.event),
+                        if a.headline.is_empty() { &a.area } else { &a.headline },
+                        urgent,
+                    );
+                }
+                for (rule, hit) in rule_hits {
+                    self.fire_rule_named(&rule, &hit, Some(a.event.clone()));
                 }
                 let zone_name = zone;
                 // `area` is banner text and `relation` is speech: "5 mi from Home" reads as
@@ -6362,7 +6467,7 @@ impl HookEchoApp {
                     }
                     None => {
                         // No watched location: banner only if it's near the selected radar.
-                        if site_box.is_none_or(|bx| !feature_in_box(f, bx)) {
+                        if !near_site {
                             continue;
                         }
                         // Nowhere of the user's own to relate it to; the counties carry it.
@@ -9821,7 +9926,7 @@ impl HookEchoApp {
         // Expert knobs for the product you're on, edited through locals so the popup closure
         // doesn't need `self`. They used to live in the toolbox's Product ▸ Options disclosure.
         let mut srv_from_cells = false;
-        let mut dealias = self.settings.dealias_velocity;
+        let mut dealias = self.views[self.active].effective_dealias(self.settings.dealias_velocity);
         let mut full_coverage = self.settings.full_coverage_radar;
         let mut precip_tint = self.settings.precip_tint;
         let mut srv_on = srv;
@@ -10049,7 +10154,9 @@ impl HookEchoApp {
             self.settings.full_coverage_radar = full_coverage;
             self.settings.save();
         }
-        self.settings.dealias_velocity = dealias;
+        if dealias != self.views[self.active].effective_dealias(self.settings.dealias_velocity) {
+            self.views[self.active].dealias_override = Some(dealias);
+        }
         // A product row was clicked this frame: it already set the moment and SRV flag, so the
         // knob write-back must not put the pre-click values back.
         if pick.is_none() {
@@ -10433,6 +10540,10 @@ impl HookEchoApp {
                     MapTool::Interrogate
                 } else {
                     t
+                };
+                if chrome::compact(ctx) {
+                    self.panel_open = false;
+                    self.sidebar_focus_search = false;
                 }
             }
             PaletteAction::ExportRegionStats => self.export_region_stats(),
@@ -10450,6 +10561,7 @@ impl HookEchoApp {
             }
             PaletteAction::ApplyAnalystPreset(preset) => self.apply_analyst_preset(preset, ctx),
             PaletteAction::AllTilts => self.apply_all_tilts(ctx),
+            PaletteAction::CompareVelocity => self.compare_velocity(ctx),
             PaletteAction::CycleBasemap => {
                 let (mb, mt) = (
                     !self.settings.mapbox_key.is_empty(),
@@ -10666,11 +10778,8 @@ impl HookEchoApp {
             match msg {
                 OverlayMsg::AlertSeed(mut f) => {
                     f.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
-                    for id in f
-                        .iter()
-                        .filter_map(|f| f.alert.as_ref().map(|a| a.dedupe_key()))
-                    {
-                        self.known_warning_ids.insert(id);
+                    for (alert, _) in warning_events(&f) {
+                        record_warning_tier(&mut self.known_warning_tiers, alert);
                     }
                     if self.alert_features.is_empty() {
                         self.alert_features = f;
@@ -13020,7 +13129,7 @@ impl HookEchoApp {
                     v.error = None;
                     v.fetch_failures = 0;
                     v.clamp_tilt();
-                    v.clamp_moment();
+                    v.refresh_moments();
                     self.scan_chime(view, time);
                 }
                 DataMsg::ListingFailed { view, date, .. } => {
@@ -13081,7 +13190,7 @@ impl HookEchoApp {
                     v.error = None;
                     v.fetch_failures = 0;
                     v.clamp_tilt();
-                    v.clamp_moment();
+                    v.refresh_moments();
                     // A healthy stream pushes the poll deadline forward — this line IS the
                     // fallback: if the stream dies, interval polling resumes on schedule.
                     v.last_poll = Some(Instant::now());
@@ -13655,7 +13764,7 @@ impl HookEchoApp {
                         if view.retained_station.is_some() { self.pane_shown.remove(&idx); }
                         view.show_volume(scan, name, time);
                         view.clamp_tilt();
-                        view.clamp_moment();
+                        view.refresh_moments();
                         self.pane_upload_tokens.insert(idx, 0);
                     }
                     if time.date_naive() != view.timeline.date {
@@ -13705,7 +13814,7 @@ impl HookEchoApp {
                         v.loading = false;
                         v.error = None;
                         v.clamp_tilt();
-                        v.clamp_moment();
+                        v.refresh_moments();
                         self.pane_upload_tokens.insert(idx, 0);
                     } else if !self.views[idx].loading || self.views[idx].frame_request.pending_name() != Some(name.as_str()) {
                         wxdata::stats::bump(wxdata::stats::Counter::ScanCacheMisses);
@@ -13988,21 +14097,12 @@ impl HookEchoApp {
                 v.selected_cut_ms(),
             )
         };
-        // The pane's product list is the union over every volume from this site, so a single frame
-        // in a loop can lack the selected moment (a legacy volume, a split cut that hasn't arrived).
-        // Draw what this volume does have rather than blanking the radar for that frame.
+        // A partial or older scan can lack a product offered by this station. Never draw a
+        // different measurement underneath the selected product's legend.
         // Caller resolved `data` to a view that has a volume; a "wait" is the honest answer if
         // that stops being true rather than taking the frame down.
         let Some(have) = self.views[data].volume.as_ref().map(|v| v.moments) else {
             return (None, true);
-        };
-        let moment = if have[moment.index()] {
-            moment
-        } else {
-            match Moment::ALL.into_iter().find(|m| have[m.index()]) {
-                Some(m) => m,
-                None => return (None, true), // nothing decodable yet: keep the last image up
-            }
         };
         let storm_uv = if moment == Moment::Velocity {
             storm_uv
@@ -14015,7 +14115,7 @@ impl HookEchoApp {
         let uv_key = storm_uv.map(|(e, n)| (e.to_bits(), n.to_bits()));
         // Dealiasing only applies to Doppler velocity, and only where it is actually folded:
         // a TDWR's Level 3 velocity is already unfolded before it leaves the radar.
-        let dealias = self.settings.dealias_velocity
+        let dealias = self.views[idx].effective_dealias(self.settings.dealias_velocity)
             && moment == Moment::Velocity
             && !self.views[idx].displayed_station().is_some_and(wxdata::tdwr::is_tdwr);
         let key: ShownKey = (
@@ -14031,6 +14131,10 @@ impl HookEchoApp {
             None,
             precision,
         );
+        if !have[moment.index()] {
+            if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
+            return (None, self.pane_shown.get(&idx).is_some_and(|shown| same_radar_measurement(shown, &key)));
+        }
         let lut_gen = self.palettes.gen.wrapping_add(self.views[idx].appearance.fingerprint(moment)).wrapping_add(u64::from(self.adaptive.reduced)).wrapping_add(u64::from(self.settings.full_coverage_radar)).wrapping_add(
             if crate::theme::is_high_contrast(self.settings.theme) {
                 0x9e37_79b9_7f4a_7c15
@@ -14045,6 +14149,7 @@ impl HookEchoApp {
         let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             if let Some(volume) = self.views[data].volume.as_mut() { volume.cancel_display_jobs(); }
+            if self.views[idx].presented_time().is_none() { self.views[idx].stage_presentation(token); }
             return (None, true);
         }
         let table_owned = self.views[idx].appearance.table(&self.palettes, moment, self.settings.theme);
@@ -14065,8 +14170,8 @@ impl HookEchoApp {
                 return (None, true);
             }
             vol.prepare_display((moment, tilt, dealias, cut_end_ms, precision), &self.spawner, ctx).map(|ready| ready.map(|s| {
-                to_upload(
-                    &s,
+                to_shared_upload(
+                    s,
                     table,
                     threshold,
                     smooth,
@@ -14102,6 +14207,7 @@ impl HookEchoApp {
                 let token = if same_data && self.pane_lut.get(&idx) == Some(&lut_gen) && token != 0 { token } else { crate::gpu_metrics::next_upload_token() };
                 up.upload_token = token;
                 self.pane_upload_tokens.insert(idx, token);
+                self.views[idx].stage_presentation(token);
                 self.pane_shown.insert(idx, key);
                 self.pane_lut.insert(idx, lut_gen);
                 (Some(up), true)
@@ -14280,6 +14386,7 @@ impl HookEchoApp {
         let lut_only = same_data && crate::gpu_metrics::upload_acknowledged(idx, token);
         if lut_only && self.pane_lut.get(&idx) == Some(&lut_gen) {
             self.views[idx].error = None;
+            if self.views[idx].presented_time().is_none() { self.views[idx].stage_presentation(token); }
             return (None, true);
         }
         let table =
@@ -14318,6 +14425,7 @@ impl HookEchoApp {
         let token = if same_data && self.pane_lut.get(&idx) == Some(&lut_gen) && token != 0 { token } else { crate::gpu_metrics::next_upload_token() };
         upload.upload_token = token;
         self.pane_upload_tokens.insert(idx, token);
+        self.views[idx].stage_presentation(token);
         self.pane_shown.insert(idx, key);
         self.pane_lut.insert(idx, lut_gen);
         self.views[idx].error = None;
@@ -14492,7 +14600,7 @@ impl HookEchoApp {
             |value| format!("Raw: {value:.2} {}", moment.units()),
         );
         let dealiased = if moment == Moment::Velocity
-            && self.settings.dealias_velocity
+            && self.views[idx].effective_dealias(self.settings.dealias_velocity)
             && !wxdata::tdwr::is_tdwr(&site)
         {
             let cut_end_ms = self.views[idx].selected_cut_ms();
@@ -14507,11 +14615,12 @@ impl HookEchoApp {
         } else {
             String::new()
         };
-        let nyquist = if moment == Moment::Velocity {
-            "\nNyquist: unavailable in decoded metadata"
-        } else {
-            ""
-        };
+        let nyquist = if moment == Moment::Velocity && wxdata::sites::is_nexrad(&site) {
+            self.views[idx].volume.as_ref().and_then(|volume| level2::nyquist_velocity_at(
+                &volume.scan, tilt, self.views[idx].selected_cut_ms()))
+                .map_or_else(|| "\nCorrection unavailable: missing or mixed Nyquist limits".to_owned(),
+                    |limit| format!("\nInstrument Nyquist: {limit:.2} m/s"))
+        } else { String::new() };
         let freshness = if self.views[idx].timeline.following {
             let age = (chrono::Utc::now() - sample.collected_at).num_seconds().max(0);
             format!(" · age {age}s")
@@ -14551,9 +14660,9 @@ impl HookEchoApp {
         let idx = self.active.min(self.views.len() - 1);
         let caption = {
             let v = &self.views[idx];
-            let time = v.volume.as_ref().map_or_else(
+            let time = v.presented_time().map_or_else(
                 || "—".to_string(),
-                |vol| vol.time.format("%H:%MZ").to_string(),
+                |time| time.format("%H:%MZ").to_string(),
             );
             format!(
                 "{} {} {time}",
@@ -15556,7 +15665,7 @@ impl HookEchoApp {
                 if pane_style.ndfd_layer().is_some() {
                     format!("{} · {state} · valid {}", pane_style.label(), time.format("%a %b %-d %HZ"))
                 } else {
-                    let offset = self.views[idx].displayed_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
+                    let offset = self.views[idx].presented_time().map_or_else(String::new, |radar| format!(" · Δ radar {:+.0}s", (time - radar).num_milliseconds() as f64 / 1000.0));
                     format!("{} · {state} {}{offset}", pane_style.label(), crate::timefmt::fmt_clock(time, self.active_tz(), false))
                 }
             } else { format!("{} · frame unavailable", pane_style.label()) };
@@ -15624,6 +15733,7 @@ impl HookEchoApp {
         if self.views[idx].timeline.forecast_hour().is_some() {
             draw_radar = false;
         }
+        if !draw_radar { self.views[idx].clear_presentation(); }
 
         // Field layers: upload freshly-fetched grids on the first pane; every pane draws the
         // currently-enabled layers.
@@ -15767,7 +15877,7 @@ impl HookEchoApp {
         // Captions must follow the opaque GPU callback in paint order.
         if let Some(previous) = self.views[idx].retained_station.as_deref().filter(|_| self.views[idx].show_radar) {
             let requested = self.views[idx].site.as_deref().unwrap_or("station");
-            let time = self.views[idx].displayed_time().map_or_else(|| "unknown time".into(), |time| time.format("%H:%M:%SZ").to_string());
+            let time = self.views[idx].presented_time().map_or_else(|| "unknown time".into(), |time| time.format("%H:%M:%SZ").to_string());
             let state = if self.views[idx].error.is_some() { "Unavailable" } else { "Loading" };
             let painter = ui.painter().with_clip_rect(prect);
             let text = painter.layout(format!("{state} {requested} · last {previous} scan {time}"),
@@ -15813,12 +15923,15 @@ impl HookEchoApp {
                                 }
                             });
                             let view = &self.views[idx];
-                            if let Some(time) = view.displayed_time().filter(|_| view.show_radar) {
+                            if let Some(label) = view.velocity_processing_label(self.settings.dealias_velocity) {
+                                ui.strong(label);
+                            }
+                            if let Some(time) = view.presented_time().filter(|_| view.show_radar) {
                                 ui.horizontal(|ui| {
                                     let withheld = idx != self.active && self.link_times
                                         && !view.alignment_acceptable(self.settings.linked_time_limit_seconds);
                                     ui.weak(format!("{}{} UTC", if withheld { "Last scan " } else { "" }, time.format("%H:%M:%S")));
-                                    let active_time = self.views[self.active].displayed_time();
+                                    let active_time = self.views[self.active].presented_time();
                                     if let Some(delta) = active_time.map(|active| (time - active).num_seconds())
                                         .filter(|delta| delta.abs() > 120) {
                                         ui.colored_label(egui::Color32::from_rgb(255, 186, 86),
@@ -15890,7 +16003,7 @@ impl HookEchoApp {
                                 ui.label(egui::RichText::new(status).small());
                                 ui.label(egui::RichText::new("Pin color reflects NOAA network status").small().color(egui::Color32::from_rgb(149, 188, 211)));
                                 if self.views[idx].site.as_deref() == Some(site.id) {
-                                    let displayed = self.views[idx].displayed_time().map_or_else(
+                                    let displayed = self.views[idx].presented_time().map_or_else(
                                         || "Displayed scan: not loaded".to_owned(),
                                         |time| {
                                             let age = Utc::now().signed_duration_since(time).num_minutes().max(0);
@@ -18980,6 +19093,47 @@ impl HookEchoApp {
         self.pane_shown.clear();
     }
 
+    fn compare_velocity(&mut self, ctx: &egui::Context) {
+        let source = &self.views[self.active];
+        if !source.site.as_deref().is_some_and(wxdata::sites::is_nexrad) {
+            self.toast(ToastKind::Info, "Choose a Level II radar for raw/corrected velocity comparison");
+            return;
+        }
+        let Some(session) = PaneSession::velocity_comparison(source) else {
+            self.toast(ToastKind::Info, "Wait for the selected radar scan before comparing velocity");
+            return;
+        };
+        let mut pane = crate::workspace::PaneSnap::capture(source);
+        pane.moment = Moment::Velocity;
+        pane.custom_product = None;
+        pane.srv = false;
+        pane.show_radar = true;
+        let mut workspace = self.capture_workspace();
+        workspace.name = "Raw / corrected velocity".into();
+        workspace.panes = vec![pane.clone(), pane];
+        workspace.active = 0;
+        workspace.link_cameras = true;
+        workspace.link_times = true;
+        self.apply_workspace(&workspace, ctx);
+        // Invalidate queued live replies before the next drain can replace the pinned source.
+        self.live_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.live_stream = None;
+        self.last_stream_attempt = None;
+        for (index, view) in self.views.iter_mut().enumerate() {
+            // A retained streamed scan is not a completed archive revision. Both panes load
+            // the selected archive object through the shared cache, with old requests cancelled.
+            view.reset_radar_provider();
+            view.clear_presentation();
+            session.restore(view);
+            view.show_radar = true;
+            view.dealias_override = Some(index == 1);
+        }
+        self.lock_source_frame = true;
+        self.panel_open = false;
+        self.pane_shown.clear();
+        self.record_interaction("compare_velocity");
+    }
+
     /// How visible the wind layer should be in this pane: faded out past the zoom where the
     /// 0.04-degree regrid goes visibly piecewise-linear, dimmed over reflectivity so the radar
     /// stays readable, and dimmed again when the pane is scrubbed to a time these grids are not
@@ -19247,6 +19401,7 @@ impl HookEchoApp {
             playing: self.views.iter().map(|v| v.timeline.playing).collect(),
             speed: self.views.iter().map(|v| v.timeline.speed).collect(),
             loop_enabled: self.views.iter().map(|v| v.timeline.loop_enabled).collect(),
+            scene: Some(Box::new(self.capture_scene_state())),
         }
     }
 
@@ -19290,6 +19445,10 @@ impl HookEchoApp {
         match entry {
             UndoEntry::Layout { snapshot, active_workspace } => {
                 self.restore_mode_session(snapshot.session, ctx);
+                if let Some(scene) = snapshot.scene {
+                    self.restore_scene_state(*scene);
+                    self.fetch_overlays(ctx);
+                }
                 self.analyst_open = snapshot.analyst;
                 self.active_workspace = active_workspace;
                 for (i, view) in self.views.iter_mut().enumerate() {
@@ -21254,7 +21413,7 @@ impl HookEchoApp {
             .unwrap_or("no site").to_string();
         let product = v.custom_product.clone().unwrap_or_else(|| crate::products::info(v.moment).name.to_string());
         let time = v
-            .displayed_time()
+            .presented_time()
             .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
             .unwrap_or_default();
         let source = v.displayed_station().or(v.site.as_deref())
@@ -21333,7 +21492,7 @@ impl HookEchoApp {
                     None => "No matching linked scan".to_string(),
                 }
             } else {
-                v.displayed_time()
+                v.presented_time()
                     .map(|time| crate::timefmt::fmt_date_clock(time, self.active_tz()))
                     .unwrap_or_else(|| "scan time unavailable".to_string())
             };
@@ -21459,6 +21618,22 @@ fn apply_coverage_range(upload: &mut RadarUpload, full_coverage: bool, nexrad: b
 /// `storm_uv` is the storm motion (east, north) in m/s for storm-relative velocity, or
 /// `None` for ground-relative. `precip` is the MRMS surface precipitation-type field, when the
 /// user has asked for reflectivity to be tinted by it.
+fn to_shared_upload(
+    sweep: Arc<BinnedSweep>, table: &ColorTable, threshold: Option<f32>, smooth: bool,
+    storm_uv: Option<(f32, f32)>, precip: Option<&PrecipGrid>, lut_only: bool,
+) -> RadarUpload {
+    // Build the inexpensive palette/uniform first; retain the immutable gates only when needed.
+    let mut upload = to_upload(&sweep, table, threshold, smooth, storm_uv, precip, true);
+    if !lut_only {
+        if let Some(grid) = precip.filter(|_| sweep.moment == Moment::Reflectivity) {
+            upload.precip_flag = grid.classes.clone();
+        }
+        upload.shared_sweep = Some(sweep);
+    }
+    upload.lut_only = lut_only;
+    upload
+}
+
 pub(crate) fn to_upload(
     s: &BinnedSweep,
     table: &ColorTable,
@@ -21523,6 +21698,7 @@ pub(crate) fn to_upload(
 
     RadarUpload {
         upload_token: 0,
+        shared_sweep: None,
         cache_loop: false,
         sector_opacity: None,
         az_bins: s.az_bins as u32,
@@ -22364,6 +22540,84 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
     x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
 }
 
+/// Keep every county/polygon part available until all notification geography has been checked.
+fn warning_events(feats: &[GeoFeature]) -> Vec<(&overlay::AlertInfo, Vec<&GeoFeature>)> {
+    let mut indices = std::collections::HashMap::new();
+    let mut events: Vec<(&overlay::AlertInfo, Vec<&GeoFeature>)> = Vec::new();
+    for feature in feats {
+        if feature.kind != overlay::FeatureKind::Warning
+            || feature.rings.first().is_none_or(|ring| ring.len() < 3)
+        {
+            continue;
+        }
+        let Some(alert) = feature.alert.as_ref() else { continue };
+        let index = *indices.entry(alert.event_key()).or_insert_with(|| {
+            events.push((alert, Vec::new()));
+            events.len() - 1
+        });
+        let (current, parts) = &mut events[index];
+        if alert.id != current.id && alerts::escalation(alert) > alerts::escalation(current) {
+            *current = alert;
+        }
+        parts.push(feature);
+    }
+    events
+}
+
+/// NWS impact tags can escalate in a CON update; UPG identifies a replaced product instead.
+fn record_warning_tier(
+    known: &mut std::collections::HashMap<String, u8>,
+    alert: &overlay::AlertInfo,
+) -> bool {
+    let tier = alerts::escalation(alert);
+    match known.entry(alert.event_key()) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(tier);
+            true
+        }
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            if tier > *entry.get() {
+                entry.insert(tier);
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// Seed startup silently, but leave an unmatched event pending: a failed county lookup may
+/// supply its relevant polygon on the next refresh without changing the event's impact tier.
+fn take_warning_notification(
+    known: &mut std::collections::HashMap<String, u8>,
+    alert: &overlay::AlertInfo,
+    seeded: bool,
+    relevant: bool,
+) -> bool {
+    if !seeded {
+        record_warning_tier(known, alert);
+        return false;
+    }
+    relevant && record_warning_tier(known, alert)
+}
+
+fn nearest_warning_part<'a>(parts: &[&'a GeoFeature], lon: f64, lat: f64) -> Option<(&'a GeoFeature, f64)> {
+    parts.iter().map(|part| (*part, part.distance_km(lon, lat)))
+        .filter(|(_, distance)| distance.is_finite())
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+}
+
+fn warning_zone_part<'a>(parts: &[&'a GeoFeature], ring: &[[f64; 2]]) -> Option<&'a GeoFeature> {
+    parts.iter().copied().find(|part| part.rings.first()
+        .is_some_and(|outer| overlay::rings_intersect(outer, ring)))
+}
+
+fn warning_centroid(feature: &GeoFeature) -> Option<[f64; 2]> {
+    let ring = feature.rings.first().filter(|ring| !ring.is_empty())?;
+    let (x, y) = ring.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+    Some([x / ring.len() as f64, y / ring.len() as f64])
+}
+
 fn histogram_text(bins: &[u32; 16]) -> String {
     const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let high = bins.iter().copied().max().unwrap_or(0);
@@ -22581,6 +22835,9 @@ impl eframe::App for HookEchoApp {
         // `platform::activity`). A frame that follows a gap means the app just came back, so
         // force one refresh rather than making the user wait out the poll interval.
         self.frame_nr = self.frame_nr.wrapping_add(1);
+        for (view, token) in self.views.iter_mut().zip(crate::gpu_metrics::painted_tokens()) {
+            view.acknowledge_presentation(token);
+        }
         wxdata::stats::bump(wxdata::stats::Counter::FramesDrawn);
         self.gesture_live = map_gesture_on_map(ctx, &self.mobile_occlusion)
             || self.views.iter().any(|v| v.camera_motion.active());
@@ -23472,7 +23729,7 @@ impl eframe::App for HookEchoApp {
                 self.views[self.active].timeline.toggle_play();
                 self.record_interaction("toggle_playback");
             }
-            if !egui::Popup::is_any_open(ctx) && !self.panel_open
+            if !egui::Popup::is_any_open(ctx) && !self.panel_open && !self.drawer.is_open()
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 if self.tool != MapTool::Interrogate {
                     self.tool = MapTool::Interrogate;
@@ -23545,7 +23802,8 @@ impl eframe::App for HookEchoApp {
         if !self.panel_open { self.drawer.resume(); }
         self.refresh_priority_overlays(ctx);
         self.drawer.begin_frame(ctx);
-        if self.panel_open && !egui::Popup::is_any_open(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self.panel_open && !blocking_surface && !self.capture_key
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.panel_open = false;
             self.sidebar_focus_search = false;
         }
@@ -23588,7 +23846,7 @@ impl eframe::App for HookEchoApp {
                     }
                 }
                 self.basemap_panel(ctx);
-                if !phone_layout { self.info_chip(ctx); }
+                self.info_chip(ctx);
                 if !site_picker_on_phone { self.error_chip(ctx); }
                 if !phone_layout { self.update_chip(ctx); }
                 self.quality_chip(ctx);
@@ -24694,6 +24952,7 @@ impl eframe::App for HookEchoApp {
                 // The shared scan cache can refill them when selected again.
                 self.views[idx].volume = None;
                 self.views[idx].forget_recent();
+                self.views[idx].clear_presentation();
                 self.views[idx].last_poll = None;
                 self.pane_shown.remove(&idx);
             }
@@ -24760,22 +25019,14 @@ impl eframe::App for HookEchoApp {
                 let source_loaded = source.as_ref().is_some_and(|source| {
                     self.views[active].volume.as_ref().is_some_and(|volume| volume.name == source.name())
                 });
-                let selected_cut = source_loaded && self.views[active].selected_cut_ms().is_some();
                 let pending_seek = leader.seek_target.is_some();
+                let locked_source = source.as_ref().filter(|_| self.lock_source_frame && source_loaded && !pending_seek);
                 if let Some(time) = self.views[active].linked_requested_time() {
                     let (following, playing) = (leader.following, leader.playing);
                     for (i, view) in self.views.iter_mut().enumerate() {
-                        if i != active { view.timeline.alignment_target = Some(time); }
-                        if i != active
-                            && (selected_cut
-                                || pending_seek
-                                || !self.lock_source_frame
-                                || !source_loaded
-                                || source.as_ref().is_none_or(|source| !view.timeline.align_to_source(
-                                    source, following, playing,
-                                )))
-                        {
-                            view.timeline.align_to(time, following, playing);
+                        if i != active {
+                            view.timeline.alignment_target = Some(time);
+                            view.timeline.align_linked(time, locked_source, following, playing);
                         }
                     }
                 }
@@ -25162,7 +25413,8 @@ mod follow_tests {
 mod warning_scope_tests {
     use super::{
         feature_in_box, nearest_alternate_nexrad, sampled_height_warning, warning_is_near_home,
-        GeoFeature,
+        nearest_warning_part, record_warning_tier, take_warning_notification, warning_events,
+        warning_zone_part, GeoFeature,
     };
     use wxdata::overlay::FeatureKind;
 
@@ -25176,6 +25428,128 @@ mod warning_scope_tests {
             detail: String::new(),
             alert: None,
         }
+    }
+
+    #[test]
+    fn multipart_warning_checks_home_zone_and_site_in_either_order() {
+        let mut remote = poly(-90.0, 35.0, -89.0, 36.0);
+        let mut home = poly(-98.0, 32.0, -97.0, 33.0);
+        let mut alert = wxdata::spoken::demo_alert();
+        alert.vtec = Some("/O.NEW.KFWD.TO.W.0001.261104T0100Z-261104T0200Z/".into());
+        remote.alert = Some(alert.clone());
+        home.alert = Some(alert);
+        let zone = poly(-97.8, 32.2, -97.6, 32.4).rings.remove(0);
+        for features in [vec![remote.clone(), home.clone()], vec![home, remote]] {
+            let groups = warning_events(&features);
+            assert_eq!(groups.len(), 1);
+            let (alert, parts) = &groups[0];
+            assert_eq!(parts.len(), 2);
+            assert_eq!(nearest_warning_part(parts, -97.5, 32.5).unwrap().1, 0.0);
+            assert!(warning_zone_part(parts, &zone).is_some());
+            assert!(parts.iter().any(|part| feature_in_box(part, (-99.0, 31.0, -96.0, 34.0))));
+            let mut known = std::collections::HashMap::new();
+            assert!(record_warning_tier(&mut known, alert));
+            assert!(!record_warning_tier(&mut known, alert));
+            assert_eq!(known.len(), 1);
+        }
+    }
+
+    #[test]
+    fn con_impact_escalations_notify_once_without_rearming_on_downgrades() {
+        let mut known = std::collections::HashMap::new();
+        let mut alert = wxdata::spoken::demo_alert();
+        alert.headline.clear();
+        alert.description.clear();
+        alert.damage_threat = None;
+        alert.tornado_detection = None;
+        alert.vtec = Some("/O.NEW.KFWD.TO.W.0001.261104T0100Z-261104T0200Z/".into());
+        // The initial snapshot seeds the highest tier without sending a notification.
+        record_warning_tier(&mut known, &alert);
+        alert.id.push_str("-continued");
+        alert.vtec = Some("/O.CON.KFWD.TO.W.0001.000000T0000Z-261104T0200Z/".into());
+        assert!(!record_warning_tier(&mut known, &alert));
+        alert.tornado_detection = Some("OBSERVED".into());
+        assert!(record_warning_tier(&mut known, &alert));
+        assert!(!record_warning_tier(&mut known, &alert));
+        alert.headline = "TORNADO EMERGENCY".into();
+        alert.damage_threat = Some("CATASTROPHIC".into());
+        assert!(record_warning_tier(&mut known, &alert));
+        assert!(!record_warning_tier(&mut known, &alert));
+        alert.headline.clear();
+        alert.damage_threat = None;
+        assert!(!record_warning_tier(&mut known, &alert));
+        alert.headline = "TORNADO EMERGENCY".into();
+        assert!(!record_warning_tier(&mut known, &alert));
+        assert_eq!(known.len(), 1);
+    }
+
+    #[test]
+    fn missing_geometry_does_not_consume_a_recovering_warning() {
+        let mut feature = poly(-98.0, 32.0, -97.0, 33.0);
+        feature.alert = Some(wxdata::spoken::demo_alert());
+        let mut empty = feature.clone();
+        empty.rings.clear();
+        let mut known = std::collections::HashMap::new();
+        for (alert, _) in warning_events(&[empty]) {
+            record_warning_tier(&mut known, alert);
+        }
+        assert!(known.is_empty());
+        for (alert, parts) in warning_events(&[feature]) {
+            assert_eq!(nearest_warning_part(&parts, -97.5, 32.5).unwrap().1, 0.0);
+            assert!(record_warning_tier(&mut known, alert));
+        }
+        assert_eq!(known.len(), 1);
+    }
+
+    #[test]
+    fn partial_geometry_recovery_notifies_once_at_the_same_tier() {
+        let mut remote = poly(-90.0, 35.0, -89.0, 36.0);
+        let mut home = poly(-98.0, 32.0, -97.0, 33.0);
+        let mut alert = wxdata::spoken::demo_alert();
+        alert.headline.clear();
+        alert.description.clear();
+        alert.damage_threat = None;
+        alert.tornado_detection = None;
+        alert.vtec = Some("/O.NEW.KFWD.TO.W.0001.261104T0100Z-261104T0200Z/".into());
+        remote.alert = Some(alert.clone());
+        home.alert = Some(alert.clone());
+        for recovered in [vec![remote.clone(), home.clone()], vec![home.clone(), remote.clone()]] {
+            let mut known = std::collections::HashMap::new();
+            for (alert, parts) in warning_events(&[remote.clone()]) {
+                let relevant = nearest_warning_part(&parts, -97.5, 32.5).unwrap().1 <= 10.0;
+                assert!(!take_warning_notification(&mut known, alert, true, relevant));
+            }
+            assert!(known.is_empty(), "the missing home county must not consume a new event");
+            for repeat in [false, true] {
+                for (alert, parts) in warning_events(&recovered) {
+                    let relevant = nearest_warning_part(&parts, -97.5, 32.5).unwrap().1 <= 10.0;
+                    assert_eq!(take_warning_notification(&mut known, alert, true, relevant), !repeat);
+                }
+            }
+            // The same recovery rule applies when a CON raises an already-known tier.
+            let mut escalation = alert.clone();
+            escalation.tornado_detection = Some("OBSERVED".into());
+            escalation.vtec = Some("/O.CON.KFWD.TO.W.0001.000000T0000Z-261104T0200Z/".into());
+            assert!(!take_warning_notification(&mut known, &escalation, true, false));
+            assert_eq!(known[&alert.event_key()], 0);
+            assert!(take_warning_notification(&mut known, &escalation, true, true));
+            assert!(!take_warning_notification(&mut known, &escalation, true, true));
+        }
+    }
+
+    #[test]
+    fn startup_seeds_unmatched_events_without_realerting_after_geometry_recovery() {
+        let alert = wxdata::spoken::demo_alert();
+        let mut known = std::collections::HashMap::new();
+        assert!(!take_warning_notification(&mut known, &alert, false, false));
+        assert_eq!(known.len(), 1);
+        assert!(!take_warning_notification(&mut known, &alert, true, true));
+        let mut new_event = alert.clone();
+        new_event.id = "new-rule-only-event".into();
+        new_event.vtec = None;
+        assert!(take_warning_notification(&mut known, &new_event, true, true),
+            "a matching user rule can qualify an otherwise remote event");
+        assert!(!take_warning_notification(&mut known, &new_event, true, true));
     }
 
     #[test]
@@ -25375,6 +25749,7 @@ mod tests {
         assert!(wxdata::sites::is_nexrad("KFWS"));
         let mut upload = RadarUpload {
             upload_token: 0,
+            shared_sweep: None,
             cache_loop: false,
             sector_opacity: None,
             az_bins: 720,
@@ -25900,6 +26275,21 @@ mod tests {
         assert_eq!(lut.uniform, full.uniform);
         assert_eq!((lut.az_bins, lut.gate_count), (360, 200));
         assert!(lut.lut_only);
+        for precision in [false, true] {
+            let mut sweep = sweep.clone();
+            sweep.data16 = precision.then(|| vec![2_048; sweep.data.len()]);
+            let shared = Arc::new(sweep);
+            let upload = super::to_shared_upload(shared.clone(), table, None, false, None, None, false);
+            assert!(Arc::ptr_eq(upload.shared_sweep.as_ref().unwrap(), &shared));
+            assert!(upload.data.is_empty(), "warm playback does not clone 8-bit gates");
+            assert!(upload.data16.as_ref().is_none_or(Vec::is_empty), "precision playback does not clone 16-bit gates");
+            let owned = super::to_upload(&shared, table, None, false, None, None, false);
+            assert_eq!(upload.lut, owned.lut);
+            assert_eq!(upload.uniform, owned.uniform);
+            let palette = super::to_shared_upload(shared, table, None, false, None, None, true);
+            assert!(palette.shared_sweep.is_none(), "a LUT update need not retain the sweep");
+            assert!(palette.lut_only);
+        }
     }
 
     /// The DWD arm exists because DL-DE/BY-2.0 requires the credit; the NOAA sites must stay

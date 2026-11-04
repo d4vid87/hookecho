@@ -1,0 +1,85 @@
+---
+source: nexrad-decode/src/messages/rda_prf_data/snapshot_test.rs
+expression: "messages[0]"
+---
+Message {
+    headers: Single(
+        MessageHeader {
+            rpg_unknown: BinaryData {
+                len: 12,
+                sha256: "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+                head: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                tail: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            },
+            segment_size: 64,
+            redundant_channel: 8,
+            message_type: 32,
+            sequence_number: 10,
+            date: 20147,
+            time: 67570256,
+            segment_count: 1,
+            segment_number: 1,
+        },
+    ),
+    contents: RDAPRFData(
+        Message {
+            header: Header {
+                number_of_waveforms: 3,
+                spare: 0,
+            },
+            waveform_prf_data: [
+                WaveformPrfData {
+                    waveform_type: 1,
+                    prf_values: [
+                        321890,
+                        349650,
+                        388600,
+                        446430,
+                        511950,
+                        602410,
+                        717700,
+                        862070,
+                    ],
+                },
+                WaveformPrfData {
+                    waveform_type: 2,
+                    prf_values: [
+                        446430,
+                        802140,
+                        857140,
+                        925930,
+                        1013510,
+                        1094890,
+                        1181100,
+                        1282050,
+                    ],
+                },
+                WaveformPrfData {
+                    waveform_type: 5,
+                    prf_values: [
+                        574713,
+                        618429,
+                        669344,
+                        729395,
+                        801282,
+                        888889,
+                        998004,
+                        1133787,
+                    ],
+                },
+            ],
+        },
+    ),
+    offset: 0,
+    size: 2432,
+}

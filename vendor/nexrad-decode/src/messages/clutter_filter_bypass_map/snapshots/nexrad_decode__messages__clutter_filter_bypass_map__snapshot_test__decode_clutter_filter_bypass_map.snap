@@ -1,0 +1,23 @@
+---
+source: nexrad-decode/src/messages/clutter_filter_bypass_map/snapshot_test.rs
+expression: summary
+---
+BypassMapSummary {
+    generation_date: 20089,
+    generation_time: 720,
+    elevation_segment_count: 1,
+    elevations: [
+        ElevationSummary {
+            segment_number: 1,
+            range_bin_bytes: 23040,
+            first_radial_first_halfword: (
+                255,
+                255,
+            ),
+            radial_180_first_halfword: (
+                170,
+                85,
+            ),
+        },
+    ],
+}

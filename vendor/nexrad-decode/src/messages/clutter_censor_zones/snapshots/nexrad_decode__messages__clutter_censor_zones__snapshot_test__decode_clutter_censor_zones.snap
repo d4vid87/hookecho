@@ -1,0 +1,61 @@
+---
+source: nexrad-decode/src/messages/clutter_censor_zones/snapshot_test.rs
+expression: "messages[0]"
+---
+Message {
+    headers: Single(
+        MessageHeader {
+            rpg_unknown: BinaryData {
+                len: 12,
+                sha256: "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+                head: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                tail: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            },
+            segment_size: 1216,
+            redundant_channel: 8,
+            message_type: 8,
+            sequence_number: 1,
+            date: 20089,
+            time: 43200000,
+            segment_count: 1,
+            segment_number: 1,
+        },
+    ),
+    contents: ClutterCensorZones(
+        Message {
+            header: Header {
+                override_region_count: 2,
+            },
+            regions: [
+                Region {
+                    start_range: 10,
+                    stop_range: 50,
+                    start_azimuth: 0,
+                    stop_azimuth: 90,
+                    elevation_segment_number: 1,
+                    operator_select_code: 2,
+                },
+                Region {
+                    start_range: 100,
+                    stop_range: 200,
+                    start_azimuth: 180,
+                    stop_azimuth: 270,
+                    elevation_segment_number: 3,
+                    operator_select_code: 0,
+                },
+            ],
+        },
+    ),
+    offset: 0,
+    size: 2432,
+}
