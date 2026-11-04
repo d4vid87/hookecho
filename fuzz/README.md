@@ -18,7 +18,7 @@ cargo +nightly fuzz run level3_decode -- -max_total_time=60
 Not a workspace member — cargo-fuzz needs nightly and its own profile, and `cargo test
 --workspace` should not try to build it. Because an excluded crate is its own workspace root, this
 manifest **duplicates the root `[patch.crates-io]`**; without that it would fuzz upstream
-gribberish and nexrad-data instead of the vendored forks the app actually ships.
+gribberish, nexrad-data, nexrad-model and nexrad-decode instead of the vendored forks the app actually ships.
 
 `seeds/` holds the starting inputs (the committed Level 3 fixtures and colour tables); copy them
 into `corpus/<target>/` before a run, as CI does. `corpus/` and `artifacts/` are run output and

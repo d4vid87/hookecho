@@ -34,6 +34,8 @@ chrono = "0.4"
 [patch.crates-io]
 gribberish = { path = ${JSON.stringify(path.join(root, 'vendor/gribberish'))} }
 nexrad-data = { path = ${JSON.stringify(path.join(root, 'vendor/nexrad-data'))} }
+nexrad-model = { path = ${JSON.stringify(path.join(root, 'vendor/nexrad-model'))} }
+nexrad-decode = { path = ${JSON.stringify(path.join(root, 'vendor/nexrad-decode'))} }
 ${profiles}`);
   await fs.copyFile(path.join(root, 'Cargo.lock'), path.join(scratch, 'Cargo.lock'));
   await fs.copyFile(new URL('./fixtures/offline-weather.rs', import.meta.url), path.join(scratch, 'src/lib.rs'));
