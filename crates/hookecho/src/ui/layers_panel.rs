@@ -380,7 +380,7 @@ pub(crate) fn context_catalog(ui: &mut egui::Ui, entries: &[PaletteEntry], tools
         let mut rows: Vec<_> = entries.iter().filter(|e| e.category == cat).collect();
         rows.sort_by_key(|e| (!e.favorite, !e.common));
         if rows.is_empty() { continue; }
-        let everyday = |e: &PaletteEntry| matches!(e.action, PaletteAction::AllTilts) || (e.common && matches!(e.action, PaletteAction::Tool(_)));
+        let everyday = |e: &PaletteEntry| matches!(e.action, PaletteAction::AllTilts | PaletteAction::CompareVelocity) || (e.common && matches!(e.action, PaletteAction::Tool(_)));
         let mut show_rows = |ui: &mut egui::Ui, advanced: bool| {
             for entry in rows.iter().filter(|e| !tools || everyday(e) != advanced) {
                 let hit = row(ui, entry, accent, false, false);

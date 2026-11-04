@@ -3533,8 +3533,6 @@ dependencies = [
 [[package]]
 name = "nexrad-decode"
 version = "1.0.0-rc.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a6928b9f7bb9a2ac7c7f4bcb04ad9104ef307d6c4dee251c36cd4b69a47bc1"
 dependencies = [
  "chrono",
  "hex",
@@ -3560,8 +3558,6 @@ dependencies = [
 [[package]]
 name = "nexrad-model"
 version = "1.0.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e2e15c56d3f5869b78eef326ca33debd6d144a4a3348ff4829e8579c6d2a9ea"
 dependencies = [
  "hex",
  "serde",
@@ -7371,6 +7367,7 @@ dependencies = [
  "lru",
  "netcdf3",
  "nexrad-data",
+ "nexrad-decode",
  "nexrad-level3",
  "nexrad-model",
  "postcard",

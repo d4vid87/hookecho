@@ -942,6 +942,21 @@ fn selected_sweep(scan: &Scan, moment: Moment, tilt: usize) -> Option<&Sweep> {
     selected_sweep_at(scan, moment, tilt, None)
 }
 
+/// A single supported instrument Nyquist limit for the velocity-bearing radials in a sweep.
+/// Mixed PRF sectors require a different correction algorithm; never infer the limit from gates.
+pub fn sweep_nyquist_velocity(sweep: &Sweep) -> Option<f32> {
+    let mut values = sweep.radials().iter().filter(|r| r.velocity().is_some());
+    let first = values.next()?.nyquist_velocity_mps()?;
+    (first.is_finite() && first > 0.0 && values.all(|r| r.nyquist_velocity_mps()
+        .is_some_and(|value| value.is_finite() && (value - first).abs() < 0.005)))
+        .then_some(first)
+}
+
+/// Instrument limit for the selected velocity cut, when correction is supported.
+pub fn nyquist_velocity_at(scan: &Scan, tilt: usize, cut_end_ms: Option<i64>) -> Option<f32> {
+    sweep_nyquist_velocity(selected_sweep_at(scan, Moment::Velocity, tilt, cut_end_ms)?)
+}
+
 fn selected_sweep_at(
     scan: &Scan,
     moment: Moment,
@@ -1157,6 +1172,9 @@ struct DealiasKey {
     lon_e2: i32,
     elevation_number: u8,
     gate_count: usize,
+    nyquist_bits: u32,
+    first_gate_bits: u32,
+    gate_interval_bits: u32,
 }
 
 /// How far back a reference may be. A volume lands every 4-6 minutes; past about three of them
@@ -1320,7 +1338,9 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
         for (bin, row) in vel.chunks_mut(gate_count).enumerate() {
             gather_row(bin, row, &by_bin);
         }
-        let nyq = crate::dealias::estimate_nyquist(&vel);
+        let nyq = sweep_nyquist_velocity(sweep).ok_or_else(|| anyhow::anyhow!(
+            "Velocity correction unavailable: missing or mixed instrument Nyquist limits. Select raw velocity."
+        ))?;
         // Continuity: hand the previous pass over this same tilt to the dealiaser, so a storm
         // whose fastest air genuinely sits past the Nyquist velocity stays unfolded from volume
         // to volume instead of snapping to zero whenever the fast region becomes the biggest one.
@@ -1329,6 +1349,9 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
             lon_e2: (radar_lon * 100.0) as i32,
             elevation_number: sweep.elevation_number(),
             gate_count,
+            nyquist_bits: nyq.to_bits(),
+            first_gate_bits: first_gate_km.to_bits(),
+            gate_interval_bits: gate_interval_km.to_bits(),
         };
         let at = radials
             .iter()
@@ -1921,6 +1944,75 @@ mod tests {
         )
     }
 
+    #[test]
+    fn sweep_nyquist_requires_consistent_metadata_only_on_velocity_radials() {
+        let velocity = radial_with_at(Moment::Velocity, 0.5, 1_000);
+        let known = velocity.clone().with_nyquist_velocity_mps(Some(25.0));
+        let different = velocity.clone().with_nyquist_velocity_mps(Some(20.0));
+        let reflectivity = radial_with_at(Moment::Reflectivity, 0.5, 1_000);
+
+        for other in [velocity, different] {
+            for radials in [vec![known.clone(), other.clone()], vec![other, known.clone()]] {
+                assert_eq!(sweep_nyquist_velocity(&Sweep::new(1, radials)), None,
+                    "missing or mixed velocity metadata cannot support correction");
+            }
+        }
+        assert_eq!(sweep_nyquist_velocity(&Sweep::new(1, vec![
+            reflectivity.clone(),
+            known.clone(),
+            reflectivity.clone().with_nyquist_velocity_mps(Some(30.0)),
+            known,
+        ])), Some(25.0), "REF-only radials do not constrain Doppler metadata");
+        assert_eq!(sweep_nyquist_velocity(&Sweep::new(1, vec![reflectivity])), None);
+        assert_eq!(sweep_nyquist_velocity(&Sweep::new(1, vec![])), None);
+    }
+
+    #[test]
+    fn raw_velocity_remains_available_when_correction_metadata_is_missing_or_mixed() {
+        let missing = radial_with_at(Moment::Velocity, 0.5, 1_000);
+        let known = missing.clone().with_nyquist_velocity_mps(Some(25.0));
+        let mixed = missing.clone().with_nyquist_velocity_mps(Some(20.0));
+        for sweep in [Sweep::new(1, vec![missing]), Sweep::new(1, vec![known, mixed])] {
+            for precision in [false, true] {
+                let raw = bin_sweep_display(&sweep, Moment::Velocity, 35.33, -97.28, false, precision)
+                    .expect("raw velocity does not require Nyquist metadata");
+                assert!(raw.data[0] >= 2, "raw measured gate stays visible");
+                let error = bin_sweep_display(&sweep, Moment::Velocity, 35.33, -97.28, true, precision)
+                    .expect_err("correction must not guess a Nyquist limit from observed gates");
+                assert!(error.to_string().contains("missing or mixed instrument Nyquist"));
+            }
+        }
+    }
+
+    // The display regression and reference-key regression both mutate the single continuity
+    // cache; serialize those tests without constraining production cache access.
+    static DEALIAS_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn correction_uses_instrument_nyquist_without_reversing_unfolded_velocity() {
+        let _serial = DEALIAS_TEST_SERIAL.lock().unwrap();
+        // The largest observed speed is 10 m/s, but the instrument limit is 25 m/s.
+        // Inferring Nyquist=10 from these gates folds the final +10 into -10 to match
+        // the larger inbound region. With the actual metadata all four values stay raw.
+        let velocity = MomentData::from_fixed_point(
+            4, 2125, 250, 8, 2.0, 129.0, vec![109, 109, 109, 149],
+        );
+        let radial = Radial::new(
+            0, 1, 0.0, 0.5, nexrad_model::data::RadialStatus::ScanStart, 1, 0.5,
+            None, Some(velocity), None, None, None, None, None,
+        ).with_nyquist_velocity_mps(Some(25.0));
+        let sweep = Sweep::new(1, vec![radial]);
+        let corrected = bin_sweep_display(&sweep, Moment::Velocity, 36.0, -98.0, true, true)
+            .unwrap();
+        let precise = corrected.data16.as_ref().unwrap();
+        for (code, expected) in precise[..4].iter().zip([-10.0, -10.0, -10.0, 10.0]) {
+            assert!(*code >= 2);
+            let actual = corrected.value_min + (*code as f32 - 2.0) / 65533.0
+                * (corrected.value_max - corrected.value_min);
+            assert!((actual - expected).abs() < 0.005, "{actual} should remain {expected} m/s");
+        }
+    }
+
     fn minimal_vcp() -> nexrad_model::data::VolumeCoveragePattern {
         use nexrad_model::data::{PulseWidth, VolumeCoveragePattern};
         VolumeCoveragePattern::new(
@@ -2101,11 +2193,15 @@ mod tests {
     /// reference from the wrong sweep is worse than no reference at all.
     #[test]
     fn a_dealias_reference_is_only_reused_for_the_next_pass_over_the_same_tilt() {
+        let _serial = DEALIAS_TEST_SERIAL.lock().unwrap();
         let key = DealiasKey {
             lat_e2: 3_552,
             lon_e2: -9_727,
             elevation_number: 1,
             gate_count: 2,
+            nyquist_bits: 25.0f32.to_bits(),
+            first_gate_bits: 2.125f32.to_bits(),
+            gate_interval_bits: 0.25f32.to_bits(),
         };
         let field = vec![Some(1.0), Some(2.0)];
         let field = std::sync::Arc::new(field);
@@ -2129,5 +2225,15 @@ mod tests {
             ..key
         };
         assert_eq!(take_dealias_reference(&other_site, 400_000), None);
+        for incompatible in [
+            DealiasKey { nyquist_bits: 20.0f32.to_bits(), ..key },
+            DealiasKey { first_gate_bits: 1.875f32.to_bits(), ..key },
+            DealiasKey { gate_interval_bits: 1.0f32.to_bits(), ..key },
+            DealiasKey { gate_count: 3, ..key },
+        ] {
+            assert!(take_dealias_reference(&incompatible, 400_000).is_none(),
+                "different Nyquist or gate geometry cannot reuse the continuity reference");
+        }
+        assert_eq!(take_dealias_reference(&key, 400_000), Some(field));
     }
 }

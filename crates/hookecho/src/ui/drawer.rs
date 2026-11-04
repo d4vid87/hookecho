@@ -249,7 +249,8 @@ impl Drawer {
             });
         self.gear = gear_on;
         self.expanded = expanded;
-        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if close || (!egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))) {
             *open = false;
             return None;
         }
@@ -319,6 +320,25 @@ fn rects(ctx: &egui::Context, width: f32, expanded: bool) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_closes_one_drawer_page_and_is_consumed() {
+        let ctx = egui::Context::default();
+        let mut drawer = Drawer::default();
+        let mut open = true;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            drawer.page_sized_fixed(ui.ctx(), "Tool", &mut open, 400.0, egui::Window::new("Tool"));
+        });
+        let input = egui::RawInput { events: vec![egui::Event::Key {
+            key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }], ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| {
+            assert!(drawer.page_sized_fixed(ui.ctx(), "Tool", &mut open, 400.0, egui::Window::new("Tool")).is_none());
+            assert!(!open);
+            assert!(!ui.ctx().input(|input| input.key_pressed(egui::Key::Escape)));
+        });
+    }
 
     #[test]
     #[cfg(not(target_os = "android"))]

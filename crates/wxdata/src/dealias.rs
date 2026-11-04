@@ -39,15 +39,6 @@ fn winning_fold(votes: std::collections::HashMap<i32, u32>) -> i32 {
         .unwrap_or(0)
 }
 
-/// Estimate the Nyquist velocity from a folded field as the largest observed |v|.
-/// Folded data saturates at ±V_ny, so this is a robust practical proxy when the model
-/// doesn't carry the radial's unambiguous velocity.
-pub fn estimate_nyquist(vel: &[Option<f32>]) -> f32 {
-    vel.iter()
-        .filter_map(|v| *v)
-        .fold(0.0f32, |m, v| m.max(v.abs()))
-}
-
 /// Dealias a polar velocity grid laid out as `vel[az * gate_count + gate]`.
 /// `None` gates (no data / below threshold / range folded) pass through untouched.
 /// Azimuth wraps (bin 0 neighbors bin az_bins-1); range does not.
@@ -92,16 +83,12 @@ pub fn dealias_with_reference(
     let idx = |az: usize, g: usize| az * gate_count + g;
     // 4-neighbors with azimuthal wrap.
     let neighbors = |az: usize, g: usize| {
-        let mut v: Vec<(usize, usize)> = Vec::with_capacity(4);
-        v.push(((az + 1) % az_bins, g));
-        v.push(((az + az_bins - 1) % az_bins, g));
-        if g + 1 < gate_count {
-            v.push((az, g + 1));
-        }
-        if g > 0 {
-            v.push((az, g - 1));
-        }
-        v
+        [
+            ((az + 1) % az_bins, g),
+            ((az + az_bins - 1) % az_bins, g),
+            (az, g + 1),
+            (az, g.wrapping_sub(1)),
+        ].into_iter().filter(move |&(_, ng)| ng < gate_count)
     };
 
     let mut region_count = 0usize;
@@ -346,9 +333,10 @@ mod tests {
     }
 
     #[test]
-    fn nyquist_from_field_is_max_abs() {
-        let f = vec![Some(-24.0f32), None, Some(19.0), Some(-31.5)];
-        assert_eq!(estimate_nyquist(&f), 31.5);
+    fn measured_nyquist_preserves_unfolded_wind_direction() {
+        let values = vec![Some(0.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0), Some(10.0)];
+        assert_eq!(dealias(&values, 1, 6, 25.0), values);
+        assert_ne!(dealias(&values, 1, 6, 10.0), values, "observed maximum is not the instrument limit");
     }
 
     #[test]

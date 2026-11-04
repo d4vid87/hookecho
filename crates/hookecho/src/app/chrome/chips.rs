@@ -18,7 +18,7 @@ impl HookEchoApp {
                 .as_deref()
                 .unwrap_or_else(|| view.moment.short_name());
             let valid = view
-                .displayed_time()
+                .presented_time()
                 .map(|time| time.format("%H:%MZ").to_string())
                 .unwrap_or_else(|| "waiting".into());
             egui::Area::new("broadcast_source".into())
@@ -292,27 +292,12 @@ impl HookEchoApp {
         let accent = crate::theme::accent(self.settings.theme);
         // An armed tool changes what a click means, so the cursor says so over the whole map.
         ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
-        // Escape disarms, the same way it closes every other transient thing.
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.tool = MapTool::Interrogate;
+        let compact = super::overlay::compact(ctx);
+        if compact && (self.panel_open || self.drawer.is_open() || self.forecast_open
+            || ctx.memory(|m| m.top_modal_layer().is_some())) {
             return;
         }
-        let compact = super::overlay::compact(ctx);
-        let content_width = (self.chrome_rect.width() - 54.0).clamp(44.0, 720.0);
-        let area = egui::Area::new(egui::Id::new("info_chip"))
-            .constrain_to(self.chrome_rect)
-            .anchor(
-                egui::Align2::RIGHT_BOTTOM,
-                egui::vec2(-14.0, style::LANE_BOTTOM_CHIP),
-            )
-            .default_width(content_width + 24.0)
-            .interactable(true)
-            .show(ctx, |ui| {
-                style::glass(ui, 238).show(ui, |ui| {
-                    ui.set_max_width(content_width);
-                    if compact {
-                        ui.spacing_mut().interact_size = egui::vec2(44.0, 44.0);
-                    }
+        let area_rect = tool_control_area(ctx, self.chrome_rect, compact, |ui, content_width, controls_height| {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new(glyph).size(15.0).color(accent));
                         ui.label(
@@ -332,6 +317,12 @@ impl HookEchoApp {
                         if !compact {
                             ui.label(egui::RichText::new("· Esc exits").size(style::FONT_SM).weak());
                         }
+                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("tool_controls")
+                        .max_height(controls_height)
+                        .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if self.tool != MapTool::Draw {
                             return;
                         }
@@ -402,40 +393,11 @@ impl HookEchoApp {
                         }
                     });
                     if self.tool == MapTool::StormTrack {
-                        ui.separator();
-                        ui.label("User-defined motion · click twice to place or replace the track");
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Direction");
-                            ui.add(egui::DragValue::new(&mut self.manual_storm_track.bearing_deg).range(0.0..=359.0).suffix("°"));
-                            ui.label("Horizon");
-                            ui.add(egui::Slider::new(&mut self.manual_storm_track.horizon_min, 15..=120).step_by(15.0).suffix(" min"));
-                        });
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Speed");
-                            let (factor, suffix) = match self.manual_storm_track.speed_unit {
-                                1 => (1.150_779, " mph"),
-                                2 => (1.852, " km/h"),
-                                _ => (1.0, " kt"),
-                            };
-                            let mut speed = self.manual_storm_track.speed_kt * factor;
-                            if ui.add(egui::DragValue::new(&mut speed).range(0.0..=150.0 * factor).suffix(suffix)).changed() {
-                                self.manual_storm_track.speed_kt = speed / factor;
-                            }
-                            egui::ComboBox::from_id_salt("storm_track_speed_unit")
-                                .selected_text(match self.manual_storm_track.speed_unit { 1 => "mph", 2 => "km/h", _ => "kt" })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 0, "kt");
-                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 1, "mph");
-                                    ui.selectable_value(&mut self.manual_storm_track.speed_unit, 2, "km/h");
-                                });
-                            ui.label("Cone ±");
-                            ui.add(egui::DragValue::new(&mut self.manual_storm_track.cone_half_angle_deg).range(0.0..=45.0).suffix("°"));
-                            if ui.button("Clear").clicked() { self.manual_storm_track.origin = None; self.manual_storm_track.endpoint_set = false; }
-                        });
+                        manual_track_controls(ui, &mut self.manual_storm_track, compact);
                     }
-                });
+                    });
             });
-        self.mobile_occlusion.push(area.response.rect);
+        self.mobile_occlusion.push(area_rect);
     }
 
     /// Top-center chip when a newer release exists: says so, links to the download, dismisses.
@@ -489,4 +451,123 @@ impl HookEchoApp {
         self.update_chip_hidden |= hide;
     }
 
+}
+
+fn manual_track_controls(ui: &mut egui::Ui, track: &mut ManualStormTrack, compact: bool) {
+    ui.separator();
+    ui.label("User-defined motion · click twice to place or replace the track");
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Direction");
+        ui.add(egui::DragValue::new(&mut track.bearing_deg).range(0.0..=359.0).suffix("°"));
+        if compact { ui.end_row(); }
+        ui.label("Horizon");
+        ui.add(egui::Slider::new(&mut track.horizon_min, 15..=120).step_by(15.0).suffix(" min"));
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Speed");
+        let (factor, suffix) = match track.speed_unit {
+            1 => (1.150_779, " mph"),
+            2 => (1.852, " km/h"),
+            _ => (1.0, " kt"),
+        };
+        let mut speed = track.speed_kt * factor;
+        if ui.add(egui::DragValue::new(&mut speed).range(0.0..=150.0 * factor).suffix(suffix)).changed() {
+            track.speed_kt = speed / factor;
+        }
+        egui::ComboBox::from_id_salt("storm_track_speed_unit")
+            .selected_text(match track.speed_unit { 1 => "mph", 2 => "km/h", _ => "kt" })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut track.speed_unit, 0, "kt");
+                ui.selectable_value(&mut track.speed_unit, 1, "mph");
+                ui.selectable_value(&mut track.speed_unit, 2, "km/h");
+            });
+        if compact { ui.end_row(); }
+        ui.label("Cone ±");
+        ui.add(egui::DragValue::new(&mut track.cone_half_angle_deg).range(0.0..=45.0).suffix("°"));
+        if ui.button("Clear").clicked() { track.origin = None; track.endpoint_set = false; }
+    });
+}
+
+fn tool_control_area(
+    ctx: &egui::Context,
+    bounds: egui::Rect,
+    compact: bool,
+    content: impl FnOnce(&mut egui::Ui, f32, f32),
+) -> egui::Rect {
+    let width = (bounds.width() - 54.0).clamp(44.0, 720.0);
+    let controls_height = if compact { (bounds.height() - 480.0).clamp(70.0, 230.0) } else { 400.0 };
+    egui::Area::new(egui::Id::new("info_chip"))
+        .constrain_to(bounds)
+        .anchor(
+            if compact { egui::Align2::RIGHT_TOP } else { egui::Align2::RIGHT_BOTTOM },
+            egui::vec2(-14.0, if compact { 164.0 } else { crate::ui::style::LANE_BOTTOM_CHIP }),
+        )
+        .default_width(width + 24.0)
+        .interactable(true)
+        .show(ctx, |ui| {
+            crate::ui::style::glass(ui, 238).show(ui, |ui| {
+                ui.set_max_width(width);
+                // Area caches the preceding tool's size. Set this before laying out the header:
+                // set_max_height also updates the cursor, so calling it later overlaps widgets.
+                ui.set_max_height(controls_height + 96.0);
+                if compact { ui.spacing_mut().interact_size = egui::vec2(44.0, 44.0); }
+                content(ui, width, controls_height);
+            });
+        }).response.rect
+}
+
+#[cfg(test)]
+mod tool_control_tests {
+    #[test]
+    fn richer_phone_tools_expand_without_overlapping_done_or_transport() {
+        for (width, height) in [(390.0, 844.0), (320.0, 568.0)] {
+            let ctx = egui::Context::default();
+            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+            // Reuse the same Area so the richer controls must overcome the short Forecast size.
+            for (name, controls) in [
+                ("Forecast", &[][..]),
+                ("Draw", &["Pencil", "Eraser", "Pen", "Undo", "Redo", "Clear", "Export"][..]),
+                ("Storm track", &["Direction", "Horizon", "Speed", "Cone", "Clear"][..]),
+            ] {
+                for _ in 0..3 {
+                    let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(bounds), ..Default::default() }, |ui| {
+                        let mut done = egui::Rect::NOTHING;
+                        let mut body = egui::Rect::NOTHING;
+                        let area = super::tool_control_area(ui.ctx(), bounds, true, |ui, _, max_height| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(name);
+                                done = ui.button("Done").rect;
+                                ui.label("Tap the map to use this tool");
+                            });
+                            if !controls.is_empty() {
+                                let scroll = egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+                                    if name == "Storm track" {
+                                        super::manual_track_controls(ui, &mut super::ManualStormTrack::default(), true);
+                                    } else {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for label in controls { let _ = ui.button(*label); }
+                                        });
+                                    }
+                                });
+                                body = scroll.inner_rect;
+                                assert!(scroll.content_size.x <= body.width() + 1.0, "{name}: controls overflow horizontally");
+                                if width >= 390.0 && name == "Draw" {
+                                    assert!(scroll.content_size.y <= body.height() + 1.0,
+                                        "{name}: richer controls inherited the short Forecast height");
+                                }
+                            }
+                        });
+                        assert!(done.bottom() < height - 190.0, "{name}: Done stays above transport");
+                        assert!(area.contains_rect(done), "{name}: Done stays in its card");
+                        assert!(area.width() <= bounds.width(), "{name}: card wider than phone");
+                        if !controls.is_empty() {
+                            assert!(body.top() >= done.bottom(), "{name}: body overlaps Done");
+                            assert!(body.height() >= 44.0, "{name}: visible touch controls");
+                            assert!(body.bottom() < height - 190.0, "{name}: body covers transport");
+                        }
+                    });
+                }
+            }
+        }
+    }
 }

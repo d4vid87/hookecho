@@ -1,0 +1,31 @@
+---
+source: nexrad-decode/src/messages/rda_adaptation_data/snapshot_test.rs
+expression: summary
+---
+AdaptationSummary {
+    adap_file_name: Some(
+        "current",
+    ),
+    adap_format: Some(
+        "14",
+    ),
+    adap_revision: Some(
+        "19",
+    ),
+    adap_date: Some(
+        "02/17/22",
+    ),
+    adap_time: Some(
+        "15-12-54",
+    ),
+    site_latitude: Some(
+        41.73119999991523,
+    ),
+    site_longitude: Some(
+        -93.72286944442325,
+    ),
+    site_name: None,
+    antenna_gain: Some(
+        44.6,
+    ),
+}

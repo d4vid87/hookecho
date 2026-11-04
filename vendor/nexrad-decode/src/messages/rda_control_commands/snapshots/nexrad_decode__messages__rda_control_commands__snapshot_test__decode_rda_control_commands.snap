@@ -1,0 +1,72 @@
+---
+source: nexrad-decode/src/messages/rda_control_commands/snapshot_test.rs
+expression: "messages[0]"
+---
+Message {
+    headers: Single(
+        MessageHeader {
+            rpg_unknown: BinaryData {
+                len: 12,
+                sha256: "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+                head: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                tail: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            },
+            segment_size: 1216,
+            redundant_channel: 8,
+            message_type: 6,
+            sequence_number: 1,
+            date: 20089,
+            time: 43200000,
+            segment_count: 1,
+            segment_number: 1,
+        },
+    ),
+    contents: RDAControlCommands(
+        Message {
+            inner: Message {
+                rda_state_command: 32772,
+                rda_log_command: 1,
+                auxiliary_power_generator_control: 0,
+                rda_control_authorization: 8,
+                restart_vcp_or_elevation_cut: 0,
+                select_local_vcp_number: 35,
+                spare_7: 0,
+                super_resolution_control: 2,
+                clutter_mitigation_decision_control: 2,
+                avset_control: 2,
+                spare_11: 0,
+                channel_control_command: 1,
+                performance_check_control: 0,
+                zdr_bias_estimate: 500,
+                spare_15_20: [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                spot_blanking: 4,
+                spare_22_26: [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            },
+        },
+    ),
+    offset: 0,
+    size: 2432,
+}

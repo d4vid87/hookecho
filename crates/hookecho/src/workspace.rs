@@ -88,7 +88,7 @@ pub struct SceneProducts {
 }
 
 impl SceneProducts {
-    fn validate(&self) -> anyhow::Result<()> {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.global_fcst_hour <= 384 && self.hrrr_fcst_hour <= 48
             && (1..=60).contains(&self.refs_fcst_hour) && self.refs_dbz_threshold <= 80
             && matches!(self.env_srh_km, 1 | 3) && (1..=168).contains(&self.snow_hours)
@@ -201,6 +201,10 @@ impl SharedScene {
             "Invalid public overlay");
         validate_scene_fields(&ws.fields_on)?;
         for pane in &ws.panes {
+            anyhow::ensure!(pane.storm_motion.is_none_or(|(direction, speed)|
+                direction.is_finite() && (0.0..=360.0).contains(&direction)
+                    && speed.is_finite() && (0.0..=300.0).contains(&speed)),
+                "Invalid pane storm-relative motion");
             anyhow::ensure!(pane.site.as_ref().is_none_or(|site|
                 site.len() <= 8 && wxdata::sites::site_by_id(site).is_some()),
                 "Unknown radar station in scene");
@@ -495,6 +499,10 @@ pub struct PaneSnap {
     pub tilt: usize,
     #[serde(default)]
     pub srv: bool,
+    #[serde(default)]
+    pub storm_motion: Option<(f32, f32)>,
+    #[serde(default)]
+    pub dealias_override: Option<bool>,
     pub basemap: String,
     pub lon: f64,
     pub lat: f64,
@@ -545,6 +553,8 @@ impl PaneSnap {
             custom_product: v.custom_product.clone(),
             tilt: v.tilt,
             srv: v.srv,
+            storm_motion: Some((v.storm_dir_deg, v.storm_speed_kt)),
+            dealias_override: v.dealias_override,
             basemap: v.basemap.slug().to_string(),
             lon,
             lat,
@@ -582,6 +592,13 @@ impl PaneSnap {
         v.tilt = self.tilt;
         v.follow_low_cut = false; // a saved tilt takes precedence over this session-only live mode
         v.srv = self.srv;
+        if let Some((direction, speed)) = self.storm_motion.filter(|(direction, speed)|
+            direction.is_finite() && (0.0..=360.0).contains(direction)
+                && speed.is_finite() && (0.0..=300.0).contains(speed)) {
+            v.storm_dir_deg = direction;
+            v.storm_speed_kt = speed;
+        }
+        v.dealias_override = self.dealias_override;
         v.satellite = self.satellite.clone();
         v.abi_scene = self.abi_scene;
         v.appearance = self.appearance.clone();
@@ -616,6 +633,8 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
         custom_product: None,
         tilt,
         srv,
+        storm_motion: None,
+        dealias_override: None,
         basemap: "dark".into(),
         // Centered on the southern plains at a single-radar zoom; overwritten the moment the
         // pane adopts a site and recenters on it.
@@ -675,6 +694,8 @@ pub fn starters() -> Vec<Workspace> {
                 custom_product: None,
                 tilt: 0,
                 srv: false,
+                storm_motion: None,
+                dealias_override: None,
                 basemap: "dark".into(),
                 lon: -97.0,
                 lat: 38.5,
@@ -727,6 +748,27 @@ pub fn starters() -> Vec<Workspace> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn velocity_workspace_keeps_each_panes_motion_and_dealias_choice() {
+        use wxdata::level2::Moment;
+        let camera = crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 7.0);
+        for (direction, speed, dealias) in [(90.0, 50.0, Some(false)), (270.0, 10.0, Some(true))] {
+            let mut view = crate::view::MapView::new(Some("KTLX".into()), camera);
+            view.moment = Moment::Velocity;
+            view.srv = true;
+            view.storm_dir_deg = direction;
+            view.storm_speed_kt = speed;
+            view.dealias_override = dealias;
+            let motion = view.storm_motion_uv();
+            let json = serde_json::to_string(&super::PaneSnap::capture(&view)).unwrap();
+            let snapshot: super::PaneSnap = serde_json::from_str(&json).unwrap();
+            let mut restored = crate::view::MapView::new(None, camera);
+            snapshot.apply(&mut restored);
+            assert_eq!(restored.storm_motion_uv(), motion);
+            assert_eq!(restored.dealias_override, dealias);
+        }
+    }
+
     #[test]
     fn abi_scene_survives_workspace_without_becoming_global() {
         let mut view = crate::view::MapView::new(None, crate::render::mercator::Camera::at_lonlat(0.0, 0.0, 4.0));
@@ -868,6 +910,8 @@ mod tests {
         // layers off captures `Some([])`, which is a different instruction.
         assert_eq!(snap.fields_on, None);
         assert!(snap.thresholds.is_empty());
+        assert_eq!(snap.storm_motion, None);
+        assert_eq!(snap.dealias_override, None);
     }
 
     #[test]
@@ -882,6 +926,8 @@ mod tests {
                 custom_product: Some("Debris score".into()),
                 tilt: 1,
                 srv: false,
+                storm_motion: Some((90.0, 50.0)),
+                dealias_override: Some(false),
                 basemap: "dark".into(),
                 lon: -93.72,
                 lat: 41.73,

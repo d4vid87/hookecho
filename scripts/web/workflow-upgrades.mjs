@@ -58,6 +58,7 @@ try {
   assert(!serialized.includes('PRIVATE-KEY') && !serialized.includes('Private home label'), 'shared scenes must exclude credentials and saved places');
   checks.push('Live scene URL excludes credentials and saved places');
 
+  const beforeScene = structuredClone(scene);
   scene.workspace.panes = [scene.workspace.panes[0], structuredClone(scene.workspace.panes[0])];
   scene.workspace.panes[1].site = 'KTLX';
   scene.workspace.panes[1].moment = 'DifferentialReflectivity';
@@ -66,6 +67,13 @@ try {
   scene.workspace.link_times = false;
   scene.workspace.chrome = {...scene.workspace.chrome, analyst_open: true};
   scene.products.storm_motion = [scene.products.storm_motion[0], scene.products.storm_motion[0]];
+  scene.products.storm_motion[1] = [90, 50];
+  scene.workspace.panes[1].storm_motion = [90, 50];
+  scene.workspace.panes[1].dealias_override = false;
+  scene.products.global_model = 'Ecmwf';
+  scene.products.global_fcst_hour = 24;
+  scene.filters.outlook_day = 3;
+  scene.lock_source_frame = !beforeScene.lock_source_frame;
   scene.time_mode = 'exact';
   scene.times = ['2026-11-03T17:00:00Z', '2026-11-03T17:01:00Z'];
   await page.evaluate(token => { location.hash = 'scene=' + token; }, Buffer.from(JSON.stringify(scene)).toString('base64url'));
@@ -81,6 +89,29 @@ try {
   assert.equal(restored.workspace.link_cameras, true);
   assert.equal(restored.workspace.link_times, false);
   checks.push('Same-tab scene restores independent radar sites and products with linked cameras');
+  assert.equal(restored.workspace.panes[1].dealias_override, false);
+  assert.deepEqual(restored.workspace.panes[1].storm_motion, [90, 50]);
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyS');
+  await page.keyboard.up('Control');
+  await wait(300);
+  await page.keyboard.type('Undo workspace action');
+  await wait(300);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(expected => {
+    if (!location.hash.startsWith('#scene=')) return false;
+    const value = JSON.parse(atob(location.hash.slice(7).replaceAll('-', '+').replaceAll('_', '/')));
+    return value.workspace.panes.length === 1
+      && JSON.stringify(value.products) === JSON.stringify(expected.products)
+      && JSON.stringify(value.filters) === JSON.stringify(expected.filters)
+      && value.lock_source_frame === expected.lock_source_frame;
+  }, {timeout: 30000}, beforeScene);
+  checks.push('Undo restores shared-scene filters, model/hour, storm motion and source-time lock');
+  await page.keyboard.press('Escape');
+  await page.evaluate(token => { location.hash = 'scene=' + token; }, Buffer.from(JSON.stringify(scene)).toString('base64url'));
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace.panes.length === 2,
+    {timeout: 30000});
+  await wait(1500);
   await page.screenshot({path: `${output}/two-pane-scene.png`});
   for (const [width, height] of [[390, 844], [320, 568]]) {
     await page.setViewport({width, height});
@@ -106,6 +137,25 @@ try {
       && Math.abs(pane.lat - 32.8) < 0.001 && session.panes[session.workspace.active].following;
   }, {timeout: 15000});
   checks.push('Saved-place radar action loads a nearby station, centers the place and returns to live');
+  const compareStation = await page.evaluate(() => {
+    const session = JSON.parse(localStorage.getItem('hookecho.recovery.v1')).session;
+    return session.workspace.panes[session.workspace.active].site;
+  });
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyS');
+  await page.keyboard.up('Control');
+  await wait(300);
+  await page.keyboard.type('Compare raw / corrected velocity');
+  await wait(300);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(station => {
+    const state = JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace;
+    return state?.panes.length === 2 && state.link_cameras && state.link_times
+      && state.panes.every(pane => pane.site === station && pane.moment === 'Velocity')
+      && state.panes[0].dealias_override === false && state.panes[1].dealias_override === true;
+  }, {timeout: 30000}, compareStation);
+  checks.push('Compare raw / corrected velocity retains the station and creates linked raw/corrected panes');
+  await page.screenshot({path: `${output}/raw-corrected-velocity.png`});
   assert.deepEqual(errors, []);
 } catch (error) {
   await page.screenshot({path: `${output}/failure.png`});

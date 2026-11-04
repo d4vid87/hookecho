@@ -9,6 +9,7 @@ impl HookEchoApp {
             "{} · {}",
             v.custom_product
                 .as_deref()
+                .or_else(|| v.velocity_processing_label(self.settings.dealias_velocity))
                 .unwrap_or_else(|| crate::products::name(v.moment, v.srv)),
             v.site.as_deref().unwrap_or("No site")
         )
@@ -94,24 +95,16 @@ impl HookEchoApp {
         let idx = self.active;
         let phone = compact(ui.ctx());
         let product = self.views[idx].custom_product.clone().unwrap_or_else(|| {
-            crate::products::name(self.views[idx].moment, self.views[idx].srv).into()
+            self.views[idx].velocity_processing_label(self.settings.dealias_velocity)
+                .unwrap_or_else(|| crate::products::name(self.views[idx].moment, self.views[idx].srv)).into()
         });
-        let elevations = self.views[idx]
-            .volume
-            .as_ref()
-            .map(|v| v.elevations.clone())
-            .unwrap_or_default();
-        let available_tilts = self.views[idx]
-            .volume
-            .as_ref()
-            .map(|v| v.available_tilts(self.views[idx].moment))
-            .unwrap_or_default();
         let tilt = self.views[idx].tilt;
+        let mut compare_velocity = false;
         ui.horizontal(|ui| {
             let mut pick = None;
             let menu = egui::containers::menu::MenuButton::from_button(egui::Button::new(format!(
                 "{} {}",
-                if phone || full_name {
+                if phone || full_name || self.views[idx].dealias_override.is_some() {
                     product.as_str()
                 } else if self.views[idx].srv && self.views[idx].moment == Moment::Velocity {
                     "SRV"
@@ -129,6 +122,10 @@ impl HookEchoApp {
             )
             .ui(ui, |ui| {
                 let width = (ui.ctx().content_rect().width() - 48.0).clamp(220.0, 360.0);
+                let elevations = self.views[idx].volume.as_ref()
+                    .map(|v| v.elevations.clone()).unwrap_or_default();
+                let available_tilts = self.views[idx].volume.as_ref()
+                    .map(|v| v.available_tilts(self.views[idx].moment)).unwrap_or_default();
                 ui.set_min_width(width);
                 ui.set_max_width(width);
                 ui.spacing_mut().interact_size.y = 44.0;
@@ -171,6 +168,25 @@ impl HookEchoApp {
                             .response
                             .on_hover_text("Choose radar elevation");
                         ui.collapsing("Appearance", |ui| self.radar_appearance_controls(ui));
+                        let level2 = self.views[idx].site.as_deref()
+                            .is_some_and(wxdata::sites::is_nexrad);
+                        if level2 && self.views[idx].moment == Moment::Velocity {
+                            ui.strong("Velocity processing");
+                            let previous = self.views[idx].dealias_override;
+                            ui.horizontal_wrapped(|ui| {
+                                for (value, label) in [(None, "App default"), (Some(false), "Raw"), (Some(true), "Corrected")] {
+                                    ui.selectable_value(&mut self.views[idx].dealias_override, value, label);
+                                }
+                            });
+                            if previous != self.views[idx].dealias_override {
+                                self.views[idx].error = None;
+                            }
+                        }
+                        if ui.add_enabled(level2, egui::Button::new("Compare raw / corrected velocity").wrap())
+                            .named("Compare raw / corrected velocity").clicked() {
+                            compare_velocity = true;
+                            ui.close();
+                        }
                         ui.separator();
                         ui.strong("Products");
                         let available = self.available_moments();
@@ -264,6 +280,9 @@ impl HookEchoApp {
                 self.apply_palette(PaletteAction::SetMoment(m, srv), ui.ctx());
             }
         });
+        if compare_velocity {
+            self.compare_velocity(ui.ctx());
+        }
     }
 
     /// The active pane uses the same appearance controls in settings and its product picker.
@@ -292,8 +311,10 @@ impl HookEchoApp {
                 }
             }
         });
+        reset_value(ui, &mut smooth, true, "smoothing");
         self.views[self.active].smooth = smooth;
         let pane = &mut self.views[self.active];
+        let defaults = crate::radar_appearance::RadarAppearance::default();
         let palette_moment = pane
             .custom_product
             .as_ref()
@@ -305,18 +326,33 @@ impl HookEchoApp {
             })
             .and_then(|p| Moment::from_code(&p.palette))
             .unwrap_or(pane.moment);
-        ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut pane.appearance.precision, "Higher-precision radar display").on_hover_text("Preserve finer native values in the display texture; uses additional memory. Available for native moments, KDP and gate-local custom products. Native probes remain unchanged.");
+            reset_value(ui, &mut pane.appearance.precision, defaults.precision, "precision");
+        });
         aurora_frame().show(ui, |ui| {
             radar_opacity_contents(ui, &mut pane.appearance.opacity, false);
         });
         if smooth {
-            ui.checkbox(&mut pane.appearance.show_smoothed_range_folding, "Show range-folded areas")
-                .on_hover_text("Keep ambiguous radar returns in their range-fold color instead of blending valid neighbors over them.");
-            ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Caches extra GPU data.");
-            ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
-                .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut pane.appearance.show_smoothed_range_folding, "Show range-folded areas")
+                    .on_hover_text("Keep ambiguous radar returns in their range-fold color instead of blending valid neighbors over them.");
+                reset_value(ui, &mut pane.appearance.show_smoothed_range_folding, defaults.show_smoothed_range_folding, "range-folded display");
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut pane.appearance.multipass, "Two-stage smoothing").on_hover_text("Adds separable gate and radial smoothing before interpolation. Missing and folded gates stay classified; native probes are unchanged. Caches extra GPU data.");
+                reset_value(ui, &mut pane.appearance.multipass, defaults.multipass, "two-stage smoothing");
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Slider::new(&mut pane.appearance.blend_width, 0.05..=1.0)
+                    .text("Blend width")).on_hover_text("Narrow keeps gate edges crisp; wide uses full bilinear blending. Native probes are unchanged.");
+                reset_value(ui, &mut pane.appearance.blend_width, defaults.blend_width, "blend width");
+            });
         }
-        ui.checkbox(&mut pane.appearance.fade_old_sectors, "Fade retained sectors from the previous scan").on_hover_text("Live radar only: older sectors remain visible at 35% opacity until replaced. Measurements and archive playback are unchanged.");
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut pane.appearance.fade_old_sectors, "Fade retained sectors from the previous scan").on_hover_text("Live radar only: older sectors remain visible at 35% opacity until replaced. Measurements and archive playback are unchanged.");
+            reset_value(ui, &mut pane.appearance.fade_old_sectors, defaults.fade_old_sectors, "sector fading");
+        });
         let moment = palette_moment;
         let key = moment.short_name().to_string();
         let current = if pane.appearance.palettes.contains_key(&key) {
@@ -351,6 +387,12 @@ impl HookEchoApp {
                 }
             }
         });
+        if ui.add_enabled(pane.appearance.palettes.contains_key(&key), egui::Button::new("Reset palette"))
+            .named("Reset active product palette")
+            .on_hover_text("Follow the app palette for this product; keep other pane settings")
+            .clicked() {
+            pane.appearance.palettes.remove(&key);
+        }
         ui.label("Appearance applies to the active pane and is saved with its workspace.");
     }
 
@@ -365,6 +407,15 @@ impl HookEchoApp {
                 ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(200.0, 300.0));
                 radar_opacity_contents(ui, &mut self.views[self.active].appearance.opacity, true);
             });
+    }
+}
+
+fn reset_value<T: Copy + PartialEq>(ui: &mut egui::Ui, value: &mut T, default: T, label: &str) {
+    if ui.add_enabled(*value != default, egui::Button::new(format!("Reset {label}")))
+        .named(&format!("Reset radar {label}"))
+        .on_hover_text("Restore this setting only; keep your other choices")
+        .clicked() {
+        *value = default;
     }
 }
 

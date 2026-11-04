@@ -311,6 +311,13 @@ impl Timeline {
         true
     }
 
+    /// An exact source lock wins over a cut's later timestamp, which may be nearer the next volume.
+    pub fn align_linked(&mut self, target: DateTime<Utc>, source: Option<&Identifier>, following: bool, playing: bool) {
+        if !source.is_some_and(|source| self.align_to_source(source, following, playing)) {
+            self.align_to(target, following, playing);
+        }
+    }
+
     /// Step `delta` slots (observed frames + forecast tail), un-pinning and pausing playback.
     pub fn step(&mut self, delta: i32) {
         self.seek_target = None;
@@ -811,6 +818,21 @@ mod tests {
         let other_site = Identifier::new("KFWS20130520_000200_V06".into());
         assert!(!timeline.align_to_source(&other_site, false, false));
         assert_eq!(timeline.playhead, 2, "a failed exact match changes nothing");
+    }
+
+    #[test]
+    fn source_lock_keeps_a_late_cut_in_its_original_volume() {
+        let mut timeline = with_frames(4);
+        let source = timeline.frames[0].clone();
+        timeline.date = source.date_time().unwrap().date_naive();
+        let late_cut = source.date_time().unwrap() + chrono::Duration::seconds(55);
+        timeline.align_linked(late_cut, None, false, false);
+        assert_eq!(timeline.playhead, 1, "time matching alone would select the next volume");
+        timeline.align_linked(late_cut, Some(&source), false, false);
+        assert_eq!(timeline.playhead, 0, "an exact source must take priority over a late cut timestamp");
+        let another_site = Identifier::new("KFWS20130520_000000_V06".into());
+        timeline.align_linked(late_cut, Some(&another_site), false, false);
+        assert_eq!(timeline.playhead, 1, "different stations still align by nearest valid time");
     }
 
     #[test]

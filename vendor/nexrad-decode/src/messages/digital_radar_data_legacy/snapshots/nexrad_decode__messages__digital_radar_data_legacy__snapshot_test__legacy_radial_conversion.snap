@@ -1,0 +1,47 @@
+---
+source: nexrad-decode/src/messages/digital_radar_data_legacy/snapshot_test.rs
+expression: radial
+---
+Radial {
+    collection_timestamp: 1104538053477,
+    azimuth_number: 1,
+    azimuth_angle_degrees: 21.92871,
+    azimuth_spacing_degrees: 1.0,
+    radial_status: ScanStart,
+    elevation_number: 1,
+    elevation_angle_degrees: 0.57128906,
+    reflectivity: Some(
+        MomentData {
+            inner: MomentDataBlock {
+                gate_count: 460,
+                first_gate_range: 0,
+                gate_interval: 1000,
+                data_word_size: 8,
+                scale: 2.0,
+                offset: 66.0,
+                values: BinaryData {
+                    len: 460,
+                    sha256: "50e8cf5bb05585e5699eada14517ab0affc5c19a0f8f425d119c430bcd95da73",
+                    head: [
+                        0,
+                        0,
+                        37,
+                        27,
+                    ],
+                    tail: [
+                        0,
+                        0,
+                        0,
+                        0,
+                    ],
+                },
+            },
+        },
+    ),
+    velocity: None,
+    spectrum_width: None,
+    differential_reflectivity: None,
+    differential_phase: None,
+    correlation_coefficient: None,
+    clutter_filter_power: None,
+}

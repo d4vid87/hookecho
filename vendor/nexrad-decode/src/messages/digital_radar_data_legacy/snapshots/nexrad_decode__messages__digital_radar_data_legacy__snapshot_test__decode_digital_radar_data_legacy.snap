@@ -1,0 +1,56 @@
+---
+source: nexrad-decode/src/messages/digital_radar_data_legacy/snapshot_test.rs
+expression: "messages[0]"
+---
+Message {
+    headers: Single(
+        MessageHeader {
+            rpg_unknown: BinaryData {
+                len: 12,
+                sha256: "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+                head: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                tail: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            },
+            segment_size: 1208,
+            redundant_channel: 0,
+            message_type: 1,
+            sequence_number: 26625,
+            date: 12785,
+            time: 455175,
+            segment_count: 1,
+            segment_number: 1,
+        },
+    ),
+    contents: DigitalRadarDataLegacy(
+        DigitalRadarDataLegacy {
+            azimuth_angle: 21.92871,
+            azimuth_number: 1,
+            elevation_angle: 0.57128906,
+            elevation_number: 1,
+            radial_status: 3,
+            vcp_number: 32,
+            unambiguous_range_km: 466.0,
+            calibration_constant: 23.274904,
+            num_surveillance_gates: 460,
+            num_doppler_gates: 0,
+            surveillance_gate_interval: 1000,
+            doppler_gate_interval: 250,
+            doppler_velocity_resolution: 0.5,
+            has_reflectivity: true,
+            has_velocity: false,
+            has_spectrum_width: false,
+        },
+    ),
+    offset: 0,
+    size: 2432,
+}

@@ -25,7 +25,7 @@ impl HookEchoApp {
         ui.heading("Inspector");
         ui.weak("Native values and actual source times");
         if let Some(gap) = comparison_time_gap(self.views.iter()
-            .filter(|view| view.show_radar).filter_map(MapView::displayed_time)) {
+            .filter(|view| view.show_radar).filter_map(MapView::presented_time)) {
             ui.colored_label(egui::Color32::from_rgb(255, 186, 86),
                 format!("Pane times differ by {}", humanize(gap)));
         }
@@ -181,7 +181,8 @@ impl HookEchoApp {
         for i in 0..self.views.len() {
             let view = &self.views[i];
             let site = view.site.as_deref().unwrap_or("No radar").to_string();
-            let product = view.moment.short_name();
+            let product = view.velocity_processing_label(self.settings.dealias_velocity)
+                .unwrap_or_else(|| view.moment.short_name());
             let active = i == self.active;
             let layer = crate::render::FieldLayer::draw_order()
                 .rev()
@@ -208,8 +209,7 @@ impl HookEchoApp {
                     frame.stamp.valid_time.format("%H:%M UTC"),
                     quality,
                 )
-            }).or_else(|| view.volume.as_ref().map(|volume| {
-                let time = view.displayed_time().unwrap_or(volume.time);
+            }).or_else(|| view.presented_time().map(|time| {
                 let displayed = view.displayed_station().unwrap_or("Unknown radar");
                 format!("{displayed} · {product} · valid {}", time.format("%H:%M UTC"))
             })).unwrap_or_else(|| format!("{site} · {product} · waiting for data")) + &health;
@@ -228,7 +228,7 @@ impl HookEchoApp {
                 egui::CollapsingHeader::new("Layer sources and times")
                     .id_salt(("pane_layer_sources", i)).show(ui, |ui| {
                     let view = &self.views[i];
-                    let radar = view.displayed_time();
+                    let radar = view.presented_time();
                     if let Some(time) = radar {
                         ui.label(format!("Radar {} observed {} UTC", view.displayed_station().unwrap_or("unknown"), time.format("%Y-%m-%d %H:%M:%S")));
                     } else {

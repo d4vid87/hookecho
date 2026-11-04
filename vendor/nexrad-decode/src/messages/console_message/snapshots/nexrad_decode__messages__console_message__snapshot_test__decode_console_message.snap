@@ -1,0 +1,60 @@
+---
+source: nexrad-decode/src/messages/console_message/snapshot_test.rs
+expression: "messages[0]"
+---
+Message {
+    headers: Single(
+        MessageHeader {
+            rpg_unknown: BinaryData {
+                len: 12,
+                sha256: "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b",
+                head: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                tail: [
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+            },
+            segment_size: 1216,
+            redundant_channel: 8,
+            message_type: 4,
+            sequence_number: 1,
+            date: 20089,
+            time: 43200000,
+            segment_count: 1,
+            segment_number: 1,
+        },
+    ),
+    contents: ConsoleMessage(
+        Message {
+            header: Header {
+                message_size: 15,
+            },
+            text_data: [
+                78,
+                69,
+                88,
+                82,
+                65,
+                68,
+                32,
+                84,
+                69,
+                83,
+                84,
+                32,
+                77,
+                83,
+                71,
+            ],
+        },
+    ),
+    offset: 0,
+    size: 2432,
+}

@@ -42,6 +42,8 @@ pub struct VisibleTile {
 /// A binned sweep plus the world-space quad covering its range disk.
 pub struct RadarUpload {
     pub upload_token: u64,
+    /// Shared display bins identify a scan revision without copying or hashing its gates.
+    pub shared_sweep: Option<std::sync::Arc<wxdata::level2::BinnedSweep>>,
     /// Animation may revisit recent scans; retain bounded GPU textures for that loop.
     pub cache_loop: bool,
     pub az_bins: u32,
@@ -69,6 +71,20 @@ pub struct RadarUpload {
     /// textures keep their contents. A palette drag writes 3 KB instead of re-uploading the
     /// ~1.3 MB gate texture it was already showing.
     pub lut_only: bool,
+}
+
+impl RadarUpload {
+    fn precision(&self) -> bool {
+        self.shared_sweep.as_ref().map_or(self.data16.is_some(), |s| s.data16.is_some())
+    }
+
+    fn gate_bytes(&self) -> &[u8] {
+        if let Some(sweep) = &self.shared_sweep {
+            sweep.data16.as_ref().map_or(sweep.data.as_slice(), |data| bytemuck::cast_slice(data))
+        } else {
+            self.data16.as_ref().map_or(self.data.as_slice(), |data| bytemuck::cast_slice(data))
+        }
+    }
 }
 
 /// A national gridded field layer (all share the MRMS warp pipeline; they differ only in data,
@@ -714,6 +730,8 @@ struct TileGpu {
 }
 
 struct RadarGpu {
+    // Weak identity keeps revised scans distinct without retaining another sweep payload.
+    shared_sweep: Option<std::sync::Weak<wxdata::level2::BinnedSweep>>,
     tex: wgpu::Texture,
     smooth: Option<wgpu::Texture>,
     smooth_dirty: bool,
@@ -743,9 +761,12 @@ impl RadarGpu {
     fn matches_upload(&self, r: &RadarUpload, gates: &[u8], flags: &[u8]) -> bool {
         self.dims == (r.gate_count, r.az_bins)
             && self.flag_dims == flag_dims(r)
-            && self.precision == r.data16.is_some()
+            && self.precision == r.precision()
             && self.lut_width as usize * 12 == r.lut.len()
-            && self.gate_bytes == gates
+            && match (&self.shared_sweep, &r.shared_sweep) {
+                (Some(old), Some(new)) => std::ptr::eq(old.as_ptr(), std::sync::Arc::as_ptr(new)),
+                _ => self.gate_bytes == gates,
+            }
             && self.flag_bytes == flags
     }
 }
@@ -1334,9 +1355,9 @@ impl RenderResources {
         cached_data: bool,
     ) -> Option<RadarGpu> {
         let flag_dims = flag_dims(r);
-        let precision = r.data16.is_some();
+        let precision = r.precision();
         let bytes_per_gate = if precision { 2 } else { 1 };
-        let gate_data: &[u8] = r.data16.as_ref().map_or(r.data.as_slice(), |d| bytemuck::cast_slice(d));
+        let gate_data = r.gate_bytes();
         let lut_width = (r.lut.len() / (3 * 4)) as u32;
         // Same shape: write into the retained textures and keep the bind group. Dimensions are
         // the only thing a bind group depends on here, so nothing else can go stale.
@@ -1347,6 +1368,7 @@ impl RenderResources {
                     write_texture_changes(queue, &g.tex, g.dims, bytes_per_gate, &mut g.gate_bytes, gate_data);
                     write_texture_changes(queue, &g.flag, g.flag_dims, 1, &mut g.flag_bytes, &flag_bytes(r, g.flag_dims));
                 }
+                if !r.lut_only { g.shared_sweep = r.shared_sweep.as_ref().map(std::sync::Arc::downgrade); }
                 queue.write_buffer(&g.uni, 0, bytemuck::cast_slice(&r.uniform));
                 queue.write_buffer(&g.uni, 80, bytemuck::cast_slice(&r.sector_opacity.unwrap_or([1.0; 720])));
                 write_lut(queue, &g.lut, &r.lut);
@@ -1497,6 +1519,7 @@ impl RenderResources {
             ],
         });
         let mut gpu = RadarGpu {
+            shared_sweep: r.shared_sweep.as_ref().map(std::sync::Arc::downgrade),
             tex,
             smooth: None,
             smooth_dirty: true,
@@ -1719,7 +1742,7 @@ impl RenderResources {
                     } else if r.lut_only {
                         (pane.radar.take(), false)
                     } else {
-                        let gates: &[u8] = r.data16.as_ref().map_or(r.data.as_slice(), |d| bytemuck::cast_slice(d));
+                        let gates = r.gate_bytes();
                         let flags = flag_bytes(r, flag_dims(r));
                         if pane.radar.as_ref().is_some_and(|gpu| gpu.matches_upload(r, gates, &flags)) {
                             (pane.radar.take(), true)
@@ -2718,7 +2741,7 @@ mod smoothing_tests {
             let mut uniform = [0.0; 20];
             uniform[4] = 3.0; uniform[5] = 4.0; uniform[18] = if precision { 65_535.0 } else { 255.0 };
             let mut upload = RadarUpload {
-                upload_token: 1, cache_loop: true, az_bins: 3, gate_count: 4,
+                upload_token: 1, shared_sweep: None, cache_loop: true, az_bins: 3, gate_count: 4,
                 data: gates.iter().map(|v| *v as u8).collect(),
                 data16: precision.then(|| gates.clone()), uniform, sector_opacity: None,
                 lut: vec![255; 256 * 3 * 4], precip_flag: Vec::new(),
@@ -2748,6 +2771,26 @@ mod smoothing_tests {
             gpu = resources.build_radar(&device, &queue, &upload, Some(gpu), false).unwrap();
             assert_ne!(first, read_cache(&device, &queue, &gpu), "changed gates rebuild smoothing");
             assert_eq!(gpu.shadow_bytes(), gpu.gate_bytes.len() + gpu.flag_bytes.len() + 256 * 12 + gates.len() * 4);
+            let shared = std::sync::Arc::new(wxdata::level2::BinnedSweep {
+                moment: wxdata::level2::Moment::Reflectivity, az_bins: 3, gate_count: 4,
+                data: upload.data.clone(), data16: upload.data16.clone(), first_gate_km: 0.0,
+                gate_interval_km: 0.25, radar_lat: 35.0, radar_lon: -97.0,
+                elevation_deg: 0.5, value_min: -32.0, value_max: 95.0,
+            });
+            upload.shared_sweep = Some(shared.clone());
+            upload.data.clear();
+            upload.data16 = precision.then(Vec::new);
+            gpu = resources.build_radar(&device, &queue, &upload, Some(gpu), false).unwrap();
+            assert!(gpu.matches_upload(&upload, &[], &[0]), "same immutable bins hit without reading gate bytes");
+            let prior = read_cache(&device, &queue, &gpu);
+            let mut revised = (*shared).clone();
+            revised.data[2] = 90;
+            if let Some(values) = &mut revised.data16 { values[2] = 90; }
+            upload.shared_sweep = Some(std::sync::Arc::new(revised));
+            assert!(!gpu.matches_upload(&upload, upload.gate_bytes(), &[0]), "a revision cannot match the previous allocation even with the same archive name");
+            gpu = resources.build_radar(&device, &queue, &upload, Some(gpu), false).unwrap();
+            assert_ne!(prior, read_cache(&device, &queue, &gpu));
+            assert!(gpu.matches_upload(&upload, &[], &[0]));
         }
     }
 
@@ -2816,7 +2859,7 @@ mod smoothing_tests {
                     uniform[18] = if precision { 65_535.0 } else { 255.0 };
                     uniform[19] = if multipass { 1.0 } else { 0.0 };
                     let upload = RadarUpload {
-                        upload_token: 1, cache_loop: false, az_bins: 4, gate_count: 3,
+                        upload_token: 1, shared_sweep: None, cache_loop: false, az_bins: 4, gate_count: 3,
                         data: gates.iter().map(|v| *v as u8).collect(),
                         data16: precision.then_some(gates), uniform, sector_opacity: None,
                         lut: lut.clone(), precip_flag: Vec::new(), world_min: [0.0; 2],

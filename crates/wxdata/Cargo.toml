@@ -73,6 +73,10 @@ web-time = "1"
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # `start_paused` only, so a test of a fifteen-second wait takes no wall clock.
 tokio = { version = "1", features = ["test-util"] }
+# Exercise binary radial metadata and the browser worker's Scan/Sweep wire format on the host.
+nexrad-decode = "1.0.0-rc.3"
+nexrad-model = { version = "1.0.0-rc.2", features = ["serde"] }
+postcard = { version = "1", features = ["alloc"] }
 
 # Benchmarks for the volume-processing hot paths (`benches/hot_paths.rs`). `default-features =
 # false` drops criterion's plotting stack — the numbers are read from the terminal here.

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 export async function fixtureRadar(page, options = {}) {
- const fixture = await fs.readFile(new URL('../../../crates/wxdata/tests/data/kdmx-one-sweep.bin',import.meta.url));
+ const fixture = await fs.readFile(options.fixturePath ?? new URL('../../../crates/wxdata/tests/data/kdmx-one-sweep.bin',import.meta.url));
  const abi = options.abi ? await fs.readFile(new URL("../../../crates/wxdata/tests/data/g19-c13-meso.nc", import.meta.url)) : null;
  const l3 = await fs.readFile(new URL('../../../crates/nexrad-level3/tests/data/n0g_tlx.l3',import.meta.url));
  const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[],outlookRequests:[],spotterRequests:[]};
