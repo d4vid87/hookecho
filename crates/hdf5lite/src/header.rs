@@ -93,15 +93,20 @@ impl Filters {
     /// Undo the pipeline for one chunk. `expect` is the uncompressed size, `elem` the element
     /// width that the shuffle filter interleaved by.
     pub(crate) fn decode(&self, raw: &[u8], expect: usize, elem: usize) -> Result<Vec<u8>> {
+        if expect > crate::read::MAX_CHUNK_BYTES || raw.len() > crate::read::MAX_CHUNK_BYTES + 65536 {
+            return Err(Error::Filter("chunk exceeds byte limit".into()));
+        }
         let mut buf = raw.to_vec();
-        for &id in self.ids.iter().rev() {
+        for (index, &id) in self.ids.iter().enumerate().rev() {
             buf = match id {
-                1 => inflate(&buf, expect)?,
+                // A checksum applied before deflate is still present in its decoded output.
+                1 => inflate(&buf, expect + 4 * self.ids[..index].iter().filter(|&&id| id == 3).count())?,
                 2 => unshuffle(&buf, elem),
                 // Fletcher32 appends a checksum we simply don't verify; dropping the trailing
                 // four bytes is what "reading past it" means.
                 3 => {
-                    let n = buf.len().saturating_sub(4);
+                    let n = buf.len().checked_sub(4)
+                        .ok_or_else(|| Error::Filter("truncated Fletcher32 checksum".into()))?;
                     buf.truncate(n);
                     buf
                 }
@@ -109,6 +114,9 @@ impl Filters {
                     return Err(Error::Unsupported(format!("filter id {other}")));
                 }
             };
+        }
+        if buf.len() != expect {
+            return Err(Error::Filter(format!("chunk has {} bytes, expected {expect}", buf.len())));
         }
         Ok(buf)
     }
@@ -119,8 +127,12 @@ fn inflate(raw: &[u8], expect: usize) -> Result<Vec<u8>> {
     use std::io::Read;
     let mut out = Vec::with_capacity(expect);
     ZlibDecoder::new(raw)
+        .take(expect as u64 + 1)
         .read_to_end(&mut out)
         .map_err(|e| Error::Filter(format!("deflate: {e}")))?;
+    if out.len() != expect {
+        return Err(Error::Filter(format!("deflate has {} bytes, expected {expect}", out.len())));
+    }
     Ok(out)
 }
 
@@ -143,6 +155,46 @@ fn unshuffle(buf: &[u8], elem: usize) -> Vec<u8> {
     out
 }
 
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn compressed(size: usize) -> Vec<u8> {
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let block = [42; 4096];
+        for start in (0..size).step_by(block.len()) {
+            encoder.write_all(&block[..(size - start).min(block.len())]).unwrap();
+        }
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn deflate_cannot_expand_past_the_declared_chunk() {
+        let filters = Filters { ids: vec![1] };
+        // The audit file declared a 345,600-byte chunk but expanded to 16 MiB.
+        let bomb = compressed(16 * 1024 * 1024);
+        assert!(bomb.len() < 32 * 1024);
+        let error = filters.decode(&bomb, 345_600, 1).unwrap_err().to_string();
+        assert!(error.contains("345601 bytes"), "{error}");
+        assert!(filters.decode(&compressed(15), 16, 1).is_err());
+        assert_eq!(filters.decode(&compressed(16), 16, 1).unwrap(), [42; 16]);
+    }
+
+    #[test]
+    fn every_filter_pipeline_requires_the_exact_output_size() {
+        assert!(Filters::default().decode(&[1, 2], 1, 1).is_err());
+        assert!(Filters { ids: vec![2] }.decode(&[1, 2, 3], 4, 2).is_err());
+        assert!(Filters { ids: vec![3] }.decode(&[1, 2, 3], 0, 1).is_err());
+        assert!(Filters::default().decode(&[], crate::read::MAX_CHUNK_BYTES + 1, 1).is_err());
+        // Both valid placements of Fletcher32 around deflate retain the same size contract.
+        assert_eq!(Filters { ids: vec![3, 1] }.decode(&compressed(20), 16, 1).unwrap(), [42; 16]);
+        let mut raw = compressed(16);
+        raw.extend_from_slice(&[0; 4]);
+        assert_eq!(Filters { ids: vec![1, 3] }.decode(&raw, 16, 1).unwrap(), [42; 16]);
+    }
+}
+
 /// A dataset: its shape, type, storage and the attributes needed to unpack it.
 #[derive(Debug, Clone)]
 pub struct Dataset {
@@ -157,7 +209,9 @@ pub struct Dataset {
 
 impl Dataset {
     pub fn element_count(&self) -> usize {
-        self.dims.iter().map(|&n| n as usize).product::<usize>()
+        self.dims.iter().fold(1usize, |total, &n| {
+            total.saturating_mul(usize::try_from(n).unwrap_or(usize::MAX))
+        })
     }
 
     /// Turn raw bytes into unpacked values: fill values become `NaN`, then

@@ -7,9 +7,10 @@ The data lives in **your own Google Drive**, in the hidden per-app folder (`appD
 only this app and you can see. There is no HookEcho server, no account, and nothing to pay for.
 The OAuth grant covers exactly one scope, `drive.appdata`: it cannot read the rest of your Drive.
 
-Three things stay local to each machine, because they describe the machine and not you:
-screen scale (`ui_scale`), your position-sharing device name, and whether Android background
-alerts are on. Everything else follows the sync.
+Device-specific settings, including screen scale, your position-sharing device name, Android
+background alerts, and executable plugins, stay local. Custom palette contents travel with the
+settings. Custom marker images and sound files stay on their original device; synchronization
+preserves the receiving device's choices when those files are unavailable.
 
 ## One-time setup: your own OAuth client
 
@@ -56,15 +57,20 @@ successful sync, so it can tell which side changed:
 | yes | no | push |
 | no | yes | pull |
 | no | no | nothing |
-| yes | yes | **pull**, and the status line says so |
+| yes | yes | pause and ask which copy to keep |
 
-The both-changed case keeps the synced copy on purpose: your local settings are still on disk
-in `settings.json` if you need them back, but an unpulled remote edit would be gone for good.
+When both copies have edits, **Settings → Sync** offers **Keep this device** and **Use Drive
+copy**. Automatic synchronization stays paused until you choose. Keep this device uploads your
+latest settings, including changes made after the conflict appeared; Use Drive copy replaces
+the shared settings with the downloaded copy. Edits made while a download is running also
+trigger this choice instead of being silently overwritten.
 
 ## Signing out
 
 **Sign out** forgets the tokens and the sync bookkeeping on this machine only. The Drive copy is
 left alone — signing out of a laptop must not wipe the phone.
+It also cancels pending synchronization and discards its results, so a late response cannot
+sign you back in or replace your settings.
 
 To delete the synced data entirely, revoke the app at
 [myaccount.google.com/permissions](https://myaccount.google.com/permissions); that removes its

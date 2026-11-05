@@ -60,6 +60,15 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.HookEcho"
         android:enableOnBackInvokedCallback="true">
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.exports"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/export_paths" />
+        </provider>
         <!-- singleTask, not the default: `android_main` runs once per process, so a second activity
              instance (a deep link, or relaunching after back) leaves the Rust event loop attached to
              the activity that is gone — the app freezes on its last frame or sits on the splash

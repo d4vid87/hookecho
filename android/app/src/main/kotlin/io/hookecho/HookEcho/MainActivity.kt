@@ -6,6 +6,10 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.google.androidgamesdk.GameActivity
 import android.content.Intent
+import android.content.ClipData
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.core.content.FileProvider
 import android.os.Bundle
 import android.os.Build
 import android.view.WindowInsets
@@ -17,6 +21,7 @@ import androidx.compose.ui.platform.ComposeView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import java.io.File
+import kotlin.concurrent.thread
 
 /**
  * Rust draws every pixel; this is the `GameActivity` it runs inside. The subclass exists for one
@@ -28,12 +33,14 @@ import java.io.File
  *
  * File import works the same way. The Storage Access Framework hands back a content URI through
  * an activity result, which Rust has no way to receive and which is not a path anything can open
- * anyway; so the stream is copied into the cache and `filesDir/import.txt` names it.
+ * anyway; so the stream is copied into app storage and `filesDir/import.txt` names it.
  */
 class MainActivity : GameActivity() {
     companion object {
         const val EXTRA_GOTO = "hookecho.goto"
         @Volatile var foreground = false
+        // Survives activity recreation while a cloud provider is still copying a document.
+        private val importInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
     }
 
     override fun onStart() { super.onStart(); foreground = true }
@@ -73,6 +80,28 @@ class MainActivity : GameActivity() {
 
     /** What [openDocument] was asked for: `kind<TAB>tag`, echoed back in `import.txt`. */
     private var pendingImport: String = ""
+    private var pendingExport: String? = null
+
+    private val saveDocument =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val source = pendingExport
+            pendingExport = null
+            val uri = result.data?.data
+            if (result.resultCode == RESULT_OK && source != null && uri != null) {
+                thread(name = "save-export") {
+                    val saved = runCatching {
+                        val file = TransferFiles.exportFile(filesDir, source)
+                        contentResolver.openOutputStream(uri, "w")?.use { output ->
+                            file.inputStream().use { it.copyTo(output) }
+                        } ?: error("Cannot open the selected destination")
+                    }
+                    runOnUiThread {
+                        saved.onSuccess { Toast.makeText(this, "Export saved", Toast.LENGTH_SHORT).show() }
+                            .onFailure { transferFailed("Export", it) }
+                    }
+                }
+            }
+        }
 
     private val openDocument =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -80,6 +109,8 @@ class MainActivity : GameActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        pendingImport = savedInstanceState?.getString("pendingImport") ?: ""
+        pendingExport = savedInstanceState?.getString("pendingExport")
         writeGoto(intent)
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, backCallback)
@@ -105,27 +136,96 @@ class MainActivity : GameActivity() {
     @Suppress("unused")
     fun openDocument(what: String, mime: String) {
         runOnUiThread {
+            if (importInProgress.get()) {
+                Toast.makeText(this, "An import is still being copied", Toast.LENGTH_SHORT).show()
+                return@runOnUiThread
+            }
             pendingImport = what
             runCatching { openDocument.launch(arrayOf(mime)) }
         }
     }
 
     /**
-     * Copy the chosen document into the cache under its display name and announce it. A content
+     * Keep referenced assets in durable storage; one-shot documents can stay in cache. A content
      * URI is not a file path and the permission behind it does not outlive this activity, so
      * handing the URI itself to Rust would hand it something it cannot open.
      */
-    private fun copyToImportFile(uri: Uri) = runCatching {
-        val name = contentResolver.query(uri, null, null, null, null)?.use { c ->
-            val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (i >= 0 && c.moveToFirst()) c.getString(i) else null
-        } ?: "import"
-        val dir = File(cacheDir, "import").apply { mkdirs() }
-        val dest = File(dir, name)
-        contentResolver.openInputStream(uri)?.use { input ->
-            dest.outputStream().use { input.copyTo(it) }
-        } ?: return@runCatching
-        File(filesDir, "import.txt").writeText("$pendingImport\t${dest.absolutePath}")
+    private fun copyToImportFile(uri: Uri) {
+        if (!importInProgress.compareAndSet(false, true)) {
+            Toast.makeText(this, "An import is still being copied", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val request = pendingImport
+        thread(name = "import-document") {
+            val copied = runCatching {
+                val name = contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (i >= 0 && c.moveToFirst()) c.getString(i) else null
+                } ?: "import"
+                val dest = contentResolver.openInputStream(uri)?.use { input ->
+                    TransferFiles.copyImport(filesDir, cacheDir, request.substringBefore('\t'), name, input)
+                } ?: error("Cannot open the selected document")
+                try {
+                    // Rust can poll while the provider is copying; publish only the complete handoff.
+                    val handoff = File(filesDir, "import.txt.tmp")
+                    handoff.writeText("$request\t${dest.absolutePath}")
+                    check(handoff.renameTo(File(filesDir, "import.txt"))) { "Cannot finish import" }
+                } catch (error: Exception) {
+                    dest.delete()
+                    throw error
+                }
+            }
+            importInProgress.set(false)
+            runOnUiThread {
+                copied.onFailure { transferFailed("Import", it) }
+            }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("pendingImport", pendingImport)
+        outState.putString("pendingExport", pendingExport)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun transferFailed(action: String, error: Throwable) {
+        android.util.Log.w("HookEchoActivity", "$action failed", error)
+        Toast.makeText(this, "$action failed: ${error.message}", Toast.LENGTH_LONG).show()
+    }
+
+    /** Rust calls this only once the output is closed, including screenshot and loop encoders. */
+    @Suppress("unused")
+    fun offerExport(path: String) {
+        runOnUiThread {
+            runCatching {
+                val file = TransferFiles.exportFile(filesDir, path)
+                AlertDialog.Builder(this)
+                    .setTitle("Export ${file.name}")
+                    .setItems(arrayOf("Save to files…", "Share…")) { _, choice ->
+                        runCatching {
+                            if (choice == 0) {
+                                pendingExport = file.absolutePath
+                                saveDocument.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = TransferFiles.mime(file)
+                                    putExtra(Intent.EXTRA_TITLE, file.name)
+                                })
+                            } else {
+                                val uri = FileProvider.getUriForFile(this, "$packageName.exports", file)
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = TransferFiles.mime(file)
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    clipData = ClipData.newUri(contentResolver, file.name, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                startActivity(Intent.createChooser(send, "Share export"))
+                            }
+                        }.onFailure { transferFailed("Export", it) }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }.onFailure { transferFailed("Export", it) }
+        }
     }
 
     /** Native Radar Focus menu. The ComposeView is gone when closed, so the map keeps touch input. */

@@ -128,10 +128,7 @@ async fn fetch_run(
     })?;
     let cached = crate::object_cache::fetch_range(http, &base, start, end).await?;
     let received_time = cached.received_at;
-    let field = crate::task::guarded(|| {
-        crate::hrrr::decode_regrid(&cached.bytes, crate::hrrr::Model::Rrfs, 0.0)
-    })
-    .unwrap_or_else(|_| anyhow::bail!("REFS GRIB decode panicked"))?;
+    let field = crate::hrrr::decode_regrid(cached.bytes, crate::hrrr::Model::Rrfs, 0.0).await?;
     let valid_time = run + chrono::Duration::hours(forecast_hour.into());
     Ok(FieldFrame::new(
         descriptor,

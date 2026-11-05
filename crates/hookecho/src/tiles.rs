@@ -1665,8 +1665,10 @@ pub struct TileManager {
     uploaded: LruCache<crate::render::TileKey, u32>,
     /// Ids evicted by the last `touch_visible`, handed to the renderer to drop.
     evicted: Vec<crate::render::TileKey>,
-    /// Tiles counted visible across all panes this frame; drives the eviction high-water mark.
-    frame_visible: usize,
+    /// Current covers and frame keys across all panes, including their world copies.
+    frame_visible: Vec<(u64, VisibleTile)>,
+    /// Earlier pane callbacks may still draw fallbacks replaced by this frame's uploads.
+    frame_protected: HashSet<crate::render::TileKey>,
     cache_root: Option<std::path::PathBuf>,
     mapbox_key: String,
     maptiler_key: String,
@@ -1708,7 +1710,8 @@ impl TileManager {
             ndfd_refresh_hour: chrono::Utc::now().timestamp().div_euclid(3600),
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
-            frame_visible: 0,
+            frame_visible: Vec::new(),
+            frame_protected: HashSet::new(),
             custom_template: String::new(),
             custom_max_z: 19,
             thumbs: std::collections::HashMap::new(),
@@ -1772,7 +1775,8 @@ impl TileManager {
         self.evicted.clear();
         self.deferred_ready = None;
         self.thumbs.clear();
-        self.frame_visible = 0;
+        self.frame_visible.clear();
+        self.frame_protected.clear();
     }
 
     /// Whether `style` is being fetched at double resolution right now — the caller drops its
@@ -2077,6 +2081,15 @@ impl TileManager {
     }
 
     pub fn drain_ready_budget(&mut self, budget: &mut crate::map_work::UploadBudget) -> Vec<PendingTile> {
+        self.drain_ready_filtered(budget, false)
+    }
+
+    /// Call after every pane registered its cover; obsolete completions cost no upload budget.
+    pub fn drain_ready_for_frame(&mut self, budget: &mut crate::map_work::UploadBudget) -> Vec<PendingTile> {
+        self.drain_ready_filtered(budget, true)
+    }
+
+    fn drain_ready_filtered(&mut self, budget: &mut crate::map_work::UploadBudget, current_frame: bool) -> Vec<PendingTile> {
         let mut ready = Vec::new();
         // Uploading every tile that finished during a network burst turns one otherwise smooth
         // pan frame into a wall of texture allocation. Two matches the vector-tile budget; the
@@ -2086,6 +2099,14 @@ impl TileManager {
             examined += 1;
             let Some((generation, t)) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) else { break };
             if generation != self.generation { continue; }
+            let key = match &t { Ok(tile) => (tile.style, tile.id), Err(key) => *key };
+            if current_frame && !self.frame_visible.iter().any(|(style, visible)| {
+                *style == key.0 && crate::render::raster_tile_quads(*style, visible,
+                    |id| *id == key || self.uploaded.contains(id)).iter().any(|quad| quad.0 == key)
+            }) {
+                self.requested.remove(&key);
+                continue;
+            }
             let t = match t {
                 Ok(t) => t,
                 Err(id) => {
@@ -2105,6 +2126,10 @@ impl TileManager {
             // `push` (not `put`) hands back whatever it evicted, so the renderer can free the
             // texture instead of leaking it.
             let bytes = t.width * t.height * 4;
+            // Defer eviction until all new tiles can replace their fallbacks together.
+            if current_frame && self.uploaded.len() == self.uploaded.cap().get() && !self.uploaded.contains(&key) {
+                self.uploaded.resize(NonZeroUsize::new(self.uploaded.len() + 1).unwrap());
+            }
             let evicted = self.uploaded.push(key, bytes);
             if let Some((id, _)) = evicted.filter(|(id, _)| *id != key) {
                 self.requested.remove(&id);
@@ -2129,16 +2154,17 @@ impl TileManager {
         self.ctx = Some(ctx);
     }
 
-    /// Mark this frame's tiles as most-recently-used. Called once per pane, because panes can
+    /// Register this frame's cover. Called once per pane, because panes can
     /// show different basemaps and each pane's tiles must survive the others' eviction pass.
     /// Eviction itself runs once per frame in [`Self::evict_excess`], after every pane has been
     /// counted — evicting mid-frame would drop tiles a later pane still needs.
     pub fn promote_visible(&mut self, style: BasemapStyle, visible: &[VisibleTile]) {
         let skey = self.frame_key(style);
         for v in visible {
-            self.uploaded.promote(&(skey, v.id));
+            self.frame_protected.extend(crate::render::raster_tile_quads(skey, v,
+                |id| self.uploaded.contains(id)).into_iter().map(|quad| quad.0));
         }
-        self.frame_visible += visible.len();
+        self.frame_visible.extend(visible.iter().map(|v| (skey, *v)));
     }
 
     pub fn visible_failed(&self, style: BasemapStyle, visible: &[VisibleTile]) -> bool {
@@ -2154,13 +2180,19 @@ impl TileManager {
     /// Shrink the cache back to its resting size and return what fell out, so the renderer can
     /// free those textures. Run after the last pane's [`Self::promote_visible`].
     pub fn evict_excess(&mut self) -> Vec<crate::render::TileKey> {
+        self.frame_protected.extend(self.frame_visible.iter().flat_map(|(style, visible)| {
+            crate::render::raster_tile_quads(*style, visible, |id| self.uploaded.contains(id))
+                .into_iter().map(|quad| quad.0)
+        }));
+        let protected = std::mem::take(&mut self.frame_protected);
+        for id in &protected { self.uploaded.promote(id); }
         // Grow to fit a wide (or multi-pane) frame: the cap is a resting size, not a per-frame
         // limit. An evicted tile also drops out of `requested`, so revisiting that area re-fetches
         // it (from disk, usually) instead of leaving a black square.
-        let want = RASTER_TILE_CACHE.max(self.frame_visible + 16);
+        let want = RASTER_TILE_CACHE.max(self.frame_visible.len().max(protected.len()) + 16);
         // What this frame drew must survive the byte sweep, exactly as it survives the entry cap.
-        let floor = self.frame_visible;
-        self.frame_visible = 0;
+        let floor = protected.len();
+        self.frame_visible.clear();
         // Entry count alone let a 512-px provider (Mapbox/MapTiler, Carto @2x) hold four times
         // the intended GPU memory. Cheap to total: at most `want` entries.
         while self.uploaded.len() > floor.max(1)
@@ -2812,6 +2844,104 @@ mod tests {
         assert_eq!(m.drain_ready().len(), 2);
         assert_eq!(m.drain_ready().len(), 1);
         assert!(m.drain_ready().is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn raster_zoom_out_protects_actual_fallbacks_across_panes_and_replacements() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut m = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let count = RASTER_TILE_CACHE + 32;
+        m.uploaded.resize(NonZeroUsize::new(count + 32).unwrap());
+        let style = BasemapStyle::Satellite;
+        let key = m.frame_key(style);
+        let parents: Vec<_> = (0..count as u32 / 4).map(|x| VisibleTile {
+            id: (10, x, 0), world_min: [x as f32 / 1024.0, 0.0],
+            world_max: [(x + 1) as f32 / 1024.0, 1.0 / 1024.0],
+        }).collect();
+        let children: Vec<_> = parents.iter().flat_map(|tile| (0..2).flat_map(move |dx| (0..2)
+            .map(move |dy| (key, (11, tile.id.1 * 2 + dx, dy))))).collect();
+        for id in &children { m.uploaded.put(*id, 512 * 512 * 4); m.requested.insert(*id); }
+        let peer_style = BasemapStyle::UsgsTopo;
+        let peer = (m.frame_key(peer_style), (8, 0, 0));
+        m.uploaded.put(peer, 512 * 512 * 4);
+        let unrelated = (key, (10, 900, 900));
+        m.uploaded.put(unrelated, 512 * 512 * 4);
+        m.promote_visible(style, &parents);
+        m.promote_visible(peer_style, &parents[..1]);
+        let dropped = m.evict_excess();
+        assert_eq!(dropped, vec![unrelated]);
+        assert!(children.iter().all(|id| m.uploaded.contains(id)));
+        assert!(m.uploaded.contains(&peer), "another pane's ancestor must survive");
+
+        m.promote_visible(style, &parents);
+        m.tx.send((m.generation, Ok(FetchedTile { id: parents[0].id, style: key,
+            rgba: vec![0; 4], width: 1, height: 1 }))).unwrap();
+        assert_eq!(m.drain_ready_for_frame(&mut crate::map_work::UploadBudget::frame(true)).len(), 1);
+        m.evict_excess();
+        assert!(children.iter().all(|id| m.uploaded.contains(id)), "already staged pane fallbacks survive replacement uploads");
+        m.evict_excess();
+        assert!(m.uploaded.len() <= RASTER_TILE_CACHE);
+        assert!(m.uploaded.iter().map(|(_, bytes)| *bytes as u64).sum::<u64>() <= RASTER_TILE_BYTES);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn raster_completions_use_current_pane_union_and_exact_frame_keys_before_budget() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut m = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let visible = [VisibleTile { id: (6, 12, 20), world_min: [0.0; 2], world_max: [1.0; 2] }];
+        let style = BasemapStyle::GoesEast;
+        m.set_goes_time(chrono::DateTime::from_timestamp(1_700_000_000, 0));
+        let first = m.frame_key(style);
+        m.promote_visible(style, &visible);
+        m.set_goes_time(chrono::DateTime::from_timestamp(1_700_000_600, 0));
+        let second = m.frame_key(style);
+        m.promote_visible(style, &visible);
+        let stale = [(u64::from(style.key()), visible[0].id),
+            (first, (6, 40, 20)), (m.frame_key(BasemapStyle::Satellite), visible[0].id),
+            (first, (8, 48, 80))];
+        let useful = [(first, (5, 6, 10)), (second, visible[0].id)];
+        for (style, id) in stale.into_iter().chain(useful) {
+            m.requested.insert((style, id));
+            m.tx.send((m.generation, Ok(FetchedTile { id, style, rgba: vec![0; 4], width: 1, height: 1 }))).unwrap();
+        }
+        let ready = m.drain_ready_for_frame(&mut crate::map_work::UploadBudget::frame(true));
+        assert_eq!(ready.iter().map(|tile| (tile.style, tile.id)).collect::<Vec<_>>(), useful);
+        assert!(stale.iter().all(|id| !m.requested.contains(id)));
+        assert!(useful.iter().all(|id| m.requested.contains(id)));
+        // A late parent is no longer useful once this pane has exact imagery.
+        let redundant = (second, (5, 6, 10));
+        m.requested.insert(redundant);
+        m.tx.send((m.generation, Ok(FetchedTile { id: redundant.1, style: redundant.0,
+            rgba: vec![0; 4], width: 1, height: 1 }))).unwrap();
+        assert!(m.drain_ready_for_frame(&mut crate::map_work::UploadBudget::frame(true)).is_empty());
+        assert!(!m.requested.contains(&redundant));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn raster_deferred_completions_are_rechecked_after_view_change_or_disabling_raster() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut m = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let style = BasemapStyle::Satellite;
+        let key = m.frame_key(style);
+        let visible: Vec<_> = (0..2).map(|x| VisibleTile { id: (6, x, 0), world_min: [0.0; 2], world_max: [1.0; 2] }).collect();
+        m.promote_visible(style, &visible);
+        for tile in &visible {
+            m.requested.insert((key, tile.id));
+            m.tx.send((m.generation, Ok(FetchedTile { id: tile.id, style: key,
+                rgba: vec![0; 4], width: 1024, height: 1024 }))).unwrap();
+        }
+        assert_eq!(m.drain_ready_for_frame(&mut crate::map_work::UploadBudget::frame(true)).len(), 1);
+        assert!(m.deferred_ready.is_some());
+        m.evict_excess();
+        let mut budget = crate::map_work::UploadBudget::frame(true);
+        assert!(m.drain_ready_for_frame(&mut budget).is_empty());
+        assert!(m.deferred_ready.is_none());
+        assert!(!m.requested.contains(&(key, visible[1].id)));
+        assert!(budget.take(1));
+        assert!(budget.take(1), "discarded raster work must leave both shared upload slots available");
     }
 
     /// 512-px providers made the 512-entry cache four times the memory the entry count assumed.
@@ -3618,4 +3748,52 @@ mod eccc_availability_tests {
         } }
     }
 
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod regional_feed_contracts {
+    use super::*;
+
+    async fn check(style: BasemapStyle, tile: (u8, u32, u32)) {
+        wxdata::task::timeout(std::time::Duration::from_secs(120), async {
+            let client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build().unwrap();
+            let now = chrono::Utc::now();
+            let frames = fetch_frame_times(&client, style, now - chrono::Duration::hours(2), now, 4).await;
+            assert!(frames.windows(2).all(|pair| pair[0] < pair[1]), "{} unordered catalog", style.slug());
+            let time = frames.last().copied().unwrap_or_else(|| panic!("{} has no recent observed frame", style.slug()));
+            assert!(time <= now && now - time <= chrono::Duration::minutes(90), "{} stale/future frame: {time}", style.slug());
+            let (z, x, y) = tile;
+            let url = if style == BasemapStyle::EcccRadarRain {
+                format!("{}&TIME={}", style.url(z, x, y, false, "", "", "").unwrap(), time.format("%Y-%m-%dT%H:%M:%SZ"))
+            } else {
+                crate::world_tiles::tile_url(style, Some(time), z, x, y).expect("advertised frame URL")
+            };
+            // Production paths check OPERA file time, parse CWA's physical grid, and decode
+            // JMA/GeoMet PNG samples. Dry weather may legitimately produce a transparent tile.
+            let image = load_raster_tile(&client, &url, None).await.unwrap_or_else(|error| {
+                panic!("{} frame {time} sample decode failed: {error}", style.slug())
+            });
+            assert_eq!(image.dimensions(), (256, 256), "{} sample dimensions", style.slug());
+            println!("{} observed={time} sample={z}/{x}/{y} rgba_bytes={}", style.slug(), image.len());
+        }).await.unwrap_or_else(|error| panic!("{} exceeded live-check deadline: {error}", style.slug()));
+    }
+
+    #[tokio::test]
+    #[ignore = "scheduled live regional provider contract"]
+    async fn live_regional_contract_opera() { check(BasemapStyle::OperaRadar, (4, 8, 5)).await; }
+
+    #[tokio::test]
+    #[ignore = "scheduled live regional provider contract"]
+    async fn live_regional_contract_jma() { check(BasemapStyle::JmaRadar, (5, 28, 12)).await; }
+
+    #[tokio::test]
+    #[ignore = "scheduled live regional provider contract"]
+    async fn live_regional_contract_cwa() { check(BasemapStyle::TaiwanRadar, (5, 26, 13)).await; }
+
+    #[tokio::test]
+    #[ignore = "scheduled live regional provider contract"]
+    async fn live_regional_contract_canada() { check(BasemapStyle::EcccRadarRain, (4, 4, 5)).await; }
 }

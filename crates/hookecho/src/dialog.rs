@@ -38,16 +38,17 @@ pub fn save_bytes(default_name: &str, ext: &str, bytes: &[u8]) -> Saved {
         let Some(path) = save_path(default_name, ext) else {
             return Saved::Cancelled;
         };
-        match std::fs::write(&path, bytes) {
-            Ok(()) => Saved::Where(path.display().to_string()),
-            Err(e) => Saved::Failed(e.to_string()),
+        match std::fs::write(&path, bytes).map_err(|e| e.to_string())
+            .and_then(|()| finish_save(&path)) {
+            Ok(where_) => Saved::Where(where_),
+            Err(e) => Saved::Failed(e),
         }
     }
 }
 
 /// Choose a save path for `default_name` (a `<label>.<ext>` filename). Desktop pops a native save
-/// dialog; Android returns `<data>/exports/<timestamp>-<default_name>` (creating the folder), so
-/// screenshots / loops / exports land somewhere retrievable without a picker.
+/// dialog; Android stages a private file. Call [`finish_save`] once its writer has closed to
+/// offer the system Save/Share flow. Failed or incomplete files must never be handed off.
 pub fn save_path(default_name: &str, ext: &str) -> Option<PathBuf> {
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     {
@@ -60,10 +61,21 @@ pub fn save_path(default_name: &str, ext: &str) -> Option<PathBuf> {
     {
         let _ = ext;
         let dir = crate::paths::data_dir()?.join("exports");
-        let _ = std::fs::create_dir_all(&dir);
-        let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        std::fs::create_dir_all(&dir).ok()?;
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S-%f");
         Some(dir.join(format!("{stamp}-{default_name}")))
     }
+}
+
+/// Finish a path-based export; byte-based exports already call this after writing.
+pub fn finish_save(path: &std::path::Path) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        android_open::offer_export(path)?;
+        Ok("the Save / Share dialog".into())
+    }
+    #[cfg(not(target_os = "android"))]
+    { Ok(path.display().to_string()) }
 }
 
 /// What an open request is for. The app needs this back with the path, because the picker returns
@@ -225,13 +237,25 @@ fn deliver(import: Import) {
 /// Storage Access Framework, through the activity.
 ///
 /// The picker is an activity result, so it lands in Kotlin, not here — and the app may not even
-/// be resumed when it does. `MainActivity` copies the chosen content stream into the cache and
+/// be resumed when it does. `MainActivity` copies the chosen content stream into app storage and
 /// writes `kind<TAB>tag<TAB>path` to `filesDir/import.txt`, exactly the handover `goto.txt` already uses
 /// for notification taps; this drains that file on the next frame.
 #[cfg(target_os = "android")]
 mod android_open {
     use super::{deliver, Import, ImportKind};
     use jni::objects::{JObject, JValue};
+
+    pub fn offer_export(path: &std::path::Path) -> Result<(), String> {
+        let app = crate::platform::android::app().ok_or("Android activity unavailable")?;
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }
+            .map_err(|error| error.to_string())?;
+        let mut env = vm.attach_current_thread().map_err(|error| error.to_string())?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
+        let path = env.new_string(path.to_string_lossy()).map_err(|error| error.to_string())?;
+        let result = env.call_method(&activity, "offerExport", "(Ljava/lang/String;)V", &[JValue::Object(&path)]);
+        if result.is_err() { let _ = env.exception_clear(); }
+        result.map(|_| ()).map_err(|error| error.to_string())
+    }
 
     fn slug(kind: ImportKind) -> &'static str {
         match kind {

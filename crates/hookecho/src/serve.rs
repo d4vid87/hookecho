@@ -1691,6 +1691,7 @@ const GOES_PROXY_MAX_BYTES: usize = 96 * 1024 * 1024;
 fn proxy_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .timeout(wxdata::net::FEED_TIMEOUT)
         .build()
         .expect("proxy HTTP client")
 }
@@ -1840,8 +1841,9 @@ fn regional_radar(server: &Server, path: &str, query: &str, if_none_match: Optio
         tokio::time::timeout(wxdata::net::FEED_TIMEOUT, fetch_capped(&server.proxy_http, &url, limit)).await?
     });
     // Do not log `url` or the reqwest error: both can contain the server-side authKey.
-    let Ok((_, mut body)) = fetched else {
-        return ("503 Service Unavailable", "application/json", br#"{"error":"KMA radar is temporarily unavailable"}"#.to_vec()).into();
+    let (_, mut body) = match fetched {
+        Ok(response) => response,
+        Err(error) => return proxy_error_reply(&error, "503 Service Unavailable"),
     };
     if matches!(request, RegionalRadarRequest::Catalog(_)) {
         let Ok(catalog) = regional_radar_catalog(&body) else {
@@ -1915,7 +1917,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
             },
             Err(e) => {
                 log::warn!("proxy range fetch of {url} failed: {e}");
-                ("502 Bad Gateway", "application/json", br#"{"error":"upstream fetch failed"}"#.to_vec()).into()
+                proxy_error_reply(&e, "502 Bad Gateway")
             }
         };
     }
@@ -1968,12 +1970,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
         }
         Err(e) => {
             log::warn!("proxy fetch of {url} failed: {e}");
-            (
-                "502 Bad Gateway",
-                "application/json",
-                br#"{"error":"upstream fetch failed"}"#.to_vec(),
-            )
-                .into()
+            proxy_error_reply(&e, "502 Bad Gateway")
         }
     }
 }
@@ -2020,7 +2017,7 @@ async fn fetch_capped_range(
         .header(reqwest::header::RANGE, range)
         .send()
         .await?;
-    anyhow::ensure!(resp.status().is_success(), "upstream returned {}", resp.status());
+    check_proxy_status(&resp)?;
     anyhow::ensure!(
         resp.status() == reqwest::StatusCode::PARTIAL_CONTENT,
         "upstream ignored byte range"
@@ -2046,6 +2043,59 @@ async fn fetch_capped_range(
         body.extend_from_slice(&chunk);
     }
     Ok((ctype, body, content_range))
+}
+
+#[derive(Debug)]
+struct UpstreamBackoff {
+    status: &'static str,
+    retry_after: u64,
+}
+
+impl std::fmt::Display for UpstreamBackoff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "upstream returned {}", self.status)
+    }
+}
+impl std::error::Error for UpstreamBackoff {}
+
+fn retry_after_seconds(value: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> u64 {
+    let Some(value) = value.map(str::trim).filter(|value| value.len() <= 128 && !value.contains(['\r', '\n'])) else { return 30; };
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.parse::<u64>().unwrap_or(u64::MAX).min(86_400);
+    }
+    let date = chrono::DateTime::parse_from_rfc2822(value).map(|date| date.with_timezone(&chrono::Utc)).ok()
+        .or_else(|| ["%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"].into_iter()
+            .find_map(|format| chrono::NaiveDateTime::parse_from_str(value, format).ok().map(|date| date.and_utc())));
+    date.map_or(30, |date| (date - now).num_seconds().clamp(0, 86_400) as u64)
+}
+
+fn check_proxy_status(response: &reqwest::Response) -> anyhow::Result<()> {
+    let status = match response.status().as_u16() {
+        429 => Some("429 Too Many Requests"),
+        503 => Some("503 Service Unavailable"),
+        _ => None,
+    };
+    if let Some(status) = status {
+        return Err(UpstreamBackoff {
+            status,
+            retry_after: retry_after_seconds(response.headers().get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()), chrono::Utc::now()),
+        }.into());
+    }
+    anyhow::ensure!(response.status().is_success(), "upstream returned {}", response.status());
+    Ok(())
+}
+
+fn proxy_error_reply(error: &anyhow::Error, fallback: &'static str) -> Reply {
+    let backoff = error.downcast_ref::<UpstreamBackoff>();
+    let mut headers = vec![("Cache-Control", "no-store".into())];
+    if let Some(backoff) = backoff { headers.push(("Retry-After", backoff.retry_after.to_string())); }
+    Reply {
+        status: backoff.map_or(fallback, |backoff| backoff.status),
+        ctype: "application/json",
+        body: br#"{"error":"upstream fetch failed"}"#.to_vec(),
+        headers,
+    }
 }
 
 /// The response for a proxied body, 304 if the client already holds it.
@@ -2095,7 +2145,7 @@ async fn fetch_capped(
         req = req.header(reqwest::header::REFERER, "https://weathercams.faa.gov/");
     }
     let mut resp = req.send().await?;
-    anyhow::ensure!(resp.status().is_success(), "upstream returned {}", resp.status());
+    check_proxy_status(&resp)?;
     let ctype = proxy_content_type(
         resp.headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -2274,6 +2324,58 @@ setInterval(radar, 300000);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_retry_after_is_bounded_and_accepts_http_dates() {
+        let now = "1994-11-06T08:49:00Z".parse().unwrap();
+        for (value, expected) in [(None, 30), (Some(""), 30), (Some("bad"), 30),
+            (Some("-2"), 30), (Some("1.5"), 30), (Some("0"), 0), (Some(" 37 "), 37),
+            (Some("99999999999999999999999999"), 86_400),
+            (Some("Sun, 06 Nov 1994 08:49:37 GMT"), 37),
+            (Some("Sunday, 06-Nov-94 08:49:37 GMT"), 37),
+            (Some("Sun Nov  6 08:49:37 1994"), 37),
+            (Some("Sun, 06 Nov 1994 08:00:00 GMT"), 0),
+            (Some("Tue, 08 Nov 1994 08:49:37 GMT"), 86_400)] {
+            assert_eq!(retry_after_seconds(value, now), expected, "{value:?}");
+        }
+        let reply = proxy_error_reply(&anyhow::anyhow!("private upstream URL and body"), "502 Bad Gateway");
+        assert_eq!(reply.status, "502 Bad Gateway");
+        assert_eq!(reply.headers, [("Cache-Control", "no-store".into())]);
+        assert_eq!(reply.body, br#"{"error":"upstream fetch failed"}"#);
+    }
+
+    #[test]
+    fn proxy_backoff_survives_full_and_range_fetches_without_upstream_body() {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = std::thread::spawn(move || {
+            for status in ["429 Too Many Requests", "503 Service Unavailable"] {
+                for _ in 0..2 {
+                    let (mut connection, _) = listener.accept().unwrap();
+                    let mut request = [0; 1024];
+                    assert!(connection.read(&mut request).unwrap() > 0);
+                    // No body arrives: status handling must finish without waiting for it.
+                    write!(connection, "HTTP/1.1 {status}\r\nRetry-After: 60\r\nContent-Length: 999999999\r\nConnection: close\r\n\r\n").unwrap();
+                }
+            }
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let http = proxy_client();
+        for status in ["429 Too Many Requests", "503 Service Unavailable"] {
+            let errors = [
+                runtime.block_on(fetch_capped(&http, &url, 1024)).unwrap_err(),
+                runtime.block_on(fetch_capped_range(&http, &url, "bytes=0-3")).unwrap_err(),
+            ];
+            for error in errors {
+                let reply = proxy_error_reply(&error, "502 Bad Gateway");
+                assert_eq!(reply.status, status);
+                assert_eq!(reply.headers, [("Cache-Control", "no-store".into()), ("Retry-After", "60".into())]);
+                assert_eq!(reply.body, br#"{"error":"upstream fetch failed"}"#);
+            }
+        }
+        upstream.join().unwrap();
+    }
 
     #[test]
     fn proxy_does_not_follow_upstream_redirects() {

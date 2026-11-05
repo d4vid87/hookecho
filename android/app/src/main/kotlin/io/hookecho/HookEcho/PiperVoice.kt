@@ -7,17 +7,19 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.SystemClock
 import org.json.JSONObject
 import java.io.File
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
 import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Offline en_US-amy-medium synthesis shared by foreground and background alerts. */
 object PiperVoice {
-    private val playing = AtomicReference<AudioTrack?>()
+    private val playback = SpeechPlayback()
+    private val submissions = Any()
     private val environment by lazy { OrtEnvironment.getEnvironment() }
     private var session: OrtSession? = null
     private val sequence = AtomicLong()
@@ -26,6 +28,7 @@ object PiperVoice {
         val text: String,
         val priority: Int,
         val order: Long,
+        val ticket: SpeechPlayback.Ticket,
     ) : Comparable<Job> {
         override fun compareTo(other: Job): Int =
             compareValuesBy(this, other, { -it.priority }, { it.order })
@@ -36,40 +39,54 @@ object PiperVoice {
         Thread({
             while (true) {
                 val job = jobs.take()
-                speakBlocking(job.context, job.text)
+                speakBlocking(job.context, job.text, job.ticket)
             }
         }, "hookecho-piper").apply { isDaemon = true; start() }
     }
     @JvmStatic private external fun nativePhonemes(text: String, dataPath: String): String
-    @JvmStatic fun stop() = playing.getAndSet(null)?.runCatching { pause(); flush(); release() }
-
-    @JvmStatic fun enqueue(context: Context, text: String, priority: Int) {
-        if (priority >= Nws.TIER_EMERGENCY) {
-            jobs.removeIf { it.priority < priority }
-            stop()
+    // Explicit Unit keeps the JNI signature ()V, even when no track is playing.
+    @JvmStatic fun stop(): Unit {
+        synchronized(submissions) {
+            jobs.clear()
+            playback.stop()
         }
-        jobs.put(Job(context.applicationContext, text, priority, sequence.getAndIncrement()))
     }
 
-    @JvmStatic @Synchronized fun speakBlocking(context: Context, text: String): Boolean = runCatching {
+    @JvmStatic fun enqueue(context: Context, text: String, priority: Int) {
+        synchronized(submissions) {
+            if (priority >= Nws.TIER_EMERGENCY) {
+                jobs.removeIf { it.priority < priority }
+                playback.interruptBelow(priority)
+            }
+            jobs.put(Job(context.applicationContext, text, priority, sequence.getAndIncrement(), playback.begin(priority)))
+        }
+    }
+
+    @JvmStatic fun speakBlocking(context: Context, text: String): Boolean {
+        val ticket = synchronized(submissions) { playback.begin(0) }
+        return speakBlocking(context, text, ticket)
+    }
+
+    private fun speakBlocking(context: Context, text: String, ticket: SpeechPlayback.Ticket): Boolean = playback.run(ticket) { runCatching {
         val dir = File(context.filesDir, "piper-amy")
         installAssets(context, dir)
+        if (!playback.isCurrent(ticket)) return@runCatching false
         val config = JSONObject(File(dir, "en_US-amy-medium.onnx.json").readText())
         val ids = phonemeIds(nativePhonemes(text, File(dir, "espeak-ng-data").path), config)
         val voice = session ?: environment.createSession(
             File(dir, "en_US-amy-medium.onnx").path
         ).also { session = it }
+        if (!playback.isCurrent(ticket)) return@runCatching false
         OnnxTensor.createTensor(environment, LongBuffer.wrap(ids), longArrayOf(1, ids.size.toLong())).use { input ->
             OnnxTensor.createTensor(environment, LongBuffer.wrap(longArrayOf(ids.size.toLong())), longArrayOf(1)).use { lengths ->
                 OnnxTensor.createTensor(environment, FloatBuffer.wrap(floatArrayOf(0.667f, 1.0f, 0.8f)), longArrayOf(3)).use { scales ->
                     voice.run(mapOf("input" to input, "input_lengths" to lengths, "scales" to scales)).use { output ->
-                        play((output[0] as OnnxTensor).floatBuffer, config.getJSONObject("audio").getInt("sample_rate"))
+                        play((output[0] as OnnxTensor).floatBuffer, config.getJSONObject("audio").getInt("sample_rate"), ticket)
                     }
                 }
             }
         }
-        true
-    }.getOrDefault(false)
+    }.getOrDefault(false) }
 
     private fun phonemeIds(phonemes: String, config: JSONObject): LongArray {
         val map = config.getJSONObject("phoneme_id_map")
@@ -96,20 +113,33 @@ object PiperVoice {
         copy("piper", dir)
     }
 
-    private fun play(samples: FloatBuffer, sampleRate: Int) {
+    private fun play(samples: FloatBuffer, sampleRate: Int, ticket: SpeechPlayback.Ticket): Boolean {
+        if (!playback.isCurrent(ticket)) return false
         val pcm = ShortArray(samples.remaining()) { (samples.get().coerceIn(-1f, 1f) * 32767).toInt().toShort() }
         val track = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).build())
             .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
             .setBufferSizeInBytes(pcm.size * 2).setTransferMode(AudioTrack.MODE_STATIC).build()
-        stop(); playing.set(track); track.write(pcm, 0, pcm.size); track.play()
-        val deadline = System.currentTimeMillis() + (pcm.size * 1000L / sampleRate) + 2_000L
-        while (playing.get() === track && track.playbackHeadPosition < pcm.size &&
-            System.currentTimeMillis() < deadline
-        ) Thread.sleep(25)
-        if (playing.compareAndSet(track, null)) {
-            track.stop()
-            track.release()
+        val deadline = SystemClock.elapsedRealtime() + (pcm.size * 1000L / sampleRate) + 2_000L
+        val output = object : SpeechPlayback.Output {
+            private val closed = AtomicBoolean()
+            override fun start() = track.play()
+            override fun isPlaying(): Boolean = track.playbackHeadPosition < pcm.size && SystemClock.elapsedRealtime() < deadline
+            override fun close() {
+                if (closed.compareAndSet(false, true)) {
+                    runCatching { track.pause() }
+                    runCatching { track.flush() }
+                    track.release()
+                }
+            }
+        }
+        try {
+            if (track.write(pcm, 0, pcm.size) != pcm.size) return false
+            if (!playback.publish(ticket, output)) return false
+            while (playback.isPlaying(ticket, output)) Thread.sleep(25)
+            return playback.isCurrent(ticket)
+        } finally {
+            playback.finish(output)
         }
     }
 }

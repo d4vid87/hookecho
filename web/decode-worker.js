@@ -14,7 +14,7 @@
 // Protocol, both directions over postMessage:
 //   in   { module, glue }        boot: compiled module + the URL of the wasm-bindgen glue
 //   in   { id, op, bytes }       run a job (bytes' buffer is transferred in). `op` is
-//                                "bin", "mrms", "opera", "cwa", "kma", "assemble", "vector", "abi", "abi-project", "abi-rgb", or "decode".
+//                                "bin", "mrms", "model", "opera", "cwa", "kma", "assemble", "vector", "abi", "abi-project", "abi-rgb", or "decode".
 //   out  { id, ok: ArrayBuffer } postcard-encoded Scan (transferred out)
 //   out  { id, err, fatal }      the job failed; `fatal` means a trap poisoned this heap
 
@@ -46,6 +46,7 @@ self.onmessage = async (e) => {
       : op === "assemble" ? wasm.assemble_live_chunks
       : op === "bin" ? wasm.bin_radar_display
       : op === "mrms" ? wasm.decode_mrms
+      : op === "model" ? wasm.decode_model
       : op === "opera" ? wasm.decode_opera_composite
       : op === "cwa" ? wasm.decode_cwa
       : op === "kma" ? wasm.decode_kma

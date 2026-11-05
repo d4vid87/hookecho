@@ -3,6 +3,26 @@
 use crate::header::{Dataset, Layout};
 use crate::{btree, Error, Result};
 
+// Full-resolution ABI images are sampled chunk by chunk; no individual allocation needs these
+// ceilings. Keep them shared by GLM, ABI and ODIM, including files with forged dimensions.
+pub(crate) const MAX_CHUNK_BYTES: usize = 64 * 1024 * 1024;
+const MAX_READ_BYTES: usize = 512 * 1024 * 1024;
+
+fn byte_len(dims: impl IntoIterator<Item = u64>, elem: usize, limit: usize) -> Result<usize> {
+    let size = dims.into_iter().try_fold(elem, |total, n| {
+        total.checked_mul(usize::try_from(n).ok()?)
+    });
+    size.filter(|&size| size <= limit)
+        .ok_or_else(|| Error::Unsupported("dataset or chunk dimensions exceed byte limit".into()))
+}
+
+fn chunk_bytes(ds: &Dataset, dims: &[u32]) -> Result<usize> {
+    if dims.is_empty() || dims.len() != ds.dims.len() || dims.contains(&0) {
+        return Err(Error::Unsupported("invalid chunk dimensions".into()));
+    }
+    byte_len(dims.iter().map(|&n| u64::from(n)), ds.dtype.size_of(), MAX_CHUNK_BYTES)
+}
+
 /// A bounds-checked little-endian cursor. HDF5 is little-endian on every platform NOAA writes on,
 /// and the datatype messages in these files confirm it per-dataset.
 pub(crate) struct Cur<'a> {
@@ -167,7 +187,8 @@ fn place_chunk(
     origin: &[u64],
 ) {
     let rank = dset_dims.len();
-    if rank == 0 || chunk_dims.len() != rank || origin.len() < rank {
+    if rank == 0 || chunk_dims.len() != rank || origin.len() < rank
+        || origin.iter().zip(dset_dims).any(|(&start, &size)| start >= size) {
         return;
     }
     // Row-major strides in elements, innermost last.
@@ -199,7 +220,7 @@ fn place_chunk(
         if dst >= out.len() || src_at >= src.len() {
             continue;
         }
-        let n = (run * elem).min(out.len() - dst).min(src.len() - src_at);
+        let n = run.min((dset_dims[rank - 1] - origin[rank - 1]) as usize) * elem;
         out[dst..dst + n].copy_from_slice(&src[src_at..src_at + n]);
     }
 }
@@ -207,11 +228,19 @@ fn place_chunk(
 /// Gather a dataset's on-disk bytes, decompressing and reassembling chunks as needed.
 pub(crate) fn raw_bytes(d: &[u8], ds: &Dataset) -> Result<Vec<u8>> {
     let elem = ds.dtype.size_of();
-    let total = ds.element_count() * elem;
+    if !matches!(elem, 1 | 2 | 4 | 8) {
+        return Err(Error::Unsupported(format!("{elem}-byte datatype")));
+    }
+    byte_len(ds.dims.iter().copied(), 8, MAX_READ_BYTES)?;
+    let total = byte_len(ds.dims.iter().copied(), elem, MAX_READ_BYTES)?;
     match &ds.layout {
         Layout::Contiguous { addr, size } => {
-            let end = (*addr as usize)
-                .checked_add(*size as usize)
+            if *size != total as u64 {
+                return Err(Error::Filter(format!("contiguous data has {size} bytes, expected {total}")));
+            }
+            let start = usize::try_from(*addr).map_err(|_| Error::Unsupported("data address exceeds address space".into()))?;
+            let end = start
+                .checked_add(total)
                 .ok_or(Error::Truncated {
                     what: "contiguous data",
                     need: 0,
@@ -224,19 +253,18 @@ pub(crate) fn raw_bytes(d: &[u8], ds: &Dataset) -> Result<Vec<u8>> {
                     have: d.len(),
                 });
             }
-            Ok(d[*addr as usize..end].to_vec())
+            Ok(d[start..end].to_vec())
         }
         Layout::Chunked { btree_addr, dims } => {
-            // Chunk dims are stored with the element size appended; the last entry isn't a
-            // dimension.
-            let chunk_elems: usize = dims.iter().map(|&n| n as usize).product::<usize>().max(1);
+            let expect = chunk_bytes(ds, dims)?;
             let mut out = vec![0u8; total];
             if *btree_addr == u64::MAX {
                 // No chunks were ever allocated — an empty dataset, not an error.
                 return Ok(out);
             }
             for chunk in btree::chunks(d, *btree_addr, dims.len())? {
-                let end = (chunk.addr as usize).saturating_add(chunk.size as usize);
+                let start = usize::try_from(chunk.addr).map_err(|_| Error::Unsupported("chunk address exceeds address space".into()))?;
+                let end = start.saturating_add(chunk.size as usize);
                 if end > d.len() {
                     return Err(Error::Truncated {
                         what: "chunk data",
@@ -244,8 +272,8 @@ pub(crate) fn raw_bytes(d: &[u8], ds: &Dataset) -> Result<Vec<u8>> {
                         have: d.len(),
                     });
                 }
-                let raw = &d[chunk.addr as usize..end];
-                let decoded = ds.filters.decode(raw, chunk_elems * elem, elem)?;
+                let raw = &d[start..end];
+                let decoded = ds.filters.decode(raw, expect, elem)?;
                 place_chunk(&mut out, &decoded, elem, &ds.dims, dims, &chunk.offset);
             }
             Ok(out)
@@ -259,26 +287,36 @@ pub(crate) fn strided_f64_2d(d: &[u8], ds: &Dataset, step: usize) -> Result<Vec<
     let [height, width] = ds.dims.as_slice() else {
         return Err(Error::Unsupported("strided read requires a 2D dataset".into()));
     };
-    let (height, width) = (*height as usize, *width as usize);
-    let out_width = width.div_ceil(step);
-    let mut out = vec![f64::NAN; out_width * height.div_ceil(step)];
     let elem = ds.dtype.size_of();
+    if !matches!(elem, 1 | 2 | 4 | 8) {
+        return Err(Error::Unsupported(format!("{elem}-byte datatype")));
+    }
+    byte_len(ds.dims.iter().copied(), elem, usize::MAX)?;
+    let (height, width) = (usize::try_from(*height), usize::try_from(*width));
+    let (height, width) = (height.map_err(|_| Error::Unsupported("image height exceeds address space".into()))?,
+        width.map_err(|_| Error::Unsupported("image width exceeds address space".into()))?);
+    let step = step.max(1);
+    let out_width = width.div_ceil(step);
+    let out_bytes = byte_len([out_width as u64, height.div_ceil(step) as u64], 8, MAX_READ_BYTES)?;
+    let mut out = vec![f64::NAN; out_bytes / 8];
     match &ds.layout {
         Layout::Chunked { btree_addr, dims } if dims.len() == 2 => {
+            let expect = chunk_bytes(ds, dims)?;
             if *btree_addr == u64::MAX { return Ok(out); }
-            let chunk_elems = dims[0] as usize * dims[1] as usize;
             for chunk in btree::chunks(d, *btree_addr, 2)? {
+                if chunk.offset[0] >= height as u64 || chunk.offset[1] >= width as u64 { continue; }
                 let (y0, x0) = (chunk.offset[0] as usize, chunk.offset[1] as usize);
-                let (y1, x1) = ((y0 + dims[0] as usize).min(height), (x0 + dims[1] as usize).min(width));
-                let (first_y, first_x) = (y0.div_ceil(step) * step, x0.div_ceil(step) * step);
+                let (y1, x1) = (y0.saturating_add(dims[0] as usize).min(height), x0.saturating_add(dims[1] as usize).min(width));
+                let (Some(first_y), Some(first_x)) = (y0.div_ceil(step).checked_mul(step), x0.div_ceil(step).checked_mul(step)) else { continue; };
                 if first_y >= y1 || first_x >= x1 { continue; }
-                let end = (chunk.addr as usize).checked_add(chunk.size as usize).ok_or(Error::Truncated {
+                let start = usize::try_from(chunk.addr).map_err(|_| Error::Unsupported("chunk address exceeds address space".into()))?;
+                let end = start.checked_add(chunk.size as usize).ok_or(Error::Truncated {
                     what: "chunk data", need: usize::MAX, have: d.len(),
                 })?;
-                let raw = d.get(chunk.addr as usize..end).ok_or(Error::Truncated {
+                let raw = d.get(start..end).ok_or(Error::Truncated {
                     what: "chunk data", need: end, have: d.len(),
                 })?;
-                let decoded = ds.filters.decode(raw, chunk_elems * elem, elem)?;
+                let decoded = ds.filters.decode(raw, expect, elem)?;
                 for y in (first_y..y1).step_by(step) {
                     for x in (first_x..x1).step_by(step) {
                         let at = ((y - y0) * dims[1] as usize + (x - x0)) * elem;
@@ -302,4 +340,44 @@ pub(crate) fn strided_f64_2d(d: &[u8], ds: &Dataset, step: usize) -> Result<Vec<
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::header::{Datatype, Filters};
+
+    fn dataset(dims: Vec<u64>, chunk: Vec<u32>) -> Dataset {
+        Dataset { dims, dtype: Datatype::Int { size: 2, signed: false, big_endian: false },
+            layout: Layout::Chunked { btree_addr: u64::MAX, dims: chunk }, filters: Filters::default(),
+            scale_factor: None, add_offset: None, fill_value: None }
+    }
+
+    #[test]
+    fn malformed_dimensions_fail_before_allocation_in_both_read_paths() {
+        for dims in [vec![0, 4], vec![4], vec![u32::MAX, u32::MAX], vec![8192, 8192]] {
+            let ds = dataset(vec![4, 4], dims);
+            assert!(raw_bytes(&[], &ds).is_err());
+            assert!(strided_f64_2d(&[], &ds, 2).is_err());
+        }
+        for dims in [vec![u64::MAX, 2], vec![8193, 8193]] {
+            let ds = dataset(dims, vec![4, 4]);
+            assert!(raw_bytes(&[], &ds).is_err());
+            assert!(strided_f64_2d(&[], &ds, 1).is_err());
+        }
+        let ds = dataset(vec![21696, 21696], vec![256, 256]);
+        assert_eq!(strided_f64_2d(&[], &ds, 16).unwrap().len(), 1356 * 1356);
+    }
+
+    #[test]
+    fn contiguous_size_must_match_shape_and_chunk_padding_stays_in_its_row() {
+        let mut ds = dataset(vec![2, 2], vec![2, 2]);
+        ds.layout = Layout::Contiguous { addr: 0, size: 6 };
+        assert!(raw_bytes(&[0; 8], &ds).is_err());
+        ds.layout = Layout::Contiguous { addr: 0, size: 8 };
+        assert_eq!(raw_bytes(&[42; 8], &ds).unwrap(), [42; 8]);
+        let mut output = [0; 6];
+        place_chunk(&mut output, &[1, 2, 3, 4], 1, &[2, 3], &[2, 2], &[0, 2]);
+        assert_eq!(output, [0, 0, 1, 0, 0, 3]);
+    }
 }

@@ -29,6 +29,12 @@ pub fn world_to_lonlat(x: f64, y: f64) -> (f64, f64) {
     (lon, lat)
 }
 
+/// Split absolute coordinates before GPU subtraction; a single f32 steps by 16 px at zoom 20.
+pub fn split_world(world: [f64; 2]) -> ([f32; 2], [f32; 2]) {
+    let high = world.map(|v| v as f32);
+    (high, std::array::from_fn(|i| (world[i] - high[i] as f64) as f32))
+}
+
 /// Slippy-map camera: a world-space center and a fractional zoom.
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
@@ -348,12 +354,13 @@ impl Camera {
 
     /// The `(center, scale)` uniform mapping a world point to clip space:
     /// `clip = (world - center) * scale`, with `scale.y` negated for screen-down Y.
-    pub fn world_to_clip_uniform(&self, viewport_px: (f32, f32)) -> ([f32; 2], [f32; 2]) {
+    /// Keep the center in f64 until it is split for the GPU upload.
+    pub fn world_to_clip_uniform(&self, viewport_px: (f32, f32)) -> ([f64; 2], [f32; 2]) {
         let ppw = 256.0 * 2f64.powf(self.zoom); // pixels per world unit
         let sx = ppw * 2.0 / viewport_px.0 as f64;
         let sy = ppw * 2.0 / viewport_px.1 as f64;
         (
-            [self.center.0 as f32, self.center.1 as f32],
+            [self.center.0, self.center.1],
             [sx as f32, -sy as f32],
         )
     }
@@ -361,6 +368,27 @@ impl Camera {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn split_positions_preserve_one_pixel_pans_at_closest_zoom() {
+        for zoom in [18.0, 19.0, 20.0] {
+            for (lon, lat) in [(-97.303, 32.573), (139.75, 35.68), (179.999999, -35.0)] {
+                let mut camera = Camera::at_lonlat(lon, lat, zoom);
+                let anchor = [camera.center.0, camera.center.1];
+                let (world, world_low) = super::split_world(anchor);
+                for step in 0..32 {
+                    camera.center.0 = anchor[0] + step as f64 * camera.world_per_pixel();
+                    camera.center.1 = anchor[1] + step as f64 * camera.world_per_pixel();
+                    let (center, low) = super::split_world([camera.center.0, camera.center.1]);
+                    for axis in 0..2 {
+                        let delta = (world[axis] - center[axis]) + (world_low[axis] - low[axis]);
+                        let px = delta as f64 / camera.world_per_pixel();
+                        assert!((px + step as f64).abs() < 0.001, "zoom {zoom}, lon {lon}, step {step}: {px}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn projection_switch_preserves_global_zoom_and_local_ground_scale() {
@@ -612,7 +640,7 @@ mod tests {
         let wpp=cam.world_per_pixel() as f32;
         for px in [(50.0,50.0),(700.0,580.0),(450.0,300.0)] {
             let world=cam.pick_world(px,vp).unwrap();
-            let q=((world.0 as f32-center[0])/wpp,-(world.1 as f32-center[1])/wpp);
+            let q=(((world.0-center[0]) as f32)/wpp,-((world.1-center[1]) as f32)/wpp);
             let r=(cb*q.0-sb*q.1,sb*q.0+cb*q.1);
             let w=1.0+r.1*k;
             let ndc=(r.0*scale[0]*wpp/w,-r.1*cp*scale[1]*wpp/w);

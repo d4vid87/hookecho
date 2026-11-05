@@ -34,7 +34,7 @@ impl HookEchoApp {
                     }
                 } else if downloads
                     .get(name)
-                    .is_some_and(|at| at.elapsed() < VOLUME_TIMEOUT)
+                    .is_some_and(|job| job.started.elapsed() < VOLUME_TIMEOUT)
                 {
                     State::Downloading
                 } else {

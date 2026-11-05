@@ -15,14 +15,14 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
   let worker = null;
   let nextId = 1;
   const queued = [];
-  let active = false;
+  let active = null;
   const dispatch = () => {
-    if (active || !worker || !queued.length) return;
+    if (active !== null || !worker || !queued.length) return;
     // Keep radar work ahead of queued map refinement. Never interrupt an executing decode.
     const urgent = queued.findIndex(job => job.op === "bin" || job.op === "assemble");
     const radar = queued.findIndex(job => job.op !== "vector");
     const job = queued.splice(urgent >= 0 ? urgent : radar < 0 ? 0 : radar, 1)[0];
-    active = true;
+    active = job.id;
     worker.postMessage(job, [job.bytes]);
   };
   // A trap that repeats is a bug in the decode, not bad luck, and respawning forever would turn
@@ -40,7 +40,7 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
     for (const [, [, reject]] of pending) reject(new Error("worker unavailable"));
     pending.clear();
     queued.length = 0;
-    active = false;
+    active = null;
     if (++respawns <= maxRespawns) {
       log(`decode worker restarting (${respawns}/${maxRespawns}):`, why);
       attach();
@@ -62,9 +62,9 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
     worker.onerror = (e) => retire((e && e.message) || "worker error");
     worker.onmessage = (e) => {
       const { id, ok, err, fatal } = e.data;
+      if (id === active) active = null;
       const entry = pending.get(id);
       if (entry) {
-        active = false;
         pending.delete(id);
         const [resolve, reject] = entry;
         if (err) reject(new Error(err));
@@ -84,12 +84,23 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn })
   return (bytes, op) => {
     if (!worker) return Promise.reject(new Error("worker unavailable"));
     const id = nextId++;
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       pending.set(id, [resolve, reject]);
       // Transfer, not copy: the volume is tens of MB and this side is finished with it. Rust
       // hands us a fresh JS-heap array for exactly this reason.
       queued.push({ id, op, bytes: bytes.buffer });
       dispatch();
     });
+    // Rust drops abandoned futures; remove their queued bytes before a stale decode starts.
+    promise.cancel = () => {
+      const entry = pending.get(id);
+      if (!entry) return;
+      pending.delete(id);
+      const index = queued.findIndex(job => job.id === id);
+      if (index >= 0) queued.splice(index, 1);
+      entry[1](new Error("decode cancelled"));
+      // An executing synchronous decode finishes once; it must still release the worker slot.
+    };
+    return promise;
   };
 }

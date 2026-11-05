@@ -47,7 +47,7 @@ fn select_remote_file(files: Vec<RemoteFile>, radar_workspace: bool) -> Option<R
 
 /// Settings fields that belong to *this* machine and must survive a sync from another one.
 /// Everything else — markers, placefiles, palettes, theme, API keys — is shared.
-pub const DEVICE_LOCAL: [&str; 7] = [
+pub const DEVICE_LOCAL: [&str; 10] = [
     // Permission to execute a command is granted separately on each machine.
     "plugins",
     "ui_scale",
@@ -60,6 +60,10 @@ pub const DEVICE_LOCAL: [&str; 7] = [
     // This machine's server credential. Copying it to a laptop would mean two boxes sharing one
     // token, and one of them changing it locks the other out.
     "serve_token",
+    // Account setup and scheduling belong to the signed-in device.
+    "sync_client_id",
+    "sync_client_secret",
+    "sync_enabled",
 ];
 
 /// What Google gave us. Stored beside settings.json but never inside it: these are credentials,
@@ -292,7 +296,7 @@ struct TokenReply {
     expires_in: i64,
 }
 
-/// A usable access token, refreshing (and re-saving) when the old one is about to expire.
+/// A usable access token. The UI saves refreshed tokens only while this session is still active.
 pub async fn access_token(
     client_id: &str,
     client_secret: &str,
@@ -315,16 +319,78 @@ pub async fn access_token(
     let reply: TokenReply = parse(r).await?;
     t.access_token = reply.access_token;
     t.expires_at = crate::share::now() + reply.expires_in;
-    t.save();
     Ok(t.access_token.clone())
 }
 
 /// The remote blob: its Drive file id, when Drive last changed it, and the JSON itself.
+#[derive(Debug, Clone)]
 pub struct Remote {
     pub id: String,
     pub modified: String,
     pub body: String,
 }
+
+/// Worker results carry the snapshot hash so a late pull cannot erase newer edits.
+pub enum SyncMsg {
+    Signed(Tokens),
+    Pulled { remote: Remote, started_revision: u64, conflict: bool, hash: u64, resolve_conflict: bool },
+    Pushed { modified: String, hash: u64 },
+    UpToDate,
+    Error(String),
+}
+
+/// Each operation has its own inbox. Signing out drops queued results as well as aborting IO;
+/// tokens are never saved by workers, including workers finishing concurrently with sign-out.
+#[derive(Default)]
+pub struct SyncSession {
+    rx: Option<std::sync::mpsc::Receiver<SyncMsg>>,
+    abort: Option<futures_util::future::AbortHandle>,
+    pub conflict: Option<Remote>,
+}
+
+impl SyncSession {
+    pub fn busy(&self) -> bool { self.rx.is_some() }
+
+    pub fn start(&mut self, rx: std::sync::mpsc::Receiver<SyncMsg>, abort: futures_util::future::AbortHandle) {
+        assert!(!self.busy(), "sync operations must not overlap");
+        self.rx = Some(rx);
+        self.abort = Some(abort);
+    }
+
+    pub fn cancel(&mut self) {
+        if let Some(abort) = self.abort.take() { abort.abort(); }
+        self.rx = None;
+        self.conflict = None;
+    }
+
+    pub fn next_message(&mut self) -> Option<SyncMsg> {
+        match self.rx.as_ref()?.try_recv() {
+            Ok(msg) => Some(msg),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.rx = None;
+                self.abort = None;
+                None
+            }
+        }
+    }
+
+    pub fn receive_pull(&mut self, remote: Remote, started_revision: u64, current_revision: u64, conflict: bool) -> Option<Remote> {
+        if conflict || started_revision != current_revision || self.conflict.is_some() {
+            self.conflict.get_or_insert(remote);
+            None
+        } else {
+            Some(remote)
+        }
+    }
+}
+
+impl Drop for SyncSession {
+    fn drop(&mut self) { self.cancel(); }
+}
+
+/// Enough for settings and custom palettes, without accepting unbounded Drive files.
+pub const MAX_SYNC_BYTES: usize = 8 * 1024 * 1024;
 
 /// Fetch the synced settings, or `None` when this account has never synced.
 pub async fn fetch(access: &str) -> Result<Option<Remote>, String> {
@@ -350,16 +416,28 @@ pub async fn fetch(access: &str) -> Result<Option<Remote>, String> {
     let Some(f) = select_remote_file(list.files, crate::paths::is_radar_workspace()) else {
         return Ok(None);
     };
-    let body = client()
+    let response = client()
         .get(format!("{FILES_URL}/{}", f.id))
         .bearer_auth(access)
         .query(&[("alt", "media")])
         .send()
         .await
         .map_err(|e| e.to_string())?
-        .text()
-        .await
-        .map_err(|e| e.to_string())?;
+        .error_for_status().map_err(|e| e.to_string())?;
+    if response.content_length().is_some_and(|len| len > MAX_SYNC_BYTES as u64) {
+        return Err("synced settings exceed 8 MiB".into());
+    }
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        if chunk.len() > MAX_SYNC_BYTES.saturating_sub(bytes.len()) {
+            return Err("synced settings exceed 8 MiB".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let body = String::from_utf8(bytes).map_err(|e| e.to_string())?;
     Ok(Some(Remote {
         id: f.id,
         modified: f.modified_time,
@@ -439,29 +517,118 @@ async fn parse<T: serde::de::DeserializeOwned>(r: reqwest::Response) -> Result<T
 /// Take the shared fields from `remote`, keep this machine's own. Returns the settings JSON to
 /// deserialize, or `Err` if the remote blob isn't an object at all.
 pub fn merge_in(local: &serde_json::Value, remote: &str) -> Result<serde_json::Value, String> {
+    if remote.len() > MAX_SYNC_BYTES { return Err("synced settings exceed 8 MiB".into()); }
     let mut merged: serde_json::Value = serde_json::from_str(remote).map_err(|e| e.to_string())?;
     let (Some(m), Some(l)) = (merged.as_object_mut(), local.as_object()) else {
         return Err("synced settings are not an object".into());
     };
-    for k in DEVICE_LOCAL {
-        match l.get(k) {
-            Some(v) => m.insert(k.to_string(), v.clone()),
-            None => m.remove(k),
-        };
+    for k in DEVICE_LOCAL { keep_local_field(m, l, k); }
+    for field in SOUND_FIELDS {
+        if m.get(field).is_none_or(custom_sound) { keep_local_field(m, l, field); }
     }
+    for (collection, field) in [("markers", "icon"), ("alert_rules", "sound")] {
+        if let Some(items) = m.get_mut(collection).and_then(serde_json::Value::as_array_mut) {
+            for item in items {
+                let Some(item) = item.as_object_mut() else { continue };
+                let unresolved = item.get(field).is_none_or(|v| if field == "icon" { custom_icon(v) } else { custom_sound(v) });
+                if !unresolved { continue; }
+                let id = item.get("id").and_then(serde_json::Value::as_str).filter(|id| !id.is_empty());
+                let previous = l.get(collection).and_then(serde_json::Value::as_array)
+                    .and_then(|items| items.iter().find(|other| id.is_some() && other.get("id").and_then(serde_json::Value::as_str) == id))
+                    .and_then(serde_json::Value::as_object);
+                if let Some(previous) = previous { keep_local_field(item, previous, field); }
+                else { item.remove(field); }
+            }
+        }
+    }
+    // A path from another computer is not a transferable asset, even if it happens to exist
+    // here. Older clients sent bare paths; retain this device's palette for those entries.
+    let mut palettes = m.get("palettes").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
+    let mut files = m.get("web_files").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
+    for (moment, path) in palettes.clone() {
+        let portable = path.as_str().is_some_and(|p| p.starts_with(crate::colormap::BUILTIN_PREFIX)
+            || files.get(p).and_then(serde_json::Value::as_str).is_some_and(|text| text.len() <= 2 * 1024 * 1024));
+        if portable { continue; }
+        if let Some(previous) = l.get("palettes").and_then(|v| v.get(&moment)) {
+            palettes.insert(moment, previous.clone());
+            if let Some((name, text)) = previous.as_str().and_then(|name| l.get("web_files")?.get(name).map(|text| (name, text))) {
+                files.insert(name.into(), text.clone());
+            }
+        } else { palettes.remove(&moment); }
+    }
+    if m.contains_key("palettes") { m.insert("palettes".into(), palettes.into()); }
+    if !files.is_empty() { m.insert("web_files".into(), files.into()); }
     Ok(merged)
 }
 
-/// The blob we upload: local settings minus the device-local fields, so another machine's screen
-/// scale and device name are never clobbered by ours.
-pub fn shareable(local: &serde_json::Value) -> serde_json::Value {
+fn keep_local_field(target: &mut serde_json::Map<String, serde_json::Value>, local: &serde_json::Map<String, serde_json::Value>, field: &str) {
+    if let Some(value) = local.get(field) { target.insert(field.into(), value.clone()); }
+    else { target.remove(field); }
+}
+
+const SOUND_FIELDS: [&str; 8] = ["rain_sound", "scan_sound", "warn_sound", "storm_warn_sound", "tds_sound", "rotation_sound", "lightning_sound", "emergency_sound"];
+fn custom_sound(value: &serde_json::Value) -> bool { value.get("Custom").is_some() }
+fn custom_icon(value: &serde_json::Value) -> bool { value.as_str().is_some_and(|s| !s.starts_with("builtin:")) }
+
+fn shared_fields(local: &serde_json::Value) -> serde_json::Value {
     let mut out = local.clone();
+    if let Some(fields) = out.as_object_mut() {
+        for key in DEVICE_LOCAL { fields.remove(key); }
+    }
+    out
+}
+
+/// Custom sounds and marker images stay on the device until their bytes can travel too.
+/// Omission lets receiving clients preserve their own asset instead of loading a foreign path.
+pub fn shareable(local: &serde_json::Value) -> serde_json::Value {
+    let mut out = shared_fields(local);
     if let Some(o) = out.as_object_mut() {
-        for k in DEVICE_LOCAL {
-            o.remove(k);
+        for field in SOUND_FIELDS {
+            if o.get(field).is_some_and(custom_sound) { o.remove(field); }
+        }
+        for (collection, field) in [("markers", "icon"), ("alert_rules", "sound")] {
+            if let Some(items) = o.get_mut(collection).and_then(serde_json::Value::as_array_mut) {
+                for item in items {
+                    if let Some(item) = item.as_object_mut() {
+                        if item.get(field).is_some_and(|v| if field == "icon" { custom_icon(v) } else { custom_sound(v) }) { item.remove(field); }
+                    }
+                }
+            }
         }
     }
     out
+}
+
+pub fn settings_hash(settings: &crate::settings::Settings) -> Result<u64, String> {
+    settings_snapshot(settings).map(|(_, hash)| hash)
+}
+
+/// A pull can replace custom choices with builtins even though custom asset paths are omitted
+/// from uploads. Include those references when checking for edits made during a request.
+pub fn settings_revision(settings: &crate::settings::Settings) -> Result<u64, String> {
+    serde_json::to_value(settings).map(|v| hash(&shared_fields(&v))).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+fn settings_body(settings: &crate::settings::Settings) -> Result<String, String> {
+    settings_snapshot(settings).map(|(body, _)| body)
+}
+
+/// Prepared on the sync worker: the same portable content drives both upload and dirty checks.
+pub fn settings_snapshot(settings: &crate::settings::Settings) -> Result<(String, u64), String> {
+    let portable = settings.portable_sync()?;
+    let value = serde_json::to_value(portable).map_err(|e| e.to_string())?;
+    let shared = shareable(&value);
+    let body = serde_json::to_string_pretty(&shared).map_err(|e| e.to_string())?;
+    if body.len() > MAX_SYNC_BYTES { return Err("synced settings exceed 8 MiB".into()); }
+    Ok((body, hash(&shared)))
+}
+
+/// Compute the destination's baseline, including local fallback assets, before delivery to UI.
+pub fn pulled_hash(local: &crate::settings::Settings, body: &str) -> Result<u64, String> {
+    let local = serde_json::to_value(local).map_err(|e| e.to_string())?;
+    let settings = serde_json::from_value(merge_in(&local, body)?).map_err(|e| e.to_string())?;
+    settings_hash(&settings)
 }
 
 /// What a sync should do, given whether each side changed since they last agreed.
@@ -470,8 +637,7 @@ pub enum Action {
     Push,
     Pull,
     Nothing,
-    /// Both sides changed. The caller resolves it — we pull, because the local copy is still on
-    /// disk and in the UI, while an unpulled remote edit would be silently lost.
+    /// Both sides changed. Keep both copies until the user chooses which one to retain.
     Conflict,
 }
 
@@ -533,6 +699,202 @@ pub fn hash(v: &serde_json::Value) -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn remote(body: &str, modified: &str) -> Remote {
+        Remote { id: "drive-settings".into(), modified: modified.into(), body: body.into() }
+    }
+
+    #[test]
+    fn late_pull_preserves_edits_and_stays_conflicted_on_repeat_pass() {
+        let mut session = SyncSession::default();
+        let start = json!({"markers": [{"id": "home", "name": "Home"}]});
+        let edited = json!({"markers": [{"id": "home", "name": "New home"}]});
+        assert!(session.receive_pull(remote("drive copy", "v2"), hash(&start), hash(&edited), false).is_none());
+        assert_eq!(session.conflict.as_ref().unwrap().body, "drive copy");
+        // A later pass's baseline already includes the edit. It must not silently clear the conflict.
+        assert!(session.receive_pull(remote("another copy", "v3"), hash(&edited), hash(&edited), false).is_none());
+        assert_eq!(session.conflict.as_ref().unwrap().modified, "v2");
+        assert_eq!(edited["markers"][0]["name"], "New home");
+    }
+
+    #[test]
+    fn late_pull_preserves_new_custom_sound_and_icon_choices() {
+        let initial: crate::settings::Settings = serde_json::from_value(json!({
+            "warn_sound": {"Custom":"old.wav"},
+            "markers": [{"id":"home", "name":"Home", "lat":0.0, "lon":0.0, "icon":"old.png"}],
+            "alert_rules": [{"id":"storm", "trigger":"Tds", "sound":{"Custom":"old-rule.wav"}}]
+        })).unwrap();
+        let remote_body = json!({
+            "warn_sound":"Siren",
+            "markers":[{"id":"home", "name":"Home", "lat":0.0, "lon":0.0, "icon":"builtin:home"}],
+            "alert_rules":[{"id":"storm", "trigger":"Tds", "sound":"Chime"}]
+        }).to_string();
+        for changed in ["sound", "icon", "rule"] {
+            let mut edited = initial.clone();
+            match changed {
+                "sound" => edited.warn_sound = crate::settings::AlertSound::Custom("new.wav".into()),
+                "icon" => edited.markers[0].icon = Some("new.png".into()),
+                _ => edited.alert_rules[0].sound = Some(crate::settings::AlertSound::Custom("new-rule.wav".into())),
+            }
+            // Device file changes are intentionally not uploads, but still require pull protection.
+            assert_eq!(settings_hash(&initial).unwrap(), settings_hash(&edited).unwrap());
+            assert_ne!(settings_revision(&initial).unwrap(), settings_revision(&edited).unwrap());
+            let mut session = SyncSession::default();
+            assert!(session.receive_pull(remote(&remote_body, "v2"), settings_revision(&initial).unwrap(),
+                settings_revision(&edited).unwrap(), false).is_none());
+            assert!(session.conflict.is_some());
+        }
+    }
+
+    #[test]
+    fn pull_requires_choice_when_both_sides_changed_before_the_request() {
+        let mut session = SyncSession::default();
+        assert!(session.receive_pull(remote("remote", "v2"), 1, 1, true).is_none());
+        session.cancel();
+        assert!(session.receive_pull(remote("fresh", "v3"), 2, 2, false).is_some());
+    }
+
+    #[test]
+    fn signout_discards_queued_and_late_credentials_and_pending_conflicts() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (abort, _registration) = futures_util::future::AbortHandle::new_pair();
+        let witness = abort.clone();
+        let mut session = SyncSession::default();
+        session.start(rx, abort);
+        tx.send(SyncMsg::Signed(Tokens { refresh_token: "old account".into(), ..Default::default() })).unwrap();
+        tx.send(SyncMsg::Pulled { remote: remote("old settings", "v2"), started_revision: 1, conflict: true, hash: 1, resolve_conflict: false }).unwrap();
+        session.conflict = Some(remote("pending old account", "v1"));
+        session.cancel();
+        assert!(witness.is_aborted());
+        assert!(!session.busy());
+        assert!(session.next_message().is_none());
+        assert!(session.conflict.is_none());
+        assert!(tx.send(SyncMsg::Signed(Tokens::default())).is_err());
+        let (new_tx, new_rx) = std::sync::mpsc::channel();
+        let (new_abort, _) = futures_util::future::AbortHandle::new_pair();
+        session.start(new_rx, new_abort);
+        new_tx.send(SyncMsg::UpToDate).unwrap();
+        assert!(matches!(session.next_message(), Some(SyncMsg::UpToDate)));
+        drop(new_tx);
+        assert!(session.next_message().is_none());
+        assert!(!session.busy());
+    }
+
+    #[test]
+    fn cloud_transfers_palette_bytes_without_requiring_the_source_file() {
+        let path = std::env::temp_dir().join(format!("hookecho-cloud-palette-{}.pal", std::process::id()));
+        let palette = "Step: 5\nColor: 0 0 0 0\nColor: 80 255 255 255\n";
+        std::fs::write(&path, palette).unwrap();
+        let mut source = crate::settings::Settings::default();
+        source.palettes.insert("REF".into(), path.to_string_lossy().into_owned());
+        source.warn_sound = crate::settings::AlertSound::Custom("/source/warn.wav".into());
+        let body = settings_body(&source).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let target = crate::settings::Settings {
+            warn_sound: crate::settings::AlertSound::Custom("/target/warn.wav".into()),
+            ..Default::default()
+        };
+        let merged = merge_in(&serde_json::to_value(&target).unwrap(), &body).unwrap();
+        let received: crate::settings::Settings = serde_json::from_value(merged).unwrap();
+        assert_eq!(received.web_files[&received.palettes["REF"]], palette);
+        assert!(received.palette_paths()[0].as_ref().unwrap().to_string_lossy().starts_with(crate::colormap::INLINE_PREFIX));
+        assert_eq!(received.warn_sound, target.warn_sound);
+        let returned = settings_body(&received).unwrap();
+        assert!(returned.contains("Color: 80"));
+        assert!(!returned.contains("/source/warn.wav"));
+        assert!(!returned.contains("/target/warn.wav"));
+    }
+
+    #[test]
+    fn palette_file_edits_at_the_same_path_trigger_a_push() {
+        let path = std::env::temp_dir().join(format!("hookecho-cloud-revision-{}.pal", std::process::id()));
+        std::fs::write(&path, "Color: 0 1 2 3\n").unwrap();
+        let mut settings = crate::settings::Settings::default();
+        settings.palettes.insert("REF".into(), path.to_string_lossy().into_owned());
+        let (old_body, old_hash) = settings_snapshot(&settings).unwrap();
+        let old_revision = settings_revision(&settings).unwrap();
+        std::fs::write(&path, "Color: 0 4 5 6\n").unwrap();
+        let (new_body, new_hash) = settings_snapshot(&settings).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_ne!(old_body, new_body);
+        assert_ne!(old_hash, new_hash);
+        assert_eq!(old_revision, settings_revision(&settings).unwrap(), "ordinary UI fingerprint does not read files");
+        assert_eq!(decide(new_hash != old_hash, false, true), Action::Push);
+    }
+
+    #[test]
+    fn pulled_baseline_matches_portable_content_on_the_receiving_device() {
+        let local: crate::settings::Settings = serde_json::from_value(json!({
+            "palettes":{"VEL":"local.pal"}, "web_files":{"local.pal":"local palette"},
+            "warn_sound":"Siren"
+        })).unwrap();
+        // Includes a legacy unresolved path and omitted local custom sound to exercise fallback.
+        let remote = json!({
+            "palettes":{"REF":"bundle-REF.pal", "VEL":"/foreign/velocity.pal"},
+            "web_files":{"bundle-REF.pal":"remote palette"}, "warn_sound":{"Custom":"/foreign/sound.wav"}
+        }).to_string();
+        let baseline = pulled_hash(&local, &remote).unwrap();
+        let received: crate::settings::Settings = serde_json::from_value(
+            merge_in(&serde_json::to_value(&local).unwrap(), &remote).unwrap()).unwrap();
+        assert_eq!(baseline, settings_hash(&received).unwrap());
+        assert_eq!(decide(settings_hash(&received).unwrap() != baseline, false, true), Action::Nothing);
+        let body = settings_body(&received).unwrap();
+        let another_device = crate::settings::Settings::default();
+        let other_baseline = pulled_hash(&another_device, &body).unwrap();
+        let other: crate::settings::Settings = serde_json::from_value(
+            merge_in(&serde_json::to_value(another_device).unwrap(), &body).unwrap()).unwrap();
+        assert_eq!(baseline, other_baseline);
+        assert_eq!(baseline, settings_hash(&other).unwrap());
+    }
+
+    #[test]
+    fn legacy_cloud_paths_preserve_only_matching_local_assets() {
+        let local = json!({
+            "warn_sound": {"Custom":"/my/warn.wav"},
+            "palettes":{"REF":"local-ref.pal", "VEL":"builtin:velocity"},
+            "web_files":{"local-ref.pal":"local palette"},
+            "markers":[{"id":"home","icon":"my-icon.png"}],
+            "alert_rules":[{"id":"rain","sound":{"Custom":"/my/rain.wav"}}]
+        });
+        let old_remote = json!({
+            "warn_sound":{"Custom":"/their/warn.wav"},
+            "palettes":{"REF":"/their/ref.pal", "VEL":"/their/vel.pal", "CC":"/their/cc.pal"},
+            "markers":[{"id":"home","icon":"their-icon.png"}, {"id":"new","icon":"their-icon.png"}],
+            "alert_rules":[{"id":"rain","sound":{"Custom":"/their/rain.wav"}}, {"id":"new","sound":{"Custom":"/their/new.wav"}}]
+        });
+        for remote in [old_remote.clone(), shareable(&old_remote)] {
+            let merged = merge_in(&local, &remote.to_string()).unwrap();
+            assert_eq!(merged["warn_sound"], local["warn_sound"]);
+            assert_eq!(merged["palettes"]["REF"], "local-ref.pal");
+            assert_eq!(merged["web_files"]["local-ref.pal"], "local palette");
+            assert_eq!(merged["palettes"]["VEL"], "builtin:velocity");
+            assert!(merged["palettes"].get("CC").is_none());
+            assert_eq!(merged["markers"][0]["icon"], "my-icon.png");
+            assert!(merged["markers"][1].get("icon").is_none());
+            assert_eq!(merged["alert_rules"][0]["sound"], local["alert_rules"][0]["sound"]);
+            assert!(merged["alert_rules"][1].get("sound").is_none());
+        }
+    }
+
+    #[test]
+    fn builtin_assets_and_explicit_clear_still_sync() {
+        let local = json!({"markers":[{"id":"home","icon":"my-icon.png"}],"warn_sound":{"Custom":"/my/warn.wav"}});
+        for icon in [json!("builtin:home"), serde_json::Value::Null] {
+            let remote = json!({"markers":[{"id":"home","icon":icon}],"warn_sound":"Siren"});
+            let merged = merge_in(&local, &shareable(&remote).to_string()).unwrap();
+            assert_eq!(merged["markers"][0]["icon"], icon);
+            assert_eq!(merged["warn_sound"], "Siren");
+        }
+    }
+
+    #[test]
+    fn cloud_palette_payloads_are_bounded() {
+        let mut settings = crate::settings::Settings::default();
+        settings.palettes.insert("REF".into(), "large.pal".into());
+        settings.web_files.insert("large.pal".into(), "x".repeat(2 * 1024 * 1024 + 1));
+        assert!(settings_body(&settings).unwrap_err().contains("2 MiB"));
+        assert!(merge_in(&json!({}), &" ".repeat(MAX_SYNC_BYTES + 1)).unwrap_err().contains("8 MiB"));
+    }
 
     #[test]
     fn profile_remote_files_never_fall_back_to_the_other_app() {

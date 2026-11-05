@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ ${1:-} == --regional ]]; then
+  # Four ignored live tests use the same timestamp selection and decoders as the app. No keys.
+  # Compile separately so the network run itself has a firm wall-clock bound.
+  cargo test -p hookecho --lib live_regional_contract --no-run
+  timeout 5m cargo test -p hookecho --lib live_regional_contract -- --ignored --nocapture
+  exit
+fi
+
 check_prefixes() {
   local url=$1
   shift

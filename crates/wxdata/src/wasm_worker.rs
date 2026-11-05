@@ -54,6 +54,10 @@ pub async fn decode_mrms(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("mrms", payload).await
 }
 
+pub async fn decode_model(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("model", payload).await
+}
+
 /// Decode an OPERA continental composite on the worker heap.
 pub async fn decode_opera(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("opera", bytes).await
@@ -103,7 +107,19 @@ async fn call(op: &str, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
         .dyn_into()
         .map_err(|_| Error::Unavailable)?;
 
-    match wasm_bindgen_futures::JsFuture::from(promise).await {
+    struct CancelOnDrop(Option<js_sys::Function>);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            if let Some(cancel) = self.0.take() {
+                let _ = cancel.call0(&wasm_bindgen::JsValue::UNDEFINED);
+            }
+        }
+    }
+    let mut cancel = CancelOnDrop(js_sys::Reflect::get(&promise, &"cancel".into()).ok()
+        .and_then(|value| value.dyn_into::<js_sys::Function>().ok()));
+    let result = wasm_bindgen_futures::JsFuture::from(promise).await;
+    cancel.0 = None;
+    match result {
         Ok(v) => Ok(js_sys::Uint8Array::new(&v).to_vec()),
         Err(e) => {
             let msg = e

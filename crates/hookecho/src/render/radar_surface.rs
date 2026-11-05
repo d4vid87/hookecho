@@ -28,7 +28,7 @@ pub(super) struct Target {
     color: wgpu::Texture,
     depth: wgpu::Texture,
     group: wgpu::BindGroup,
-    camera_key: Vec<u32>,
+    camera_key: Vec<u64>,
 }
 impl Target {
     pub fn memory_bytes(&self) -> u64 {
@@ -169,14 +169,12 @@ impl Renderer {
             return;
         }
         let size = target_size(cb);
-        let key: Vec<u32> = cb
-            .camera_center
-            .iter()
-            .chain(&cb.camera_scale)
-            .chain(&cb.globe)
-            .chain(&cb.planar)
-            .chain(std::iter::once(&cb.world_per_pixel))
-            .map(|v| v.to_bits())
+        let key: Vec<u64> = cb.camera_center.iter().map(|v| v.to_bits())
+            .chain(cb.camera_scale.iter()
+                .chain(&cb.globe)
+                .chain(&cb.planar)
+                .chain(std::iter::once(&cb.world_per_pixel))
+                .map(|v| u64::from(v.to_bits())))
             .collect();
         if pane
             .surface

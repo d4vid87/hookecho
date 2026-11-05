@@ -86,9 +86,21 @@ pub struct Catalog {
     pub hour: Option<i64>,
     pub requested_at: Option<wxdata::clock::Instant>,
     pub rx: Option<std::sync::mpsc::Receiver<Vec<DateTime<Utc>>>>,
+    pub abort: Option<futures_util::future::AbortHandle>,
     /// Pane-local imagery playback, separate from the radar-volume transport.
     pub playing: bool,
     pub last_advance: Option<wxdata::clock::Instant>,
+}
+
+impl Catalog {
+    pub fn cancel_request(&mut self) {
+        if let Some(handle) = self.abort.take() { handle.abort(); }
+        self.rx = None;
+    }
+}
+
+impl Drop for Catalog {
+    fn drop(&mut self) { self.cancel_request(); }
 }
 
 /// Advance one advertised frame, wrapping to the oldest only after the newest is displayed.
@@ -122,6 +134,54 @@ pub fn loop_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn superseding_catalog_cancels_only_its_shared_read_consumer() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) { self.0.store(true, Ordering::SeqCst); }
+        }
+        let pool = Arc::new(wxdata::shared_read::Pool::<Vec<u8>>::default());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let spawner = crate::rt::Spawner::new(tokio::runtime::Handle::current());
+        let mut catalog = Catalog::default();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, received) = tokio::sync::oneshot::channel();
+        let request_pool = pool.clone();
+        let request_dropped = dropped.clone();
+        catalog.abort = Some(spawner.spawn_abortable(async move {
+            request_pool.read("catalog".into(), async move {
+                let _guard = Dropped(request_dropped);
+                let _ = started.send(());
+                received.await.unwrap();
+                Ok(vec![1])
+            }).await.unwrap();
+        }));
+        ready.await.unwrap();
+        let mut peer = Box::pin(pool.read("catalog".into(), async { panic!("duplicate read") }));
+        assert!(futures_util::poll!(peer.as_mut()).is_pending());
+        catalog.cancel_request();
+        tokio::task::yield_now().await;
+        assert!(!dropped.load(Ordering::SeqCst), "the peer pane still needs the shared request");
+        release.send(()).unwrap();
+        assert_eq!(&*peer.await.unwrap(), &[1]);
+        assert!(dropped.load(Ordering::SeqCst));
+
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let request_dropped = Arc::new(AtomicBool::new(false));
+        let observed = request_dropped.clone();
+        catalog.abort = Some(spawner.spawn_abortable(async move {
+            let _guard = Dropped(request_dropped);
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        }));
+        ready.await.unwrap();
+        drop(catalog);
+        tokio::task::yield_now().await;
+        assert!(observed.load(Ordering::SeqCst), "closing the final pane drops obsolete work");
+    }
 
     #[test]
     fn forecast_selection_starts_with_next_valid_period_and_honors_manual_step() {

@@ -707,12 +707,12 @@ async fn list_day(site: &str, date: chrono::NaiveDate, provider: Level2Provider)
 /// The one decode path: the download, the on-disk cache and the fuzz target all come through here,
 /// so a volume that decodes in one place decodes the same way in the others.
 pub fn decode_volume(data: Vec<u8>) -> anyhow::Result<Scan> {
-    decode_file(nexrad_data::volume::File::new(data))
+    decode_file(&nexrad_data::volume::File::new(data))
 }
 
 /// bzip2 decompression plus the message decode is tens of MB of pure CPU — callers on an async
 /// worker must run this on a blocking thread, or it stalls every other fetch sharing that thread.
-fn decode_file(file: nexrad_data::volume::File) -> anyhow::Result<Scan> {
+fn decode_file(file: &nexrad_data::volume::File) -> anyhow::Result<Scan> {
     // Anything shorter than the 24-byte Archive II volume header is not a volume. The decoder
     // slices past the header unconditionally and panics on a short buffer (found by
     // fuzz/fuzz_targets/level2_decode.rs), and the live head really does serve half-written
@@ -721,13 +721,34 @@ fn decode_file(file: nexrad_data::volume::File) -> anyhow::Result<Scan> {
     if file.data().len() < VOLUME_HEADER_LEN {
         anyhow::bail!("volume is {} bytes, too short to be one", file.data().len());
     }
+    let decompressed;
     let file = if file.compressed() {
-        file.decompress()
-            .map_err(|e| anyhow::anyhow!("decompress: {e}"))?
+        decompressed = file.clone().decompress().map_err(|e| anyhow::anyhow!("decompress: {e}"))?;
+        &decompressed
     } else {
         file
     };
-    file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))
+    let scan = file.scan().map_err(|e| anyhow::anyhow!("scan: {e}"))?;
+    anyhow::ensure!(!scan.sweeps().is_empty(), "volume contains no radar sweeps");
+    Ok(scan)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn decode_file_native(file: nexrad_data::volume::File, cache_file: Option<PathBuf>) -> anyhow::Result<Scan> {
+    // Cancelled prefetches still finish CPU work; bound their decompressed volumes as well.
+    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(
+        if cfg!(target_os = "android") { 1 } else { 2 },
+    );
+    crate::task::blocking_limited(&SLOTS, move || {
+        let scan = decode_file(&file)?;
+        if let Some(path) = cache_file {
+            use std::io::Write;
+            if let Err(error) = crate::object_cache::write_atomic(&path, |out| out.write_all(file.data())) {
+                log::warn!("Radar cache write failed: {error}");
+            }
+        }
+        Ok(scan)
+    }).await?
 }
 
 /// Decode raw Archive II bytes and re-encode the [`Scan`] as postcard, for the Web Worker.
@@ -769,11 +790,11 @@ pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Resul
     let _decode_timer = crate::stats::DecodeTimer::default();
     let file = nexrad_data::volume::File::new(bytes);
     #[cfg(not(target_arch = "wasm32"))]
-    let scan = crate::task::blocking(move || decode_file(file)).await??;
+    let scan = decode_file_native(file, None).await?;
     #[cfg(target_arch = "wasm32")]
     let scan = match crate::wasm_worker::decode_volume(file.data().to_vec()).await {
         Ok(wire) => scan_from_wire(&wire)?,
-        Err(crate::wasm_worker::Error::Unavailable) => decode_file(file)?,
+        Err(crate::wasm_worker::Error::Unavailable) => decode_file(&file)?,
         Err(e) => anyhow::bail!("{e}"),
     };
     Ok(match scan.site() {
@@ -797,42 +818,37 @@ pub async fn download_scan(id: Identifier, cache_dir: Option<PathBuf>) -> anyhow
 }
 
 pub async fn download_scan_with_progress(id: Identifier, cache_dir: Option<PathBuf>, progress: impl Fn(LoadPhase) + Send) -> anyhow::Result<Scan> {
-    progress(LoadPhase::Downloading);
     let name = id.name().to_string();
     // Validate normalized provider names before using them as disk paths, even on cache hits.
     iem_volume_url(&name)?;
     let cache_file = cache_dir.map(|d| d.join("volumes").join(&name));
-    let cached = cache_file
-        .as_ref()
-        .and_then(|p| std::fs::read(p).ok())
-        .map(nexrad_data::volume::File::new);
-    let file = match cached {
-        Some(f) => f,
-        None => {
-            let f = nexrad_data::volume::File::new(volume_bytes(id).await?);
-            if let Some(p) = &cache_file {
-                if let Some(dir) = p.parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                }
-                let _ = std::fs::write(p, f.data());
-            }
-            f
+    load_scan(&name, cache_file, progress, volume_bytes(id)).await
+}
+
+async fn load_scan(
+    name: &str, cache_file: Option<PathBuf>, progress: impl Fn(LoadPhase),
+    fetch: impl std::future::Future<Output = anyhow::Result<Vec<u8>>>,
+) -> anyhow::Result<Scan> {
+    if let Some(bytes) = cache_file.as_ref().and_then(|path| std::fs::read(path).ok()) {
+        progress(LoadPhase::Decoding);
+        match scan_from_volume_bytes(name, bytes).await {
+            Ok(scan) => return Ok(scan),
+            Err(error) => log::warn!("Invalid cached radar volume {name}; downloading again: {error}"),
         }
-    };
+    }
+    progress(LoadPhase::Downloading);
+    let file = nexrad_data::volume::File::new(fetch.await?);
     progress(LoadPhase::Decoding);
     let _decode_timer = crate::stats::DecodeTimer::default();
-    // bzip2 decompression plus the message decode is tens of MB of pure CPU. On the async worker
-    // it blocks every other fetch sharing that thread for as long as it runs; the `parallel`
-    // feature of nexrad-data then spreads the decode itself across rayon.
     #[cfg(not(target_arch = "wasm32"))]
-    let scan = crate::task::blocking(move || decode_file(file)).await??;
+    let scan = decode_file_native(file, cache_file).await?;
     // In the browser that "async worker" is the thread drawing the map, so try the Web Worker
     // first. ponytail: no worker (old browser, `file://`, a worker that already trapped) means
     // inline decode, jank and all — a frozen map still beats no radar.
     #[cfg(target_arch = "wasm32")]
     let scan = match crate::wasm_worker::decode_volume(file.data().to_vec()).await {
         Ok(wire) => scan_from_wire(&wire)?,
-        Err(crate::wasm_worker::Error::Unavailable) => decode_file(file)?,
+        Err(crate::wasm_worker::Error::Unavailable) => decode_file(&file)?,
         Err(e) => anyhow::bail!("{e}"),
     };
     // Legacy (pre-2008) volumes carry no volume data block, so the decoder can't name the radar.
@@ -1438,6 +1454,55 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn corrupt_volume_cache_refetches_once_then_reuses_the_repaired_file() {
+        let root = std::env::temp_dir().join(format!("hookecho-volume-repair-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let name = "KDMX20261104_120000_V06";
+        let path = root.join(name);
+        let fixture = include_bytes!("../tests/data/kdmx-one-sweep.bin");
+        std::fs::write(&path, b"AR2V").unwrap();
+        let downloads = std::sync::atomic::AtomicUsize::new(0);
+        let scan = load_scan(name, Some(path.clone()), |_| {}, async {
+            downloads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(fixture.to_vec())
+        }).await.unwrap();
+        assert!(!scan.sweeps().is_empty());
+        assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), fixture);
+        // A complete header without records decodes structurally, but is not usable radar.
+        std::fs::write(&path, &fixture[..24]).unwrap();
+        load_scan(name, Some(path.clone()), |_| {}, async {
+            downloads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(fixture.to_vec())
+        }).await.unwrap();
+        assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(std::fs::read(&path).unwrap(), fixture);
+        let cached = load_scan(name, Some(path.clone()), |_| {}, async { panic!("a valid cache hit refetched") }).await.unwrap();
+        assert_eq!(scan_gate_bytes(&cached), scan_gate_bytes(&scan));
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn failed_downloads_do_not_poison_cache_and_disk_failures_preserve_valid_scans() {
+        let root = std::env::temp_dir().join(format!("hookecho-volume-failure-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let name = "KDMX20261104_120000_V06";
+        let path = root.join(name);
+        let result = load_scan(name, Some(path.clone()), |_| {}, async { Ok(b"AR2V".to_vec()) }).await;
+        assert!(result.is_err());
+        assert!(!path.exists(), "invalid new bytes must never become a cache hit");
+        std::fs::write(root.join("blocked"), b"not a directory").unwrap();
+        let result = load_scan(name, Some(root.join("blocked").join(name)), |_| {}, async {
+            Ok(include_bytes!("../tests/data/kdmx-one-sweep.bin").to_vec())
+        }).await.unwrap();
+        assert!(!result.sweeps().is_empty(), "disk cache failure must not lose downloaded weather");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     #[ignore = "requires the live IEM radar feed"]

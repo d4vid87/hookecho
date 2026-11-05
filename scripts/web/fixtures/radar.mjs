@@ -3,11 +3,15 @@ export async function fixtureRadar(page, options = {}) {
  const fixture = await fs.readFile(options.fixturePath ?? new URL('../../../crates/wxdata/tests/data/kdmx-one-sweep.bin',import.meta.url));
  const abi = options.abi ? await fs.readFile(new URL("../../../crates/wxdata/tests/data/g19-c13-meso.nc", import.meta.url)) : null;
  const l3 = await fs.readFile(new URL('../../../crates/nexrad-level3/tests/data/n0g_tlx.l3',import.meta.url));
- const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[],outlookRequests:[],spotterRequests:[]};
+ const counts = {aborted:[],radarRequests:[],radarResponses:[],list:0,volume:0,abiRequests:[],vectorRequests:[],satelliteCatalogs:0,satelliteTimes:[],satelliteMethods:[],outlookRequests:[],spotterRequests:[],alertsRequests:[]};
  const tile = options.satellite ? await fs.readFile(new URL("../../../web/icon-192.png", import.meta.url)) : null;
  await page.setRequestInterception(true);
  page.on('request',async request=>{
   const url = new URL(request.url());
+  if(options.alertsResponse && url.pathname.startsWith('/proxy/api.weather.gov/')) {
+   counts.alertsRequests.push(url.href);
+   await request.respond(await options.alertsResponse(url)); return;
+  }
   if(options.spottersResponse && url.href.includes('www.spotternetwork.org/feeds/gr.txt')) {
    counts.spotterRequests.push(url.href);
    await request.respond(await options.spottersResponse(url)); return;

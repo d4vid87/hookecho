@@ -32,11 +32,18 @@ pub struct PendingTile {
 }
 
 /// A tile to draw this frame (world-space rect, top-left origin).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VisibleTile {
     pub id: TileId,
     pub world_min: [f32; 2],
     pub world_max: [f32; 2],
+}
+
+impl VisibleTile {
+    /// Geometry is cached by wrapped id; each visible instance carries its whole-world shift.
+    pub fn world_copy(&self) -> i32 {
+        (self.world_min[0] - self.id.1 as f32 / (1u32 << self.id.0) as f32).round() as i32
+    }
 }
 
 /// A binned sweep plus the world-space quad covering its range disk.
@@ -85,6 +92,12 @@ impl RadarUpload {
             self.data16.as_ref().map_or(self.data.as_slice(), |data| bytemuck::cast_slice(data))
         }
     }
+}
+
+fn geographic_origin(lon: f32, lat: f32) -> [f32; 4] {
+    let (x, y) = mercator::lonlat_to_world(lon as f64, lat as f64);
+    let (high, low) = mercator::split_world([x, y]);
+    [high[0], high[1], low[0], low[1]]
 }
 
 /// A national gridded field layer (all share the MRMS warp pipeline; they differ only in data,
@@ -611,9 +624,8 @@ pub struct MrmsUpload {
     /// World-space quad (mercator bbox of the grid).
     pub world_min: [f32; 2],
     pub world_max: [f32; 2],
-    /// [lon_west, lat_north, lon_east, lat_south, nx, ny, opacity, +5 pad] (see
-    /// `shaders/mrms.wgsl`). Opacity is rewritten each frame from `field_draws`, so the value
-    /// here only matters until the first draw.
+    /// [lon_west, lat_north, lon_east, lat_south, nx, ny, opacity, direct_rgba, origin x/y hi/lo].
+    /// `build_field_layer` fills the split origin; opacity is rewritten from `field_draws`.
     pub uniform: [f32; 12],
     pub lut: Vec<u8>,
 }
@@ -626,6 +638,19 @@ pub struct OverlayVertex {
     pub color: [f32; 4],
     /// XY: screen-pixel stroke extrusion. Z: apply the road width scale (0 or 1).
     pub offset: [f32; 3],
+    /// Residual after rounding `world`, subtracted with the camera residual in the shader.
+    pub world_low: [f32; 2],
+}
+
+impl OverlayVertex {
+    pub fn new(world: [f64; 2], color: [f32; 4], offset: [f32; 3]) -> Self {
+        let (world, world_low) = mercator::split_world(world);
+        Self { world, world_low, color, offset }
+    }
+
+    pub fn precise_world(&self) -> [f64; 2] {
+        std::array::from_fn(|i| self.world[i] as f64 + self.world_low[i] as f64)
+    }
 }
 
 /// Pre-tessellated overlay geometry to upload this frame.
@@ -652,7 +677,7 @@ pub struct MapCallback {
     pub retain_only_pane: Option<u32>,
     /// Drop resources for panes closed by the current layout.
     pub live_pane_count: Option<u32>,
-    pub camera_center: [f32; 2],
+    pub camera_center: [f64; 2],
     pub camera_scale: [f32; 2],
     pub globe: [f32; 4],
     pub planar: [f32; 4],
@@ -685,8 +710,8 @@ pub struct MapCallback {
     pub drop_fields: Vec<FieldLayer>,
     /// Newly tessellated vector basemap tiles to upload this frame.
     pub new_vector_tiles: Vec<PendingVectorTile>,
-    /// Vector tile ids to draw this frame (drawn first, under the raster/radar layers).
-    pub visible_vector: Vec<TileId>,
+    /// Vector tiles and world copies to draw, under the raster/radar layers.
+    pub visible_vector: Vec<VisibleTile>,
     /// Drop all cached vector tiles before uploading (style or tess-zoom changed).
     pub clear_vector: bool,
     /// Individual vector tiles the manager evicted; freed before this frame's uploads.
@@ -700,7 +725,7 @@ pub struct MapCallback {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TileVertex {
-    world: [f32; 2],
+    delta: [f32; 2],
     uv: [f32; 2],
     transform: [f32; 4],
 }
@@ -718,8 +743,8 @@ struct CameraUniform {
     scale: [f32; 2],
     world_per_pixel: f32,
     road_scale: f32,
-    // WebGL uniform bindings must occupy a multiple of 16 bytes.
-    _pad: [f32; 2],
+    // Use the old alignment padding for the camera residual, retaining the 64-byte WebGL ABI.
+    center_low: [f32; 2],
     globe: [f32; 4],
     planar: [f32; 4],
 }
@@ -794,7 +819,7 @@ struct MrmsGpu {
 /// Per-pane GPU state: its own camera uniform, radar sweep, tile/radar quad buffers, and the
 /// draw lists staged during `prepare` and consumed during `paint`. (All `prepare`s run before
 /// any `paint`, so shared per-frame buffers would clobber across panes — hence per-pane.)
-type TileQuadsKey = (u64, u64, u32, u32, u32, u32, usize, bool, [u32; 4]);
+type TileQuadsKey = (u64, u64, u64, u64, u32, u32, usize, bool, [u32; 4]);
 
 struct PaneGpu {
     id: u32,
@@ -816,7 +841,8 @@ struct PaneGpu {
     // ponytail: the visible *count* rather than the list — camera plus generation already decide
     // which tiles are asked for; compare the ids if a case ever shows a stale quad.
     quads_key: Option<TileQuadsKey>,
-    frame_visible_vector: Vec<TileId>,
+    frame_visible_vector: Vec<(TileId, i32)>,
+    vector_copy_buf: wgpu::Buffer,
     vector_over_raster: bool,
     frame_draw_radar: bool,
     frame_draw_wind: bool,
@@ -934,7 +960,7 @@ impl RenderResources {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(80 + 720 * 4),
+                        min_binding_size: NonZeroU64::new(96 + 720 * 4),
                     },
                     count: None,
                 },
@@ -1175,7 +1201,11 @@ impl RenderResources {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<OverlayVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x3],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x3, 4 => Float32x2],
+                }, wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<f32>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![3 => Float32],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -1277,6 +1307,11 @@ impl RenderResources {
                 frame_visible: Vec::new(),
                 quads_key: None,
                 frame_visible_vector: Vec::new(),
+                vector_copy_buf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("vector_world_copies"),
+                    contents: bytemuck::cast_slice(&[0.0f32]),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                }),
                 vector_over_raster: false,
                 frame_draw_radar: false,
                 frame_draw_wind: false,
@@ -1371,6 +1406,7 @@ impl RenderResources {
                 if !r.lut_only { g.shared_sweep = r.shared_sweep.as_ref().map(std::sync::Arc::downgrade); }
                 queue.write_buffer(&g.uni, 0, bytemuck::cast_slice(&r.uniform));
                 queue.write_buffer(&g.uni, 80, bytemuck::cast_slice(&r.sector_opacity.unwrap_or([1.0; 720])));
+                queue.write_buffer(&g.uni, 80 + 720 * 4, bytemuck::cast_slice(&geographic_origin(r.uniform[1], r.uniform[0])));
                 write_lut(queue, &g.lut, &r.lut);
                 if r.uniform[19] > 0.5 { self.smooth_radar(device, queue, &mut g); }
                 return Some(g);
@@ -1413,6 +1449,7 @@ impl RenderResources {
         );
         let mut uniform = r.uniform.to_vec();
         uniform.extend_from_slice(&r.sector_opacity.unwrap_or([1.0; 720]));
+        uniform.extend_from_slice(&geographic_origin(r.uniform[1], r.uniform[0]));
         let uni = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("radar_uniform"),
             contents: bytemuck::cast_slice(&uniform),
@@ -1615,6 +1652,9 @@ impl RenderResources {
         cb: &MapCallback,
     ) {
         if cb.wind.is_none() && cb.wind_upload.is_none() {
+            if let Some(wind) = self.wind.get_mut(&cb.pane) {
+                wind.release_inactive_trails(wxdata::clock::Instant::now());
+            }
             return;
         }
         if let Some(up) = &cb.wind_upload {
@@ -1656,16 +1696,22 @@ impl RenderResources {
                 }
                 let sx = (uvmax[0] - uvmin[0]) / (wmax[0] - wmin[0]);
                 let sy = (uvmax[1] - uvmin[1]) / (wmax[1] - wmin[1]);
-                let transform = [wmin[0] - uvmin[0] / sx, wmin[1] - uvmin[1] / sy, sx, sy];
+                // Tile geometry is already keyed by the camera. Subtract in f64 here:
+                // native shader reassociation can erase the split camera's low component.
+                let transform = [
+                    (wmin[0] as f64 - uvmin[0] as f64 / sx as f64 - cb.camera_center[0]) as f32,
+                    (wmin[1] as f64 - uvmin[1] as f64 / sy as f64 - cb.camera_center[1]) as f32,
+                    sx, sy,
+                ];
                 for y in 0..steps {
                     for x in 0..steps {
                         for (dx, dy) in [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)] {
                             let u = (x + dx) as f32 / steps as f32;
                             let v = (y + dy) as f32 / steps as f32;
                             tverts.push(TileVertex {
-                                world: [
-                                    wmin[0] + u * (wmax[0] - wmin[0]),
-                                    wmin[1] + v * (wmax[1] - wmin[1]),
+                                delta: [
+                                    (wmin[0] as f64 + u as f64 * (wmax[0] as f64 - wmin[0] as f64) - cb.camera_center[0]) as f32,
+                                    (wmin[1] as f64 + v as f64 * (wmax[1] as f64 - wmin[1] as f64) - cb.camera_center[1]) as f32,
                                 ],
                                 uv: [
                                     uvmin[0] + u * (uvmax[0] - uvmin[0]),
@@ -1782,21 +1828,22 @@ impl RenderResources {
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
-        let visible_vector = vector_draw_tiles(&cb.visible_vector, self.vector_tiles.keys().filter_map(|(pane, id)| (*pane == cb.pane).then_some(*id)));
+        let visible_vector = vector_draw_instances(&cb.visible_vector, self.vector_tiles.keys().filter_map(|(pane, id)| (*pane == cb.pane).then_some(*id)));
         let overlay_present = self.overlay.is_some();
 
         let pane = self.pane_mut(device, cb.pane);
+        let (center, center_low) = mercator::split_world(cb.camera_center);
         queue.write_buffer(
             &pane.camera_buf,
             0,
             bytemuck::bytes_of(&CameraUniform {
-                center: cb.camera_center,
+                center,
                 scale: cb.camera_scale,
                 world_per_pixel: cb.world_per_pixel,
                 road_scale: crate::basemap_style::road_scale(
                     -(256.0 * cb.world_per_pixel as f64).log2(),
                 ) as f32,
-                _pad: [0.0; 2],
+                center_low,
                 globe: cb.globe,
                 planar: cb.planar,
             }),
@@ -1834,7 +1881,21 @@ impl RenderResources {
             pane.frame_visible = visible;
             pane.quads_key = Some(quads_key);
         }
-        pane.frame_visible_vector = visible_vector;
+        if pane.frame_visible_vector != visible_vector {
+            // Instance zero is reserved for geographic overlays, which already use world space.
+            let copies: Vec<f32> = std::iter::once(0.0).chain(visible_vector.iter().map(|(_, copy)| *copy as f32)).collect();
+            let bytes = bytemuck::cast_slice(&copies);
+            if pane.vector_copy_buf.size() < bytes.len() as u64 {
+                pane.vector_copy_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("vector_world_copies"),
+                    size: (bytes.len() as u64).next_power_of_two(),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            queue.write_buffer(&pane.vector_copy_buf, 0, bytes);
+            pane.frame_visible_vector = visible_vector;
+        }
         pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_wind = cb.wind.is_some();
         pane.frame_draw_radar = cb.draw_radar && pane.radar.is_some();
@@ -1906,9 +1967,11 @@ impl RenderResources {
             },
             size,
         );
+        let mut uniform = m.uniform;
+        uniform[8..12].copy_from_slice(&geographic_origin(m.uniform[0], m.uniform[1]));
         let uni = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mrms_uniform"),
-            contents: bytemuck::cast_slice(&m.uniform),
+            contents: bytemuck::cast_slice(&uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let lut_size = wgpu::Extent3d {
@@ -2091,6 +2154,7 @@ impl RenderResources {
                 pass.set_pipeline(&self.overlay_pipeline);
                 pass.set_bind_group(0, cam, &[]);
                 pass.set_vertex_buffer(0, overlay.vbuf.slice(..));
+                pass.set_vertex_buffer(1, pane.vector_copy_buf.slice(..));
                 pass.set_index_buffer(overlay.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..overlay.index_count, 0, 0..1);
             }
@@ -2111,11 +2175,12 @@ impl RenderResources {
         }
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
-        for tid in &pane.frame_visible_vector {
+        pass.set_vertex_buffer(1, pane.vector_copy_buf.slice(..));
+        for (instance, (tid, _)) in pane.frame_visible_vector.iter().enumerate() {
             if let Some(t) = self.vector_tiles.get(&(pane.id, *tid)) {
                 pass.set_vertex_buffer(0, t.base.vbuf.slice(..));
                 pass.set_index_buffer(t.base.ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..t.base.index_count, 0, 0..1);
+                pass.draw_indexed(0..t.base.index_count, 0, instance as u32 + 1..instance as u32 + 2);
             }
         }
     }
@@ -2128,13 +2193,14 @@ impl RenderResources {
     ) {
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
-        for tid in &pane.frame_visible_vector {
+        pass.set_vertex_buffer(1, pane.vector_copy_buf.slice(..));
+        for (instance, (tid, _)) in pane.frame_visible_vector.iter().enumerate() {
             let Some(t) = self.vector_tiles.get(&(pane.id, *tid)).and_then(|t| t.foreground.as_ref()) else {
                 continue;
             };
             pass.set_vertex_buffer(0, t.vbuf.slice(..));
             pass.set_index_buffer(t.ibuf.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..t.index_count, 0, 0..1);
+            pass.draw_indexed(0..t.index_count, 0, instance as u32 + 1..instance as u32 + 2);
         }
     }
 
@@ -2304,7 +2370,7 @@ impl egui_wgpu::CallbackTrait for MapCallback {
 
 /// Prefer exact imagery, then cached children; fill their missing quarters from an ancestor.
 #[allow(clippy::type_complexity)] // one call site; a struct here would be ceremony
-fn raster_tile_quads(
+pub(crate) fn raster_tile_quads(
     style: u64,
     v: &VisibleTile,
     contains: impl Fn(&TileKey) -> bool,
@@ -2359,6 +2425,18 @@ fn raster_tile_quads(
 
 /// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
 /// then finer fallbacks, then the requested tiles so current detail always wins.
+fn vector_draw_instances(visible: &[VisibleTile], resident: impl Iterator<Item = TileId>) -> Vec<(TileId, i32)> {
+    let resident: Vec<_> = resident.collect();
+    let mut copies = std::collections::BTreeMap::<i32, Vec<TileId>>::new();
+    for tile in visible {
+        copies.entry(tile.world_copy()).or_default().push(tile.id);
+    }
+    copies.into_iter().flat_map(|(copy, ids)| {
+        vector_draw_tiles(&ids, resident.iter().copied()).into_iter().map(move |id| (id, copy))
+    }).collect()
+}
+
+/// Select resident geometry independently of the world copies in which it is drawn.
 pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item = TileId>) -> Vec<TileId> {
     if visible.is_empty() {
         return Vec::new();
@@ -2397,6 +2475,19 @@ pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item
 #[cfg(test)]
 mod vector_fallback_tests {
     use super::vector_draw_tiles;
+
+    #[test]
+    fn antimeridian_instances_keep_world_copies_for_exact_and_fallback_geometry() {
+        let tile = |x, copy: i32| super::VisibleTile {
+            id: (5, x, 16), world_min: [x as f32 / 32.0 + copy as f32, 0.5],
+            world_max: [(x + 1) as f32 / 32.0 + copy as f32, 17.0 / 32.0],
+        };
+        let visible = [tile(31, -1), tile(0, 0), tile(0, 1)];
+        assert_eq!(super::vector_draw_instances(&visible, [(5, 31, 16), (5, 0, 16)].into_iter()),
+            [((5, 31, 16), -1), ((5, 0, 16), 0), ((5, 0, 16), 1)]);
+        assert_eq!(super::vector_draw_instances(&[tile(0, 1)], [(4, 0, 8), (6, 0, 32)].into_iter()),
+            [((4, 0, 8), 1), ((6, 0, 32), 1)]);
+    }
 
     #[test]
     fn zooming_both_ways_keeps_cached_tiles_and_current_detail_wins() {
@@ -2656,7 +2747,7 @@ mod projection_shader_tests {
                     if let naga::TypeInner::Struct {span,..}=ty.inner { return Some(span); }
                 } None
             }).unwrap();
-            assert_eq!(uniform,if name=="wind" {112} else {std::mem::size_of::<super::CameraUniform>() as u32},"{name}");
+            assert_eq!(uniform,if name=="wind" {128} else {std::mem::size_of::<super::CameraUniform>() as u32},"{name}");
         }
     }
 }
@@ -2807,7 +2898,7 @@ mod smoothing_tests {
         let (x, y) = mercator::lonlat_to_world(0.0, 0.008);
         let camera = CameraUniform {
             center: [x as f32, y as f32], scale: [1000.0, -1000.0],
-            world_per_pixel: 0.002, road_scale: 1.0, _pad: [0.0; 2],
+            world_per_pixel: 0.002, road_scale: 1.0, center_low: [0.0; 2],
             globe: [0.0; 4], planar: [1.0, 0.0, 1.0, 0.0],
         };
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

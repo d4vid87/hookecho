@@ -8,6 +8,13 @@
 // far finer than a pixel at any zoom — and a wind component is one byte over ±40 m/s, about
 // 0.3 m/s, which is finer than the color ramp resolves.
 
+// Native GPU sine can round street-scale angles to zero (for example on NVIDIA).
+// The cubic retains their sign and relative precision; its error below .001 is below f32 ULP.
+fn precise_sin(angle: f32) -> f32 {
+    if (abs(angle) < 0.001) { return angle * (1.0 - angle * angle / 6.0); }
+    return sin(angle);
+}
+
 struct Wind {
     /// Mercator world bbox of the wind grid: min, then max.
     bbox_min: vec2<f32>,
@@ -31,6 +38,7 @@ struct Wind {
     globe: vec4<f32>,
     planar: vec4<f32>,
     trail: vec4<f32>,
+    ramp: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> w: Wind;
@@ -57,10 +65,22 @@ fn encode_pos(p: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(hi.x, lo.x, hi.y, lo.y);
 }
 
-/// Wind at a normalized position, in m/s, bilinear across grid cells.
-fn wind_at(p: vec2<f32>) -> vec2<f32> {
+/// Wind in m/s and validity. Interpolate valid neighbors without inventing wind in data gaps.
+fn wind_at(p: vec2<f32>) -> vec3<f32> {
+    let size = vec2<i32>(textureDimensions(wind_tex));
+    let cell = clamp(vec2<i32>(floor(p * vec2<f32>(size))), vec2<i32>(0), size - vec2<i32>(1));
+    if (textureLoad(wind_tex, cell, 0).a < 0.5) {
+        return vec3<f32>(0.0);
+    }
     let c = textureSampleLevel(wind_tex, smp, p, 0.0);
-    return (c.rg * 2.0 - 1.0) * 40.0;
+    return vec3<f32>((c.rg / max(c.a, 1e-6) * 255.0 - 128.0) * (40.0 / 127.0), 1.0);
+}
+
+fn wind_color(speed: f32) -> vec4<f32> {
+    let value = speed * w.ramp.x;
+    if (value < w.ramp.y) { return vec4<f32>(0.0); }
+    let t = clamp((value - w.ramp.y) / (w.ramp.z - w.ramp.y), 0.0, 1.0);
+    return textureLoad(lut_tex, vec2<i32>(i32(2.0 + t * 253.0), 0), 0);
 }
 
 /// A cheap hash in [0,1), for respawn positions. Not random enough for anything that matters, and
@@ -91,7 +111,8 @@ fn vs_fullscreen(@builtin(vertex_index) i: u32) -> FsIn {
 fn fs_advect(in: FsIn) -> @location(0) vec4<f32> {
     let texel = vec2<i32>(in.frag.xy);
     let p = decode_pos(textureLoad(pos_tex, texel, 0));
-    let uv = wind_at(p);
+    let wind = wind_at(p);
+    let uv = wind.xy;
     let speed = length(uv);
 
     // Screen-space calibration converted to world units through this frame's camera: the same
@@ -109,7 +130,7 @@ fn fs_advect(in: FsIn) -> @location(0) vec4<f32> {
     // Respawn particles that leave the domain, particles in dead air, and a slice of the rest
     // each step — without that last one every particle ends up on the same convergence line.
     let r = hash(vec2<f32>(f32(texel.x) + w.seed, f32(texel.y) - w.seed));
-    if (next.x < 0.0 || next.x > 1.0 || next.y < 0.0 || next.y > 1.0 || speed < 0.2 || r < w.respawn) {
+    if (next.x < 0.0 || next.x > 1.0 || next.y < 0.0 || next.y > 1.0 || wind.z == 0.0 || speed < 0.2 || r < w.respawn) {
         next = vec2<f32>(
             hash(vec2<f32>(f32(texel.x) * 1.7 + w.seed, f32(texel.y) * 0.3)),
             hash(vec2<f32>(f32(texel.y) * 2.3 - w.seed, f32(texel.x) * 0.9))
@@ -135,7 +156,8 @@ fn fs_composite(in: FsIn) -> @location(0) vec4<f32> {
         if (dot(ndc, ndc) > 1.0) { discard; }
     }
     let c = textureSampleLevel(src_tex, smp, in.uv, 0.0);
-    return vec4<f32>(c.rgb, c.a * w.opacity);
+    // Trail RGB is already premultiplied by the particle pass; scale RGBA exactly once.
+    return c * w.opacity;
 }
 
 // ----------------------------------------------------------------- particles
@@ -159,15 +181,25 @@ fn vs_points(
     let p = decode_pos(textureLoad(pos_tex, texel, 0));
 
     let world = w.bbox_min + p * (w.bbox_max - w.bbox_min);
-    var base = (world - w.center) * w.scale;
+    let delta = (world - w.center) - w.trail.yz;
+    var base = delta * w.scale;
     out.horizon = 1.0;
     if (w.globe.z != 0.0) {
         let pi = 3.14159265358979;
-        let lat = atan(sinh(pi * (1.0 - 2.0 * world.y)));
-        let dl = (world.x - w.center.x) * 2.0 * pi;
-        let sl = sin(lat); let cl = cos(lat);
-        base = vec2<f32>(w.globe.z * cl * sin(dl), w.globe.w * (w.globe.y * sl - w.globe.x * cl * cos(dl)));
-        out.horizon = w.globe.x * sl + w.globe.y * cl * cos(dl);
+        let dn = -2.0 * pi * delta.y;
+        let sl0 = w.globe.x;
+        let cl0 = w.globe.y;
+        var dlat = dn * cl0 * (1.0 - 0.5 * dn * sl0 + dn * dn * (sl0 * sl0 - cl0 * cl0) / 6.0);
+        if (abs(dn) >= 0.001) {
+            let n = 0.5 * log((1.0 + sl0) / (1.0 - sl0));
+            dlat = atan2(2.0 * cosh(n + dn * 0.5) * sinh(dn * 0.5),
+                1.0 + sinh(n) * sinh(n + dn));
+        }
+        let dl = delta.x * 2.0 * pi;
+        let cl = cl0 * cos(dlat) - sl0 * precise_sin(dlat);
+        let drop = 2.0 * precise_sin(dl * 0.5) * precise_sin(dl * 0.5);
+        base = vec2<f32>(w.globe.z * cl * precise_sin(dl), w.globe.w * (precise_sin(dlat) + sl0 * cl * drop));
+        out.horizon = cos(dlat) - cl0 * cl * drop;
     }
     var corner = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
@@ -176,7 +208,7 @@ fn vs_points(
     let px = w.point_px * w.world_per_px * w.scale * 0.5;
     out.clip = vec4<f32>(base + corner[vi] * px, 0.0, 1.0);
     if (w.globe.z == 0.0) {
-        let q = (world - w.center) / w.world_per_px * vec2<f32>(1.0, -1.0);
+        let q = delta / w.world_per_px * vec2<f32>(1.0, -1.0);
         let r = vec2<f32>(w.planar.x * q.x - w.planar.y * q.y,
             w.planar.y * q.x + w.planar.x * q.y);
         let cw = 1.0 + r.y * w.planar.w;
@@ -184,10 +216,9 @@ fn vs_points(
         out.clip = vec4<f32>(r * vec2<f32>(1.0, w.planar.z) * clip_scale + corner[vi] * px * cw, 0.0, cw);
     }
 
-    // The shared WIND ramp, baked into a 256x1 LUT: 0..60 m/s across the table.
-    let t = clamp(length(wind_at(p)) / 60.0, 0.0, 0.999);
-    let c = textureLoad(lut_tex, vec2<i32>(i32(t * 256.0), 0), 0);
-    out.color = vec4<f32>(c.rgb, c.a * w.opacity);
+    let wind = wind_at(p);
+    out.color = wind_color(length(wind.xy));
+    if (wind.z == 0.0 || length(wind.xy) < 0.2) { out.color = vec4<f32>(0.0); }
     return out;
 }
 

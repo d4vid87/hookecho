@@ -25,14 +25,36 @@ pub trait Named {
 
 impl Named for Response {
     fn named(self, name: &str) -> Response {
+        record_target(&self, name);
         let enabled = self.enabled();
         self.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, name));
         self.on_hover_text(name.to_owned())
     }
 
     fn named_toggle(self, name: &str, on: bool) -> Response {
+        record_target(&self, name);
         let enabled = self.enabled();
         self.widget_info(|| WidgetInfo::selected(WidgetType::Button, enabled, on, name));
         self.on_hover_text(name.to_owned())
     }
+}
+
+/// Let browser checks locate real canvas controls without depending on their screen position.
+/// The opt-in callback only reports geometry; input still goes through the normal pointer path.
+pub fn record_target(response: &Response, name: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen(inline_js = "export function ui_target(name, pass, x, y, w, h, scale) { globalThis.__hookechoUiTarget?.(name, pass, x, y, w, h, scale); }")]
+        extern "C" {
+            fn ui_target(name: &str, pass: f64, x: f32, y: f32, w: f32, h: f32, scale: f32);
+        }
+        let rect = response.ctx.layer_transform_to_global(response.layer_id)
+            .map_or(response.interact_rect, |transform| transform * response.interact_rect);
+        let size = if response.enabled() && rect.is_positive() { rect.size() } else { egui::Vec2::ZERO };
+        ui_target(name, response.ctx.cumulative_pass_nr() as f64,
+            rect.min.x, rect.min.y, size.x, size.y, response.ctx.pixels_per_point());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (response, name);
 }

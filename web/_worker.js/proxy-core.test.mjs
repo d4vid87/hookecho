@@ -156,5 +156,75 @@ test("RTMA host is permitted, but malformed or oversized ranges are refused", as
 test("daytime GOES imagery may exceed the general feed cap", async () => {
   stubFetch(upstream({ "content-length": String(70 * 1024 * 1024) }));
   assert.equal((await proxy(ask("noaa-goes19.s3.amazonaws.com/daytime.nc"))).status, 200);
+  stubFetch(upstream({ "content-length": String(70 * 1024 * 1024) }));
   assert.equal((await proxy(ask("noaa-hrrr-bdp-pds.s3.amazonaws.com/large.grib2"))).status, 403);
+});
+
+test('throttling stays retryable without forwarding provider error bodies or cache headers', async () => {
+  for (const status of [429, 503]) {
+    const response = new Response('private provider details', {status, headers: {
+      'retry-after': '120', 'set-cookie': 'secret', 'cache-control': 'public, max-age=600',
+    }});
+    stubFetch(response);
+    const res = await proxy(ask('api.weather.gov/alerts/active'));
+    assert.equal(res.status, status);
+    assert.equal(res.headers.get('retry-after'), '120');
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.equal(res.headers.get('set-cookie'), null);
+    assert(!((await res.text()).includes('private')));
+  }
+});
+
+test('unsafe Retry-After values are replaced and HTTP dates are normalized', async () => {
+  for (const [value, expected] of [['garbage', 30], ['-9', 30], ['999999999', 86400]]) {
+    stubFetch(new Response(null, {status: 429, headers: {'retry-after': value}}));
+    assert.equal((await proxy(ask('api.weather.gov/alerts'))).headers.get('retry-after'), String(expected));
+  }
+  stubFetch(new Response(null, {status: 503, headers: {'retry-after': new Date(Date.now() + 60000).toUTCString()}}));
+  const retry = Number((await proxy(ask('api.weather.gov/alerts'))).headers.get('retry-after'));
+  assert(retry >= 59 && retry <= 60);
+});
+
+test('upstream deadline and caller cancellation both abort pending fetches', async () => {
+  let signal;
+  globalThis.fetch = async (_url, init) => {
+    signal = init.signal;
+    return new Promise((_, reject) => {
+      if (signal.aborted) reject(signal.reason);
+      else signal.addEventListener('abort', () => reject(signal.reason), {once: true});
+    });
+  };
+  // Keep Node alive while the platform timeout (an unref'ed timer) fires.
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    const result = await handleProxy(ask('api.weather.gov/alerts'), {timeoutMs: 10});
+    assert.equal(result.status, 502);
+    assert.equal(signal.reason.name, 'TimeoutError');
+    const controller = new AbortController();
+    const pending = handleProxy(new Request('https://example.test/proxy/api.weather.gov/alerts', {signal: controller.signal}));
+    controller.abort();
+    assert.equal((await pending).status, 502);
+    assert.equal(signal.reason.name, 'AbortError');
+  } finally { clearTimeout(keepAlive); }
+});
+
+test('the deadline remains active while the response body streams', async () => {
+  globalThis.fetch = async (_url, {signal}) => new Response(new ReadableStream({start(controller) {
+    controller.enqueue(new Uint8Array([1]));
+    signal.addEventListener('abort', () => controller.error(signal.reason), {once: true});
+  }}));
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    const result = await handleProxy(ask('api.weather.gov/alerts'), {timeoutMs: 10});
+    await assert.rejects(result.arrayBuffer(), {name: 'TimeoutError'});
+  } finally { clearTimeout(keepAlive); }
+});
+
+test('a broken error body can be discarded without an unhandled cancellation rejection', async () => {
+  stubFetch(new Response(new ReadableStream({start(controller) {controller.error(new Error('connection lost'));}}),
+    {status: 503, headers: {'retry-after': '1'}}));
+  const result = await proxy(ask('api.weather.gov/alerts'));
+  assert.equal(result.status, 503);
+  assert.equal(result.headers.get('retry-after'), '1');
+  assert.deepEqual(await result.json(), {error: 'provider temporarily unavailable'});
 });

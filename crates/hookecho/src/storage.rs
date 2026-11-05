@@ -85,12 +85,33 @@ pub fn report() -> Vec<Entry> {
     .collect()
 }
 
-/// Delete a cache directory's contents. The directory itself is recreated, because the writers
-/// that use it assume it exists.
+/// Clear disposable files while preserving downloaded offline maps and directories used by writers.
 pub fn clear(path: &Path) -> std::io::Result<()> {
-    if path.is_dir() {
-        std::fs::remove_dir_all(path)?;
-        std::fs::create_dir_all(path)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let pinned = crate::offline::pinned_paths();
+    #[cfg(target_arch = "wasm32")]
+    let pinned = std::collections::HashSet::new();
+    clear_unpinned(path, &pinned)
+}
+
+fn clear_unpinned(path: &Path, pinned: &std::collections::HashSet<PathBuf>) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            clear_unpinned(&path, pinned)?;
+        } else if !pinned.contains(&path) {
+            // An in-flight writer owns its temporary file until the final rename.
+            if path.extension().is_some_and(|ext| ext == "tmp" || ext == "part") { continue; }
+            if let Err(error) = std::fs::remove_file(path) {
+                if error.kind() != std::io::ErrorKind::NotFound { return Err(error); }
+            }
+        }
     }
     Ok(())
 }
@@ -137,6 +158,23 @@ mod tests {
     #[test]
     fn missing_directory_is_zero_not_an_error() {
         assert_eq!(dir_size(Path::new("/nonexistent/hookecho/cache")), 0);
+    }
+
+    #[test]
+    fn clearing_preserves_offline_tiles_and_inflight_writers() {
+        let root = std::env::temp_dir().join(format!("hookecho-storage-pinned-{}", std::process::id()));
+        let nested = root.join("z/x");
+        std::fs::create_dir_all(&nested).unwrap();
+        let saved = nested.join("saved.pbf");
+        let temporary = nested.join("pending.tmp");
+        let browsing = nested.join("browsing.pbf");
+        for path in [&saved, &temporary, &browsing] { std::fs::write(path, b"tile").unwrap(); }
+        clear_unpinned(&root, &std::collections::HashSet::from([saved.clone()])).unwrap();
+        assert_eq!(std::fs::read(saved).unwrap(), b"tile");
+        assert!(temporary.exists(), "a concurrent writer must still be able to rename its output");
+        assert!(!browsing.exists());
+        assert!(nested.exists(), "writers retain their parent directories");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

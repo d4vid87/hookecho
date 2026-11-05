@@ -5,12 +5,19 @@
 const PI: f32 = 3.14159265358979;
 const R_EARTH_KM: f32 = 6371.0;
 
+// Native GPU sine can round street-scale angles to zero (for example on NVIDIA).
+// The cubic retains their sign and relative precision; its error below .001 is below f32 ULP.
+fn precise_sin(angle: f32) -> f32 {
+    if (abs(angle) < 0.001) { return angle * (1.0 - angle * angle / 6.0); }
+    return sin(angle);
+}
+
 struct Camera {
     center: vec2<f32>,
     scale: vec2<f32>,
     world_per_pixel: f32,
     road_scale: f32,
-    _pad: vec2<f32>,
+    center_low: vec2<f32>,
     globe: vec4<f32>,
     planar: vec4<f32>,
 };
@@ -40,16 +47,25 @@ struct Radar {
     code_max: f32,
     multipass: f32,
     sector_opacity: array<vec4<f32>, 180>,
+    origin: vec4<f32>,
 };
 
 
+// Subtract split positions before multiplying by the high-zoom camera scale.
+fn world_delta(world: vec2<f32>, low: vec2<f32>) -> vec2<f32> {
+    let d = world - camera.center;
+    let b = world - d;
+    let error = (world - (d + b)) + (b - camera.center);
+    return d + ((low - camera.center_low) + error);
+}
+
 // Perspective Mercator plane; CPU mirror is Camera::planar_point.
 // Keep homogeneous W here so world/UV varyings interpolate on the ground plane.
-fn planar_clip(world: vec2<f32>) -> vec4<f32> {
+fn planar_clip(world: vec2<f32>, low: vec2<f32>) -> vec4<f32> {
     if (all(camera.planar == vec4<f32>(1.0, 0.0, 1.0, 0.0))) {
-        return vec4<f32>((world - camera.center) * camera.scale, 0.0, 1.0);
+        return vec4<f32>(world_delta(world, low) * camera.scale, 0.0, 1.0);
     }
-    let q = (world - camera.center) / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+    let q = world_delta(world, low) / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
     let r = vec2<f32>(camera.planar.x * q.x - camera.planar.y * q.y,
         camera.planar.y * q.x + camera.planar.x * q.y);
     let clip_scale = camera.scale * camera.world_per_pixel * vec2<f32>(1.0, -1.0);
@@ -57,27 +73,59 @@ fn planar_clip(world: vec2<f32>) -> vec4<f32> {
         1.0 + r.y * camera.planar.w);
 }
 
+// Reconstruct a small camera-relative ground offset in the fragment. Interpolating
+// world positions across a continent-sized quad loses street-level pixel precision.
+fn planar_delta(ndc: vec2<f32>) -> vec2<f32> {
+    let screen = ndc / (camera.scale * camera.world_per_pixel) * vec2<f32>(1.0, -1.0);
+    let ry = screen.y / (camera.planar.z - screen.y * camera.planar.w);
+    let rx = screen.x * (1.0 + ry * camera.planar.w);
+    return vec2<f32>(camera.planar.x * rx + camera.planar.y * ry,
+        camera.planar.y * rx - camera.planar.x * ry) * camera.world_per_pixel;
+}
+
 // Orthographic globe shared with CPU picking. globe.z == 0 retains Mercator.
 const G_PI: f32 = 3.14159265358979;
-fn project_world(w: vec2<f32>) -> vec3<f32> {
-    if (camera.globe.z == 0.0) { return vec3<f32>((w - camera.center) * camera.scale, 1.0); }
-    let lat = atan(sinh(G_PI * (1.0 - 2.0 * w.y)));
-    let dl = (w.x - camera.center.x) * 2.0 * G_PI;
-    let sl = sin(lat); let cl = cos(lat);
-    return vec3<f32>(camera.globe.z * cl * sin(dl),
-        camera.globe.w * (camera.globe.y * sl - camera.globe.x * cl * cos(dl)),
-        camera.globe.x * sl + camera.globe.y * cl * cos(dl));
+fn latitude_delta(base_lat: f32, world_dy: f32) -> f32 {
+    let s = precise_sin(base_lat);
+    let n = 0.5 * log((1.0 + s) / (1.0 - s));
+    let dn = -2.0 * G_PI * world_dy;
+    // GLES sinh may subtract two rounded exponentials near zero. The local series
+    // retains subpixel latitude deltas at street zoom while the exact path covers a globe.
+    if (abs(dn) < 0.001) {
+        let c = cos(base_lat);
+        return dn * c * (1.0 - 0.5 * dn * s + dn * dn * (s * s - c * c) / 6.0);
+    }
+    return atan2(2.0 * cosh(n + dn * 0.5) * sinh(dn * 0.5),
+        1.0 + sinh(n) * sinh(n + dn));
 }
-fn globe_world(ndc: vec2<f32>) -> vec3<f32> {
+
+fn project_delta(delta: vec2<f32>) -> vec3<f32> {
+    if (camera.globe.z == 0.0) { return vec3<f32>(delta * camera.scale, 1.0); }
+    let base_lat = atan2(camera.globe.x, camera.globe.y);
+    let dlat = latitude_delta(base_lat, delta.y);
+    let dl = delta.x * 2.0 * G_PI;
+    let cl = camera.globe.y * cos(dlat) - camera.globe.x * precise_sin(dlat);
+    let longitude_drop = 2.0 * precise_sin(dl * 0.5) * precise_sin(dl * 0.5);
+    return vec3<f32>(camera.globe.z * cl * precise_sin(dl),
+        camera.globe.w * (precise_sin(dlat) + camera.globe.x * cl * longitude_drop),
+        cos(dlat) - camera.globe.y * cl * longitude_drop);
+}
+fn project_world(w: vec2<f32>, low: vec2<f32>) -> vec3<f32> {
+    return project_delta(world_delta(w, low));
+}
+fn globe_delta(ndc: vec2<f32>) -> vec3<f32> {
     let xy = ndc / camera.globe.zw;
     let r2 = dot(xy, xy);
     if (r2 > 1.0) { return vec3<f32>(0.0, 0.0, -1.0); }
     let z = sqrt(max(0.0, 1.0 - r2));
-    let lat = asin(clamp(z * camera.globe.x + xy.y * camera.globe.y, -1.0, 1.0));
-    if (abs(lat) > 1.48442223) { return vec3<f32>(0.0, 0.0, -1.0); }
+    let ds = -camera.globe.x * r2 / (1.0 + z) + xy.y * camera.globe.y;
+    let s = camera.globe.x + ds;
+    if (abs(s) > 0.99627208) { return vec3<f32>(0.0, 0.0, -1.0); }
+    let q = ds / (1.0 - s * camera.globe.x);
+    var dn = q + q * q * q / 3.0;
+    if (abs(q) >= 0.001) { dn = 0.5 * log((1.0 + q) / (1.0 - q)); }
     let dl = atan2(xy.x, z * camera.globe.y - xy.y * camera.globe.x);
-    return vec3<f32>(fract(camera.center.x + dl / (2.0 * G_PI)),
-        0.5 - log((1.0 + sin(lat)) / (1.0 - sin(lat))) / (4.0 * G_PI), 1.0);
+    return vec3<f32>(dl / (2.0 * G_PI), -dn / (2.0 * G_PI), 1.0);
 }
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -102,7 +150,7 @@ struct VsOut {
 @vertex
 fn vs_main(in: VsIn, @builtin(vertex_index) index: u32) -> VsOut {
     var out: VsOut;
-    var p = (in.world - camera.center) * camera.scale;
+    var p = ((in.world - camera.center) - camera.center_low) * camera.scale;
     if (camera.globe.z != 0.0) {
         let corners = array<vec2<f32>, 6>(vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0),
             vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, -1.0));
@@ -112,8 +160,10 @@ fn vs_main(in: VsIn, @builtin(vertex_index) index: u32) -> VsOut {
     out.visible = 1.0;
     out.ndc = p;
     out.clip = vec4<f32>(p, 0.0, 1.0);
-    if (camera.globe.z == 0.0) { out.clip = planar_clip(in.world); }
-    out.world = in.world;
+    if (camera.globe.z == 0.0) { out.clip = planar_clip(in.world, vec2<f32>(0.0)); }
+    // Perspective interpolation returns NDC * clip-W; fragment position.w cancels it.
+    out.ndc = out.clip.xy;
+    out.world = world_delta(in.world, vec2<f32>(0.0));
     return out;
 }
 
@@ -127,12 +177,6 @@ fn sharpen(t: f32) -> f32 {
     return smoothstep(0.5 - blend_width() * 0.5, 0.5 + blend_width() * 0.5, t);
 }
 
-fn world_to_lonlat(w: vec2<f32>) -> vec2<f32> {
-    let lon = w.x * 360.0 - 180.0;
-    let n = PI * (1.0 - 2.0 * w.y);
-    let lat = atan(sinh(n)) * 180.0 / PI;
-    return vec2<f32>(lon, lat);
-}
 
 // Precompute the original normalized stages once per changed sweep. Classification and
 // operation order stay identical for both R8 and R16 source data.
@@ -184,28 +228,30 @@ fn display_gate(gx: i32, gy: i32, nbins: i32) -> f32 {
 
 fn radar_color(in: VsOut) -> vec4<f32> {
     if (in.visible < 0.999) { discard; }
-    var world = in.world;
+    var delta = in.world;
     if (camera.globe.z != 0.0 && in.surface == 0u) {
-        let picked = globe_world(in.ndc);
+        let picked = globe_delta(in.ndc);
         if (picked.z < 0.0) { discard; }
-        world = picked.xy;
+        delta = picked.xy;
+    } else if (in.surface == 0u) {
+        delta = planar_delta(in.ndc * in.clip.w);
     }
-    let ll = world_to_lonlat(world);
-    let lat = ll.y * PI / 180.0;
-    let lon = ll.x * PI / 180.0;
-    let lat0 = radar.radar_lat * PI / 180.0;
-    let lon0 = radar.radar_lon * PI / 180.0;
-    let dlon = lon - lon0;
+    var relative = delta - world_delta(radar.origin.xy, radar.origin.zw);
+    relative.x -= round(relative.x);
+    let lat0 = radians(radar.radar_lat);
+    let dlat = latitude_delta(lat0, relative.y);
+    let dlon = relative.x * 2.0 * PI;
+    let lat = lat0 + dlat;
+    let ll = vec2<f32>(radar.radar_lon + degrees(dlon), degrees(lat));
 
     // Great-circle range (haversine) in km.
-    let dlat = lat - lat0;
-    let a = sin(dlat * 0.5) * sin(dlat * 0.5)
-          + cos(lat0) * cos(lat) * sin(dlon * 0.5) * sin(dlon * 0.5);
+    let a = precise_sin(dlat * 0.5) * precise_sin(dlat * 0.5)
+          + cos(lat0) * cos(lat) * precise_sin(dlon * 0.5) * precise_sin(dlon * 0.5);
     let range_km = 2.0 * R_EARTH_KM * asin(sqrt(clamp(a, 0.0, 1.0)));
 
     // Initial bearing (azimuth) from radar, degrees clockwise from north.
-    let y = sin(dlon) * cos(lat);
-    let x = cos(lat0) * sin(lat) - sin(lat0) * cos(lat) * cos(dlon);
+    let y = precise_sin(dlon) * cos(lat);
+    let x = precise_sin(dlat) + precise_sin(lat0) * cos(lat) * 2.0 * precise_sin(dlon * 0.5) * precise_sin(dlon * 0.5);
     var az = atan2(y, x) * 180.0 / PI;
     az = az - floor(az / 360.0) * 360.0;
 
@@ -267,7 +313,7 @@ fn radar_color(in: VsOut) -> vec4<f32> {
     // raw-index units, so we shift the index directly. 0/1 (no-data / range-fold) pass through.
     if (radar.srv > 0.5 && rawf >= 2.0) {
         let az_rad = az * PI / 180.0;
-        let delta = -(radar.motion_e * sin(az_rad) + radar.motion_n * cos(az_rad));
+        let delta = -(radar.motion_e * precise_sin(az_rad) + radar.motion_n * cos(az_rad));
         rawf = clamp(rawf + delta, 2.0, code_max());
     }
 
@@ -330,14 +376,20 @@ fn vs_surface(@builtin(vertex_index) vertex: u32) -> VsOut {
     let azimuth = (f32(radial) + 0.5) / radar.az_bins * 2.0 * PI;
     let distance = (radar.first_gate_km + (f32(gate) + 0.5) * radar.gate_interval_km) / R_EARTH_KM;
     let lat0 = radians(radar.radar_lat);
-    let lat = asin(clamp(sin(lat0) * cos(distance) + cos(lat0) * sin(distance) * cos(azimuth), -1.0, 1.0));
-    let lon = radians(radar.radar_lon) + atan2(sin(azimuth) * sin(distance) * cos(lat0),
-        cos(distance) - sin(lat0) * sin(lat));
-    var world = vec2<f32>(lon / (2.0 * PI) + 0.5,
-        0.5 - log((1.0 + sin(lat)) / (1.0 - sin(lat))) / (4.0 * PI));
-    world.x -= round(world.x - camera.center.x);
+    let sl0 = precise_sin(lat0);
+    let cl0 = cos(lat0);
+    let drop = -2.0 * precise_sin(distance * 0.5) * precise_sin(distance * 0.5);
+    let ds = sl0 * drop + cl0 * precise_sin(distance) * cos(azimuth);
+    let sl = clamp(sl0 + ds, -0.999999, 0.999999);
+    let lat = asin(sl);
+    let q = ds / (1.0 - sl * sl0);
+    var dn = q + q * q * q / 3.0;
+    if (abs(q) >= 0.001) { dn = 0.5 * log((1.0 + q) / (1.0 - q)); }
+    let dl = atan2(precise_sin(azimuth) * precise_sin(distance) * cl0, cl0 * cl0 + drop - sl0 * ds);
+    var delta = world_delta(radar.origin.xy, radar.origin.zw) + vec2<f32>(dl, -dn) / (2.0 * PI);
+    delta.x -= round(delta.x);
     var out: VsOut;
-    out.world = world;
+    out.world = delta;
     out.ndc = vec2<f32>(0.0);
     out.surface = 1u;
     let last = f32(textureDimensions(lut_tex).x - 1u);
@@ -345,13 +397,13 @@ fn vs_surface(@builtin(vertex_index) vertex: u32) -> VsOut {
     let alpha = textureLoad(lut_tex, vec2<i32>(index, 0), 0).a;
     out.visible = select(0.0, 1.0, raw >= 2.0 && alpha > 0.0);
     if (camera.globe.z != 0.0) {
-        let projected = project_world(world);
+        let projected = project_delta(delta);
         // Radial displacement away from the sphere; backside remains hidden.
         let factor = 1.0 + height * 2.0 * PI * cos(lat);
         out.clip = vec4<f32>(projected.xy * factor, clamp(0.5 - projected.z * factor * 0.49, 0.0, 1.0), 1.0);
         if (projected.z <= 0.0) { out.visible = 0.0; }
     } else {
-        let q = (world - camera.center) / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+        let q = delta / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
         let rotated = vec2<f32>(camera.planar.x * q.x - camera.planar.y * q.y,
             camera.planar.y * q.x + camera.planar.x * q.y);
         let cp = camera.planar.z;

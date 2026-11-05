@@ -88,6 +88,7 @@ export const ALLOWED_HOSTS = [
   "cwwp2.dot.ca.gov",
 ];
 
+export const UPSTREAM_TIMEOUT_MS = 60_000;
 export const MAX_BYTES = 64 * 1024 * 1024;
 // Daytime GOES C02 CONUS files reach about 70 MB before the browser downsamples them.
 const goesMaxBytes = 96 * 1024 * 1024;
@@ -243,7 +244,7 @@ function capped(body, limit) {
 
 /// Handle one `/proxy/{host}/{path}` request. `fetchInit(host)` lets a platform add its own cache
 /// hints to the upstream call, `extraHeaders(host, search)` the same for the response we send back.
-export async function handleProxy(request, { fetchInit = () => ({}), extraHeaders = () => ({}) } = {}) {
+export async function handleProxy(request, { fetchInit = () => ({}), extraHeaders = () => ({}), timeoutMs = UPSTREAM_TIMEOUT_MS } = {}) {
   const url = new URL(request.url);
   const rest = url.pathname.slice("/proxy/".length);
   const slash = rest.indexOf("/");
@@ -269,16 +270,36 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
       ...fetchInit(host, url.search, !!range),
       // An allowed upstream must not redirect this proxy to a host outside the allowlist.
       redirect: "manual",
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]),
     });
   } catch {
     return badGateway();
   }
-  if (!upstream.ok) return badGateway();
-  if (range && upstream.status !== 206) return badGateway();
+  if (!upstream.ok) {
+    upstream.body?.cancel().catch(() => {});
+    if (upstream.status === 429 || upstream.status === 503) {
+      const retry = (upstream.headers.get("retry-after") || "").trim();
+      const seconds = /^\d+$/.test(retry) ? Number(retry)
+        : /^[A-Za-z]{3},/.test(retry) ? (Date.parse(retry) - Date.now()) / 1000 : NaN;
+      return new Response('{"error":"provider temporarily unavailable"}', {
+        status: upstream.status,
+        headers: { "content-type": "application/json", "cache-control": "no-store",
+          "retry-after": String(Number.isFinite(seconds) ? Math.min(86400, Math.max(0, Math.ceil(seconds))) : 30) },
+      });
+    }
+    return badGateway();
+  }
+  if (range && upstream.status !== 206) {
+    upstream.body?.cancel().catch(() => {});
+    return badGateway();
+  }
 
   const length = Number(upstream.headers.get("content-length") || 0);
   const limit = responseLimit(host);
-  if (length > limit) return refused("response over cap");
+  if (length > limit) {
+    upstream.body?.cancel().catch(() => {});
+    return refused("response over cap");
+  }
 
   const validators = validatorsOf(upstream);
   const headers = {
@@ -292,7 +313,7 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   // Answered at the edge: the upstream fetch above was served from `cf.cacheTtl` in the common
   // case, so this costs no origin call and no bytes on the wire back.
   if (!range && notModified(request, validators)) {
-    upstream.body?.cancel();
+    upstream.body?.cancel().catch(() => {});
     return new Response(null, { status: 304, headers });
   }
 

@@ -1,15 +1,21 @@
-// MRMS national mosaic layer. A world-space quad covers the CONUS grid's mercator bbox;
-// each fragment inverts web-mercator to lon/lat, maps to the regular lat/lon grid (plate-carrée
-// → mercator warp), samples the R8 index texture, and colors it through the shared LUT.
+// Gridded weather layer. Each screen fragment picks geographic coordinates, maps to the
+// source lat/lon grid, and samples either direct RGBA or indices in the shared color LUT.
 
 const PI: f32 = 3.14159265358979;
+
+// Native GPU sine can round street-scale angles to zero (for example on NVIDIA).
+// The cubic retains their sign and relative precision; its error below .001 is below f32 ULP.
+fn precise_sin(angle: f32) -> f32 {
+    if (abs(angle) < 0.001) { return angle * (1.0 - angle * angle / 6.0); }
+    return sin(angle);
+}
 
 struct Camera {
     center: vec2<f32>,
     scale: vec2<f32>,
     world_per_pixel: f32,
     road_scale: f32,
-    _pad: vec2<f32>,
+    center_low: vec2<f32>,
     globe: vec4<f32>,
     planar: vec4<f32>,
 };
@@ -26,20 +32,25 @@ struct Mrms {
     opacity: f32,
     /// 1 when grid_tex contains direct RGBA bytes instead of palette indices.
     direct_rgba: f32,
-    _pad2: f32,
-    _pad3: f32,
-    _pad4: f32,
-    _pad5: f32,
+    origin: vec4<f32>,
 };
 
 
+// Subtract split positions before multiplying by the high-zoom camera scale.
+fn world_delta(world: vec2<f32>, low: vec2<f32>) -> vec2<f32> {
+    let d = world - camera.center;
+    let b = world - d;
+    let error = (world - (d + b)) + (b - camera.center);
+    return d + ((low - camera.center_low) + error);
+}
+
 // Perspective Mercator plane; CPU mirror is Camera::planar_point.
 // Keep homogeneous W here so world/UV varyings interpolate on the ground plane.
-fn planar_clip(world: vec2<f32>) -> vec4<f32> {
+fn planar_clip(world: vec2<f32>, low: vec2<f32>) -> vec4<f32> {
     if (all(camera.planar == vec4<f32>(1.0, 0.0, 1.0, 0.0))) {
-        return vec4<f32>((world - camera.center) * camera.scale, 0.0, 1.0);
+        return vec4<f32>(world_delta(world, low) * camera.scale, 0.0, 1.0);
     }
-    let q = (world - camera.center) / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
+    let q = world_delta(world, low) / camera.world_per_pixel * vec2<f32>(1.0, -1.0);
     let r = vec2<f32>(camera.planar.x * q.x - camera.planar.y * q.y,
         camera.planar.y * q.x + camera.planar.x * q.y);
     let clip_scale = camera.scale * camera.world_per_pixel * vec2<f32>(1.0, -1.0);
@@ -47,27 +58,59 @@ fn planar_clip(world: vec2<f32>) -> vec4<f32> {
         1.0 + r.y * camera.planar.w);
 }
 
+// Reconstruct a small camera-relative ground offset in the fragment. Interpolating
+// world positions across a continent-sized quad loses street-level pixel precision.
+fn planar_delta(ndc: vec2<f32>) -> vec3<f32> {
+    let screen = ndc / (camera.scale * camera.world_per_pixel) * vec2<f32>(1.0, -1.0);
+    let denom = camera.planar.z - screen.y * camera.planar.w;
+    if (denom <= 0.0) { return vec3<f32>(0.0, 0.0, -1.0); }
+    let ry = screen.y / denom;
+    let rx = screen.x * (1.0 + ry * camera.planar.w);
+    return vec3<f32>(vec2<f32>(camera.planar.x * rx + camera.planar.y * ry,
+        camera.planar.y * rx - camera.planar.x * ry) * camera.world_per_pixel, 1.0);
+}
+
 // Orthographic globe shared with CPU picking. globe.z == 0 retains Mercator.
 const G_PI: f32 = 3.14159265358979;
-fn project_world(w: vec2<f32>) -> vec3<f32> {
-    if (camera.globe.z == 0.0) { return vec3<f32>((w - camera.center) * camera.scale, 1.0); }
-    let lat = atan(sinh(G_PI * (1.0 - 2.0 * w.y)));
-    let dl = (w.x - camera.center.x) * 2.0 * G_PI;
-    let sl = sin(lat); let cl = cos(lat);
-    return vec3<f32>(camera.globe.z * cl * sin(dl),
-        camera.globe.w * (camera.globe.y * sl - camera.globe.x * cl * cos(dl)),
-        camera.globe.x * sl + camera.globe.y * cl * cos(dl));
+fn latitude_delta(base_lat: f32, world_dy: f32) -> f32 {
+    let s = precise_sin(base_lat);
+    let n = 0.5 * log((1.0 + s) / (1.0 - s));
+    let dn = -2.0 * G_PI * world_dy;
+    // GLES sinh may subtract two rounded exponentials near zero. The local series
+    // retains subpixel latitude deltas at street zoom while the exact path covers a globe.
+    if (abs(dn) < 0.001) {
+        let c = cos(base_lat);
+        return dn * c * (1.0 - 0.5 * dn * s + dn * dn * (s * s - c * c) / 6.0);
+    }
+    return atan2(2.0 * cosh(n + dn * 0.5) * sinh(dn * 0.5),
+        1.0 + sinh(n) * sinh(n + dn));
 }
-fn globe_world(ndc: vec2<f32>) -> vec3<f32> {
+
+fn project_world(w: vec2<f32>, low: vec2<f32>) -> vec3<f32> {
+    let delta = world_delta(w, low);
+    if (camera.globe.z == 0.0) { return vec3<f32>(delta * camera.scale, 1.0); }
+    let base_lat = atan2(camera.globe.x, camera.globe.y);
+    let dlat = latitude_delta(base_lat, delta.y);
+    let dl = delta.x * 2.0 * G_PI;
+    let cl = camera.globe.y * cos(dlat) - camera.globe.x * precise_sin(dlat);
+    let longitude_drop = 2.0 * precise_sin(dl * 0.5) * precise_sin(dl * 0.5);
+    return vec3<f32>(camera.globe.z * cl * precise_sin(dl),
+        camera.globe.w * (precise_sin(dlat) + camera.globe.x * cl * longitude_drop),
+        cos(dlat) - camera.globe.y * cl * longitude_drop);
+}
+fn globe_delta(ndc: vec2<f32>) -> vec3<f32> {
     let xy = ndc / camera.globe.zw;
     let r2 = dot(xy, xy);
     if (r2 > 1.0) { return vec3<f32>(0.0, 0.0, -1.0); }
     let z = sqrt(max(0.0, 1.0 - r2));
-    let lat = asin(clamp(z * camera.globe.x + xy.y * camera.globe.y, -1.0, 1.0));
-    if (abs(lat) > 1.48442223) { return vec3<f32>(0.0, 0.0, -1.0); }
+    let ds = -camera.globe.x * r2 / (1.0 + z) + xy.y * camera.globe.y;
+    let s = camera.globe.x + ds;
+    if (abs(s) > 0.99627208) { return vec3<f32>(0.0, 0.0, -1.0); }
+    let q = ds / (1.0 - s * camera.globe.x);
+    var dn = q + q * q * q / 3.0;
+    if (abs(q) >= 0.001) { dn = 0.5 * log((1.0 + q) / (1.0 - q)); }
     let dl = atan2(xy.x, z * camera.globe.y - xy.y * camera.globe.x);
-    return vec3<f32>(fract(camera.center.x + dl / (2.0 * G_PI)),
-        0.5 - log((1.0 + sin(lat)) / (1.0 - sin(lat))) / (4.0 * G_PI), 1.0);
+    return vec3<f32>(dl / (2.0 * G_PI), -dn / (2.0 * G_PI), 1.0);
 }
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -75,47 +118,47 @@ fn globe_world(ndc: vec2<f32>) -> vec3<f32> {
 @group(1) @binding(1) var grid_tex: texture_2d<u32>;
 @group(1) @binding(2) var lut_tex: texture_2d<f32>;
 
-struct VsIn { @location(0) world: vec2<f32> };
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) world: vec2<f32>,
-    @location(1) ndc: vec2<f32>,
+    @location(0) ndc: vec2<f32>,
 };
 
 @vertex
-fn vs_main(in: VsIn, @builtin(vertex_index) index: u32) -> VsOut {
+fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
+    // Reconstruct ground coordinates from a screen quad. At street zoom, interpolating
+    // continent-sized clip coordinates loses whole pixels on native GPU interpolators.
+    let corners = array<vec2<f32>, 6>(vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, -1.0));
+    let p = corners[index % 6u];
     var out: VsOut;
-    var p = (in.world - camera.center) * camera.scale;
-    if (camera.globe.z != 0.0) {
-        let corners = array<vec2<f32>, 6>(vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0),
-            vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, -1.0));
-        p = corners[index % 6u];
-    }
     out.ndc = p;
     out.clip = vec4<f32>(p, 0.0, 1.0);
-    if (camera.globe.z == 0.0) { out.clip = planar_clip(in.world); }
-    out.world = in.world;
     return out;
 }
 
-fn world_to_lonlat(w: vec2<f32>) -> vec2<f32> {
-    let lon = w.x * 360.0 - 180.0;
-    let n = PI * (1.0 - 2.0 * w.y);
-    let lat = atan(sinh(n)) * 180.0 / PI;
-    return vec2<f32>(lon, lat);
-}
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    var world = in.world;
+    var delta: vec2<f32>;
     if (camera.globe.z != 0.0) {
-        let picked = globe_world(in.ndc);
+        let picked = globe_delta(in.ndc);
         if (picked.z < 0.0) { discard; }
-        world = picked.xy;
+        delta = picked.xy;
+    } else {
+        let picked = planar_delta(in.ndc);
+        if (picked.z < 0.0) { discard; }
+        delta = picked.xy;
     }
-    let ll = world_to_lonlat(world);
-    let fu = (ll.x - mrms.lon_west) / (mrms.lon_east - mrms.lon_west);
-    let fv = (mrms.lat_north - ll.y) / (mrms.lat_north - mrms.lat_south);
+    var relative = delta - world_delta(mrms.origin.xy, mrms.origin.zw);
+    if (camera.globe.z != 0.0) {
+        // Pick the periodic copy centered on this source, including grids spanning the seam.
+        relative.x -= round(relative.x - (mrms.lon_east - mrms.lon_west) / 720.0);
+    }
+    let fu = relative.x * 360.0 / (mrms.lon_east - mrms.lon_west);
+    // geographic_origin uses Mercator's latitude limit, while global grids can reach ±90°.
+    let reference_lat = clamp(mrms.lat_north, -85.05112878, 85.05112878);
+    let fv = (mrms.lat_north - reference_lat - degrees(latitude_delta(radians(reference_lat), relative.y)))
+        / (mrms.lat_north - mrms.lat_south);
     if (fu < 0.0 || fu >= 1.0 || fv < 0.0 || fv >= 1.0) { discard; }
 
     let gx = i32(fu * mrms.nx);

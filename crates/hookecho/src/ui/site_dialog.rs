@@ -164,7 +164,8 @@ pub fn show(
             ui.visuals_mut().selection.stroke.color = egui::Color32::from_rgb(143, 207, 255);
         }
         let accent = ui.visuals().selection.stroke.color;
-        let height = (ui.clip_rect().bottom() - ui.cursor().top() - 8.0).max(120.0);
+        // Layout space shrinks with the window; the paint clip may still span the viewport.
+        let height = (ui.available_height() - 8.0).max(120.0);
         let compact = ui.available_width() < 400.0;
         let rail_width = if compact { 64.0 } else { 82.0 };
         let detail_width = (ui.available_width() - rail_width - 24.0).max(140.0);
@@ -200,6 +201,7 @@ pub fn show(
                                     )
                                     .selected(dialog.collection == collection),
                                 )
+                                .named_toggle(&format!("Radar sites: {label}"), dialog.collection == collection)
                                 .clicked()
                             {
                                 dialog.collection = collection;
@@ -271,12 +273,13 @@ pub fn show(
                         });
                     ui.add_space(10.0);
                 }
-                ui.add_sized(
+                let search = ui.add_sized(
                     [detail_width, 34.0],
                     egui::TextEdit::singleline(&mut dialog.filter)
                         .hint_text("Search city, country, state or radar ID")
                         .font(egui::TextStyle::Body),
                 );
+                crate::ui::a11y::record_target(&search, "Radar site search");
                 ui.add_space(6.0);
                 egui::ComboBox::from_id_salt("radar_country_filter")
                     .selected_text(dialog.country.unwrap_or("All countries"))
@@ -300,7 +303,7 @@ pub fn show(
                             &mut dialog.network,
                             network,
                             egui::RichText::new(label).size(11.0),
-                        );
+                        ).named_toggle(&format!("Radar network: {label}"), dialog.network == network);
                     }
                 });
                 ui.separator();
@@ -341,7 +344,7 @@ pub fn show(
                         dialog.desc = !dialog.desc;
                     }
                 });
-                let list_height = (ui.clip_rect().bottom() - ui.cursor().top() - 34.0).max(48.0);
+                let list_height = (ui.available_height() - 34.0).max(48.0);
                 if rows.is_empty() {
                     ui.add_space(12.0);
                     ui.label("No matching radar sites");

@@ -21,3 +21,18 @@ test("asset revalidation retains 304 responses", async () => {
   assert.equal(result.status, 304);
   assert.equal(result.headers.get("etag"), '"asset"');
 });
+
+test('provider errors are not cached upstream or downstream', async () => {
+  const original = globalThis.fetch;
+  let hints;
+  globalThis.fetch = async (_url, init) => {
+    hints = init.cf;
+    return new Response('limited', {status: 429, headers: {'retry-after': '15'}});
+  };
+  try {
+    const result = await worker.fetch(new Request('https://app.hookecho.io/proxy/api.weather.gov/alerts'), {});
+    assert.equal(hints.cacheTtlByStatus['400-599'], -1);
+    assert.equal(result.status, 429);
+    assert.equal(result.headers.get('cache-control'), 'no-store');
+  } finally { globalThis.fetch = original; }
+});

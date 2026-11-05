@@ -307,7 +307,7 @@ impl HookEchoApp {
                                 if let Some(action) = ui::layers_panel::workspace_shortcuts(ui, &entries) { chosen = Some(action); ui.close(); }
                             });
                             if ui.button("Map settings").clicked() { settings_page = Some("Map settings"); }
-                            if ui.button("Share").clicked() {
+                            if ui.button("Share").named("Share this view").clicked() {
                                 settings_page = Some("Preferences");
                                 ctx.data_mut(|d| d.insert_temp(egui::Id::new("preferences_section"), "Share"));
                             }
@@ -331,6 +331,7 @@ impl HookEchoApp {
                             } else {
                                 "‹ All controls"
                             })
+                            .named(if section.is_some() { "Back to preferences" } else { "Back to all controls" })
                             .clicked()
                         {
                             if section.is_some() {

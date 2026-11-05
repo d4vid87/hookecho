@@ -180,7 +180,7 @@ impl Layer {
         let (tx, _) = self.stills.get_or_insert_with(std::sync::mpsc::channel);
         let (tx, http, ctx) = (tx.clone(), http.clone(), ctx.clone());
         spawner.spawn(async move {
-            match fetch_image(&http, &url).await {
+            match fetch_image(&http, &url, ctx.input(|i| i.max_texture_side)).await {
                 Ok(img) => {
                     let _ = tx.send((url, img));
                     ctx.request_repaint();
@@ -287,21 +287,9 @@ fn km_between(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     6371.0 * 2.0 * a.sqrt().asin()
 }
 
-pub(crate) async fn fetch_image(http: &reqwest::Client, url: &str) -> anyhow::Result<ColorImage> {
-    let bytes = http
-        .get(wxdata::net::fetch_url(url))
-        .header("User-Agent", crate::tiles::USER_AGENT)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let img = image::load_from_memory(&bytes)?.to_rgba8();
-    let (w, h) = img.dimensions();
-    Ok(ColorImage::from_rgba_unmultiplied(
-        [w as usize, h as usize],
-        img.as_raw(),
-    ))
+pub(crate) async fn fetch_image(http: &reqwest::Client, url: &str, max_side: usize) -> anyhow::Result<ColorImage> {
+    let bytes = crate::image_load::fetch(http, &wxdata::net::fetch_url(url)).await?;
+    crate::image_load::color(crate::image_load::decode(&bytes)?, max_side, false)
 }
 
 #[cfg(test)]

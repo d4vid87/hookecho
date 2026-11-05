@@ -611,20 +611,7 @@ impl WindLevel {
 
 /// Fetch the `u`/`v` wind components for `level` as a matched pair from one model cycle.
 ///
-/// **HRRR only, deliberately — do not add a [`Model`] parameter.** RAP's `awp130pgrb` packs the two
-/// components as *submessages of a single GRIB2 message*, so its `.idx` lists them at one shared
-/// byte offset:
-///
-/// ```text
-/// 92.1:4703714:d=2026073012:UGRD:500 mb:anl:
-/// 92.2:4703714:d=2026073012:VGRD:500 mb:anl:      <- same offset
-/// ```
-///
-/// [`field_byte_range`] hands back the same range for both, and `gribberish`'s `Message::data()`
-/// decodes the *first* data section, so a RAP `VGRD` request quietly returns u-wind: every vector
-/// at 45° with `|u| == |v|`, wrong everywhere and plausible-looking for about three seconds. HRRR's
-/// `wrfsfc` stores them as separate messages, so this path is safe. The same trap waits for any
-/// future RAP-sourced vector field.
+/// This layer uses HRRR's surface/steering products; the environment model selector is separate.
 ///
 /// `min_valid` is `-∞` for both: wind components are signed, and the regrid's threshold is a drop
 /// test, so anything higher would silently delete every westward or southward vector.
@@ -767,19 +754,21 @@ async fn fetch_run_field(
         .error_for_status()?
         .text()
         .await?;
-    let (start, end) = field_byte_range(&idx, var, level)
+    let (start, end, submessage) = field_request(&idx, var, level)
         .ok_or_else(|| anyhow::anyhow!("no {var}:{level} in idx"))?;
 
     let bytes = crate::object_cache::fetch_range(http, &base, start, end).await?;
 
-    // gribberish can panic on some packings; contain it (see mrms::fetch_latest).
-    crate::task::guarded(|| decode_regrid(&bytes.bytes, model, min_valid))
-        .unwrap_or_else(|_| anyhow::bail!("{} grib decode panicked", model.label()))
+    decode_model_async(bytes.bytes, model.res_deg(), min_valid, submessage).await
 }
 
 /// Find the `[start, end)` byte range of the message matching `var` (field 3) and `level`
 /// (field 4) in a GRIB2 `.idx`. `end` is `None` when it's the last message (read to EOF).
 pub(crate) fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64, Option<u64>)> {
+    field_request(idx, var, level).map(|(start, end, _)| (start, end))
+}
+
+fn field_request(idx: &str, var: &str, level: &str) -> Option<(u64, Option<u64>, usize)> {
     let lines: Vec<&str> = idx.lines().collect();
     for (i, line) in lines.iter().enumerate() {
         let f: Vec<&str> = line.split(':').collect();
@@ -788,6 +777,10 @@ pub(crate) fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64
         }
         if f[3] == var && f[4] == level {
             let start: u64 = f[1].parse().ok()?;
+            let submessage = match f[0].split_once('.') {
+                Some((_, index)) => index.parse::<usize>().ok()?.checked_sub(1)?,
+                None => 0,
+            };
             // The end is the next *distinct* offset. RAP's idx lists a message that packs several
             // fields (VUCSH/VVCSH) as sibling lines sharing one offset; taking the very next line
             // would build the empty byte range `start..start` and fetch nothing.
@@ -796,20 +789,104 @@ pub(crate) fn field_byte_range(idx: &str, var: &str, level: &str) -> Option<(u64
                 .filter_map(|n| n.split(':').nth(1))
                 .filter_map(|s| s.parse::<u64>().ok())
                 .find(|&o| o > start);
-            return Some((start, end));
+            return Some((start, end, submessage));
         }
     }
     None
 }
 
+/// Build a standalone GRIB2 message for an indexed sibling, retaining shared grid and bitmap sections.
+fn grib_submessage(raw: &[u8], wanted: usize) -> anyhow::Result<std::borrow::Cow<'_, [u8]>> {
+    anyhow::ensure!(raw.len() >= 20 && &raw[..4] == b"GRIB" && raw[7] == 2, "invalid GRIB2 header");
+    let length = usize::try_from(u64::from_be_bytes(raw[8..16].try_into()?))?;
+    anyhow::ensure!(length >= 20 && length <= raw.len() && &raw[length - 4..length] == b"7777", "truncated GRIB2 message");
+    if wanted == 0 { return Ok(std::borrow::Cow::Borrowed(&raw[..length])); }
+    let mut sections: [Option<&[u8]>; 7] = [None; 7];
+    let mut bitmap = None;
+    let mut offset = 16;
+    let mut index = 0;
+    while offset < length - 4 {
+        let rest = &raw[offset..length - 4];
+        anyhow::ensure!(rest.len() >= 5, "truncated GRIB2 section header");
+        let size = u32::from_be_bytes(rest[..4].try_into()?) as usize;
+        anyhow::ensure!(size >= 5 && size <= rest.len(), "invalid GRIB2 section length");
+        let section = &rest[..size];
+        let number = usize::from(section[4]);
+        anyhow::ensure!((1..=7).contains(&number), "invalid GRIB2 section number");
+        if number == 6 {
+            anyhow::ensure!(size >= 6, "truncated GRIB2 bitmap");
+            sections[6] = Some(match section[5] {
+                0 => { bitmap = Some(section); section }
+                254 => bitmap.ok_or_else(|| anyhow::anyhow!("GRIB2 bitmap reference has no predecessor"))?,
+                255 => section,
+                _ => anyhow::bail!("predefined GRIB2 bitmaps are unsupported"),
+            });
+        } else if number < 7 {
+            sections[number] = Some(section);
+        } else {
+            if index == wanted {
+                anyhow::ensure!([1, 3, 4, 5, 6].iter().all(|&n| sections[n].is_some()), "incomplete GRIB2 submessage");
+                let mut selected = raw[..16].to_vec();
+                for section in sections.into_iter().flatten() { selected.extend_from_slice(section); }
+                selected.extend_from_slice(section);
+                selected.extend_from_slice(b"7777");
+                let size = (selected.len() as u64).to_be_bytes();
+                selected[8..16].copy_from_slice(&size);
+                return Ok(std::borrow::Cow::Owned(selected));
+            }
+            index += 1;
+            // Product, packing and bitmap sections belong to this sibling, unlike the shared grid.
+            sections[4..].fill(None);
+        }
+        offset += size;
+    }
+    anyhow::bail!("GRIB2 submessage {} is absent", wanted + 1)
+}
+
+pub(crate) async fn decode_model_async(
+    bytes: Vec<u8>, resolution: f64, min_valid: f64, submessage: usize,
+) -> anyhow::Result<MrmsField> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Each grid holds full decode/projection scratch; six parallel downloads need fewer CPU slots.
+        static DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(
+            if cfg!(target_os = "android") { 1 } else { 2 },
+        );
+        crate::task::blocking_limited(&DECODES, move || decode_model(&bytes, resolution, min_valid, submessage)).await?
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let payload = postcard::to_allocvec(&(&bytes, resolution, min_valid, submessage))?;
+        match crate::wasm_worker::decode_model(payload).await {
+            Ok(wire) => postcard::from_bytes(&wire).map_err(Into::into),
+            Err(crate::wasm_worker::Error::Unavailable) => decode_model(&bytes, resolution, min_valid, submessage),
+            Err(error) => anyhow::bail!("{error}"),
+        }
+    }
+}
+
+fn decode_model(raw: &[u8], resolution: f64, min_valid: f64, submessage: usize) -> anyhow::Result<MrmsField> {
+    crate::task::guarded(|| {
+        let selected = grib_submessage(raw, submessage)?;
+        decode_regrid_at_resolution(&selected, resolution, min_valid)
+    }).unwrap_or_else(|_| anyhow::bail!("model GRIB decode panicked"))
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[doc(hidden)]
+pub fn decode_worker(payload: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let (bytes, resolution, min_valid, submessage): (Vec<u8>, f64, f64, usize) = postcard::from_bytes(&payload)?;
+    postcard::to_allocvec(&decode_model(&bytes, resolution, min_valid, submessage)?).map_err(Into::into)
+}
+
 /// Decode a single-message HRRR GRIB2 (Lambert grid) and scatter-regrid onto a regular lat/lon
 /// grid, keeping the max dBZ per target cell (reflectivity composites well under max).
-pub(crate) fn decode_regrid(
-    raw: &[u8],
+pub(crate) async fn decode_regrid(
+    raw: Vec<u8>,
     model: Model,
     min_valid: f64,
 ) -> anyhow::Result<MrmsField> {
-    decode_regrid_at_resolution(raw, model.res_deg(), min_valid)
+    decode_model_async(raw, model.res_deg(), min_valid, 0).await
 }
 
 pub(crate) fn decode_regrid_at_resolution(
@@ -908,7 +985,7 @@ pub(crate) fn regrid(
             .collect()
     };
     #[cfg(target_arch = "wasm32")]
-    let cells: Vec<(usize, f32)> = (0..data.len()).filter_map(cell_of).collect();
+    let cells = (0..data.len()).filter_map(cell_of);
     for (idx, v) in cells {
         let cell = &mut values[idx];
         *cell = if cell.is_nan() { v } else { cell.max(v) };
@@ -929,6 +1006,75 @@ pub(crate) fn regrid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RAP_SHEAR: &[u8] = include_bytes!("../tests/data/rap-shear-pair.grib2");
+
+    #[test]
+    fn rap_shear_siblings_decode_the_requested_component() {
+        let index = "242.1:12686079:d=2026110400:VUCSH:0-6000 m above ground:anl:\n\
+                     242.2:12686079:d=2026110400:VVCSH:0-6000 m above ground:anl:\n\
+                     243:12834497:d=2026110400:PRES:tropopause:anl:\n";
+        assert_eq!(field_request(index, "VVCSH", "0-6000 m above ground"),
+            Some((12686079, Some(12834497), 1)));
+        let first = grib_submessage(RAP_SHEAR, 0).unwrap();
+        let second = grib_submessage(RAP_SHEAR, 1).unwrap();
+        let u = gribberish::message::read_message(&first, 0).unwrap();
+        let v = gribberish::message::read_message(&second, 0).unwrap();
+        assert_eq!(u.variable_abbrev().unwrap(), "VUCSH");
+        assert_eq!(v.variable_abbrev().unwrap(), "VVCSH");
+        assert_eq!(u.forecast_date().unwrap(), v.forecast_date().unwrap());
+        let u = u.data().unwrap();
+        let v = v.data().unwrap();
+        assert_eq!(u.len(), v.len());
+        assert!(u.iter().zip(&v).any(|(u, v)| (u - v).abs() > 1.0));
+        assert!(grib_submessage(RAP_SHEAR, 2).is_err());
+    }
+
+    #[test]
+    fn model_worker_roundtrip_preserves_selected_component_and_grid() {
+        let expected = decode_model(RAP_SHEAR, 0.5, f64::NEG_INFINITY, 1).unwrap();
+        let payload = postcard::to_allocvec(&(RAP_SHEAR, 0.5, f64::NEG_INFINITY, 1usize)).unwrap();
+        let actual: MrmsField = postcard::from_bytes(&decode_worker(payload).unwrap()).unwrap();
+        assert_eq!((actual.nx, actual.ny, actual.time), (expected.nx, expected.ny, expected.time));
+        assert_eq!((actual.lon_west, actual.lon_east, actual.lat_north, actual.lat_south),
+            (expected.lon_west, expected.lon_east, expected.lat_north, expected.lat_south));
+        assert!(actual.values.iter().zip(&expected.values)
+            .all(|(a, b)| a.to_bits() == b.to_bits()));
+    }
+
+    #[test]
+    fn submessage_validation_rejects_truncation_and_missing_bitmap() {
+        assert!(grib_submessage(b"GRIB", 1).is_err());
+        assert!(grib_submessage(&RAP_SHEAR[..RAP_SHEAR.len() - 1], 1).is_err());
+        let mut invalid = RAP_SHEAR.to_vec();
+        invalid[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(grib_submessage(&invalid, 1).is_err());
+        let mut missing = RAP_SHEAR.to_vec();
+        // This real message has no explicit bitmap to inherit at its second section 6.
+        missing[74272 + 5] = 254;
+        assert!(grib_submessage(&missing, 1).is_err());
+    }
+
+    #[test]
+    fn selected_sibling_materializes_the_previous_explicit_bitmap() {
+        fn section(number: u8, bytes: &[u8]) -> Vec<u8> {
+            let mut section = ((bytes.len() + 5) as u32).to_be_bytes().to_vec();
+            section.push(number);
+            section.extend_from_slice(bytes);
+            section
+        }
+        let bitmap = section(6, &[0, 0b1010_0000]);
+        let mut raw = b"GRIB\0\0\0\x02\0\0\0\0\0\0\0\0".to_vec();
+        for bytes in [section(1, &[]), section(3, &[]), section(4, &[]), section(5, &[]),
+            bitmap.clone(), section(7, &[1]), section(4, &[]), section(5, &[]),
+            section(6, &[254]), section(7, &[2])] { raw.extend_from_slice(&bytes); }
+        raw.extend_from_slice(b"7777");
+        let len = (raw.len() as u64).to_be_bytes();
+        raw[8..16].copy_from_slice(&len);
+        let selected = grib_submessage(&raw, 1).unwrap();
+        assert!(selected.windows(bitmap.len()).any(|bytes| bytes == bitmap));
+        assert_eq!(&selected[selected.len() - 10..selected.len() - 4], section(7, &[2]));
+    }
 
     #[test]
     fn idx_range_finds_field() {

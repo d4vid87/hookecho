@@ -19,6 +19,9 @@ tar -xzf "$work/ort.tgz" -C "$work/ort"
 cp "$work/piper/package/dist/piper-tts-web.js" "$out/piper-tts-web.js"
 cp "$work/piper/package/dist/piper-o91UDS6e.js" "$out/piper-o91UDS6e.js"
 cp "$work/ort/package/dist/ort.wasm.min.js" "$out/ort.wasm.min.js"
+# The npm browser bundle is an IIFE. An ES-module import otherwise exposes neither its local
+# `ort` variable nor InferenceSession to our module worker.
+printf '\nexport default ort;\n' >> "$out/ort.wasm.min.js"
 cp "$work/ort/package/dist/ort-wasm.wasm" "$work/ort/package/dist/ort-wasm-simd.wasm" \
   "$work/ort/package/dist/ort-wasm-simd-threaded.wasm" "$out/"
 fetch 'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.wasm' \
@@ -28,7 +31,7 @@ fetch 'https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/pipe
 # The published wrapper uses a bare npm import and remote defaults. Point its already-bundled
 # code at the verified files beside it; the model itself is populated in OPFS by amy-bootstrap.
 sed -i \
-  -e 's#await import("onnxruntime-web/wasm")#await import("./ort.wasm.min.js")#' \
+  -e 's#await import("onnxruntime-web/wasm")#await import("./ort.wasm.min.js?module=1")#' \
   -e 's#const ort = ortModule.default || ortModule;#const ort = globalThis.ort || ortModule.default || ortModule;#' \
   -e 's#https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/#./#' \
   -e 's#https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize#./piper_phonemize#' \

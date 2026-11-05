@@ -100,8 +100,18 @@ fn radar_payload_budget(settings: &Settings) -> usize {
     else { NATIVE_RADAR_PAYLOAD_BUDGET }
 }
 
-/// Loop frames in flight, keyed by volume name, with when each was kicked off.
-type PrefetchBook = std::collections::HashMap<String, Instant>;
+/// Shared panes keep a fetch alive until no pane needs its station.
+struct Prefetch {
+    started: Instant,
+    site: String,
+    request: crate::frame_request::Request,
+}
+type PrefetchBook = std::collections::HashMap<String, Prefetch>;
+
+fn retain_prefetch_sites<'a>(book: &mut PrefetchBook, sites: impl Iterator<Item = &'a str> + Clone) {
+    book.retain(|_, job| job.started.elapsed() < VOLUME_TIMEOUT + Duration::from_secs(15)
+        && sites.clone().any(|site| site == job.site));
+}
 
 /// Take the prefetch book, recovering from poisoning.
 ///
@@ -2143,6 +2153,17 @@ impl OverlayToggle {
         self == Self::Tropical || requested
     }
 
+    /// Missing history uses startup defaults; recorded empty history turns optional layers off.
+    fn restored(self, saved: Option<&[String]>) -> Option<bool> {
+        if self.session_only() { return None; }
+        let requested = saved.map_or_else(
+            || matches!(self, Self::RadarSites | Self::Outages | Self::Alerts | Self::Mds
+                | Self::Watches | Self::Cells | Self::Tracks),
+            |names| names.iter().any(|name| *name == self.slug()),
+        );
+        Some(self.enabled(requested))
+    }
+
     /// Stable name used in the settings file. Persisted as a string, not as the enum: an unknown
     /// name written by a newer build has to be skippable, and a failed `Settings` parse takes the
     /// whole file down with it.
@@ -2538,26 +2559,7 @@ struct RadarTimeSeries {
 /// afternoon of browsing doesn't end with every layer's texture still on the GPU.
 const FIELD_EVICT: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// What a settings-sync worker reports back. Everything network lives on the runtime; the app
-/// thread only ever applies the outcome.
-enum SyncMsg {
-    /// Fresh tokens (from finishing a sign-in, or from a refresh mid-sync).
-    Signed(crate::cloud::Tokens),
-    /// The remote settings blob, to merge over the local one.
-    Pulled {
-        body: String,
-        modified: String,
-    },
-    /// Our settings are now the remote ones, as of this `modifiedTime`.
-    Pushed {
-        modified: String,
-        hash: u64,
-    },
-    /// Both sides had edits. We took the remote copy; say so rather than pretend.
-    Conflict,
-    UpToDate,
-    Error(String),
-}
+use crate::cloud::SyncMsg;
 
 /// Where a pending screenshot is delivered: saved to a file, or copied to the clipboard, or
 /// captured as one frame of a loop-GIF export.
@@ -2792,6 +2794,14 @@ fn live_update_is_current(
 }
 
 impl DataMsg {
+    fn has_consumer(&self, views: &[MapView]) -> bool {
+        if matches!(self, Self::Prefetched { .. }) {
+            views.iter().any(|view| view.site.as_deref() == Some(self.site()))
+        } else {
+            views.get(self.view()).is_some_and(|view| view.site.as_deref() == Some(self.site()))
+        }
+    }
+
     fn view(&self) -> usize {
         match self {
             DataMsg::Head { view, .. }
@@ -3613,10 +3623,10 @@ pub struct HookEchoApp {
     /// Frame counter, only used to invalidate within-frame memos.
     frame_nr: u64,
     palette_cache: Option<(u64, std::sync::Arc<[PaletteEntry]>)>,
-    /// Visible city/town labels, keyed by the visible tile ids and the label-set generation.
+    /// Visible city/town labels, keyed by tile world copies and the label-set generation.
     #[allow(clippy::type_complexity)]
     vlabel_cache: Vec<Option<(
-        (Vec<crate::render::TileId>, u64),
+        (Vec<crate::render::VisibleTile>, u64),
         std::sync::Arc<[crate::vector_tiles::PlaceLabel]>,
     )>>,
     /// Last result of each per-volume detector, keyed by what it depends on (see `volume_key`).
@@ -3909,7 +3919,7 @@ pub struct HookEchoApp {
     sync_state: crate::cloud::SyncState,
     sync_login: Option<crate::cloud::Pending>,
     sync_status: String,
-    sync_rx: Option<std::sync::mpsc::Receiver<SyncMsg>>,
+    sync_session: crate::cloud::SyncSession,
     sync_checked: Option<wxdata::clock::Instant>,
     /// Position sharing (LAN broadcast + optional relay), started on first use.
     share: Option<crate::share::Share>,
@@ -4996,7 +5006,7 @@ impl HookEchoApp {
             sync_state: crate::cloud::SyncState::load(),
             sync_login: None,
             sync_status: String::new(),
-            sync_rx: None,
+            sync_session: crate::cloud::SyncSession::default(),
             sync_checked: None,
             share: None,
             peers: std::collections::HashMap::new(),
@@ -5303,28 +5313,7 @@ impl HookEchoApp {
             max_texture_dim,
             volume3d_supported,
         };
-        // Restore the overlays from last time, assigning rather than only ever switching on: the
-        // additive version could never turn a default-on layer off, so unchecking one lasted until
-        // the next restart and then came back. `None` is "no run has recorded this yet", where the
-        // built-in defaults still stand; a recorded list restores each optional layer. Tropical is always enabled.
-        //
-        // Unknown names (an older build reading a newer file) are skipped rather than treated as
-        // an error.
-        if let Some(saved) = app.settings.overlays_on.clone() {
-            let restore: Vec<OverlayToggle> = saved
-                .iter()
-                .filter_map(|s| OverlayToggle::from_slug(s))
-                .collect();
-            for t in OverlayToggle::ALL {
-                if t.session_only() {
-                    continue;
-                }
-                *app.overlay_flag(t) = t.enabled(restore.contains(&t));
-            }
-            // Whatever the outcome, the overlay set now differs from the one the constructor built,
-            // so the derived features have to be rebuilt from it once.
-            app.rebuild_overlays();
-        }
+        app.restore_overlay_settings();
         app.palettes.reload(&app.settings.palette_paths());
         crate::platform::set_background_alerts(app.settings.background_alerts);
         crate::platform::set_battery_saver(app.settings.battery_saver);
@@ -7234,6 +7223,7 @@ impl HookEchoApp {
 
     /// Load any marker icon files not yet in the texture cache (negative-cached on failure).
     fn load_marker_icons(&mut self, ctx: &egui::Context) {
+        self.marker_icon_tex.retain(|name, _| self.settings.markers.iter().any(|m| m.icon.as_ref() == Some(name)));
         let Some(dir) = crate::settings::Settings::marker_icons_dir() else {
             return;
         };
@@ -7245,11 +7235,12 @@ impl HookEchoApp {
             if self.marker_icon_tex.contains_key(name) {
                 continue;
             }
-            let tex = std::fs::read(dir.join(name))
+            let tex = crate::image_load::read(&dir.join(name))
                 .ok()
-                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                .and_then(|bytes| crate::image_load::decode(&bytes).ok())
                 .map(|img| {
-                    let rgba = img.to_rgba8();
+                    let side = ctx.input(|i| i.max_texture_side).min(96) as u32;
+                    let rgba = image::DynamicImage::ImageRgba8(img).thumbnail(side.max(1), side.max(1)).into_rgba8();
                     let size = [rgba.width() as usize, rgba.height() as usize];
                     let ci = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
                     ctx.load_texture(format!("marker-{name}"), ci, egui::TextureOptions::LINEAR)
@@ -7437,10 +7428,7 @@ impl HookEchoApp {
             self.settings.matrix_token.trim().to_string(),
         );
         if !hs.is_empty() && !room.is_empty() && !token.is_empty() {
-            let txn = wxdata::clock::SystemTime::now()
-                .duration_since(wxdata::clock::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
+            let txn = crate::notify::matrix_transaction_id();
             let url = crate::notify::matrix_url(&hs, &room, txn);
             let payload = crate::notify::matrix_body(&title, &body);
             self.spawner.spawn(async move {
@@ -7732,6 +7720,10 @@ impl HookEchoApp {
         style: crate::tiles::BasemapStyle,
     ) -> Option<chrono::DateTime<Utc>> {
         if !style.timed() {
+            if let Some(catalog) = self.goes.get_mut(idx) {
+                catalog.cancel_request();
+                catalog.style = None;
+            }
             return None;
         }
         if self.goes.len() <= idx {
@@ -7760,6 +7752,7 @@ impl HookEchoApp {
                 .requested_at
                 .is_none_or(|time| time.elapsed() >= std::time::Duration::from_secs(60));
         if changed || refresh {
+            catalog.cancel_request();
             catalog.style = Some(style);
             catalog.hour = hour;
             if changed {
@@ -7773,13 +7766,13 @@ impl HookEchoApp {
             let (tx, rx) = std::sync::mpsc::channel();
             catalog.rx = Some(rx);
             let http = self.http.clone();
-            self.spawner.spawn(async move {
+            catalog.abort = Some(self.spawner.spawn_abortable(async move {
                 let times = timed_imagery_catalog(
                     Duration::from_secs(60),
                     crate::tiles::fetch_frame_times(&http, style, from, to, 48),
                 ).await;
                 let _ = tx.send(times);
-            });
+            }));
         }
         if style.ndfd_layer().is_some() {
             self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
@@ -7877,19 +7870,19 @@ impl HookEchoApp {
         self.spawner.spawn(crate::chase::warm(site, self.settings.radar_feed.provider()));
     }
 
-    /// Start the Google sign-in: bind a loopback port, send the browser to Google, and wait for
-    /// the redirect to come back with a code.
+    /// Start sign-in with a fresh inbox; results from any prior account are discarded.
     fn sync_sign_in(&mut self) {
         let id = self.settings.sync_client_id.trim().to_string();
         if id.is_empty() {
             self.sync_status = "Add your OAuth client id first (see docs/sync.md)".into();
             return;
         }
+        self.sync_session.cancel();
+        self.sync_login = None;
         match crate::cloud::start_login(&id) {
             Ok(pending) => {
                 self.sync_status = match crate::platform::open_url(&pending.url) {
                     Ok(()) => "Finish in the browser window that just opened…".into(),
-                    // No browser we could launch — the URL is on screen with a Copy button.
                     Err(e) => format!("Open the sign-in link below ({e})"),
                 };
                 self.sync_login = Some(pending);
@@ -7898,174 +7891,144 @@ impl HookEchoApp {
         }
     }
 
-    /// Watch the loopback listener for the redirect, then swap the code for tokens.
     fn poll_login(&mut self) {
-        let Some(code) = self.sync_login.as_ref().and_then(|p| p.rx.try_recv().ok()) else {
-            return;
-        };
-        let Some(pending) = self.sync_login.take() else {
-            return;
-        };
+        let Some(code) = self.sync_login.as_ref().and_then(|p| p.rx.try_recv().ok()) else { return };
+        let Some(pending) = self.sync_login.take() else { return };
         let code = match code {
             Ok(c) => c,
-            Err(e) => {
-                self.sync_status = format!("Sign-in failed: {e}");
-                return;
-            }
+            Err(e) => { self.sync_status = format!("Sign-in failed: {e}"); return; }
         };
         let (id, secret) = (
             self.settings.sync_client_id.trim().to_string(),
             self.settings.sync_client_secret.trim().to_string(),
         );
         let (tx, rx) = std::sync::mpsc::channel();
-        self.sync_rx = Some(rx);
         self.sync_status = "Finishing sign-in…".into();
-        self.spawner.spawn(async move {
-            let msg = match crate::cloud::exchange(
-                &id,
-                &secret,
-                &code,
-                &pending.verifier,
-                &pending.redirect,
-            )
-            .await
-            {
-                Ok(t) => {
-                    t.save();
-                    SyncMsg::Signed(t)
-                }
+        let abort = self.spawner.spawn_abortable(async move {
+            let msg = match crate::cloud::exchange(&id, &secret, &code, &pending.verifier, &pending.redirect).await {
+                Ok(t) => SyncMsg::Signed(t),
                 Err(e) => SyncMsg::Error(e),
             };
             let _ = tx.send(msg);
         });
+        self.sync_session.start(rx, abort);
     }
 
-    /// Forget the tokens (and the bookkeeping, so a later sign-in starts clean). The Drive copy
-    /// is left alone — signing out of a laptop should not wipe the phone's settings.
     fn sync_sign_out(&mut self) {
+        self.sync_session.cancel();
+        self.sync_login = None;
         crate::cloud::Tokens::forget();
         self.sync_tokens = None;
-        self.sync_login = None;
+        self.sync_checked = None;
         self.sync_state = crate::cloud::SyncState::default();
         self.sync_state.save();
         self.sync_status = "Signed out".into();
     }
 
-    /// One sync pass: refresh the token, look at what Drive has, and push or pull accordingly.
-    fn sync_now(&mut self) {
+    fn sync_now(&mut self) { self.sync_start(false); }
+
+    /// Forced push is only the explicit "Keep this device" conflict choice. Capture the current
+    /// settings here, including any edits made while the conflict dialog was open.
+    fn sync_start(&mut self, keep_device: bool) {
+        if self.sync_session.busy() || self.sync_login.is_some()
+            || (self.sync_session.conflict.is_some() && !keep_device) { return; }
         let Some(tokens) = self.sync_tokens.clone() else {
-            self.sync_status = "Not signed in".into();
-            return;
+            self.sync_status = "Not signed in".into(); return;
         };
-        let local = match serde_json::to_value(&self.settings) {
-            Ok(v) => v,
-            Err(e) => {
-                self.sync_status = format!("Sync failed: {e}");
-                return;
-            }
+        self.sync_checked = Some(wxdata::clock::Instant::now());
+        let started_revision = match crate::cloud::settings_revision(&self.settings) {
+            Ok(revision) => revision,
+            Err(e) => { self.sync_status = format!("Sync failed: {e}"); return; }
         };
-        let share = crate::cloud::shareable(&local);
-        let hash = crate::cloud::hash(&share);
-        let body = serde_json::to_string_pretty(&share).unwrap_or_default();
+        let settings = self.settings.clone();
         let st = self.sync_state.clone();
         let (id, secret) = (
             self.settings.sync_client_id.trim().to_string(),
             self.settings.sync_client_secret.trim().to_string(),
         );
         let (tx, rx) = std::sync::mpsc::channel();
-        self.sync_rx = Some(rx);
         self.sync_checked = Some(wxdata::clock::Instant::now());
         self.sync_status = "Syncing…".into();
-        self.spawner.spawn(async move {
+        let abort = self.spawner.spawn_abortable(async move {
+            let (body, hash) = match crate::cloud::settings_snapshot(&settings) {
+                Ok(prepared) => prepared,
+                Err(e) => { let _ = tx.send(SyncMsg::Error(e)); return; }
+            };
             let mut tokens = tokens;
             let access = match crate::cloud::access_token(&id, &secret, &mut tokens).await {
                 Ok(a) => a,
-                Err(e) => {
-                    let _ = tx.send(SyncMsg::Error(e));
-                    return;
-                }
+                Err(e) => { let _ = tx.send(SyncMsg::Error(e)); return; }
             };
-            let _ = tx.send(SyncMsg::Signed(tokens));
+            if tx.send(SyncMsg::Signed(tokens)).is_err() { return; }
             let remote = match crate::cloud::fetch(&access).await {
                 Ok(r) => r,
-                Err(e) => {
-                    let _ = tx.send(SyncMsg::Error(e));
-                    return;
-                }
+                Err(e) => { let _ = tx.send(SyncMsg::Error(e)); return; }
             };
-            let local_changed = hash != st.local_hash;
-            let remote_changed = remote
-                .as_ref()
-                .is_some_and(|r| r.modified != st.remote_modified);
-            let action = crate::cloud::decide(local_changed, remote_changed, remote.is_some());
+            let remote_changed = remote.as_ref().is_some_and(|r| r.modified != st.remote_modified);
+            let action = if keep_device { crate::cloud::Action::Push }
+                else { crate::cloud::decide(hash != st.local_hash, remote_changed, remote.is_some()) };
             let msg = match (action, remote) {
-                (crate::cloud::Action::Push, r) => {
-                    match crate::cloud::push(&access, r.as_ref().map(|r| r.id.as_str()), body).await
-                    {
+                (crate::cloud::Action::Push, remote) => {
+                    match crate::cloud::push(&access, remote.as_ref().map(|r| r.id.as_str()), body).await {
                         Ok(modified) => SyncMsg::Pushed { modified, hash },
                         Err(e) => SyncMsg::Error(e),
                     }
                 }
-                (crate::cloud::Action::Pull, Some(r)) => SyncMsg::Pulled {
-                    body: r.body,
-                    modified: r.modified,
-                },
-                (crate::cloud::Action::Conflict, Some(r)) => {
-                    let _ = tx.send(SyncMsg::Conflict);
-                    SyncMsg::Pulled {
-                        body: r.body,
-                        modified: r.modified,
+                (crate::cloud::Action::Pull | crate::cloud::Action::Conflict, Some(remote)) => {
+                    match crate::cloud::pulled_hash(&settings, &remote.body) {
+                        Ok(hash) => SyncMsg::Pulled {
+                            remote, started_revision, conflict: action == crate::cloud::Action::Conflict,
+                            hash, resolve_conflict: false,
+                        },
+                        Err(e) => SyncMsg::Error(e),
                     }
-                }
+                },
                 _ => SyncMsg::UpToDate,
             };
             let _ = tx.send(msg);
         });
+        self.sync_session.start(rx, abort);
     }
 
-    /// How often a signed-in, sync-enabled app checks Drive on its own.
     const SYNC_SECS: u64 = 300;
 
-    /// Apply whatever the sync worker sent, and start a pass when one is due.
-    fn poll_sync(&mut self) {
+    fn poll_sync(&mut self, ctx: &egui::Context) {
         self.poll_login();
-        while let Some(msg) = self.sync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        while let Some(msg) = self.sync_session.next_message() {
             match msg {
                 SyncMsg::Signed(t) => {
                     let first = self.sync_tokens.is_none();
+                    // Only this active inbox can persist credentials. Sign-out drops it first.
+                    t.save();
                     self.sync_tokens = Some(t);
                     if first {
-                        self.sync_login = None;
                         self.settings.sync_enabled = true;
+                        self.sync_checked = None;
                         self.sync_status = "Signed in".into();
-                        self.sync_now();
                     }
                 }
-                SyncMsg::Pulled { body, modified } => match self.apply_synced(&body) {
-                    Ok(hash) => {
-                        self.sync_state = crate::cloud::SyncState {
-                            remote_modified: modified,
-                            local_hash: hash,
-                            last_sync: crate::share::now(),
-                        };
-                        self.sync_state.save();
-                        if self.sync_status != "Kept the synced copy (both sides had edits)" {
-                            self.sync_status = "Settings pulled from Drive".into();
+                SyncMsg::Pulled { remote, started_revision, conflict, hash, resolve_conflict } => {
+                    let current = crate::cloud::settings_revision(&self.settings);
+                    match current {
+                        Ok(current) => {
+                            if resolve_conflict && current == started_revision && !conflict {
+                                self.sync_apply_remote(&remote, hash, ctx);
+                            } else if let Some(remote) = self.sync_session.receive_pull(remote, started_revision, current, conflict) {
+                                self.sync_apply_remote(&remote, hash, ctx);
+                            } else {
+                                self.sync_status = "Settings changed on both sides. Choose which copy to keep.".into();
+                            }
                         }
+                        Err(e) => self.sync_status = format!("Sync failed: {e}"),
                     }
-                    Err(e) => self.sync_status = format!("Sync failed: {e}"),
-                },
+                }
                 SyncMsg::Pushed { modified, hash } => {
                     self.sync_state = crate::cloud::SyncState {
-                        remote_modified: modified,
-                        local_hash: hash,
-                        last_sync: crate::share::now(),
+                        remote_modified: modified, local_hash: hash, last_sync: crate::share::now(),
                     };
                     self.sync_state.save();
+                    self.sync_session.conflict = None;
                     self.sync_status = "Settings pushed to Drive".into();
-                }
-                SyncMsg::Conflict => {
-                    self.sync_status = "Kept the synced copy (both sides had edits)".into();
                 }
                 SyncMsg::UpToDate => {
                     self.sync_state.last_sync = crate::share::now();
@@ -8075,30 +8038,58 @@ impl HookEchoApp {
                 SyncMsg::Error(e) => self.sync_status = format!("Sync failed: {e}"),
             }
         }
-        // Periodic pass, plus the one at startup (`sync_checked` starts unset).
-        if self.settings.sync_enabled
-            && self.sync_tokens.is_some()
-            && self
-                .sync_checked
-                .is_none_or(|t| t.elapsed().as_secs() >= Self::SYNC_SECS)
-        {
+        if self.settings.sync_enabled && self.sync_tokens.is_some()
+            && self.sync_checked.is_none_or(|t| t.elapsed().as_secs() >= Self::SYNC_SECS) {
             self.sync_now();
         }
     }
 
-    /// Replace the settings with the synced ones, keeping this machine's own fields, and persist.
-    /// Returns the hash the sync bookkeeping should record.
-    fn apply_synced(&mut self, body: &str) -> Result<u64, String> {
+    fn sync_use_drive(&mut self) {
+        if self.sync_session.busy() || self.sync_tokens.is_none() { return; }
+        let Some(remote) = self.sync_session.conflict.clone() else { return };
+        let started_revision = match crate::cloud::settings_revision(&self.settings) {
+            Ok(revision) => revision,
+            Err(e) => { self.sync_status = format!("Sync failed: {e}"); return; }
+        };
+        let settings = self.settings.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.sync_status = "Preparing Drive settings…".into();
+        let abort = self.spawner.spawn_abortable(async move {
+            let msg = match crate::cloud::pulled_hash(&settings, &remote.body) {
+                Ok(hash) => SyncMsg::Pulled { remote, started_revision, conflict: false, hash, resolve_conflict: true },
+                Err(e) => SyncMsg::Error(e),
+            };
+            let _ = tx.send(msg);
+        });
+        self.sync_session.start(rx, abort);
+    }
+
+    fn sync_apply_remote(&mut self, remote: &crate::cloud::Remote, hash: u64, ctx: &egui::Context) {
+        match self.apply_synced(&remote.body, ctx) {
+            Ok(()) => {
+                self.sync_state = crate::cloud::SyncState {
+                    remote_modified: remote.modified.clone(), local_hash: hash, last_sync: crate::share::now(),
+                };
+                self.sync_state.save();
+                self.sync_session.conflict = None;
+                self.sync_status = "Settings pulled from Drive".into();
+            }
+            Err(e) => self.sync_status = format!("Sync failed: {e}"),
+        }
+    }
+
+    fn apply_synced(&mut self, body: &str, ctx: &egui::Context) -> Result<(), String> {
         let local = serde_json::to_value(&self.settings).map_err(|e| e.to_string())?;
         let merged = crate::cloud::merge_in(&local, body)?;
-        let settings: crate::settings::Settings =
-            serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        let settings: crate::settings::Settings = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        settings.save_checked()?;
         self.settings = settings;
-        self.settings.save();
-        let hash = crate::cloud::hash(&crate::cloud::shareable(
-            &serde_json::to_value(&self.settings).map_err(|e| e.to_string())?,
-        ));
-        Ok(hash)
+        self.restore_overlay_settings();
+        self.palettes.reload(&self.settings.palette_paths());
+        self.sync_placefiles(ctx);
+        crate::platform::set_battery_saver(self.settings.battery_saver);
+        self.settings_checked = None;
+        Ok(())
     }
 
     /// How often our own fix goes out on both transports. Fast enough to follow a chase vehicle,
@@ -10500,6 +10491,17 @@ impl HookEchoApp {
         }
     }
 
+    /// Startup and bundle import must update the flags before dirty-diff writes them back.
+    fn restore_overlay_settings(&mut self) {
+        let saved = self.settings.overlays_on.clone();
+        for toggle in OverlayToggle::ALL {
+            if let Some(enabled) = toggle.restored(saved.as_deref()) {
+                *self.overlay_flag(toggle) = enabled;
+            }
+        }
+        self.rebuild_overlays();
+    }
+
     /// Run one registry action. Every surface (drawer, pills, mobile sheets) routes through it.
     pub(crate) fn apply_palette(&mut self, action: PaletteAction, ctx: &egui::Context) {
         self.record_interaction(match &action {
@@ -12055,7 +12057,7 @@ impl HookEchoApp {
                 log::info!("camera {cam_id} has no recent image");
                 return;
             };
-            match fetch_icon_sheet(&http, &url).await {
+            match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), false).await {
                 Ok(image) => {
                     let _ = tx.send((key, image));
                     ctx2.request_repaint();
@@ -12088,7 +12090,7 @@ impl HookEchoApp {
         let (http, tx, ctx2) = (self.http.clone(), self.pf_icon_tx.clone(), ctx.clone());
         self.spawner.spawn(async move {
             match wxdata::webcams::latest_image(&http, cam_id).await {
-                Ok(Some(url)) => match fetch_icon_sheet(&http, &url).await {
+                Ok(Some(url)) => match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), false).await {
                     Ok(image) => {
                         let _ = tx.send((key, image));
                         ctx2.request_repaint();
@@ -12213,7 +12215,7 @@ impl HookEchoApp {
         let separator = if url.contains('?') { '&' } else { '?' };
         let request_url = format!("{url}{separator}he_still={}", Utc::now().timestamp() / 60);
         self.spawner.spawn(async move {
-            match crate::stationlayer::fetch_image(&http, &request_url).await {
+            match crate::stationlayer::fetch_image(&http, &request_url, ctx2.input(|i| i.max_texture_side)).await {
                 Ok(image) => {
                     let _ = tx.send((key, image));
                     ctx2.request_repaint();
@@ -12365,7 +12367,7 @@ impl HookEchoApp {
         let tx = self.pf_icon_tx.clone();
         let ctx2 = ctx.clone();
         self.spawner.spawn(async move {
-            match fetch_icon_sheet(&http, &url).await {
+            match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), false).await {
                 Ok(image) => {
                     let _ = tx.send((key, image));
                     ctx2.request_repaint();
@@ -12835,7 +12837,7 @@ impl HookEchoApp {
             let tx = self.pf_icon_tx.clone();
             let ctx2 = ctx.clone();
             self.spawner.spawn(async move {
-                match fetch_icon_sheet(&http, &url).await {
+                match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), true).await {
                     Ok(image) => {
                         let _ = tx.send((url, image));
                         ctx2.request_repaint();
@@ -13136,7 +13138,7 @@ impl HookEchoApp {
                 }
                 continue;
             }
-            if idx >= self.views.len() || self.views[idx].site.as_deref() != Some(msg.site()) {
+            if !msg.has_consumer(&self.views) {
                 continue; // view gone or its site changed since the fetch spawned
             }
             let msg = match msg {
@@ -13746,9 +13748,9 @@ impl HookEchoApp {
                     .map(|id| id.name().to_string())
                     .is_some_and(|n| {
                         !self.scan_cache.contains(&n)
-                            && book(&self.prefetching).get(&n).is_some_and(|at| {
+                            && book(&self.prefetching).get(&n).is_some_and(|job| {
                                 // Bounded: a fetch that never answers must not park the loop.
-                                at.elapsed() < std::time::Duration::from_secs(8)
+                                job.started.elapsed() < std::time::Duration::from_secs(8)
                             })
                     })
         };
@@ -13982,7 +13984,7 @@ impl HookEchoApp {
         // task is genuinely gone. At 15 s it reaped entries whose download was still running,
         // and every tick after that started the same download again.
         book(&self.prefetching)
-            .retain(|_, at| at.elapsed() < VOLUME_TIMEOUT + std::time::Duration::from_secs(15));
+            .retain(|_, job| job.started.elapsed() < VOLUME_TIMEOUT + std::time::Duration::from_secs(15));
         if book(&self.prefetching).len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
@@ -14009,13 +14011,15 @@ impl HookEchoApp {
         if self.scan_cache.contains(&name) || book(&self.prefetching).contains_key(&name) {
             return;
         }
-        book(&self.prefetching).insert(name, Instant::now());
+        let mut request = crate::frame_request::Request::default();
+        let generation = request.start(name.clone());
+        book(&self.prefetching).insert(name.clone(), Prefetch { started: Instant::now(), site: site.to_string(), request });
         let tx = self.msg_tx.clone();
         let (site, ctx) = (site.to_string(), ctx.clone());
         let http = self.http.clone();
         let view = idx;
         let slot = self.prefetching.clone();
-        self.spawner.spawn(async move {
+        let handle = self.spawner.spawn_abortable(async move {
             let name = id.name().to_string();
             let fetched = wxdata::task::timeout(
                 VOLUME_TIMEOUT,
@@ -14043,9 +14047,17 @@ impl HookEchoApp {
             }
             // Whatever happened, this slot is free: the message above may be dropped as stale
             // (the site changed under it) and the book must not depend on it arriving.
-            book(&slot).remove(&name);
+            let mut jobs = book(&slot);
+            if jobs.get(&name).is_some_and(|job| job.request.matches(&name, generation)) {
+                jobs.remove(&name);
+            }
+            drop(jobs);
             ctx.request_repaint();
         });
+        let mut jobs = book(&self.prefetching);
+        if let Some(job) = jobs.get_mut(&name).filter(|job| job.request.matches(&name, generation)) {
+            job.request.attach(generation, handle);
+        } else { handle.abort(); }
     }
 
     /// Fill the loop window *backwards* from the head, for browser auto-play and its growing tail.
@@ -14060,7 +14072,7 @@ impl HookEchoApp {
             return;
         }
         book(&self.prefetching)
-            .retain(|_, at| at.elapsed() < VOLUME_TIMEOUT + std::time::Duration::from_secs(15));
+            .retain(|_, job| job.started.elapsed() < VOLUME_TIMEOUT + std::time::Duration::from_secs(15));
         if book(&self.prefetching).len() >= MAX_PREFETCH_INFLIGHT {
             return;
         }
@@ -15808,25 +15820,21 @@ impl HookEchoApp {
             (Vec::new(), labels, Vec::new())
         } else {
             let vis = self.pane_vtiles[idx].request_view(&cam, vp, self.gesture_live, if self.adaptive.reduced && self.settings.map_quality == crate::settings::MapQuality::Auto { crate::settings::MapQuality::Performance } else { self.settings.map_quality });
-            let ids: Vec<crate::render::TileId> = vis.iter().map(|v| v.id).collect();
             // Deep-copying every visible place name every frame (for every pane) showed up at the
             // 4-10 fps the phone runs at. The set only changes when the visible tiles do, or when
             // a tile's labels finish tessellating — both bump the key below.
-            // Compared before it is built: the key holds a `Vec` of every visible tile id, and
+            // Compared before it is built: the key holds every visible tile and world copy, and
             // cloning it to ask "did this change" was itself a per-pane, per-frame allocation.
             let gen = self.pane_vtiles[idx].label_generation();
             let stale = self
                 .vlabel_cache[idx]
                 .as_ref()
-                .is_none_or(|((k_ids, k_gen), _)| *k_gen != gen || *k_ids != ids);
+                .is_none_or(|((k_tiles, k_gen), _)| *k_gen != gen || *k_tiles != vis);
             if stale {
                 let labels: std::sync::Arc<[crate::vector_tiles::PlaceLabel]> = self
                     .pane_vtiles[idx]
-                    .labels_for(ids.iter())
-                    .into_iter()
-                    .cloned()
-                    .collect();
-                self.vlabel_cache[idx] = Some(((ids.clone(), gen), labels));
+                    .labels_for_view(&vis).into();
+                self.vlabel_cache[idx] = Some(((vis.clone(), gen), labels));
             }
             // An `Arc` handle, not a deep copy of every visible place name — the cache existed to
             // stop the *lookup* running every frame, but the copy it returned survived it.
@@ -15835,10 +15843,10 @@ impl HookEchoApp {
                 .as_ref()
                 .map(|(_, l)| l.clone())
                 .unwrap_or_else(|| Vec::new().into());
-            (if is_vector { ids } else { Vec::new() }, labels, vis)
+            (if is_vector { vis.clone() } else { Vec::new() }, labels, vis)
         };
-        // Raster eviction waits for every pane. Styled vector caches belong to one pane,
-        // so their eviction and ready uploads can run independently.
+        // Raster relevance and eviction need the union of this frame's pane covers.
+        let new_tiles = if last { self.tiles.drain_ready_for_frame(&mut self.map_upload_budget) } else { Vec::new() };
         let drop_tiles = if last {
             self.tiles.evict_excess()
         } else {
@@ -15848,7 +15856,6 @@ impl HookEchoApp {
             self.pane_vtiles[idx].touch_visible(&visible_vector_tiles);
             self.pane_vtiles[idx].take_evicted()
         };
-        let new_tiles = if first { self.tiles.drain_ready_budget(&mut self.map_upload_budget) } else { Vec::new() };
         let upload_turn = !self.gesture_live || chrome::compact(ctx)
             || idx == self.frame_nr as usize % self.views.len();
         let new_vector_tiles = if upload_turn {
@@ -15960,7 +15967,7 @@ impl HookEchoApp {
                 pane: idx, frame: self.frame_nr, camera: cam, viewport: vp,
                 scroll: ctx.input(|i| i.smooth_scroll_delta.y),
                 pinch: ctx.input(|i| i.zoom_delta()), moving: self.gesture_live,
-                tile_zoom: visible_vector.first().map_or(0, |id| id.0),
+                tile_zoom: visible_vector.first().map_or(0, |tile| tile.id.0),
                 vector_uploads: new_vector_tiles.len(), raster_uploads: new_tiles.len(),
                 labels: vlabels.len(), prepare_ms: started.elapsed().as_secs_f32() * 1000.0,
             });
@@ -16321,7 +16328,7 @@ impl HookEchoApp {
             let label_key = |l: &crate::vector_tiles::PlaceLabel| {
                 let key = crate::labelplace::key(&l.name);
                 if repeat_shields && l.shield != crate::vector_tiles::RoadShield::None {
-                    key ^ ((l.world[0].to_bits() as u64) << 32) ^ l.world[1].to_bits() as u64
+                    key ^ l.world[0].to_bits().rotate_left(32) ^ l.world[1].to_bits()
                 } else {
                     key
                 }
@@ -16363,7 +16370,7 @@ impl HookEchoApp {
                 {
                     continue;
                 }
-                let (sx, sy) = cam.world_to_screen((l.world[0] as f64, l.world[1] as f64), vp);
+                let (sx, sy) = cam.world_to_screen((l.world[0], l.world[1]), vp);
                 let p = egui::pos2(prect.left() + sx, prect.top() + sy);
                 if !prect.contains(p) {
                     continue;
@@ -20406,6 +20413,7 @@ impl HookEchoApp {
             ui.scope(|ui| {
                 if ui
                     .button("Save settings backup…")
+                    .named("Save settings backup")
                     .on_hover_text("Save settings + color tables to a portable bundle")
                     .clicked()
                 {
@@ -20413,6 +20421,7 @@ impl HookEchoApp {
                 }
                 if ui
                     .button("Restore settings backup…")
+                    .named("Restore settings backup")
                     .on_hover_text("Load a settings bundle from another machine")
                     .clicked()
                 {
@@ -20539,6 +20548,10 @@ impl HookEchoApp {
                 }
             })
         };
+        let result = result.and_then(|rows| {
+            crate::dialog::finish_save(&path).map_err(anyhow::Error::msg)?;
+            Ok(rows)
+        });
         match result {
             Ok(Some(rows)) => self.toast(ToastKind::Success, format!("Exported {rows} native values")),
             Ok(None) => self.toast(ToastKind::Success, "Exported native-value field"),
@@ -20888,7 +20901,7 @@ impl HookEchoApp {
     fn apply_import(&mut self, import: crate::dialog::Import, ctx: &egui::Context) {
         use crate::dialog::ImportKind as K;
         match import.kind {
-            K::SettingsBundle => self.apply_settings_bundle(&import),
+            K::SettingsBundle => self.apply_settings_bundle(&import, ctx),
             K::Palette if import.tag == crate::ui::palette_editor::EDITOR_TAG => {
                 match import.text() {
                     Ok(text) => self.palette_editor.pending_import = Some(text),
@@ -21036,7 +21049,8 @@ impl HookEchoApp {
                     idx.and_then(|i| self.settings.markers.get_mut(i)),
                     crate::ui::marker_window::store_icon(&import.path),
                 ) {
-                    (Some(m), Some(name)) => m.icon = Some(name),
+                    (Some(m), Ok(name)) => m.icon = Some(name),
+                    (_, Err(error)) => self.toast(ToastKind::Error, format!("Icon import failed: {error}")),
                     _ => log::warn!("marker icon import went nowhere (marker {})", import.tag),
                 }
             }
@@ -21058,13 +21072,19 @@ impl HookEchoApp {
     }
 
     /// Apply a settings bundle the user picked.
-    fn apply_settings_bundle(&mut self, import: &crate::dialog::Import) {
+    fn apply_settings_bundle(&mut self, import: &crate::dialog::Import, ctx: &egui::Context) {
         match import
             .text()
             .and_then(|s| crate::settings::Settings::import_bundle(&s))
         {
             Ok(settings) => {
                 self.settings = settings;
+                self.restore_overlay_settings();
+                self.palettes.reload(&self.settings.palette_paths());
+                self.sync_placefiles(ctx);
+                crate::platform::set_background_alerts(self.settings.background_alerts);
+                crate::platform::set_battery_saver(self.settings.battery_saver);
+                self.settings_checked = None;
                 self.toast(ToastKind::Success, "Settings imported. Review and enable imported plugins in Layers.");
             }
             Err(e) => {
@@ -21302,7 +21322,7 @@ impl HookEchoApp {
                     zoom: le.zoom,
                 },
                 &le.sources,
-            )
+            ).and_then(|()| crate::dialog::finish_save(&le.dest).map(|_| ()).map_err(anyhow::Error::msg))
         });
         match res {
             Ok(()) => {
@@ -21765,10 +21785,12 @@ impl HookEchoApp {
                     for px in &image.pixels {
                         rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
                     }
-                    match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
-                        Ok(()) => {
+                    match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8)
+                        .map_err(|error| error.to_string())
+                        .and_then(|()| crate::dialog::finish_save(&path)) {
+                        Ok(where_) => {
                             log::info!("screenshot saved: {}", path.display());
-                            let msg = format!("Saved {}", path.display());
+                            let msg = format!("Saved to {where_}");
                             self.toast(ToastKind::Success, msg);
                         }
                         Err(e) => {
@@ -22500,43 +22522,24 @@ fn icon_sheet_cache_path(url: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Download and decode a placefile icon sheet (PNG/GIF) into an egui image.
-async fn fetch_icon_sheet(http: &reqwest::Client, url: &str) -> anyhow::Result<egui::ColorImage> {
-    // Read-through disk cache, same shape as the basemap tiles: an icon sheet is a few KB of PNG
-    // that never changes, and re-fetching every placefile's sheet at every startup is the kind of
-    // traffic somebody else's web host notices. A corrupt file simply fails to decode and is
-    // refetched. Nothing on the web, where `cache_dir()` is None.
+async fn fetch_icon_sheet(http: &reqwest::Client, url: &str, max_side: usize, sprite: bool) -> anyhow::Result<egui::ColorImage> {
     let cached = icon_sheet_cache_path(url);
-    let hit = cached
-        .as_ref()
-        .and_then(|p| std::fs::read(p).ok())
-        .and_then(|b| image::load_from_memory(&b).ok());
-    let img = match hit {
-        Some(img) => img.to_rgba8(),
+    let hit = cached.as_ref()
+        .and_then(|path| crate::image_load::read(path).ok())
+        .and_then(|bytes| crate::image_load::decode(&bytes).ok());
+    let image = match hit {
+        Some(image) => image,
         None => {
-            // Generic web hosts, so use the browser-ish UA the tile fetches already send.
-            let bytes = http
-                .get(url)
-                .header("User-Agent", crate::tiles::USER_AGENT)
-                .send()
-                .await?
-                .error_for_status()?
-                .bytes()
-                .await?;
-            let img = image::load_from_memory(&bytes)?.to_rgba8();
+            let bytes = crate::image_load::fetch(http, url).await?;
+            let image = crate::image_load::decode(&bytes)?;
             if let Some(path) = &cached {
-                if let Some(dir) = path.parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                }
+                if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
                 let _ = std::fs::write(path, &bytes);
             }
-            img
+            image
         }
     };
-    let (w, h) = img.dimensions();
-    Ok(egui::ColorImage::from_rgba_unmultiplied(
-        [w as usize, h as usize],
-        img.as_raw(),
-    ))
+    crate::image_load::color(image, max_side, sprite)
 }
 
 fn rgba32(c: [u8; 4]) -> egui::Color32 {
@@ -23232,8 +23235,9 @@ impl eframe::App for HookEchoApp {
         self.drive_loop_export(ctx);
         self.apply_chase();
         self.sync_share(ctx);
-        self.poll_sync();
+        self.poll_sync(ctx);
         self.sync_forecast_scrub();
+        retain_prefetch_sites(&mut book(&self.prefetching), self.views.iter().filter_map(|view| view.site.as_deref()));
         self.poll_messages();
         self.poll_overlays();
         // Time-machine warnings + storm reports: swap in archived sets while scrubbed.
@@ -24183,6 +24187,8 @@ impl eframe::App for HookEchoApp {
             status: &self.sync_status,
             login_url: self.sync_login.as_ref().map(|p| p.url.as_str()),
             last_sync: self.sync_state.last_sync,
+            busy: self.sync_session.busy(),
+            conflict: self.sync_session.conflict.is_some(),
         };
         let previous_optional_alerts = self.settings_window.open.then(|| self.settings.optional_alert_events.clone());
         let sync_action = self.settings_window.show(
@@ -24215,6 +24221,8 @@ impl eframe::App for HookEchoApp {
             Some(ui::settings_window::SyncAction::SignIn) => self.sync_sign_in(),
             Some(ui::settings_window::SyncAction::SignOut) => self.sync_sign_out(),
             Some(ui::settings_window::SyncAction::SyncNow) => self.sync_now(),
+            Some(ui::settings_window::SyncAction::KeepDevice) => self.sync_start(true),
+            Some(ui::settings_window::SyncAction::UseDrive) => self.sync_use_drive(),
             None => {}
         }
         let pf_status: Vec<ui::placefile_window::PlacefileStatus> = self
@@ -25377,7 +25385,7 @@ impl eframe::App for HookEchoApp {
         }
         if due && self.settings != self.saved {
             // A palette-map change reloads the color tables (bumps gen -> LUT re-bake).
-            if self.settings.palettes != self.saved.palettes {
+            if self.settings.palettes != self.saved.palettes || self.settings.web_files != self.saved.web_files {
                 self.palettes.reload(&self.settings.palette_paths());
             }
             match self.settings.save_checked() {
@@ -25821,6 +25829,27 @@ mod warning_scope_tests {
 
 #[cfg(test)]
 mod tropical_click_tests {
+    #[test]
+    fn imported_overlays_replace_live_choices_and_survive_the_save_sweep() {
+        use super::OverlayToggle as T;
+        let imported = vec!["Metar".into(), "FutureLayer".into(), "LinkCameras".into()];
+        let persisted: Vec<_> = T::ALL.into_iter()
+            .filter(|toggle| toggle.restored(Some(&imported)) == Some(true))
+            .map(T::slug).collect();
+        assert!(persisted.contains(&"Metar".into()));
+        assert!(persisted.contains(&"Tropical".into()));
+        assert!(!persisted.contains(&"Alerts".into()));
+        assert!(!persisted.contains(&"LinkCameras".into()));
+        for toggle in T::ALL {
+            assert_eq!(toggle.restored(Some(&imported)), toggle.restored(Some(&persisted)));
+        }
+        assert_eq!(T::Alerts.restored(None), Some(true));
+        assert_eq!(T::Alerts.restored(Some(&[])), Some(false));
+        assert_eq!(T::Metar.restored(None), Some(false));
+        assert_eq!(T::Tropical.restored(Some(&[])), Some(true));
+        assert_eq!(T::LinkCameras.restored(Some(&imported)), None);
+    }
+
     #[test]
     fn tropical_survives_saved_layouts_and_toggle_actions() {
         use super::OverlayToggle as T;
@@ -26592,6 +26621,41 @@ mod tests {
     /// Scrubbing reverses constantly, so the paused set has to reach backwards as well; playback
     /// only ever goes forward. Nearest frames come first either way, because the in-flight budget
     /// usually runs out before the list does.
+    #[test]
+    fn prefetched_result_survives_origin_pane_change_only_for_remaining_consumers() {
+        let camera = super::Camera::at_lonlat(-97.0, 35.0, 8.0);
+        let mut views = vec![super::MapView::new(Some("KFWS".into()), camera), super::MapView::new(Some("KTLX".into()), camera)];
+        let scan = super::level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap();
+        let msg = super::DataMsg::Prefetched { view: 5, site: "KTLX".into(), name: "frame".into(), scan };
+        assert!(msg.has_consumer(&views), "a closed origin pane must not discard a peer's cache fill");
+        views[1].site = Some("KFWS".into());
+        assert!(!msg.has_consumer(&views), "obsolete results are not retained");
+        let error = super::DataMsg::Error { view: 0, site: "KTLX".into(), err: "old request".into() };
+        views[1].site = Some("KTLX".into());
+        assert!(!error.has_consumer(&views), "foreground errors still belong only to their origin pane");
+    }
+
+    #[test]
+    fn prefetch_cancel_keeps_shared_stations_and_releases_obsolete_slots() {
+        let mut jobs = super::PrefetchBook::new();
+        let mut handles = Vec::new();
+        for site in ["KTLX", "KFWS"] {
+            let mut request = crate::frame_request::Request::default();
+            let generation = request.start(site.into());
+            let (handle, _) = futures_util::future::AbortHandle::new_pair();
+            request.attach(generation, handle.clone());
+            handles.push(handle);
+            jobs.insert(site.into(), super::Prefetch { started: super::Instant::now(), site: site.into(), request });
+        }
+        super::retain_prefetch_sites(&mut jobs, ["KFWS", "KFWS"].into_iter());
+        assert!(handles[0].is_aborted(), "leaving a station cancels its download/decode future");
+        assert!(!handles[1].is_aborted(), "another pane still needs this station");
+        assert_eq!(jobs.len(), 1, "obsolete downloads release their slots immediately");
+        super::retain_prefetch_sites(&mut jobs, std::iter::empty());
+        assert!(handles[1].is_aborted());
+        assert!(jobs.is_empty());
+    }
+
     #[test]
     fn prefetch_reaches_backwards_only_when_paused() {
         let playing = super::prefetch_offsets(true);

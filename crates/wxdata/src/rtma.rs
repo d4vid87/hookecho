@@ -275,10 +275,7 @@ pub async fn fetch_analysis(
     valid: DateTime<Utc>,
 ) -> anyhow::Result<FieldFrame> {
     let (cached, source_identity) = fetch_message(http, source, field, valid).await?;
-    let mut grid = crate::task::guarded(|| {
-        crate::hrrr::decode_regrid_at_resolution(&cached.bytes, 0.03, f64::NEG_INFINITY)
-    })
-    .unwrap_or_else(|_| anyhow::bail!("RTMA GRIB decode panicked"))?;
+    let mut grid = crate::hrrr::decode_model_async(cached.bytes, 0.03, f64::NEG_INFINITY, 0).await?;
     if field == SurfaceField::Precip1h {
         grid.time += chrono::Duration::hours(1);
     }

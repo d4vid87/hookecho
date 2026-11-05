@@ -13,6 +13,19 @@ pub async fn blocking<T: Send + 'static>(
     Ok(tokio::task::spawn_blocking(f).await?)
 }
 
+/// Cancel queued CPU work freely, but hold its slot until running work actually ends.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn blocking_limited<T: Send + 'static>(
+    slots: &'static tokio::sync::Semaphore,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> anyhow::Result<T> {
+    let slot = slots.acquire().await?;
+    blocking(move || {
+        let _slot = slot;
+        f()
+    }).await
+}
+
 /// wasm: no threads, so this is a plain call. Never fails, but keeps the native signature.
 #[cfg(target_arch = "wasm32")]
 pub async fn blocking<T>(f: impl FnOnce() -> T) -> anyhow::Result<T> {
@@ -104,6 +117,27 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn cancelling_cpu_waiters_preserves_running_slots_and_skips_queued_work() {
+        static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let running = tokio::spawn(blocking_limited(&SLOTS, move || {
+            started_tx.send(()).unwrap();
+            finish_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }));
+        started_rx.await.unwrap();
+        let mut queued = Box::pin(blocking_limited(&SLOTS, || panic!("cancelled queued work ran")));
+        assert!(futures_util::poll!(queued.as_mut()).is_pending());
+        drop(queued);
+        running.abort();
+        assert!(running.await.unwrap_err().is_cancelled());
+        assert_eq!(SLOTS.available_permits(), 0, "aborting an awaiter must not release its running CPU slot");
+        finish_tx.send(()).unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), blocking_limited(&SLOTS, || 7)).await.unwrap().unwrap(), 7);
+        assert_eq!(SLOTS.available_permits(), 1, "completed work returns its slot");
+    }
 
     #[tokio::test(start_paused = true)]
     async fn sleep_while_gives_up_within_a_slice() {

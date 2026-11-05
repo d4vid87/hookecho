@@ -329,15 +329,23 @@ fn marker_editor(ui: &mut egui::Ui, marker: &mut Marker, i: usize, icon_tex: &Ic
     make_home
 }
 
-/// Copy a picked PNG into the marker-icons dir and return the stored filename.
-pub(crate) fn store_icon(src: &std::path::Path) -> Option<String> {
-    let name = src.file_name()?.to_string_lossy().into_owned();
-    let dir = Settings::marker_icons_dir()?;
-    if let Err(e) = std::fs::copy(src, dir.join(&name)) {
-        log::warn!("marker icon copy failed ({name}): {e}");
-        return None;
-    }
-    Some(name)
+/// Store a bounded icon under its content identity, so equal upload names cannot alias markers.
+pub(crate) fn store_icon(src: &std::path::Path) -> Result<String, String> {
+    let dir = Settings::marker_icons_dir().ok_or("Marker icon storage is unavailable")?;
+    store_icon_in(src, &dir).map_err(|error| error.to_string())
+}
+
+fn store_icon_in(src: &std::path::Path, dir: &std::path::Path) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    let image = crate::image_load::decode(&crate::image_load::read(src)?)?;
+    let icon = image::DynamicImage::ImageRgba8(image).thumbnail(96, 96);
+    let mut output = std::io::Cursor::new(Vec::new());
+    icon.write_to(&mut output, image::ImageFormat::Png)?;
+    let bytes = output.into_inner();
+    let name = format!("{:x}.png", Sha256::digest(&bytes));
+    std::fs::create_dir_all(dir)?;
+    crate::settings::atomic_write(&dir.join(&name), &bytes)?;
+    Ok(name)
 }
 
 #[cfg(test)]
@@ -348,6 +356,31 @@ mod tests {
         assert_eq!(builtin_icon(Some("builtin:car"), false), Some(egui_phosphor::regular::CAR));
         assert_eq!(builtin_icon(None, true), Some(egui_phosphor::regular::HOUSE));
         assert_eq!(builtin_icon(Some("photo.png"), false), None);
+    }
+
+    #[test]
+    fn uploads_with_the_same_name_keep_distinct_bounded_icons() {
+        let root = std::env::temp_dir().join(format!("hookecho-marker-icons-{}", std::process::id()));
+        let destination = root.join("stored");
+        let mut names = Vec::new();
+        for (folder, color) in [("first", [255, 0, 0, 255]), ("second", [0, 0, 255, 255])] {
+            let directory = root.join(folder);
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join("icon.png");
+            image::RgbaImage::from_pixel(1200, 600, image::Rgba(color)).save(&path).unwrap();
+            let name = super::store_icon_in(&path, &destination).unwrap();
+            let stored = image::open(destination.join(&name)).unwrap().into_rgba8();
+            assert_eq!(stored.dimensions(), (96, 48));
+            assert_eq!(stored.get_pixel(0, 0).0, color);
+            assert_eq!(name, super::store_icon_in(&path, &destination).unwrap(), "identical imports reuse their identity");
+            names.push(name);
+        }
+        assert_ne!(names[0], names[1]);
+        let invalid = root.join("invalid.png");
+        std::fs::write(&invalid, b"not an image").unwrap();
+        assert!(super::store_icon_in(&invalid, &destination).is_err());
+        assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 2);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

@@ -20,10 +20,39 @@ pub struct CachedObject {
 }
 
 fn range_key(url: &str, start: u64, end: Option<u64>) -> String {
+    // Older entries were stored without checking HTTP range provenance.
     end.map_or_else(
-        || format!("{url}#bytes={start}-"),
-        |end| format!("{url}#bytes={start}-{}", end - 1),
+        || format!("range-v2:{url}#bytes={start}-"),
+        |end| format!("range-v2:{url}#bytes={start}-{}", end - 1),
     )
+}
+
+const MAX_MODEL_BYTES: u64 = 256 * 1024 * 1024;
+
+fn response_length(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap, start: u64, end: Option<u64>) -> anyhow::Result<Option<u64>> {
+    let content_length = headers.get(reqwest::header::CONTENT_LENGTH)
+        .map(|value| value.to_str()?.parse::<u64>().map_err(anyhow::Error::from)).transpose()?;
+    let expected = if status == reqwest::StatusCode::PARTIAL_CONTENT {
+        let range = headers.get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("bytes "))
+            .ok_or_else(|| anyhow::anyhow!("model response lacks a byte Content-Range"))?;
+        let (bounds, total) = range.split_once('/').ok_or_else(|| anyhow::anyhow!("invalid model Content-Range"))?;
+        let (first, last) = bounds.split_once('-').ok_or_else(|| anyhow::anyhow!("invalid model Content-Range"))?;
+        let first: u64 = first.parse()?;
+        let limit = last.parse::<u64>()?.checked_add(1).ok_or_else(|| anyhow::anyhow!("model Content-Range overflow"))?;
+        anyhow::ensure!(first == start && limit > first && end.is_none_or(|end| end == limit), "model response range differs from request");
+        if total != "*" {
+            let total: u64 = total.parse()?;
+            anyhow::ensure!(limit <= total && (end.is_some() || limit == total), "model response range has an invalid total");
+        }
+        Some(limit - first)
+    } else {
+        anyhow::ensure!(status == reqwest::StatusCode::OK && start == 0 && end.is_none(), "model server ignored the requested byte range");
+        content_length
+    };
+    anyhow::ensure!(expected.is_none_or(|n| n > 0 && n <= MAX_MODEL_BYTES), "model response exceeds the byte limit or is empty");
+    anyhow::ensure!(content_length.is_none_or(|n| Some(n) == expected), "model Content-Length differs from requested range");
+    Ok(expected)
 }
 
 /// Read one immutable model message, reusing the exact source-object byte range in browsers.
@@ -33,28 +62,44 @@ pub async fn fetch_range(
     start: u64,
     end: Option<u64>,
 ) -> anyhow::Result<CachedObject> {
+    anyhow::ensure!(end.is_none_or(|end| end > start), "invalid model byte range");
+    anyhow::ensure!(end.is_none_or(|end| end - start <= MAX_MODEL_BYTES), "model range exceeds the byte limit");
     let key = range_key(url, start, end);
     if let Some(cached) = get("model", &key).await {
-        return Ok(cached);
+        let length = cached.bytes.len() as u64;
+        if length > 0 && length <= MAX_MODEL_BYTES && end.is_none_or(|end| end - start == length) {
+            return Ok(cached);
+        }
     }
     let range = end.map_or_else(
         || format!("bytes={start}-"),
         |end| format!("bytes={start}-{}", end - 1),
     );
-    let bytes = http
+    let response = http
         .get(crate::net::fetch_url(url))
         .timeout(crate::net::FEED_TIMEOUT)
         .header("User-Agent", crate::alerts::USER_AGENT)
         .header("Range", range)
         .send()
         .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+        .error_for_status()?;
+    let expected = response_length(response.status(), response.headers(), start, end)?;
+    let limit = expected.unwrap_or(MAX_MODEL_BYTES);
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        anyhow::ensure!(bytes.len().saturating_add(chunk.len()) as u64 <= limit, "model response body exceeds expected length");
+        bytes.extend_from_slice(&chunk);
+    }
+    anyhow::ensure!(!bytes.is_empty() && expected.is_none_or(|n| n == bytes.len() as u64), "model response body is truncated or empty");
     let received_at = chrono::Utc::now();
-    put("model", &key, &bytes, received_at).await?;
+    if let Err(error) = put("model", &key, &bytes, received_at).await {
+        log::warn!("Model cache write failed: {error}");
+    }
     Ok(CachedObject {
-        bytes: bytes.to_vec(),
+        bytes,
         received_at,
     })
 }
@@ -492,6 +537,27 @@ mod browser {
 #[cfg(target_arch = "wasm32")]
 pub use browser::{get, known_stats, latest_key, put, set_pinned, spawn_clear};
 
+/// Each writer owns its temp file; only complete writes replace a shared cache entry.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_atomic(path: &std::path::Path, write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>) -> std::io::Result<()> {
+    static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    let (temp, mut file) = loop {
+        let seq = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = path.with_extension(format!("{}-{seq}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => break (temp, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    let result = write(&mut file).and_then(|()| file.sync_all());
+    drop(file);
+    let result = result.and_then(|()| std::fs::rename(&temp, path));
+    if result.is_err() { let _ = std::fs::remove_file(temp); }
+    result
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::{CacheStats, CachedObject, checksum};
@@ -609,22 +675,14 @@ mod native {
         received_at: DateTime<Utc>,
     ) -> anyhow::Result<()> {
         let path = path(root, family, key);
-        let parent = path.parent().expect("cache object has parent");
-        std::fs::create_dir_all(parent)?;
-        let temp = path.with_extension("tmp");
-        let mut file = std::fs::File::create(&temp)?;
-        file.write_all(MAGIC)?;
-        file.write_all(&received_at.timestamp().to_le_bytes())?;
-        file.write_all(&checksum(bytes).to_le_bytes())?;
-        file.write_all(&(key.len() as u32).to_le_bytes())?;
-        file.write_all(key.as_bytes())?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        if path.exists() {
-            std::fs::remove_file(&path)?;
-        }
-        std::fs::rename(temp, path)?;
-        Ok(())
+        super::write_atomic(&path, |file| {
+            file.write_all(MAGIC)?;
+            file.write_all(&received_at.timestamp().to_le_bytes())?;
+            file.write_all(&checksum(bytes).to_le_bytes())?;
+            file.write_all(&(key.len() as u32).to_le_bytes())?;
+            file.write_all(key.as_bytes())?;
+            file.write_all(bytes)
+        }).map_err(Into::into)
     }
 
     pub async fn get(family: &str, key: &str) -> Option<CachedObject> {
@@ -673,6 +731,34 @@ mod native {
         // remove them, so no pin marker is needed here.
         Ok(())
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn simultaneous_writers_leave_one_complete_object() {
+            let root = std::env::temp_dir().join(format!("hookecho-cache-writers-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let received = Utc::now();
+            let barrier = std::sync::Barrier::new(8);
+            std::thread::scope(|scope| {
+                for value in 0..8 {
+                    let (root, barrier) = (&root, &barrier);
+                    scope.spawn(move || {
+                        let bytes = vec![value; 128 * 1024];
+                        barrier.wait();
+                        write(root, "model", "same", &bytes, received).unwrap();
+                    });
+                }
+            });
+            let (_, object) = read(&path(&root, "model", "same"), Some("same")).unwrap();
+            assert_eq!(object.bytes.len(), 128 * 1024);
+            assert!(object.bytes.iter().all(|byte| *byte == object.bytes[0]));
+            assert_eq!(std::fs::read_dir(root.join("model")).unwrap().count(), 1);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -686,6 +772,80 @@ pub fn set_native_root(root: std::path::PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_headers_identify_the_exact_requested_bytes() {
+        use reqwest::{StatusCode as S, header::HeaderMap};
+        let headers = |range: Option<&str>, length: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(range) = range { headers.insert("content-range", range.parse().unwrap()); }
+            if let Some(length) = length { headers.insert("content-length", length.parse().unwrap()); }
+            headers
+        };
+        assert_eq!(response_length(S::PARTIAL_CONTENT, &headers(Some("bytes 2-3/8"), Some("2")), 2, Some(4)).unwrap(), Some(2));
+        assert_eq!(response_length(S::PARTIAL_CONTENT, &headers(Some("bytes 4-7/8"), Some("4")), 4, None).unwrap(), Some(4));
+        assert_eq!(response_length(S::OK, &headers(None, Some("8")), 0, None).unwrap(), Some(8));
+        for (status, range, length, start, end) in [
+            (S::OK, None, Some("8"), 2, Some(4)),
+            (S::PARTIAL_CONTENT, None, Some("2"), 2, Some(4)),
+            (S::PARTIAL_CONTENT, Some("bytes 0-1/8"), Some("2"), 2, Some(4)),
+            (S::PARTIAL_CONTENT, Some("bytes 2-3/8"), Some("3"), 2, Some(4)),
+            (S::PARTIAL_CONTENT, Some("bytes 2-3/3"), Some("2"), 2, Some(4)),
+            (S::PARTIAL_CONTENT, Some("bytes 2-3/8"), Some("2"), 2, None),
+            (S::PARTIAL_CONTENT, Some("bytes 2-18446744073709551615/*"), None, 2, None),
+            (S::OK, None, Some("268435457"), 0, None),
+        ] {
+            assert!(response_length(status, &headers(range, length), start, end).is_err(), "{status} {range:?}");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn range_downloads_reject_wrong_headers_truncated_and_excess_bodies() {
+        use std::io::{Read, Write};
+        let http = reqwest::Client::new();
+        for (headers, body, accepted) in [
+            ("200 OK\r\nContent-Length: 2", "CD", false),
+            ("206 Partial Content\r\nContent-Range: bytes 0-1/8\r\nContent-Length: 2", "AB", false),
+            ("206 Partial Content\r\nContent-Range: bytes 2-3/8\r\nContent-Length: 3", "CDE", false),
+            ("206 Partial Content\r\nContent-Range: bytes 2-3/8\r\nTransfer-Encoding: chunked", "1\r\nC\r\n0\r\n\r\n", false),
+            ("206 Partial Content\r\nContent-Range: bytes 2-3/8\r\nTransfer-Encoding: chunked", "3\r\nCDE\r\n0\r\n\r\n", false),
+            ("206 Partial Content\r\nContent-Range: bytes 2-3/8\r\nTransfer-Encoding: chunked", "2\r\nCD\r\n0\r\n\r\n", true),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/model", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_write_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let _ = stream.read(&mut [0; 4096]);
+                let _ = write!(stream, "HTTP/1.1 {headers}\r\nConnection: close\r\n\r\n{body}");
+            });
+            let result = fetch_range(&http, &url, 2, Some(4)).await;
+            assert_eq!(result.is_ok(), accepted, "{headers}");
+            if let Ok(object) = result { assert_eq!(object.bytes, b"CD"); }
+            server.join().unwrap();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn atomic_cache_write_preserves_the_previous_file_until_complete() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("hookecho-atomic-failure-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("cached");
+        std::fs::write(&path, b"previous").unwrap();
+        assert!(write_atomic(&path, |file| {
+            file.write_all(b"partial")?;
+            assert_eq!(std::fs::read(&path)?, b"previous");
+            Err(std::io::Error::other("interrupted write"))
+        }).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+        write_atomic(&path, |file| file.write_all(b"complete")).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"complete");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn eviction_is_lru_and_stops_at_the_family_cap() {
@@ -738,12 +898,21 @@ mod tests {
 
     #[test]
     fn range_identity_includes_object_and_exact_interval() {
-        assert_eq!(range_key("object", 10, Some(20)), "object#bytes=10-19");
+        assert_eq!(range_key("object", 10, Some(20)), "range-v2:object#bytes=10-19");
         assert_ne!(
             range_key("object", 10, Some(20)),
             range_key("object", 10, None)
         );
         assert_ne!(range_key("object", 10, None), range_key("other", 10, None));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn invalid_ranges_are_rejected_before_request_or_cache_access() {
+        let http = reqwest::Client::new();
+        for (start, end) in [(0, 0), (10, 10), (10, 9)] {
+            assert!(fetch_range(&http, "unused", start, Some(end)).await.is_err());
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

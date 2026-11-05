@@ -1,5 +1,11 @@
 # wxdata fixtures
 
+- `rap-shear-pair.grib2`: unmodified NOAA RAP 2026-11-04 00Z f00 message 242,
+  containing the VUCSH/VVCSH 0–6 km shear siblings; tests distinct component selection.
+  Source: `https://nomads.ncep.noaa.gov/pub/data/nccf/com/rap/prod/rap.20261104/rap.t00z.awp130pgrbf00.grib2`,
+  byte range `12686079-12834496`; SHA-256
+  `0e88a99c09de4cb20bb9be7de1eea2561b38641626a281512b7ccb908e8b9f8c`.
+
 - `g19-c13-meso.nc`: unmodified NOAA GOES-19 ABI-L2-CMIPM C13 granule; source and checksum are
   recorded in `docs/source-contracts.md`.
 - `kdmx-one-sweep.bin`: KDMX Archive II fixture trimmed to one complete sweep with the vendored

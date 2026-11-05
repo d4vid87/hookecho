@@ -146,6 +146,8 @@ pub struct SyncView<'a> {
     pub login_url: Option<&'a str>,
     /// Unix seconds of the last successful sync (0 = never).
     pub last_sync: i64,
+    pub busy: bool,
+    pub conflict: bool,
 }
 
 /// What the user asked for in the Sync tab.
@@ -154,6 +156,8 @@ pub enum SyncAction {
     SignIn,
     SignOut,
     SyncNow,
+    KeepDevice,
+    UseDrive,
 }
 
 #[derive(Default)]
@@ -175,9 +179,11 @@ pub struct SettingsWindow {
     /// Cache sizes, measured once on a background thread when the tab opens — a walk of a full
     /// tile cache is tens of thousands of `stat` calls and has no business on the UI thread.
     #[cfg(not(target_arch = "wasm32"))]
-    storage: Option<std::sync::mpsc::Receiver<Vec<crate::storage::Entry>>>,
+    storage: Option<std::sync::mpsc::Receiver<(Vec<crate::storage::Entry>, Option<String>)>>,
     #[cfg(not(target_arch = "wasm32"))]
     storage_rows: Option<Vec<crate::storage::Entry>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    storage_error: Option<String>,
     /// Set by the Help page's two buttons; the app drains them after `show`.
     pub run_setup: bool,
     pub run_tour: bool,
@@ -386,35 +392,46 @@ impl SettingsWindow {
         if self.storage.is_none() && self.storage_rows.is_none() {
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(crate::storage::report());
+                let _ = tx.send((crate::storage::report(), None));
             });
             self.storage = Some(rx);
         }
         if let Some(rx) = &self.storage {
-            if let Ok(rows) = rx.try_recv() {
-                self.storage_rows = Some(rows);
-                self.storage = None;
+            match rx.try_recv() {
+                Ok((rows, error)) => {
+                    self.storage_rows = Some(rows);
+                    self.storage_error = error;
+                    self.storage = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.storage = None;
+                    self.storage_rows = Some(Vec::new());
+                    self.storage_error = Some("Storage operation could not finish".into());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
 
         let Some(rows) = &self.storage_rows else {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak("Measuring…");
+                ui.weak("Updating storage…");
             });
-            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
             return;
         };
 
         let total: u64 = rows.iter().map(|r| r.bytes).sum();
         let mut recheck = false;
+        let mut clear = None;
         ui.horizontal(|ui| {
             ui.strong(format!("{} in caches", crate::storage::human(total)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 recheck |= ui.button("Refresh").clicked();
             });
         });
-        ui.weak("Everything here is re-downloadable. Clearing costs the next fetch, nothing else.");
+        ui.weak("Clear removes browsing caches. Your downloaded offline map area is kept.");
+        if let Some(error) = &self.storage_error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -427,10 +444,7 @@ impl SettingsWindow {
                         // startup), and deleting it wholesale is not a button's decision.
                         if row.cap.is_some() {
                             if ui.button("Clear").clicked() {
-                                if let Err(e) = crate::storage::clear(&row.path) {
-                                    log::warn!("clearing {}: {e}", row.path.display());
-                                }
-                                recheck = true;
+                                clear = Some(row.path.clone());
                             }
                             if ui.button("Open").clicked() {
                                 let _ = crate::platform::open_url(&row.path.to_string_lossy());
@@ -448,7 +462,18 @@ impl SettingsWindow {
                 });
             }
         });
-        if recheck {
+        if let Some(path) = clear {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let error = crate::storage::clear(&path).err().map(|error| format!("Could not clear cache: {error}"));
+                let _ = tx.send((crate::storage::report(), error));
+                ctx.request_repaint();
+            });
+            self.storage = Some(rx);
+            self.storage_rows = None;
+            self.storage_error = None;
+        } else if recheck {
             self.storage_rows = None;
         }
 
@@ -1124,7 +1149,19 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
             &mut settings.sync_enabled,
             "Sync automatically (every 5 minutes)",
         );
-        if ui.button("Sync now").clicked() {
+        if sync.conflict {
+            ui.label("Both copies have edits. Automatic sync is paused until you choose.");
+            ui.add_enabled_ui(!sync.busy, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Keep this device").on_hover_text("Upload this device's latest settings, including edits made since this conflict appeared.").clicked() {
+                        action = Some(SyncAction::KeepDevice);
+                    }
+                    if ui.button("Use Drive copy").on_hover_text("Replace shared settings with the downloaded Drive copy, including its built-in icon and sound choices.").clicked() {
+                        action = Some(SyncAction::UseDrive);
+                    }
+                });
+            });
+        } else if ui.add_enabled(!sync.busy, egui::Button::new("Sync now")).clicked() {
             action = Some(SyncAction::SyncNow);
         }
         if sync.last_sync > 0 {
@@ -1135,10 +1172,14 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
                 _ => format!("last synced {} h ago", ago / 3600),
             });
         }
+    } else if sync.busy {
+        ui.label("Finishing sign-in…");
+        if ui.button("Cancel sign-in").clicked() { action = Some(SyncAction::SignOut); }
     } else if let Some(url) = sync.login_url {
         // The browser has the user right now. Show the link anyway: on a phone (or a desktop with
         // no opener) launching it can fail, and then this is the only way through.
         ui.label("Waiting for you to finish in the browser…");
+        if ui.button("Cancel sign-in").clicked() { action = Some(SyncAction::SignOut); }
         ui.horizontal(|ui| {
             if ui.button("Open sign-in page").clicked() {
                 if let Err(e) = crate::platform::open_url(url) {
@@ -1165,8 +1206,8 @@ fn sync_tab(ui: &mut egui::Ui, settings: &mut Settings, sync: &SyncView) -> Opti
     }
     ui.add_space(6.0);
     ui.weak(
-        "Screen scale, device name and background alerts stay local to each machine; everything \
-         else follows the sync. The grant covers only this app's own Drive folder.",
+        "Screen scale, device name, background alerts, custom sound files and marker image files stay local. \
+         Custom palettes travel with the settings. The grant covers only this app's own Drive folder.",
     );
     action
 }

@@ -54,7 +54,19 @@ fn pct(s: &str) -> String {
     out
 }
 
-/// `PUT` URL for a Matrix message send, with `txn` as the transaction id (unix millis).
+/// Generate once per message; retries must reuse the same transaction ID.
+pub fn matrix_transaction_id() -> u128 {
+    let mut bytes = [0; 16];
+    if getrandom::fill(&mut bytes).is_ok() {
+        return u128::from_le_bytes(bytes);
+    }
+    static SEQUENCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let now = wxdata::clock::SystemTime::now().duration_since(wxdata::clock::UNIX_EPOCH)
+        .unwrap_or_default().as_nanos();
+    (now << 32) | SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u128
+}
+
+/// `PUT` URL for a Matrix message send, with a unique per-message transaction ID.
 pub fn matrix_url(homeserver: &str, room: &str, txn: u128) -> String {
     format!(
         "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
@@ -125,22 +137,48 @@ pub fn desktop(title: &str, body: &str) {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn browser_notification(title: &str, body: &str, tag: Option<&str>) {
-    use web_sys::NotificationPermission as P;
-    match web_sys::Notification::permission() {
-        P::Granted => {
-            let opts = web_sys::NotificationOptions::new();
-            opts.set_body(body);
-            opts.set_icon("/icon-192.png");
-            if let Some(tag) = tag { opts.set_tag(tag); }
-            if let Err(e) = web_sys::Notification::new_with_options(title, &opts) {
-                log::warn!("browser notification failed: {e:?}");
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export async function showBrowserNotification(title, body, tag) {
+    if (globalThis.Notification?.permission !== 'granted') return false;
+    const options = {body, icon: '/icon-192.png'};
+    if (tag) options.tag = tag;
+    try {
+        const workers = globalThis.navigator?.serviceWorker;
+        let registration = await workers?.getRegistration();
+        if (registration) {
+            if (!registration.active) {
+                let timer;
+                try {
+                    registration = await Promise.race([workers.ready, new Promise((_, reject) => {
+                        timer = setTimeout(() => reject(new Error('Notification worker did not activate')), 5000);
+                    })]);
+                } finally { clearTimeout(timer); }
             }
+            await registration.showNotification(title, options);
+            return true;
         }
-        // Never prompt from here. An alert firing is not a moment to interrupt someone with a
-        // permission dialog, and the ask already happened when they turned the setting on.
-        _ => log::debug!("browser notification skipped: no permission"),
+    } catch (error) {
+        // Desktop browsers can still notify if worker registration or delivery failed.
+        console.warn('Service worker notification failed', error);
     }
+    new Notification(title, options);
+    return true;
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(catch, js_name = showBrowserNotification)]
+    async fn show_browser_notification(title: String, body: String, tag: Option<String>)
+        -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>;
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_notification(title: &str, body: &str, tag: Option<&str>) {
+    let (title, body, tag) = (title.to_owned(), body.to_owned(), tag.map(str::to_owned));
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(error) = show_browser_notification(title, body, tag).await {
+            log::warn!("browser notification failed: {error:?}");
+        }
+    });
 }
 
 /// Ask the browser for notification permission, if it has not already been answered.
@@ -199,11 +237,12 @@ fn worth_retrying(res: &Result<reqwest::Response, reqwest::Error>) -> bool {
 // reports losing alerts to a restart rather than to a dead webhook.
 pub async fn send_retrying(what: &str, make: impl Fn() -> reqwest::RequestBuilder) {
     use std::sync::atomic::Ordering;
-    let first = make().send().await;
-    if log_outcome(what, "delivery", &first) {
+    let started = wxdata::clock::Instant::now();
+    let mut response = make().send().await;
+    if log_outcome(what, "delivery", &response) {
         return;
     }
-    if !worth_retrying(&first) {
+    if !worth_retrying(&response) {
         return;
     }
     // Taking a retry slot is what the cap counts; the first attempt is always free.
@@ -220,13 +259,23 @@ pub async fn send_retrying(what: &str, make: impl Fn() -> reqwest::RequestBuilde
     }
     let _slot = Slot;
     for secs in BACKOFF_SECS {
-        sleep_secs(secs).await;
-        let res = make().send().await;
-        if log_outcome(what, "retry", &res) {
+        let delay = response.as_ref().ok()
+            .map(|r| retry_delay(r.headers(), secs, chrono::Utc::now()))
+            .unwrap_or(std::time::Duration::from_secs(secs));
+        // Never retry before the server's deadline; an hour-old weather alert is no longer useful.
+        if !within_delivery_lifetime(started.elapsed(), delay) {
+            log::warn!("{what}: server retry deadline exceeds alert delivery lifetime");
+            return;
+        }
+        drop(response);
+        wxdata::task::sleep(delay).await;
+        if !within_delivery_lifetime(started.elapsed(), std::time::Duration::ZERO) { return; }
+        response = make().send().await;
+        if log_outcome(what, "retry", &response) {
             log::info!("{what} delivery succeeded on retry");
             return;
         }
-        if !worth_retrying(&res) {
+        if !worth_retrying(&response) {
             return;
         }
     }
@@ -248,10 +297,24 @@ fn log_outcome(what: &str, stage: &str, res: &Result<reqwest::Response, reqwest:
     }
 }
 
-/// Both targets have a timer: tokio natively, `setTimeout` in the browser. `wxdata::task::sleep`
-/// is already the thing that knows which.
-async fn sleep_secs(secs: u64) {
-    wxdata::task::sleep(std::time::Duration::from_secs(secs)).await;
+fn retry_delay(headers: &reqwest::header::HeaderMap, fallback_secs: u64, now: chrono::DateTime<chrono::Utc>) -> std::time::Duration {
+    let fallback = std::time::Duration::from_secs(fallback_secs);
+    let Some(value) = headers.get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()) else {
+        return fallback;
+    };
+    let value = value.trim();
+    // Some webhook providers send fractional seconds.
+    if let Ok(seconds) = value.parse::<f64>() {
+        return std::time::Duration::try_from_secs_f64(seconds)
+            .map(|delay| delay.max(fallback)).unwrap_or(fallback);
+    }
+    chrono::DateTime::parse_from_rfc2822(value).ok()
+        .and_then(|date| date.signed_duration_since(now).to_std().ok())
+        .map(|delay| delay.max(fallback)).unwrap_or(fallback)
+}
+
+fn within_delivery_lifetime(elapsed: std::time::Duration, wait: std::time::Duration) -> bool {
+    elapsed.checked_add(wait).is_some_and(|age| age < std::time::Duration::from_secs(3600))
 }
 
 #[cfg(test)]
@@ -261,6 +324,11 @@ mod tests {
     /// Tiny HTTP server answering `codes` in order (then repeating the last), counting requests.
     #[cfg(not(target_arch = "wasm32"))]
     fn mock_sink(codes: Vec<u16>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        mock_sink_with_retry_after(codes, None)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mock_sink_with_retry_after(codes: Vec<u16>, retry_after: Option<&'static str>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{Read, Write};
         use std::sync::atomic::Ordering;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -274,8 +342,9 @@ mod tests {
                 let code = codes[i.min(codes.len() - 1)];
                 let mut buf = [0u8; 2048];
                 let _ = sock.read(&mut buf);
+                let header = retry_after.map(|v| format!("Retry-After: {v}\r\n")).unwrap_or_default();
                 let _ = sock.write_all(
-                    format!("HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    format!("HTTP/1.1 {code} X\r\n{header}Content-Length: 0\r\nConnection: close\r\n\r\n")
                         .as_bytes(),
                 );
             }
@@ -316,6 +385,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rate_limited_delivery_waits_for_the_server_deadline() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let http = reqwest::Client::new();
+        let (url, hits) = mock_sink_with_retry_after(vec![429, 200], Some("3"));
+        let start = std::time::Instant::now();
+        rt.block_on(send_retrying("test", || http.post(&url)));
+        assert!(start.elapsed() >= std::time::Duration::from_secs(3));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let (url, hits) = mock_sink_with_retry_after(vec![429], Some("7200"));
+        rt.block_on(send_retrying("test", || http.post(&url)));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "never retry early for an expired alert");
+    }
+
+    #[test]
     fn payloads_are_valid_json_and_escape() {
         let t = "Tornado \"Warning\"";
         let b = "line1\nline2\\end";
@@ -338,6 +422,36 @@ mod tests {
             u,
             "https://matrix.org/_matrix/client/v3/rooms/%21abc%3Amatrix.org/send/m.room.message/1234"
         );
+    }
+
+    #[test]
+    fn matrix_burst_has_a_distinct_id_for_every_message() {
+        let ids: std::collections::HashSet<_> = (0..10_000).map(|_| matrix_transaction_id()).collect();
+        assert_eq!(ids.len(), 10_000);
+    }
+
+    #[test]
+    fn retry_after_supports_seconds_dates_and_provider_fractions() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-04T12:00:00Z").unwrap().to_utc();
+        let mut headers = HeaderMap::new();
+        for (value, expected) in [("60", 60.0), ("2.5", 2.5),
+            ("Wed, 04 Nov 2026 12:01:00 GMT", 60.0), ("0", 2.0),
+            ("Wed, 04 Nov 2026 11:00:00 GMT", 2.0), ("-1", 2.0), ("NaN", 2.0),
+            ("inf", 2.0), ("not a deadline", 2.0)] {
+            headers.insert(RETRY_AFTER, HeaderValue::from_str(value).unwrap());
+            assert_eq!(retry_delay(&headers, 2, now).as_secs_f64(), expected, "{value}");
+        }
+        assert_eq!(retry_delay(&HeaderMap::new(), 8, now).as_secs(), 8);
+    }
+
+    #[test]
+    fn repeated_rate_limits_and_background_resume_cannot_extend_alert_lifetime() {
+        use std::time::Duration as D;
+        assert!(within_delivery_lifetime(D::ZERO, D::from_secs(3599)));
+        assert!(!within_delivery_lifetime(D::from_secs(3599), D::from_secs(3599)));
+        assert!(!within_delivery_lifetime(D::from_secs(3600), D::ZERO));
+        assert!(!within_delivery_lifetime(D::MAX, D::MAX));
     }
 }
 

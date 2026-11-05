@@ -129,3 +129,32 @@ test("visible display preparation runs before queued downloads and map refinemen
   finish();
   await Promise.all([running, history, vector, display]);
 });
+
+test("abandoning queued work releases it and preserves the active job and peers", async () => {
+  const worker = { jobs: [], postMessage(job) { this.jobs.push(job); }, terminate() {} };
+  const bridge = makeBridge({ spawnWorker: () => worker, log: () => {} });
+  const running = bridge(new Uint8Array([1]), "decode");
+  const stale = bridge(new Uint8Array([2]), "model");
+  const current = bridge(new Uint8Array([3]), "vector");
+  const cancelled = assert.rejects(stale, /decode cancelled/);
+  stale.cancel();
+  stale.cancel();
+  worker.onmessage({ data: { id: worker.jobs[0].id, ok: new Uint8Array([4]).buffer } });
+  assert.deepEqual(worker.jobs.map(job => job.op), ["decode", "vector"]);
+  worker.onmessage({ data: { id: worker.jobs[1].id, ok: new Uint8Array([5]).buffer } });
+  await Promise.all([running, current, cancelled]);
+});
+
+test("abandoning an active job cannot strand the queue or dispatch concurrent decodes", async () => {
+  const worker = { jobs: [], postMessage(job) { this.jobs.push(job); }, terminate() {} };
+  const bridge = makeBridge({ spawnWorker: () => worker, log: () => {} });
+  const stale = bridge(new Uint8Array([1]), "decode");
+  const current = bridge(new Uint8Array([2]), "model");
+  const cancelled = assert.rejects(stale, /decode cancelled/);
+  stale.cancel();
+  assert.equal(worker.jobs.length, 1);
+  worker.onmessage({ data: { id: worker.jobs[0].id, ok: new Uint8Array([4]).buffer } });
+  assert.equal(worker.jobs.length, 2);
+  worker.onmessage({ data: { id: worker.jobs[1].id, ok: new Uint8Array([5]).buffer } });
+  await Promise.all([current, cancelled]);
+});

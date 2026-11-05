@@ -1399,7 +1399,9 @@ mod android_tts {
     }
 
     pub fn stop() {
-        let _ = try_piper_stop();
+        if let Err(error) = try_piper_stop() {
+            log::warn!("Android speech stop failed: {error:?}");
+        }
     }
 
     fn try_piper(text: &str) -> jni::errors::Result<bool> {
@@ -1416,7 +1418,7 @@ mod android_tts {
 
     fn try_piper_stop() -> jni::errors::Result<()> {
         super::android_alerts::with_class("io.hookecho.HookEcho.PiperVoice", |env, class, _| {
-            env.call_static_method(class, "stop", "()V", &[]).map(|_| ())
+            env.call_static_method(class, "stop", "()V", &[])?.v()
         })
     }
 

@@ -98,16 +98,16 @@
       });
     </script>
     <script type="module">
-      import { prepareAmy } from "./amy-bootstrap.js";
-      // Family Hub keeps the full radar, but should not assemble a 60 MB voice model beside its
-      // renderer on startup. The spoken-alerts control still calls __hookechoAmyRetry on demand.
-      if (!/Family Hub/i.test(navigator.userAgent)) setTimeout(prepareAmy, 1000);
+      // Voice assets load only after the spoken-alerts control enables speech.
+      import "./amy-bootstrap.js";
     </script>
     <script type="module">
       const boot = document.getElementById("boot");
       let stage = "loading scripts";
 
       try {
+      const { feedFetch } = await import("./feed-fetch.js");
+      globalThis.fetch = feedFetch(globalThis.fetch.bind(globalThis), location.origin);
       // A previous Pages fallback cached HTML at an immutable JS URL. Use a fresh cache key.
       const { default: init, start } = await import("./dist/hookecho.js?boot=2");
       const { makeBridge } = await import("./decode-bridge.js");

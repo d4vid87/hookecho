@@ -9,6 +9,15 @@ workflow without making pull-request tests depend on the network.
 RRFS plus GEFS mean, spread, control, and edge perturbed members must expose a current or
 previous-day index.
 
+The independent regional-radar job runs `scripts/feed-contracts.sh --regional`: four ignored live
+tests exercise the app's OPERA, JMA, CWA, and Canadian radar adapters. Each requires an advertised
+observation no older than 90 minutes, then fetches and decodes one timestamp-pinned 256-pixel
+sample tile. OPERA verifies the HDF5 timestamp; CWA validates its physical grid and embedded time;
+JMA and Canada decode the provider PNG. Transparent samples are valid during dry weather.
+Each test has a 120-second deadline, the network test process is capped at five minutes, and logs
+with source times are retained for 30 days. Compilation has the workflow's 30-minute job limit.
+These checks need no KMA credential and stay ignored in ordinary pull-request tests.
+
 Model schedule metadata follows NOAA's current HRRR/RAP/GFS product inventories and ECMWF's
 Cycle 50r1 open-data contract. Extended HRRR and RAP forecast hours are restricted to their
 documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop at F90.
@@ -82,3 +91,31 @@ documented cycles; ECMWF 00/12 UTC runs extend to F240 while 06/18 UTC runs stop
 - URMA objects are read from <https://nomads.ncep.noaa.gov/pub/data/nccf/com/urma/prod/>. NOAA
   publishes no usable sidecar index there, so HookEcho walks the self-sized GRIB message headers
   with 512-byte range requests and downloads only the selected field message.
+
+## Regional radar
+
+- OPERA: the official [Open Radar Data overview](https://eumetnet.github.io/openradardata-documentation/1-ORD-API-overview/)
+  links the public `openradar-24h` bucket and documents the five-minute, 1 km CIRRUS reflectivity
+  composite in ODIM HDF5, registered in Lambert Equal Area. The adapter reads advertised
+  `OPERA/COMP/OPERA@…@0@DBZH.h5` objects and checks their internal observation time.
+- JMA: [the official nowcast catalog](https://www.data.jma.go.jp/suishin/cgi-bin/catalogue/make_product_page.cgi?id=Nowcast)
+  documents five-minute precipitation analysis and PNG imagery. The website's
+  `targetTimes_N1.json` feed is not a stable API guarantee; only advertised `hrpns` entries whose
+  base and valid times agree are observations. The live check pins one of those times in the PNG URL.
+- Taiwan CWA: [O-A0059-001](https://opendata.cwa.gov.tw/dataset/observation/O-A0059-001)
+  is consumed from the public CWA observation bucket. The adapter checks the product id, dBZ
+  units, TWD67 registration, exact grid count, and embedded `DateTime`. Its latest-only URL does
+  not imply that earlier snapshots remain fetchable.
+- Canada: [ECCC's radar GeoMet contract](https://eccc-msc.github.io/open-data/msc-data/obs_radar/readme_radar_geomet_en/)
+  documents `RADAR_1KM_RRAI`, six-minute updates and a three-hour history. The check reads the
+  layer's advertised WMS times and decodes a GetMap PNG requested with an explicit `TIME`.
+
+### Provider throttling and deadlines
+
+The web and native proxies preserve 429/503 with a sanitized `Retry-After` (seconds or HTTP date,
+limited to 24 hours; missing/invalid values use 30 seconds). These errors are never cached. Browser
+feed requests observe a provider-wide cooldown, without delaying other hosts or retrying invisibly.
+The proxy deadline covers both response headers and body streaming. On Cloudflare, immediate
+client-disconnect cancellation additionally requires the `enable_request_signal` compatibility flag
+for older compatibility dates; the deadline still applies without it. See [Cloudflare's flag
+reference](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#enable-requestsignal-for-incoming-requests).

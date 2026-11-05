@@ -23,13 +23,14 @@ pub const COUNT: u32 = SIDE * SIDE;
 /// Wind grid resolution uploaded to the GPU. The HRRR grid is much finer than this, but the
 /// particles are drawn at a few hundred per pane and read as flow, not as a field.
 const GRID: u32 = 256;
+const TRAIL_IDLE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// What the app hands over each frame.
 pub struct Frame {
     /// Mercator world bbox of the wind grid.
     pub bbox_min: [f32; 2],
     pub bbox_max: [f32; 2],
-    pub center: [f32; 2],
+    pub center: [f64; 2],
     pub globe: [f32; 4],
     pub planar: [f32; 4],
     pub scale: [f32; 2],
@@ -58,10 +59,11 @@ struct Uniform {
     globe: [f32; 4],
     planar: [f32; 4],
     trail: [f32; 4],
+    /// Shared WIND ramp: input unit multiplier, minimum, maximum, unused.
+    ramp: [f32; 4],
 }
 
-/// Pipelines and the textures they run over. One instance for the whole app; the trail buffers
-/// are per pane, since panes have their own cameras and sizes.
+/// Pipelines and textures for a pane's wind particles.
 pub struct WindGpu {
     advect: wgpu::RenderPipeline,
     fade: wgpu::RenderPipeline,
@@ -85,9 +87,10 @@ pub struct WindGpu {
     /// Per-pane trail buffers, ping-ponged the same way, keyed by pane id.
     trails: std::collections::HashMap<u32, Trails>,
     frames: u64,
+    last_active: wxdata::clock::Instant,
 }
 
-type TrailCamera = ([f32; 2], [f32; 2], [f32; 4], [f32; 4]);
+type TrailCamera = ([f64; 2], [f32; 2], [f32; 4], [f32; 4]);
 
 struct Trails {
     /// The trail buffers themselves. Held rather than dropped in favour of the views below: a
@@ -295,7 +298,7 @@ impl WindGpu {
                 "vs_fullscreen",
                 "fs_composite",
                 target_format,
-                alpha,
+                Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
             ),
             src_bgl,
             uni,
@@ -307,6 +310,7 @@ impl WindGpu {
             cur: 0,
             trails: std::collections::HashMap::new(),
             frames: 0,
+            last_active: wxdata::clock::Instant::now(),
         }
     }
 }
@@ -359,19 +363,23 @@ impl WindGpu {
         pane: u32,
         f: &Frame,
     ) {
+        let now = wxdata::clock::Instant::now();
+        self.release_inactive_trails(now);
+        self.last_active = now;
         self.frames += 1;
         self.ensure_trails(device, pane, f.viewport);
         let camera = (f.center, f.scale, f.globe, f.planar);
         let trails = self.trails.get_mut(&pane).unwrap();
         let fade = if trails.camera == Some(camera) { 0.94 } else { 0.0 };
         trails.camera = Some(camera);
+        let (center, center_low) = crate::render::mercator::split_world(f.center);
         queue.write_buffer(
             &self.uni,
             0,
             bytemuck::bytes_of(&Uniform {
                 bbox_min: f.bbox_min,
                 bbox_max: f.bbox_max,
-                center: f.center,
+                center,
                 scale: f.scale,
                 dt: f.dt.clamp(0.0, 0.25),
                 world_per_px: f.world_per_px,
@@ -385,7 +393,8 @@ impl WindGpu {
                 point_px: 2.0,
                 globe: f.globe,
                 planar: f.planar,
-                trail: [fade, 0.0, 0.0, 0.0],
+                trail: [fade, center_low[0], center_low[1], 0.0],
+                ramp: wind_ramp_uniform(),
             }),
         );
 
@@ -442,6 +451,14 @@ impl WindGpu {
         // RGBA8 grid, two position textures, LUT, uniform and two trail targets per pane.
         (GRID * GRID * 4 + SIDE * SIDE * 8 + 256 * 4) as u64 + self.uni.size()
             + self.trails.values().map(|trail| trail.size.0 as u64 * trail.size.1 as u64 * 8).sum::<u64>()
+    }
+
+    /// Keep quick toggles cheap, but return full-screen targets after the layer stays hidden.
+    /// The small wind grid, particle positions and compiled pipelines remain reusable.
+    pub fn release_inactive_trails(&mut self, now: wxdata::clock::Instant) {
+        if now.saturating_duration_since(self.last_active) >= TRAIL_IDLE_GRACE {
+            self.trails.clear();
+        }
     }
 
     /// Forget a pane's trail buffers (the pane closed, or the layout changed).
@@ -519,22 +536,29 @@ pub fn warp_field(
             let i = ((gy * GRID + gx) * 4) as usize;
             // Alpha marks "there is wind here": the model domain is not the shape of its bbox,
             // and a particle that wanders outside it should respawn rather than freeze.
-            match field.sample(lon, lat) {
-                Some((u, v)) => {
-                    rgba[i] = encode_component(u);
-                    rgba[i + 1] = encode_component(v);
-                    rgba[i + 3] = 255;
-                }
-                None => rgba[i..i + 4].copy_from_slice(&[128, 128, 0, 0]),
+            // Missing samples stay zero so filtered RGB can be divided by its valid weight.
+            if let Some((u, v)) = field.sample(lon, lat) {
+                rgba[i] = encode_component(u);
+                rgba[i + 1] = encode_component(v);
+                rgba[i + 3] = 255;
             }
         }
     }
     rgba
 }
 
-/// ±40 m/s over one byte — about 0.3 m/s, finer than the color ramp resolves.
+/// ±40 m/s over one byte, with exact zero at 128 (0 is reserved for missing data).
 fn encode_component(ms: f32) -> u8 {
-    (((ms / 40.0).clamp(-1.0, 1.0) * 0.5 + 0.5) * 255.0).round() as u8
+    ((ms / 40.0).clamp(-1.0, 1.0) * 127.0 + 128.0).round() as u8
+}
+
+fn wind_ramp_uniform() -> [f32; 4] {
+    use crate::render::field_ramps::{FieldScale, RampScale, WIND};
+    let FieldScale::Ramp { lo, hi, scale, .. } = WIND.scale else {
+        unreachable!("wind uses a continuous color ramp")
+    };
+    debug_assert_eq!(scale, RampScale::Linear);
+    [WIND.input_scale, lo, hi, 0.0]
 }
 
 fn color_pass<'a>(
@@ -568,6 +592,179 @@ fn color_pass<'a>(
 mod tests {
     use super::*;
     use wxdata::mrms::MrmsField;
+
+    fn gpu_device() -> (wgpu::Device, wgpu::Queue) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let instance = wgpu::Instance::default();
+        let adapter = rt.block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            force_fallback_adapter: std::env::var("HOOKECHO_GPU_FALLBACK").is_ok(),
+            ..Default::default()
+        })).unwrap();
+        rt.block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap()
+    }
+
+    fn test_frame(opacity: f32) -> Frame {
+        Frame {
+            bbox_min: [0.0; 2], bbox_max: [1.0; 2], center: [0.5; 2],
+            globe: [0.0; 4], planar: [1.0, 0.0, 1.0, 0.0], scale: [2.0, -2.0],
+            dt: 0.0, world_per_px: 1.0 / 64.0, opacity, viewport: (64, 64),
+        }
+    }
+
+    fn constant_grid(u: f32, v: f32) -> WindGrid {
+        WindGrid {
+            rgba: std::iter::repeat_n([encode_component(u), encode_component(v), 0, 255], (GRID * GRID) as usize).flatten().collect(),
+            bbox_min: [0.0; 2], bbox_max: [1.0; 2],
+        }
+    }
+
+    fn draw_frame(gpu: &mut WindGpu, device: &wgpu::Device, queue: &wgpu::Queue, f: &Frame) -> Vec<u8> {
+        let target = crate::headless::new_target(device, POS_FORMAT, 64);
+        let view = target.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        gpu.step(device, queue, &mut encoder, 0, f);
+        {
+            let mut pass = color_pass(&mut encoder, "wind test composite", &view, Some(wgpu::Color::TRANSPARENT));
+            gpu.draw(0, &mut pass);
+        }
+        queue.submit(Some(encoder.finish()));
+        crate::headless::read_target(device, queue, &target, 64)
+    }
+
+    /// Exercise the production sampling/color helpers directly at sub-texel boundaries.
+    fn probe_shader(gpu: &WindGpu, device: &wgpu::Device, queue: &wgpu::Queue, body: &str) -> Vec<u8> {
+        let source = format!("{}\n@fragment fn probe(in: FsIn) -> @location(0) vec4<f32> {{ {body} }}", include_str!("shaders/wind.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("wind regression probe"), source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&gpu.points.get_bind_group_layout(0)), Some(&gpu.points.get_bind_group_layout(1))],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None, layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_fullscreen"), buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader, entry_point: Some("probe"), compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: POS_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: Default::default(), depth_stencil: None, multisample: Default::default(), multiview_mask: None, cache: None,
+        });
+        let target = crate::headless::new_target(device, POS_FORMAT, 64);
+        let view = target.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = color_pass(&mut encoder, "wind probe", &view, Some(wgpu::Color::TRANSPARENT));
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &gpu.main_bg[gpu.cur], &[]);
+            pass.set_bind_group(1, &gpu.pos_src_bg[gpu.cur], &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit(Some(encoder.finish()));
+        crate::headless::read_target(device, queue, &target, 64)
+    }
+
+    #[test]
+    fn wind_encoding_preserves_calm_and_missing_data() {
+        assert_eq!(encode_component(0.0), 128);
+        assert_eq!((encode_component(0.0) as f32 - 128.0) * (40.0 / 127.0), 0.0);
+        let nw = crate::render::mercator::lonlat_to_world(-100.0, 40.0);
+        let se = crate::render::mercator::lonlat_to_world(-90.0, 35.0);
+        let missing = warp_field(&constant_field(f32::NAN, 0.0), [nw.0 as f32, nw.1 as f32], [se.0 as f32, se.1 as f32]);
+        assert!(missing.iter().all(|v| *v == 0), "missing samples must not influence filtered wind");
+        assert_eq!(std::mem::size_of::<Uniform>(), 128);
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_wind_colors_match_shared_legend_and_mask_data_gaps() {
+        use crate::render::field_ramps::{FieldScale, WIND, bake_ramp_lut};
+        let (device, queue) = gpu_device();
+        let mut gpu = WindGpu::new(&device, &queue, POS_FORMAT);
+        gpu.upload_grid(&queue, &constant_grid(10.0, 0.0));
+        draw_frame(&mut gpu, &device, &queue, &test_frame(1.0));
+        let FieldScale::Ramp { stops, .. } = WIND.scale else { unreachable!() };
+        let lut = bake_ramp_lut(stops, 255);
+        for speed in [0.0, 5.0, 10.0, 20.0, 25.7222, 40.0, 60.0] {
+            let pixels = probe_shader(&gpu, &device, &queue, &format!("return wind_color({speed:?});"));
+            let i = WIND.index(speed) as usize * 4;
+            assert_eq!(&pixels[..4], &lut[i..i + 4], "GPU legend color for {speed} m/s");
+        }
+
+        let mut gap = constant_grid(10.0, 0.0);
+        for y in 0..GRID { gap.rgba[((y * GRID + 128) * 4) as usize..((y + 1) * GRID * 4) as usize].fill(0); }
+        gpu.upload_grid(&queue, &gap);
+        // Positions immediately on either side of the boundary both mix valid/missing texels.
+        // Valid-side flow must keep its speed; the missing side must stay masked.
+        for (x, valid) in [(127.75, true), (128.25, false)] {
+            let pixels = probe_shader(&gpu, &device, &queue, &format!(
+                "let sample = wind_at(vec2<f32>({x} / 256.0, 0.5)); return vec4<f32>(sample.xy / 40.0, 0.0, sample.z);"
+            ));
+            if valid {
+                let expected = ((encode_component(10.0) as f32 - 128.0) / 127.0 * 255.0).round() as u8;
+                assert!(pixels[0].abs_diff(expected) <= 1, "missing neighbor must not slow a valid wind: {:?}", &pixels[..4]);
+                assert_eq!(pixels[1], 0, "zero north component must remain exactly calm");
+                assert_eq!(pixels[3], 255);
+            } else {
+                assert_eq!(&pixels[..4], &[0; 4], "missing-cell particles must be suppressed");
+            }
+        }
+        gap.rgba.fill(0);
+        gpu.upload_grid(&queue, &gap);
+        gpu.retain_panes(|_| false);
+        let pixels = draw_frame(&mut gpu, &device, &queue, &test_frame(1.0));
+        assert!(pixels.iter().all(|v| *v == 0), "missing field must not create visible particles");
+        gpu.upload_grid(&queue, &constant_grid(0.0, 0.0));
+        let pixels = draw_frame(&mut gpu, &device, &queue, &test_frame(1.0));
+        assert!(pixels.iter().all(|v| *v == 0), "calm field must not create drifting particles");
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_wind_opacity_fades_once_and_inactive_trails_release() {
+        let (device, queue) = gpu_device();
+        let mut gpu = WindGpu::new(&device, &queue, POS_FORMAT);
+        gpu.upload_grid(&queue, &constant_grid(10.0, 0.0));
+        let small_bytes = gpu.estimated_bytes();
+        let seed: Vec<u8> = std::iter::repeat_n([128u8, 0, 128, 0], (SIDE * SIDE) as usize).flatten().collect();
+        for tex in &gpu.pos {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &seed,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(SIDE * 4), rows_per_image: Some(SIDE) },
+                wgpu::Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: 1 },
+            );
+        }
+        let baseline = draw_frame(&mut gpu, &device, &queue, &test_frame(1.0));
+        let pixel = (32 * 64 + 32) * 4;
+        assert_eq!(baseline[pixel + 3], 255, "seeded center particle must be visible");
+        for opacity in [0.7, 0.4, 0.28] {
+            gpu.retain_panes(|_| false);
+            let pixels = draw_frame(&mut gpu, &device, &queue, &test_frame(opacity));
+            for c in 0..4 {
+                let expected = (baseline[pixel + c] as f32 * opacity).round() as u8;
+                assert!(pixels[pixel + c].abs_diff(expected) <= 1, "channel {c} opacity {opacity}: {} vs {expected}", pixels[pixel + c]);
+            }
+        }
+        let mut missing = constant_grid(10.0, 0.0);
+        missing.rgba.fill(0);
+        gpu.upload_grid(&queue, &missing);
+        let faded = draw_frame(&mut gpu, &device, &queue, &test_frame(1.0));
+        for c in 0..4 {
+            let expected = (baseline[pixel + c] as f32 * 0.94).round() as u8;
+            assert!(faded[pixel + c].abs_diff(expected) <= 1, "premultiplied trail must fade once");
+        }
+        let active_at = gpu.last_active;
+        assert_eq!(gpu.estimated_bytes() - small_bytes, 64 * 64 * 8);
+        gpu.release_inactive_trails(active_at + TRAIL_IDLE_GRACE / 2);
+        assert!(!gpu.trails.is_empty(), "brief toggles reuse trail allocation");
+        gpu.release_inactive_trails(active_at + TRAIL_IDLE_GRACE);
+        assert_eq!(gpu.estimated_bytes(), small_bytes, "only large targets should be released");
+        gpu.upload_grid(&queue, &constant_grid(10.0, 0.0));
+        let resumed = draw_frame(&mut gpu, &device, &queue, &test_frame(1.0));
+        assert!(resumed.as_chunks::<4>().0.iter().any(|p| p[3] > 0), "resuming must reuse the retained GPU state");
+    }
 
     fn constant_field(u_ms: f32, v_ms: f32) -> crate::wind_draw::WindField {
         let grid = |v: f32| MrmsField {

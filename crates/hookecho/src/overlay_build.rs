@@ -70,6 +70,34 @@ mod rainfall_border_tests {
         assert_eq!(normal.indices, unchanged.indices);
         assert_eq!(normal.vertices.len(), unchanged.vertices.len());
     }
+
+    #[test]
+    fn street_zoom_polygons_keep_subpixel_vertices_and_stroke_width() {
+        let origin = lonlat_to_world(139.75, 35.68);
+        let wpp = 1.0 / (256.0 * 2f64.powi(20));
+        let mut feature = square("Tiny polygon");
+        feature.fill = [255, 255, 255, 255];
+        feature.stroke = [255, 0, 0, 255];
+        feature.rings = vec![[(0.0, 0.0), (8.0, 0.0), (8.0, 8.0), (0.0, 8.0), (0.0, 0.0)]
+            .map(|(x, y)| {
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(origin.0 + x*wpp, origin.1 + y*wpp);
+                [lon, lat]
+            }).to_vec()];
+        let mesh = build(&[feature], 20.0);
+        assert!(!mesh.indices.is_empty());
+        for vertex in &mesh.vertices {
+            let world = vertex.precise_world();
+            let px = [(world[0] - origin.0) / wpp, (world[1] - origin.1) / wpp];
+            assert!(px.iter().all(|&p| (-0.81..=8.81).contains(&p)), "stroke exceeded 1.6px: {px:?}");
+        }
+        for expected in [[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]] {
+            assert!(mesh.vertices.iter().any(|vertex| {
+                let world = vertex.precise_world();
+                vertex.color[1] == 1.0 && ((world[0] - origin.0)/wpp - expected[0]).abs() < 0.001
+                    && ((world[1] - origin.1)/wpp - expected[1]).abs() < 0.001
+            }), "tessellation lost tiny polygon corner {expected:?}");
+        }
+    }
 }
 
 /// Build tessellated fills + outlines for `features` at `zoom` (normal theme).
@@ -105,7 +133,8 @@ fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Th
     let stroke_w = (1.6 * scale as f64 / (256.0 * 2f64.powf(zoom))) as f32;
     let fill_opts = FillOptions::default().with_tolerance(stroke_w * 0.5);
     for f in features {
-        let path = feature_path(f);
+        let origin = f.rings.iter().flatten().next().map_or((0.0, 0.0), |p| lonlat_to_world(p[0], p[1]));
+        let path = feature_path(f, origin);
         let atlas_style = atlas.then(|| crate::field_atlas::style(f)).flatten();
         let base_fill = atlas_style.map_or(f.fill, |s| [s.rgb[0], s.rgb[1], s.rgb[2], s.fill]);
         let (fill_rgba, stroke_rgba) = high_contrast_feature_colors(base_fill, f.stroke, theme);
@@ -116,28 +145,20 @@ fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Th
         let _ = fill_tess.tessellate_path(
             &path,
             &fill_opts,
-            &mut BuffersBuilder::new(&mut buf, |v: FillVertex| OverlayVertex {
-                offset: [0.0; 3],
-                world: [v.position().x, v.position().y],
-                color: fill,
-            }),
+            &mut BuffersBuilder::new(&mut buf, |v: FillVertex| OverlayVertex::new([origin.0 + v.position().x as f64, origin.1 + v.position().y as f64], fill, [0.0; 3])),
         );
         if atlas_style.is_none() {
             let ero = f.kind == wxdata::overlay::FeatureKind::Outlook && f.title.starts_with("ERO D");
             let border_px = if ero { ero_border_px.unwrap_or(1.6) } else { 1.6 };
             if border_px > 0.0 {
-                let width = (border_px * scale / (256.0 * 2f64.powf(zoom)) as f32).max(f32::EPSILON);
+                let width = (border_px * scale / (256.0 * 2f64.powf(zoom)) as f32).max(f32::MIN_POSITIVE);
                 let opts = StrokeOptions::default()
                     .with_line_width(width)
                     .with_tolerance(width * 0.5);
                 let _ = stroke_tess.tessellate_path(
                     &path,
                     &opts,
-                    &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
-                        offset: [0.0; 3],
-                        world: [v.position().x, v.position().y],
-                        color: stroke,
-                    }),
+                    &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex::new([origin.0 + v.position().x as f64, origin.1 + v.position().y as f64], stroke, [0.0; 3])),
                 );
             }
         }
@@ -193,10 +214,11 @@ pub fn append_placefiles_with_theme(
                 pts,
             } => {
                 let stroke = color(*col);
+                let origin = pts.first().map_or((0.0, 0.0), |p| project(*p));
                 let mut b = Path::builder();
                 let mut it = pts.iter().map(|&p| {
                     let (wx, wy) = project(p);
-                    lyon::math::point(wx as f32, wy as f32)
+                    lyon::math::point((wx - origin.0) as f32, (wy - origin.1) as f32)
                 });
                 if let Some(first) = it.next() {
                     b.begin(first);
@@ -214,21 +236,18 @@ pub fn append_placefiles_with_theme(
                 let _ = stroke_tess.tessellate_path(
                     &path,
                     &opts,
-                    &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex {
-                        offset: [0.0; 3],
-                        world: [v.position().x, v.position().y],
-                        color: stroke,
-                    }),
+                    &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex::new([origin.0 + v.position().x as f64, origin.1 + v.position().y as f64], stroke, [0.0; 3])),
                 );
                 append(geom, buf);
             }
             PlaceKind::Polygon { color: col, rings } => {
                 let fill = color(*col);
+                let origin = rings.iter().flatten().next().map_or((0.0, 0.0), |p| project(*p));
                 let mut b = Path::builder();
                 for ring in rings {
                     let mut it = ring.iter().map(|&p| {
                         let (wx, wy) = project(p);
-                        lyon::math::point(wx as f32, wy as f32)
+                        lyon::math::point((wx - origin.0) as f32, (wy - origin.1) as f32)
                     });
                     if let Some(first) = it.next() {
                         b.begin(first);
@@ -244,11 +263,7 @@ pub fn append_placefiles_with_theme(
                 let _ = fill_tess.tessellate_path(
                     &path,
                     &opts,
-                    &mut BuffersBuilder::new(&mut buf, |v: FillVertex| OverlayVertex {
-                        offset: [0.0; 3],
-                        world: [v.position().x, v.position().y],
-                        color: fill,
-                    }),
+                    &mut BuffersBuilder::new(&mut buf, |v: FillVertex| OverlayVertex::new([origin.0 + v.position().x as f64, origin.1 + v.position().y as f64], fill, [0.0; 3])),
                 );
                 append(geom, buf);
             }
@@ -258,11 +273,7 @@ pub fn append_placefiles_with_theme(
                 let base = geom.vertices.len() as u32;
                 for (p, c) in verts {
                     let (wx, wy) = project(*p);
-                    geom.vertices.push(OverlayVertex {
-                        offset: [0.0; 3],
-                        world: [wx as f32, wy as f32],
-                        color: color(*c),
-                    });
+                    geom.vertices.push(OverlayVertex::new([wx, wy], color(*c), [0.0; 3]));
                 }
                 geom.indices.extend(0..verts.len() as u32);
                 geom.indices
@@ -283,11 +294,7 @@ pub fn append_placefiles_with_theme(
                 };
                 for (p, _uv) in verts {
                     let (wx, wy) = project(*p);
-                    geom.vertices.push(OverlayVertex {
-                        offset: [0.0; 3],
-                        world: [wx as f32, wy as f32],
-                        color: col,
-                    });
+                    geom.vertices.push(OverlayVertex::new([wx, wy], col, [0.0; 3]));
                 }
                 geom.indices.extend(0..verts.len() as u32);
                 geom.indices
@@ -301,13 +308,13 @@ pub fn append_placefiles_with_theme(
     }
 }
 
-/// Build a closed lyon path (outer ring + holes) from a feature, in world coordinates.
-fn feature_path(f: &GeoFeature) -> Path {
+/// Build a closed lyon path relative to a nearby origin, before narrowing to lyon's f32.
+fn feature_path(f: &GeoFeature, origin: (f64, f64)) -> Path {
     let mut b = Path::builder();
     for ring in &f.rings {
         let mut pts = ring.iter().map(|&[lon, lat]| {
             let (wx, wy) = lonlat_to_world(lon, lat);
-            lyon::math::point(wx as f32, wy as f32)
+            lyon::math::point((wx - origin.0) as f32, (wy - origin.1) as f32)
         });
         if let Some(first) = pts.next() {
             b.begin(first);

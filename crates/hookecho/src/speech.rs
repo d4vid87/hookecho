@@ -81,8 +81,7 @@ pub fn enable() {
     #[cfg(target_arch = "wasm32")]
     {
         WEB_ENABLED.with(|enabled| enabled.set(true));
-        // Family Hub defers the large model until speech is requested; other browsers may also
-        // reach this button before their startup preparation begins.
+        // Defer the voice model on every browser until speech is requested.
         if js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStatus".into())
             .ok()
             .and_then(|value| value.as_string())

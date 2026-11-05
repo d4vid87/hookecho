@@ -64,12 +64,14 @@ fn shear_term(shear6_ms: f64) -> f64 {
 /// Significant Tornado Parameter (fixed layer). Shared with the point sounding, which calls this
 /// rather than keeping a second copy of the constants.
 pub fn stp(sbcape: f64, srh1: f64, shear6_ms: f64, lcl_agl_m: f64) -> f64 {
+    if ![sbcape, srh1, shear6_ms, lcl_agl_m].into_iter().all(f64::is_finite) { return f64::NAN; }
     let lcl_term = ((2000.0 - lcl_agl_m) / 1000.0).clamp(0.0, 1.0);
     (sbcape / 1500.0) * (srh1.max(0.0) / 150.0) * shear_term(shear6_ms) * lcl_term
 }
 
 /// Supercell Composite Parameter, shared with the point sounding.
 pub fn scp(sbcape: f64, srh3: f64, shear6_ms: f64) -> f64 {
+    if ![sbcape, srh3, shear6_ms].into_iter().all(f64::is_finite) { return f64::NAN; }
     (sbcape / 1000.0) * (srh3.max(0.0) / 50.0) * shear_term(shear6_ms)
 }
 
@@ -136,6 +138,8 @@ pub async fn fetch_grid(
 
     let mut values = vec![f32::NAN; f0.values.len()];
     for (i, out) in values.iter_mut().enumerate() {
+        // min/max and hypot can hide missing inputs before the formula sees them.
+        if fields.iter().any(|field| !field.values[i].is_finite()) { continue; }
         let cape = fields[0].values[i] as f64;
         let srh = fields[1].values[i] as f64;
         let v = match kind {
@@ -148,7 +152,7 @@ pub async fn fetch_grid(
                     SevereKind::Scp => scp(cape, srh, shear),
                     SevereKind::Stp => {
                         let lcl_agl =
-                            (fields[4].values[i] as f64 - fields[5].values[i] as f64).max(0.0);
+                            fields[4].values[i] as f64 - fields[5].values[i] as f64;
                         stp(cape, srh, shear, lcl_agl)
                     }
                     // Handled above, before any surface field was fetched.
@@ -253,9 +257,7 @@ async fn fetch_effective_grid(
     _model: hrrr::Model,
     kind: SevereKind,
 ) -> anyhow::Result<HrrrForecast> {
-    // HRRR's pressure file regardless of the picked source. The surface file carries only a
-    // handful of pressure levels, and RAP's awp130 packs U and V as two submessages of one GRIB
-    // record — a byte range for either decodes to U, so RAP winds here would be silently wrong.
+    // HRRR's pressure file supplies the full column ladder; the selected surface file has few levels.
     let model = hrrr::Model::HrrrPressure;
 
     let mut specs: Vec<(String, String, f64)> = Vec::new();
@@ -517,6 +519,25 @@ fn as_forecast(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_composite_ingredients_remain_missing_before_clamping() {
+        for missing in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for index in 0..4 {
+                let mut args = [1500.0, 150.0, 20.0, 1000.0];
+                args[index] = missing;
+                assert!(stp(args[0], args[1], args[2], args[3]).is_nan());
+            }
+            for index in 0..3 {
+                let mut args = [1000.0, 50.0, 20.0];
+                args[index] = missing;
+                assert!(scp(args[0], args[1], args[2]).is_nan());
+            }
+        }
+        assert!(stp(1500.0, 150.0, 20.0, f64::NAN - 100.0).is_nan());
+        assert!(stp(1500.0, 150.0, 20.0, 1000.0 - f64::NAN).is_nan());
+        assert_eq!(stp(1500.0, 150.0, 20.0, -100.0), stp(1500.0, 150.0, 20.0, 0.0));
+    }
 
     #[test]
     fn formulas_match_the_point_sounding() {

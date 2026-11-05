@@ -28,6 +28,9 @@ const TILES = "tiles-v2";
 // small enough that trimming stays cheap. Cache.keys() is insertion-ordered, so the oldest
 // entries are the first ones — evicting from the front is FIFO with no bookkeeping to store.
 const TILE_BYTES = 250 * 1024 * 1024;
+const MAX_TILE_BYTES = 8 * 1024 * 1024;
+const MAX_TILE_WRITES = 8;
+let pendingTileWrites = 0;
 let tileWrites = Promise.resolve();
 let tileSizes = null;
 
@@ -53,9 +56,48 @@ function isTile(url) {
   );
 }
 
-// Drop the oldest entries once the cache has grown past its cap. Fire-and-forget: a trim that
-// loses a race just runs again on the next tile.
-async function storeTile(request, response) {
+// Read admitted copies immediately: leaving a cloned response unread buffers the entire body.
+async function tileBytes(response) {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_TILE_BYTES) {
+        // A tee's cancellation can wait for the page's branch; never hold our admission slot for it.
+        reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  if (!length) return null;
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+
+function queueTile(request, response) {
+  if (response.status !== 200 || pendingTileWrites >= MAX_TILE_WRITES ||
+      Number(response.headers.get('content-length')) > MAX_TILE_BYTES) return;
+  let copy;
+  try { copy = response.clone(); } catch { return; }
+  pendingTileWrites++;
+  tileBytes(copy).then(bytes => {
+    if (!bytes) return;
+    const write = tileWrites.then(() => storeTile(request, response.headers, bytes));
+    tileWrites = write.catch(() => {});
+    return write;
+  }).catch(() => {}).finally(() => { pendingTileWrites--; });
+}
+
+// Serialize quota accounting and eviction; cache failures must never delay map display.
+async function storeTile(request, responseHeaders, bytes) {
   const c = await caches.open(TILES);
   if (!tileSizes) {
     tileSizes = new Map();
@@ -66,9 +108,7 @@ async function storeTile(request, response) {
       else tileSizes.set(key.url, size);
     }
   }
-  const bytes = await response.arrayBuffer();
-  if (!bytes.byteLength || bytes.byteLength > TILE_BYTES) return;
-  const headers = new Headers(response.headers);
+  const headers = new Headers(responseHeaders);
   headers.set("x-hookecho-cache-bytes", String(bytes.byteLength));
   // Stored bytes are already decoded by fetch; don't retain transport compression metadata.
   headers.delete("content-encoding");
@@ -82,7 +122,7 @@ async function storeTile(request, response) {
     tileSizes.delete(url);
     total -= size;
   }
-  await c.put(request, new Response(bytes, { status: response.status, headers }));
+  await c.put(request, new Response(bytes, { headers }));
   tileSizes.delete(request.url);
   tileSizes.set(request.url, bytes.byteLength);
 }
@@ -139,11 +179,10 @@ self.addEventListener("fetch", (e) => {
             // which is all the renderer needs. An error is not: caching a 404 tile would make a
             // transient outage permanent.
             if (res.ok && res.type !== "opaque") {
-              const copy = res.clone();
               // Not waitUntil: by the time this runs the response has usually already been
               // handed to the page, and a settled event rejects it. The worker stays alive for
               // the fetch anyway, and a store that loses the race costs one re-download.
-              tileWrites = tileWrites.then(() => storeTile(req, copy)).catch(() => {});
+              queueTile(req, res);
             }
             return res;
           }),

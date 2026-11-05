@@ -83,7 +83,7 @@ pub enum RoadShield {
 /// A map label to draw with the egui painter (never appears in GPU/headless PNGs).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PlaceLabel {
-    pub world: [f32; 2],
+    pub world: [f64; 2],
     pub name: String,
     /// OpenMapTiles `rank` (lower = more important); used for collision priority.
     pub rank: i64,
@@ -171,8 +171,8 @@ fn building_heights(props: &Option<HashMap<String, Value>>) -> Option<(f32, f32)
 
 /// Negative offset.z marks an elevated vertex in the shared overlay shader. One metre is
 /// reserved for the marker, so a zero-metre wall base is distinct from ordinary fill geometry.
-fn building_vertex(world: [f32; 2], metres: f32, rgba: [u8; 4]) -> OverlayVertex {
-    OverlayVertex { world, color: color(rgba), offset: [0.0, 0.0, -(metres + 1.0)] }
+fn building_vertex(world: [f64; 2], metres: f32, rgba: [u8; 4]) -> OverlayVertex {
+    OverlayVertex::new(world, color(rgba), [0.0, 0.0, -(metres + 1.0)])
 }
 
 fn append_building_walls(
@@ -193,8 +193,7 @@ fn append_building_walls(
             let grey = (170.0 * shade) as u8;
             let rgba = [grey, grey, grey, 153];
             let world = |p: geo_types::Coord<f32>| {
-                [((tx + p.x as f64 / extent) / n) as f32,
-                    ((ty + p.y as f64 / extent) / n) as f32]
+                [(tx + p.x as f64 / extent) / n, (ty + p.y as f64 / extent) / n]
             };
             let (a, b) = (world(a), world(b));
             let first = out.vertices.len() as u32;
@@ -225,10 +224,10 @@ fn append_building_walls(
 }
 
 /// Tile-local `(lx, ly)` in `0..extent` -> normalized mercator world point for tile `(z,x,y)`.
-fn tw(lx: f32, ly: f32, n: f64, tx: f64, ty: f64, extent: f64) -> lyon::math::Point {
+fn tw(lx: f32, ly: f32, n: f64, tx: f64, ty: f64, extent: f64) -> [f64; 2] {
     let wx = (tx + lx as f64 / extent) / n;
     let wy = (ty + ly as f64 / extent) / n;
-    lyon::math::point(wx as f32, wy as f32)
+    [wx, wy]
 }
 
 fn tile_point(lx: f32, ly: f32, extent: f64) -> lyon::math::Point {
@@ -325,26 +324,10 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
         let (x1, y1) = ((txf + 1.0) / n, (tyf + 1.0) / n);
         let base = verts.len() as u32;
         verts.extend_from_slice(&[
-            OverlayVertex {
-                offset: [0.0; 3],
-                world: [x0 as f32, y0 as f32],
-                color: bg,
-            },
-            OverlayVertex {
-                offset: [0.0; 3],
-                world: [x1 as f32, y0 as f32],
-                color: bg,
-            },
-            OverlayVertex {
-                offset: [0.0; 3],
-                world: [x1 as f32, y1 as f32],
-                color: bg,
-            },
-            OverlayVertex {
-                offset: [0.0; 3],
-                world: [x0 as f32, y1 as f32],
-                color: bg,
-            },
+            OverlayVertex::new([x0, y0], bg, [0.0; 3]),
+            OverlayVertex::new([x1, y0], bg, [0.0; 3]),
+            OverlayVertex::new([x1, y1], bg, [0.0; 3]),
+            OverlayVertex::new([x0, y1], bg, [0.0; 3]),
         ]);
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
@@ -415,20 +398,13 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                 &opts,
                 &mut BuffersBuilder::new(&mut buf, |v: FillVertex| {
                     let p = v.position();
-                    OverlayVertex {
-                        offset: [0.0; 3],
-                        world: [
-                            ((txf + p.x as f64) / n) as f32,
-                            ((tyf + p.y as f64) / n) as f32,
-                        ],
-                        color: fill,
-                    }
+                    OverlayVertex::new([(txf + p.x as f64) / n, (tyf + p.y as f64) / n], fill, [0.0; 3])
                 }),
             );
             if *layer == "building" && details.extrude_buildings {
                 if let Some((base, top)) = building_heights(&f.properties) {
                     for vertex in &mut buf.vertices {
-                        *vertex = building_vertex(vertex.world, top, [170, 170, 170, 153]);
+                        *vertex = building_vertex(vertex.precise_world(), top, [170, 170, 170, 153]);
                     }
                     append(&mut buildings.vertices, &mut buildings.indices, buf);
                     append_building_walls(
@@ -523,15 +499,9 @@ fn build_tile_detail(bytes: &[u8], id: TileId, palette: basemap_style::Palette,
                     let p = v.position_on_path();
                     let normal = v.normal();
                     let half_px = (w as f64 / px_to_tile * 0.5) as f32;
-                    OverlayVertex {
-                        offset: [normal.x * half_px, normal.y * half_px,
-                            if *layer == "transportation" { 1.0 } else { 0.0 }],
-                        world: [
-                            ((txf + p.x as f64) / n) as f32,
-                            ((tyf + p.y as f64) / n) as f32,
-                        ],
-                        color: stroke,
-                    }
+                    OverlayVertex::new([(txf + p.x as f64) / n, (tyf + p.y as f64) / n], stroke,
+                        [normal.x * half_px, normal.y * half_px,
+                            if *layer == "transportation" { 1.0 } else { 0.0 }])
                 }),
             );
             // The radar sits below the complete road layer, not just major highways. Keep each
@@ -600,7 +570,7 @@ fn extract_labels(
                     _ => 100,
                 };
                 out.push(PlaceLabel {
-                    world: [p.x, p.y],
+                    world: p,
                     name,
                     rank,
                     city,
@@ -652,7 +622,7 @@ fn extract_airport_labels(
             }?;
             let p = tw(px, py, n, txf, tyf, extent);
             Some(PlaceLabel {
-                world: [p.x, p.y],
+                world: p,
                 name: format!("✈ {name}"),
                 rank: 80,
                 city: false,
@@ -784,7 +754,7 @@ fn extract_road_labels(
         for (px, py) in road_anchors(&f.geometry, shield != RoadShield::None) {
             let p = tw(px, py, n, txf, tyf, extent);
             out.push(PlaceLabel {
-                world: [p.x, p.y],
+                world: p,
                 name: name.clone(),
                 rank,
                 city: false,
@@ -853,7 +823,7 @@ fn extract_pois(reader: &Reader, names: &[String], n: f64, txf: f64, tyf: f64) -
         if let Some((px, py)) = pt {
             let p = tw(px, py, n, txf, tyf, extent);
             out.push(PlaceLabel {
-                world: [p.x, p.y],
+                world: p,
                 name,
                 // Below every town: the collision pass drops these first when space runs out.
                 rank: 500,
@@ -955,7 +925,10 @@ pub async fn fetch_visible_vector(
             wxdata::task::blocking(move || build_tile(&bytes, id, palette, tess_zoom)).await?
         }).await {
             Ok((verts, indices, foreground_vertices, foreground_indices, lbls)) => {
-                labels.extend(lbls);
+                labels.extend(lbls.into_iter().map(|mut label| {
+                    label.world[0] += v.world_copy() as f64;
+                    label
+                }));
                 out.push(PendingVectorTile {
                     id, vertices: verts, indices, foreground_vertices, foreground_indices,
                 });
@@ -1476,11 +1449,22 @@ impl VectorTileManager {
         self.label_gen
     }
 
+    /// Match the geometry's visible world copies before CPU projection, including pitched views.
+    pub fn labels_for_view(&self, visible: &[VisibleTile]) -> Vec<PlaceLabel> {
+        visible.iter().flat_map(|tile| {
+            self.labels_for(std::iter::once(&tile.id)).into_iter().map(move |label| {
+                let mut label = label.clone();
+                label.world[0] += tile.world_copy() as f64;
+                label
+            })
+        }).collect()
+    }
+
     /// Labels for the given visible tile ids (for the egui text pass).
     pub fn labels_for<'a>(&'a self, ids: impl Iterator<Item = &'a TileId>) -> Vec<&'a PlaceLabel> {
         let mut labels = Vec::new();
         for &id in ids {
-            let n = (1u32 << id.0) as f32;
+            let n = (1u32 << id.0) as f64;
             if let Some(exact) = self.labels.get(&id) {
                 labels.extend(exact.iter().filter(|l|
                     ((l.world[0] * n).floor() as u32, (l.world[1] * n).floor() as u32) == (id.1, id.2)));
@@ -1495,7 +1479,7 @@ impl VectorTileManager {
                         ((l.world[0] * n).floor() as u32, (l.world[1] * n).floor() as u32)
                             == (id.1, id.2)
                             && !sources.iter().any(|&(z, x, y)| {
-                                let n = (1u32 << z) as f32;
+                                let n = (1u32 << z) as f64;
                                 z > source.0 && ((l.world[0] * n).floor() as u32,
                                     (l.world[1] * n).floor() as u32) == (x, y)
                             })
@@ -1574,6 +1558,22 @@ mod tests {
         assert!(raised.2.iter().any(|v| v.offset[2] == -33.0), "32-metre roof");
         assert!(raised.2.iter().any(|v| v.offset[2] == -5.0), "4-metre base");
         assert!(raised.3.iter().all(|&i| i < raised.2.len() as u32));
+    }
+
+    #[test]
+    fn street_zoom_vector_vertices_retain_tile_local_precision() {
+        let id = (20, 930000, 412345);
+        let n = (1u32 << id.0) as f64;
+        let tile = build_tile_detail(&building_fixture(), id, basemap_style::Palette::Dark, 20.0,
+            crate::settings::Theme::Dark, false, basemap_style::MapDetailStyle::default()).unwrap();
+        for (x, y) in [(1000.0, 1000.0), (2000.0, 1000.0), (2000.0, 2000.0), (1000.0, 2000.0)] {
+            let expected = [(id.1 as f64 + x / 4096.0) / n, (id.2 as f64 + y / 4096.0) / n];
+            assert!(tile.0.iter().any(|vertex| {
+                let actual = vertex.precise_world();
+                (actual[0] - expected[0]).abs() * 256.0 * n < 0.001
+                    && (actual[1] - expected[1]).abs() * 256.0 * n < 0.001
+            }), "decoded building corner {expected:?} lost precision");
+        }
     }
 
     fn test_manager() -> VectorTileManager {
@@ -1720,6 +1720,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn antimeridian_labels_follow_visible_geometry_in_flat_and_pitched_views() {
+        let mut manager = test_manager();
+        let vp = (1000.0, 800.0);
+        for (center_lon, label_lon) in [(179.0, -179.0), (-179.0, 179.0)] {
+            let world = crate::render::mercator::lonlat_to_world(label_lon, 1.0);
+            let child = (5, (world.0 * 32.0).floor() as u32, (world.1 * 32.0).floor() as u32);
+            let parent = (4, child.1 >> 1, child.2 >> 1);
+            for resident in [child, parent] {
+                manager.labels.clear();
+                manager.labels.insert(resident, vec![PlaceLabel { name: "Dateline".into(),
+                    world: [world.0, world.1], city: true, rank: 1,
+                    shield: RoadShield::None, min_zoom: 0.0 }]);
+                for pitch in [0.0, 55.0] {
+                    let mut camera = Camera::at_lonlat(center_lon, 0.0, 5.0);
+                    camera.pitch_deg = pitch;
+                    camera.bearing_deg = if pitch == 0.0 { 0.0 } else { 30.0 };
+                    let visible = crate::tiles::tile_cover(&camera, vp, 5, 0.0);
+                    let labels = manager.labels_for_view(&visible);
+                    assert_eq!(labels.len(), 1);
+                    let tile = visible.iter().find(|tile| tile.id == child).unwrap();
+                    assert_eq!(labels[0].world[0], world.0 + tile.world_copy() as f64);
+                    let projected = camera.world_to_screen((labels[0].world[0], labels[0].world[1]), vp);
+                    assert!((0.0..vp.0).contains(&projected.0) && (0.0..vp.1).contains(&projected.1), "{projected:?}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn labels_follow_cached_geography_through_zoom_and_partial_loads() {
         let mut manager = test_manager();
         let parent = (4, 3, 5);
@@ -1763,7 +1792,7 @@ mod tests {
         let queue = |m: &mut VectorTileManager| {
             for x in 0..2 {
                 m.tx.send((m.render_generation, Ok(FetchedVector {
-                    id:(4,x,5),vertices:vec![OverlayVertex { world:[0.0,0.0],color:[1.0;4],offset:[0.0;3] };3],
+                    id:(4,x,5),vertices:vec![OverlayVertex::new([0.0,0.0], [1.0;4], [0.0;3]);3],
                     indices:if x==1 { (0..(3<<20)/4).map(|i| i%3).collect() } else { vec![0,1,2] },
                     foreground_vertices:Vec::new(),foreground_indices:Vec::new(),labels:Vec::new(),
                 }))).unwrap();

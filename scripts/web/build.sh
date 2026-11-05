@@ -81,7 +81,7 @@ video_export_hash="$(hash_of web/video-export.js)"
 cp web/video-export.js "web/dist/video-export-$video_export_hash.js"
 
 # Keep startup helpers tied to their app shell when an older worker still controls a tab.
-for name in decode-worker decode-bridge video-player amy-bootstrap; do
+for name in decode-worker decode-bridge video-player amy-bootstrap feed-fetch; do
   rm -f "web/dist/$name-"*.js
   hash="$(hash_of "web/$name.js")"
   cp "web/$name.js" "web/dist/$name-$hash.js"
@@ -104,7 +104,7 @@ done
 font_urls="{${font_urls%,}}"
 
 # Amy is deliberately outside the radar wasm and below Cloudflare Pages' 25 MiB file ceiling.
-# Start-up JS fetches these ordered pieces only after the map is running.
+# The voice control fetches these ordered pieces only when spoken alerts are enabled.
 "$root/packaging/piper/fetch.sh" web "$root/target/piper/web"
 "$root/scripts/web/piper-runtime.sh"
 voice_dir="web/voice/amy-medium-39ab474b"
@@ -125,6 +125,7 @@ sed \
   -e "s#decode-bridge\.js#dist/decode-bridge-$decode_bridge_hash.js#g" \
   -e "s#video-player\.js#dist/video-player-$video_player_hash.js#g" \
   -e "s#amy-bootstrap\.js#dist/amy-bootstrap-$amy_bootstrap_hash.js#g" \
+  -e "s#feed-fetch\.js#dist/feed-fetch-$feed_fetch_hash.js#g" \
   -e "s#__FONT_URLS__#$font_urls#" \
   web/index.src.html > web/index.html
 
@@ -214,7 +215,11 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # These fixes measure 4,792,941 gzip bytes; keep 7,059 bytes of headroom and unchanged Lite/startup gates.
 # Worldwide selection, European history and OPERA/CWA/KMA worker decoders measure 4,877,777
 # gzip bytes (+84,836, 1.8%). Keep a narrow margin; Lite and startup budgets stay unchanged.
-budget="${HOOKECHO_WASM_BUDGET:-4890000}"
+# Bounded image decoding, model-worker dispatch and high-zoom precision measure 4,900,156
+# gzip bytes (+0.3%); keep 4,844 bytes of margin and unchanged Lite/startup limits.
+# Sync/notification reliability and GPU precision fixes measure 4,910,220 gzip bytes (+0.2%).
+# Keep a small main-bundle margin; Lite and startup limits stay unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4915000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

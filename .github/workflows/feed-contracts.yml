@@ -13,6 +13,7 @@ permissions:
 jobs:
   official-sources:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Verify public NOAA prefixes
@@ -39,5 +40,30 @@ jobs:
         with:
           name: cross-source-timing-${{ github.run_id }}
           path: cross-source-capture.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  regional-radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev \
+            libwayland-dev libxcb1-dev libgtk-3-dev
+      - name: Check OPERA, JMA, CWA, and Canada timestamps and sample decodes
+        run: |
+          set -o pipefail
+          scripts/feed-contracts.sh --regional 2>&1 | tee regional-feed-contracts.log
+      - name: Upload regional source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regional-feed-contracts-${{ github.run_id }}
+          path: regional-feed-contracts.log
           if-no-files-found: warn
           retention-days: 30

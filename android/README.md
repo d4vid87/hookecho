@@ -13,8 +13,9 @@ creation.
 
 - **Target:** `arm64-v8a`, minSdk 29 (Android 10), Vulkan.
 - **What differs from desktop:** storage routes to the app-private data dir
-  ([`paths.rs`](../crates/hookecho/src/paths.rs)); native file dialogs are replaced by a fixed
-  `exports/` folder ([`dialog.rs`](../crates/hookecho/src/dialog.rs)); the tray, gpsd GPS, and MP4
+  ([`paths.rs`](../crates/hookecho/src/paths.rs)); file imports use Android's document picker and
+  completed exports offer Save to files or Share ([`dialog.rs`](../crates/hookecho/src/dialog.rs)).
+  Imported palettes and alert sounds survive cache clearing. The tray, gpsd GPS, and MP4
   export (ffmpeg) are hidden; the UI is a Material 3 layout (map-first, one persistent bottom sheet with snap points, a docked
   toolbar, full-screen surfaces instead of floating windows) rather than the desktop chrome —
   see [`app/mobile/`](../crates/hookecho/src/app/mobile/) and the tokens in
@@ -94,6 +95,6 @@ topic in Settings) still works and is the option that does not cost a permanent 
 ## Status
 
 Phases 0–1 of the port (lib split, Android entry, platform gating, storage, touch input, CI) are in
-place. On-device polish (soft-keyboard IME, drawer toolbox, JNI GPS, Storage-Access-Framework
-import, Play Store) is tracked as deferred work in the port plan. The APK build itself runs in the
+place. On-device polish (soft-keyboard IME, drawer toolbox, JNI GPS,
+Play Store) is tracked as deferred work in the port plan. The APK build itself runs in the
 release workflow; a physical device is needed to exercise the GUI.

@@ -40,6 +40,8 @@ pub struct ChaseReplay {
     pub speed: f64,
     /// App time the playhead last advanced, so speed means something regardless of frame rate.
     last_step: f64,
+    /// Replay seconds elapsed since the current GPS fix, including fractional frames.
+    offset_secs: f64,
 }
 
 impl Default for ChaseReplay {
@@ -52,6 +54,7 @@ impl Default for ChaseReplay {
             playing: false,
             speed: 60.0,
             last_step: 0.0,
+            offset_secs: 0.0,
         }
     }
 }
@@ -64,6 +67,7 @@ impl ChaseReplay {
         self.source = source.into();
         self.at = 0;
         self.playing = false;
+        self.offset_secs = 0.0;
     }
 
     /// The fix under the playhead.
@@ -81,26 +85,21 @@ impl ChaseReplay {
         self.last_step = now;
         // A frame that took a second (a decode, a tab coming back) would otherwise jump the
         // playhead a minute of track; clamp it to something a viewer can follow.
-        let track_secs = (dt.clamp(0.0, 0.25) * self.speed) as i64;
-        let Some(from) = self.current() else {
-            return false;
-        };
-        let target = from.ts + track_secs.max(0);
-        let next = self
-            .track
-            .points
-            .iter()
-            .position(|p| p.ts >= target)
-            .unwrap_or(self.track.points.len() - 1);
-        if next == self.at {
-            return false;
+        self.offset_secs += dt.clamp(0.0, 0.25) * self.speed;
+        let before = self.at;
+        while let Some(next) = self.track.points.get(self.at + 1) {
+            let Some(from) = self.current() else { break };
+            let gap = next.ts.saturating_sub(from.ts).max(0) as f64;
+            if gap > self.offset_secs + 1e-9 { break; }
+            self.offset_secs = (self.offset_secs - gap).max(0.0);
+            self.at += 1;
         }
-        self.at = next;
         if self.at + 1 >= self.track.points.len() {
             // Stop at the end rather than loop: a drive has a destination.
             self.playing = false;
+            self.offset_secs = 0.0;
         }
-        true
+        self.at != before
     }
 
     pub fn show(
@@ -169,6 +168,7 @@ impl ChaseReplay {
                     // looks broken.
                     if self.playing && self.at + 1 >= self.track.points.len() {
                         self.at = 0;
+                        self.offset_secs = 0.0;
                     }
                     self.last_step = ui.input(|i| i.time);
                     seek = true;
@@ -181,6 +181,7 @@ impl ChaseReplay {
                 {
                     self.at = at;
                     self.playing = false;
+                    self.offset_secs = 0.0;
                     seek = true;
                 }
             });
@@ -266,10 +267,11 @@ mod tests {
         };
         // One second of wall clock at 60x is a minute of track: one point.
         r.last_step = 0.0;
-        assert!(r.advance(0.2));
+        for i in 1..5 { assert!(!r.advance(i as f64 * 0.2)); }
+        assert!(r.advance(1.0));
         assert_eq!(r.at, 1);
         // Enough steps to run off the end: it stops there rather than wrapping or panicking.
-        for i in 2..20 {
+        for i in 6..=20 {
             r.advance(i as f64 * 0.2);
         }
         assert_eq!(r.at, 4);
@@ -298,7 +300,28 @@ mod tests {
             ..Default::default()
         };
         // Ten seconds of stall at 60x would be ten minutes of track; the clamp keeps it to 15 s.
-        assert!(r.advance(10.0));
+        assert!(!r.advance(10.0));
+        assert_eq!(r.at, 0);
+        assert_eq!(r.offset_secs, 15.0);
+    }
+
+    #[test]
+    fn fractional_frames_and_sparse_fixes_keep_the_selected_speed() {
+        for fps in [30, 60, 120] {
+            for speed in [10.0, 60.0, 300.0] {
+                let mut r = ChaseReplay { track: track(2000), playing: true, speed, ..Default::default() };
+                for (index, point) in r.track.points.iter_mut().enumerate() { point.ts = 1_700_000_000 + index as i64; }
+                for frame in 1..=fps * 5 { r.advance(frame as f64 / fps as f64); }
+                assert_eq!(r.at, (5.0 * speed) as usize, "{fps} FPS at {speed}x");
+            }
+        }
+        let mut r = ChaseReplay { track: track(10), playing: true, speed: 60.0, ..Default::default() };
+        for point in &mut r.track.points { point.ts *= 2; }
+        for frame in 1..=30 { assert!(!r.advance(frame as f64 / 30.0)); }
+        assert_eq!(r.at, 0, "the next fix is still a minute of replay time away");
+        for frame in 31..=60 { r.advance(frame as f64 / 30.0); }
         assert_eq!(r.at, 1);
+        r.load(track(3), "replacement");
+        assert_eq!(r.offset_secs, 0.0);
     }
 }

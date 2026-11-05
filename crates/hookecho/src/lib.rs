@@ -53,6 +53,7 @@ pub mod gps;
 pub mod headless;
 pub mod hotkeys;
 pub mod icon;
+mod image_load;
 pub mod labelplace;
 pub mod loopexport;
 /// MQTT publishing for home automation; native only (no TCP socket in a browser).
@@ -234,6 +235,12 @@ pub fn bin_radar_display(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsVa
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn decode_mrms(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
     wxdata::mrms::decode_worker(payload).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn decode_model(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::hrrr::decode_worker(payload).map_err(|e| e.to_string().into())
 }
 
 #[cfg(target_arch = "wasm32")]

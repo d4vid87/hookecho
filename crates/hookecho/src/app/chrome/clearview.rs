@@ -116,7 +116,7 @@ impl HookEchoApp {
                                 .named_toggle("Expand radar controls", expanded)
                                 .on_hover_text(full_name).clicked() { expanded = !expanded; }
                             ui.menu_button(ph::DOTS_THREE, |ui| {
-                                menu = ui.button(format!("{} Menu", ph::SQUARES_FOUR)).clicked();
+                                menu = ui.button(format!("{} Menu", ph::SQUARES_FOUR)).named("Open Quick Launch").clicked();
                                 search = ui.button(format!("{} Search", ph::MAGNIFYING_GLASS)).clicked();
                                 settings = ui.button(format!("{} Settings", ph::SLIDERS_HORIZONTAL)).clicked();
                                 if menu || search || settings { ui.close(); }

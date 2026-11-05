@@ -1775,30 +1775,64 @@ impl Settings {
     /// file (inlined by moment short name), so it restores identically on another machine where
     /// the palette paths don't exist. Returns pretty JSON.
     pub fn export_bundle(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(&self.bundle()?).map_err(|e| e.to_string())
+    }
+
+    fn bundle(&self) -> Result<SettingsBundle, String> {
+        use std::io::Read;
+        const MAX_PALETTE_BYTES: usize = 2 * 1024 * 1024;
         let mut palette_files = BTreeMap::new();
+        let mut total = 0;
         for (moment, path) in &self.palettes {
-            // A built-in alternate is compiled in on the other machine too — nothing to inline.
-            if path.starts_with(crate::colormap::BUILTIN_PREFIX) {
-                continue;
-            }
-            match std::fs::read_to_string(path) {
-                Ok(text) => {
-                    palette_files.insert(moment.clone(), text);
-                }
-                Err(e) => log::warn!("bundle: skipping palette {moment} ({path}): {e}"),
-            }
+            if path.starts_with(crate::colormap::BUILTIN_PREFIX) { continue; }
+            let text = if let Some(text) = self.web_files.get(path) {
+                if text.len() > MAX_PALETTE_BYTES { return Err(format!("palette {moment} exceeds 2 MiB")); }
+                text.clone()
+            } else {
+                let file = match std::fs::File::open(path) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        log::warn!("bundle: skipping palette {moment} ({path}): {e}");
+                        continue;
+                    }
+                };
+                let mut text = String::new();
+                file.take(MAX_PALETTE_BYTES as u64 + 1).read_to_string(&mut text).map_err(|e| e.to_string())?;
+                if text.len() > MAX_PALETTE_BYTES { return Err(format!("palette {moment} exceeds 2 MiB")); }
+                text
+            };
+            total += text.len();
+            if total > crate::cloud::MAX_SYNC_BYTES { return Err("palette bundle exceeds 8 MiB".into()); }
+            palette_files.insert(moment.clone(), text);
         }
-        let bundle = SettingsBundle {
-            settings: self.clone(),
-            palette_files,
-        };
-        serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
+        Ok(SettingsBundle { settings: self.clone(), palette_files })
+    }
+
+    /// Cloud uses the same palette contents as exported bundles, encoded in the existing
+    /// inline-file format understood by both native and browser palette loaders.
+    pub(crate) fn portable_sync(&self) -> Result<Settings, String> {
+        let bundle = self.bundle()?;
+        let mut settings = bundle.settings;
+        settings.inline_bundle_palettes(bundle.palette_files);
+        Ok(settings)
+    }
+
+    fn inline_bundle_palettes(&mut self, palette_files: BTreeMap<String, String>) {
+        for (moment, text) in palette_files {
+            let name = format!("bundle-{moment}.pal");
+            self.web_files.insert(name.clone(), text);
+            self.palettes.insert(moment, name);
+        }
     }
 
     /// Import a bundle produced by [`export_bundle`]: writes each inlined `.pal` into the local
     /// colortables dir and rewrites the palette paths to point there, so the imported palettes
     /// resolve locally. Returns the ready-to-use Settings (caller assigns + saves).
     pub fn import_bundle(json: &str) -> Result<Settings, String> {
+        Self::import_bundle_in(json, Self::colortables_dir().as_deref())
+    }
+
+    fn import_bundle_in(json: &str, directory: Option<&std::path::Path>) -> Result<Settings, String> {
         let bundle: SettingsBundle = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let mut settings = bundle.settings;
         // A portable settings file is not permission to execute its author's commands.
@@ -1806,7 +1840,6 @@ impl Settings {
             plugin.enabled = false;
         }
         if !bundle.palette_files.is_empty() {
-            let dir = Self::colortables_dir().ok_or("no colortables dir")?;
             for moment in bundle.palette_files.keys() {
                 if moment.is_empty()
                     || !moment
@@ -1816,7 +1849,12 @@ impl Settings {
                     return Err(format!("invalid palette name: {moment:?}"));
                 }
             }
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let Some(dir) = directory else {
+                // Browsers persist these bytes with the settings, using the ordinary palette loader.
+                settings.inline_bundle_palettes(bundle.palette_files);
+                return Ok(settings);
+            };
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             let stage = dir.join(format!(".import-{}", std::process::id()));
             if stage.exists() {
                 std::fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
@@ -2451,12 +2489,33 @@ mod tests {
             "settings": {"default_site":"KFWS","theme":"Magma","markers":[{"name":"H","lat":1.0,"lon":2.0}]},
             "palette_files": {"REF":"; test palette\nStep: 5\n"}
         }"#;
-        let s = Settings::import_bundle(json).expect("import");
+        let dir = std::env::temp_dir().join(format!("hookecho-bundle-test-{}", std::process::id()));
+        let s = Settings::import_bundle_in(json, Some(&dir)).expect("import");
         assert_eq!(s.default_site, "KFWS");
         assert_eq!(s.theme, Theme::Dark); // "Magma" is aliased onto Dark
         let ref_path = s.palettes.get("REF").expect("REF palette path set");
         let text = std::fs::read_to_string(ref_path).expect("palette file written");
         assert!(text.contains("test palette"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn desktop_palette_bundle_round_trips_without_a_filesystem() {
+        let json = r#"{"settings":{"palettes":{"REF":"/other/machine/ref.pal"}},
+            "palette_files":{"REF":"Step: 5\nColor: 0 0 0 0\nColor: 80 255 255 255\n"}}"#;
+        let imported = Settings::import_bundle_in(json, None).unwrap();
+        let name = &imported.palettes["REF"];
+        assert!(imported.web_files[name].contains("Color: 80"));
+        assert!(imported.palette_paths()[0].as_ref().unwrap().to_string_lossy()
+            .starts_with(crate::colormap::INLINE_PREFIX));
+        let saved = serde_json::to_string(&imported).unwrap();
+        let reloaded: Settings = serde_json::from_str(&saved).unwrap();
+        let exported = reloaded.export_bundle().unwrap();
+        let bundle: SettingsBundle = serde_json::from_str(&exported).unwrap();
+        assert_eq!(bundle.palette_files["REF"], imported.web_files[name]);
+        assert_eq!(Settings::import_bundle_in(&exported, None).unwrap().palette_paths(), imported.palette_paths());
+        let invalid = json.replace("\"REF\":\"Step", "\"../REF\":\"Step");
+        assert!(Settings::import_bundle_in(&invalid, None).is_err());
     }
 
     #[test]
