@@ -130,28 +130,28 @@ type Basemap = (
 
 /// Basemap for the national-layer renders, so field mosaics sit over a real map instead of
 /// the bare clear color. Default: dark vector tiles (same fetch path as `run`).
-/// `HOOKECHO_BASEMAP=<slug>` switches to any raster style, e.g. `mapbox-satellite-streets`
+/// `HOOKECHO_BASEMAP=<slug>` switches styles, e.g. `mapbox-satellite-streets` or `opera-radar`
 /// (provider keys come from the saved Settings — never logged).
 fn national_basemap(rt: &tokio::runtime::Runtime, camera: &Camera) -> Basemap {
     let vp = (size() as f32, size() as f32);
     let client = reqwest::Client::new();
-    if let Ok(slug) = std::env::var("HOOKECHO_BASEMAP") {
-        let style = crate::tiles::BasemapStyle::from_slug(&slug);
-        if style.is_raster() {
-            let settings = crate::settings::Settings::load();
-            let tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
-            let vis = tm.visible(style, camera, vp, 0.0);
-            let tiles = rt.block_on(crate::tiles::fetch_visible(
-                &client,
-                style,
-                &vis,
-                &settings.mapbox_key,
-                &settings.maptiler_key,
-            ));
-            println!("basemap {}: {} raster tiles", style.label(), tiles.len());
-            return (tiles, vis, Vec::new(), Vec::new(), Vec::new());
-        }
-    }
+    let style = std::env::var("HOOKECHO_BASEMAP")
+        .map(|slug| BasemapStyle::from_slug(&slug)).unwrap_or(BasemapStyle::Dark).resolve(true);
+    let (mut raster, raster_visible) = if style.is_raster() {
+        let settings = crate::settings::Settings::load();
+        let tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
+        let vis = tm.visible(style, camera, vp, 0.0);
+        let tiles = rt.block_on(crate::tiles::fetch_visible(
+            &client, style, &vis, &settings.mapbox_key, &settings.maptiler_key,
+        ));
+        println!("basemap {}: {} raster tiles", style.label(), tiles.len());
+        (tiles, vis)
+    } else { (Vec::new(), Vec::new()) };
+    // National export callbacks share the one-shot basemap slot 0; match that upload identity.
+    for tile in &mut raster { tile.style = 0; }
+    let Some(palette) = style.vector_palette() else {
+        return (raster, raster_visible, Vec::new(), Vec::new(), Vec::new());
+    };
     let vis = crate::tiles::tile_cover(camera, vp, 14, 0.0);
     let tiles = rt.block_on(async {
         let template = crate::vector_tiles::fetch_tilejson(&client, None).await?;
@@ -159,7 +159,7 @@ fn national_basemap(rt: &tokio::runtime::Runtime, camera: &Camera) -> Basemap {
             crate::vector_tiles::fetch_visible_vector(
                 &client,
                 &template,
-                crate::basemap_style::Palette::Dark,
+                palette,
                 camera.zoom,
                 &vis,
             )
@@ -170,14 +170,14 @@ fn national_basemap(rt: &tokio::runtime::Runtime, camera: &Camera) -> Basemap {
         Some((t, labels)) => {
             println!("basemap: {} vector tiles", t.len());
             (
-                Vec::new(),
-                Vec::new(),
+                raster,
+                raster_visible,
                 t,
                 vis.iter().map(|v| v.id).collect(),
                 labels,
             )
         }
-        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        None => (raster, raster_visible, Vec::new(), Vec::new(), Vec::new()),
     }
 }
 
@@ -281,6 +281,25 @@ fn stamp_time(t: &chrono::DateTime<chrono::Utc>) -> String {
     t.format("%Y-%m-%d %H:%MZ").to_string()
 }
 
+/// A deliberate archive request cannot borrow yesterday's live-loop tail or ignore bad time input.
+fn select_archive_frame(
+    frames: Vec<level2::Identifier>, day: chrono::NaiveDate, hhmm: Option<&str>,
+) -> anyhow::Result<level2::Identifier> {
+    let target_min = hhmm.map(|value| parse_hhmm(value)
+        .ok_or_else(|| anyhow::anyhow!("invalid UTC time {value}; expected HH:MM"))).transpose()?;
+    let frames = frames.into_iter().filter(|frame|
+        frame.date_time().is_some_and(|at| at.date_naive() == day));
+    let frame = if let Some(target_min) = target_min {
+        frames.min_by_key(|frame| {
+            let time = frame.date_time().expect("filtered dated frame").time();
+            (time.signed_duration_since(chrono::NaiveTime::MIN).num_minutes() - target_min).abs()
+        })
+    } else {
+        frames.max_by_key(level2::Identifier::date_time)
+    };
+    frame.ok_or_else(|| anyhow::anyhow!("no published radar volumes for {day}; the selected source may only retain recent scans"))
+}
+
 /// Render one real radar sweep for `site` to a PNG.
 ///
 /// `pal` optionally overrides the moment's colormap with a GRLevelX `.pal` file (verifies the
@@ -318,25 +337,37 @@ pub fn run(
     // The volume's own time, formatted, for the caption — carried as a string because each
     // network hands back a different chrono type for it and the caption is all any of them feed.
     let (sweep, scan_time) = rt.block_on(async {
-        // Only NEXRAD has a volume archive to scrub; every other network publishes its current
-        // volume and nothing else. Saying so is better than quietly rendering "now" for a request
-        // that asked for last Tuesday.
-        if !wxdata::sites::is_nexrad(site) && (date.is_some() || hhmm.is_some()) {
-            anyhow::bail!("{site} has no volume archive — only the current scan is available");
+        let http = reqwest::Client::builder()
+            .user_agent(wxdata::alerts::USER_AGENT)
+            .build()?;
+        let network = wxdata::sites::network(site);
+        // A requested time must use timestamped objects, including the rolling European caches.
+        if let Some(day) = date.or_else(|| hhmm.map(|_| chrono::Utc::now().date_naive())) {
+            use wxdata::sites::Network;
+            let frames = match network {
+                Network::Nexrad => level2::list_volumes(site, day).await?,
+                Network::Tdwr => wxdata::tdwr::list_volumes(&http, site, day).await?,
+                Network::Dwd => wxdata::dwd::list_volumes(&http, site, day).await?,
+                Network::Opera => wxdata::opera::list_volumes(&http, site, day).await?,
+            };
+            let id = select_archive_frame(frames, day, hhmm)?;
+            eprintln!("archive frame: {}", id.name());
+            let requested_time = id.date_time().expect("selected dated frame");
+            let (time, scan) = match network {
+                Network::Nexrad => (requested_time, level2::download_scan(id, None).await?),
+                Network::Tdwr => wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, time, scan)| (time, scan))?,
+                Network::Dwd => wxdata::dwd::fetch_volume_at(&http, &id).await.map(|(_, time, scan)| (time, scan))?,
+                Network::Opera => wxdata::opera::fetch_volume_at(&http, &id).await.map(|(_, time, scan)| (time, scan))?,
+            };
+            return Ok((level2::bin_scan_opts(&scan, moment, tilt, dealias)?, Some(stamp_time(&time))));
         }
-        // The live path for those networks: one call assembles the newest volume from the site's
-        // own files, and it feeds the same binner the Level 2 path uses.
-        if !wxdata::sites::is_nexrad(site) {
-            let http = reqwest::Client::builder()
-                .user_agent(wxdata::alerts::USER_AGENT)
-                .build()?;
-            let fetched = match wxdata::sites::network(site) {
+        // The live path assembles the newest published volume with the same binner as Level II.
+        if network != wxdata::sites::Network::Nexrad {
+            let fetched = match network {
                 wxdata::sites::Network::Tdwr => wxdata::tdwr::fetch_volume(&http, site, None, None).await
                     .map(|result| result.map(|(name, time, scan, _)| (name, time, scan))),
                 wxdata::sites::Network::Dwd => wxdata::dwd::fetch_volume(&http, site, None).await,
-                wxdata::sites::Network::Opera => {
-                    wxdata::opera::fetch_volume(&http, site, None).await
-                }
+                wxdata::sites::Network::Opera => wxdata::opera::fetch_volume(&http, site, None).await,
                 wxdata::sites::Network::Nexrad => unreachable!("guarded above"),
             }?;
             let (name, time, scan) =
@@ -347,35 +378,6 @@ pub fn run(
                 Some(stamp_time(&time)),
             ));
         }
-        // Archive mode: list a specific UTC day and pick the volume nearest `hhmm` — the exact
-        // path the timeline uses when scrubbing (list_volumes -> download_scan by identifier).
-        if let Some(day) = date {
-            let frames = level2::list_volumes(site, day).await?;
-            anyhow::ensure!(!frames.is_empty(), "no volumes for {site} on {day}");
-            let target_min = hhmm.and_then(parse_hhmm);
-            let id = match target_min {
-                Some(tm) => frames
-                    .into_iter()
-                    .min_by_key(|f| {
-                        let m = f
-                            .date_time()
-                            .map(|d| {
-                                d.time()
-                                    .signed_duration_since(chrono::NaiveTime::MIN)
-                                    .num_minutes()
-                            })
-                            .unwrap_or(0);
-                        (m - tm).abs()
-                    })
-                    .unwrap(),
-                None => frames.into_iter().next_back().unwrap(),
-            };
-            eprintln!("archive frame: {}", id.name());
-            let at = id.date_time().map(|t| stamp_time(&t));
-            let scan = level2::download_scan(id, None).await?;
-            return Ok((level2::bin_scan_opts(&scan, moment, tilt, dealias)?, at));
-        }
-
         let mut day = chrono::Utc::now().date_naive();
         for _ in 0..3 {
             // `download_latest_scan` throws the volume identifier away, and the identifier is
@@ -418,10 +420,9 @@ pub fn run(
         .user_agent("Mozilla/5.0 (compatible; hookecho/0.0; +github.com/d4vid87/hookecho)")
         .build()?;
 
-    // Basemap under the radar. Satellite + provider styles are raster; Dark/Light are vector MVT.
+    // Transparent weather rasters also need their vector basemap beneath the observed coverage.
     // Provider keys come from the saved Settings (never logged).
     let settings = crate::settings::Settings::load();
-    let is_vector = matches!(basemap, BasemapStyle::Dark | BasemapStyle::Light);
     let (new_tiles, visible) = if basemap.is_raster() {
         let tm = TileManager::new(crate::rt::Spawner::new(rt.handle().clone()));
         // Style is passed per call so the zoom cap matches this source (GOES layers top out early).
@@ -439,8 +440,7 @@ pub fn run(
         (Vec::new(), Vec::new())
     };
     let mut place_labels: Vec<crate::vector_tiles::PlaceLabel> = Vec::new();
-    let (new_vector_tiles, visible_vector) = if is_vector {
-        let dark = basemap == BasemapStyle::Dark;
+    let (new_vector_tiles, visible_vector) = if let Some(palette) = basemap.vector_palette() {
         let tess_zoom = camera.zoom;
         let vis = crate::tiles::tile_cover(&camera, vp, 14, 0.0);
         let (tiles, labels) = rt.block_on(async {
@@ -452,11 +452,7 @@ pub fn run(
                 crate::vector_tiles::fetch_visible_vector(
                     &client,
                     &template,
-                    if dark {
-                        crate::basemap_style::Palette::Dark
-                    } else {
-                        crate::basemap_style::Palette::Light
-                    },
+                    palette,
                     tess_zoom,
                     &vis,
                 )
@@ -3262,6 +3258,21 @@ mod golden_tests {
         assert_eq!(parse_hhmm("23:59"), Some(1439));
         assert_eq!(parse_hhmm("24:00"), None);
         assert_eq!(parse_hhmm("10:60"), None);
+    }
+
+    #[test]
+    fn archive_selection_supports_europe_without_using_another_day() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        for (site, suffix) in [("DEBO", "DWD"), ("BEWID", "OPERA"), ("TDJT", "TDWR"), ("KTLX", "V06")] {
+            let frames = || ["20261104_235500", "20261105_001000", "20261105_000500"].into_iter()
+                .map(|time| level2::Identifier::new(format!("{site}{time}_{suffix}"))).collect();
+            let selected = select_archive_frame(frames(), day, Some("00:04")).unwrap();
+            assert_eq!(selected.name(), format!("{site}20261105_000500_{suffix}"));
+            assert_eq!(select_archive_frame(frames(), day, None).unwrap().name(), format!("{site}20261105_001000_{suffix}"));
+            assert!(select_archive_frame(frames(), day, Some("24:00")).is_err());
+        }
+        let borrowed = vec![level2::Identifier::new("BEWID20261104_235500_OPERA".into())];
+        assert!(select_archive_frame(borrowed, day, Some("00:00")).is_err());
     }
 
     #[test]

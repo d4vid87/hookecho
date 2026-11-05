@@ -280,7 +280,10 @@ fn handle(server: &Server, mut stream: TcpStream) -> anyhow::Result<()> {
             authorized |= constant_time_eq(&t, &server.token);
         }
     }
-    let reply = if authorized {
+    let method = line.split_whitespace().next().unwrap_or_default();
+    let reply = if regional_radar_bad_method(method, path) {
+        ("405 Method Not Allowed", "application/json", br#"{"error":"GET required"}"#.to_vec()).into()
+    } else if authorized {
         route(server, path, query, if_none_match.as_deref(), range.as_deref())
     } else if server.public {
         // The public hostname serves the fixed frames the site embeds and nothing else. Anything
@@ -426,6 +429,7 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
         "/national.png" | "/national.mp4" => "national",
         "/loop.gif" | "/loop.mp4" | "/v1/loop.gif" | "/v1/loop.mp4" => "loop",
         "/metrics" => "metrics",
+        _ if path.starts_with("/regional-radar/") => "proxy",
         _ if path.starts_with("/proxy/") => "proxy",
         _ => "other",
     });
@@ -512,6 +516,7 @@ fn route(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
             metrics(server).into_bytes(),
         )
             .into(),
+        _ if path.starts_with("/regional-radar/") => regional_radar(server, path, query, if_none_match),
         _ if path.starts_with("/proxy/") => proxy(server, path, query, if_none_match, range),
         _ if server.web_root.is_some() => static_file(server, path).into(),
         _ => not_found().into(),
@@ -1586,6 +1591,9 @@ const ALLOWED_HOSTS: &[&str] = &[
     // EUMETNET OpenRadarData: the ODIM volumes the OPERA network publishes, plus the
     // bucket listing that names the newest one.
     "s3.waw3-1.cloudferro.com",
+    "api.meteogate.eu",
+    "www.jma.go.jp",
+    "cwaopendata.s3.ap-northeast-1.amazonaws.com",
     // Basemap and imagery tiles.
     "api.mapbox.com",
     "api.maptiler.com",
@@ -1624,6 +1632,7 @@ const ARCHIVE_BUCKET: &str = "unidata-nexrad-level2.s3.amazonaws.com";
 /// one answer from the Pages deployment and a different one from `--serve` is a bug that only
 /// shows up as a loop that will not advance.
 fn cache_seconds(host: &str, query: &str) -> u64 {
+    if host == "www.jma.go.jp" || host == "cwaopendata.s3.ap-northeast-1.amazonaws.com" { return 60; }
     // Caltrans still URLs stay fixed while the image changes; match the open-card refresh cycle.
     if host == "cwwp2.dot.ca.gov" {
         return 60;
@@ -1688,6 +1697,184 @@ fn proxy_client() -> reqwest::Client {
 
 fn proxy_max_bytes(host: &str) -> usize {
     if host.starts_with("noaa-goes") { GOES_PROXY_MAX_BYTES } else { PROXY_MAX_BYTES }
+}
+
+#[derive(Debug, PartialEq)]
+enum RegionalRadarRequest {
+    Status,
+    Catalog(String),
+    Grid(chrono::DateTime<chrono::Utc>),
+}
+
+#[cfg(test)]
+mod regional_radar_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_explicit_recent_catalog_and_observation_times() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-05T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        assert_eq!(regional_radar_request("/regional-radar/status", "", now), Some(RegionalRadarRequest::Status));
+        assert_eq!(regional_radar_request("/regional-radar/kma/catalog", "day=20261105", now), Some(RegionalRadarRequest::Catalog("20261105".into())));
+        assert!(matches!(regional_radar_request("/regional-radar/kma/grid", "time=202611050855", now), Some(RegionalRadarRequest::Grid(_))));
+        for query in ["time=202611050857", "time=202602300000", "time=202611010000", "time=202611050855&authKey=caller", "time=202611050855&time=202611050855", "time=../bad"] {
+            assert!(regional_radar_request("/regional-radar/kma/grid", query, now).is_none());
+        }
+        assert!(regional_radar_request("/regional-radar/arbitrary", "", now).is_none());
+    }
+
+    #[test]
+    fn regional_routes_require_get_without_changing_other_routes() {
+        assert!(!regional_radar_bad_method("GET", "/regional-radar/status"));
+        assert!(regional_radar_bad_method("POST", "/regional-radar/kma/grid"));
+        assert!(regional_radar_bad_method("HEAD", "/regional-radar/status"));
+        assert!(!regional_radar_bad_method("POST", "/status.json"));
+    }
+
+    #[test]
+    fn catalog_output_removes_credentials_headers_and_unknown_content() {
+        let body = b"AUTHKEY=private%26key%3Dsecret\n# server header\nRDR_CMP_HSR_EXT_202611050855.bin.gz\n";
+        assert_eq!(regional_radar_catalog(body).unwrap(), b"RDR_CMP_HSR_EXT_202611050855.bin.gz\n");
+        assert!(regional_radar_catalog(b"AUTHKEY=private%26key%3Dsecret").unwrap().is_empty());
+    }
+
+    #[test]
+    fn upstream_urls_are_fixed_and_keys_are_encoded_only_for_kma() {
+        let request = RegionalRadarRequest::Catalog("20261105".into());
+        let cloud = regional_radar_upstream(&request, None).unwrap();
+        assert_eq!(cloud, "https://app.hookecho.io/regional-radar/kma/catalog?day=20261105");
+        let url = reqwest::Url::parse(&regional_radar_upstream(&request, Some("private&key=secret")).unwrap()).unwrap();
+        assert_eq!(url.host_str(), Some("apihub.kma.go.kr"));
+        assert_eq!(url.query_pairs().find(|(name, _)| name == "authKey").unwrap().1, "private&key=secret");
+        assert!(url.query_pairs().all(|(name, _)| ["tm", "cmp", "authKey"].contains(&name.as_ref())));
+        assert!(regional_radar_upstream(&RegionalRadarRequest::Status, Some("key")).is_none());
+    }
+}
+
+fn regional_radar_bad_method(method: &str, path: &str) -> bool {
+    path.starts_with("/regional-radar/") && method != "GET"
+}
+
+/// The public catalog contains only validated observed filenames, never arbitrary upstream
+/// headers or error text (which can contain an encoded credential under any parameter casing).
+fn regional_radar_catalog(body: &[u8]) -> anyhow::Result<Vec<u8>> {
+    wxdata::world_radar::parse_kma_frames(body)?; // Enforce UTF-8, size and advertised time limits.
+    let text = std::str::from_utf8(body)?;
+    let mut names = Vec::new();
+    for segment in text.split("RDR_CMP_HSR_").skip(1) {
+        let suffix = segment.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+            .next().unwrap_or_default();
+        let name = format!("RDR_CMP_HSR_{suffix}");
+        if !wxdata::world_radar::parse_kma_frames(name.as_bytes())?.is_empty() {
+            names.push(name);
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    Ok(names.into_iter().map(|name| name + "\n").collect::<String>().into_bytes())
+}
+
+fn regional_radar_request(path: &str, query: &str, now: chrono::DateTime<chrono::Utc>) -> Option<RegionalRadarRequest> {
+    use chrono::NaiveDateTime;
+    if path == "/regional-radar/status" && query.is_empty() { return Some(RegionalRadarRequest::Status); }
+    let (parameter, length) = match path {
+        "/regional-radar/kma/catalog" => ("day", 8),
+        "/regional-radar/kma/grid" => ("time", 12),
+        _ => return None,
+    };
+    let (name, value) = query.split_once('=')?;
+    if name != parameter || value.len() != length || !value.bytes().all(|b| b.is_ascii_digit()) { return None; }
+    let stamp = if length == 8 { format!("{value}0000") } else { value.to_owned() };
+    let local = NaiveDateTime::parse_from_str(&stamp, "%Y%m%d%H%M").ok()?;
+    let time = local.and_utc() - chrono::Duration::hours(9);
+    if time.timestamp().rem_euclid(300) != 0 || time > now + chrono::Duration::minutes(1)
+        || time < now - chrono::Duration::hours(if length == 8 { 72 } else { 48 }) { return None; }
+    Some(if length == 8 { RegionalRadarRequest::Catalog(value.to_owned()) } else { RegionalRadarRequest::Grid(time) })
+}
+
+fn regional_radar_upstream(request: &RegionalRadarRequest, key: Option<&str>) -> Option<String> {
+    let base = if key.is_some() { "https://apihub.kma.go.kr" } else { "https://app.hookecho.io" };
+    let (path, params) = match (request, key.is_some()) {
+        (RegionalRadarRequest::Status, false) => ("/regional-radar/status", Vec::new()),
+        (RegionalRadarRequest::Status, true) => return None,
+        (RegionalRadarRequest::Catalog(day), false) => ("/regional-radar/kma/catalog", vec![("day", day.clone())]),
+        (RegionalRadarRequest::Grid(time), false) => ("/regional-radar/kma/grid", vec![("time", wxdata::world_radar::kma_time_parameter(*time))]),
+        (RegionalRadarRequest::Catalog(day), true) => ("/api/typ01/url/rdr_cmp_file_list.php", vec![("cmp", "HSR".into()), ("tm", day.clone())]),
+        (RegionalRadarRequest::Grid(time), true) => ("/api/typ01/cgi-bin/url/nph-rdr_cmp1_api", vec![
+            ("cmp", "HSR".into()), ("tm", wxdata::world_radar::kma_time_parameter(*time)),
+            ("qcd", "MSK".into()), ("obs", "ECHO".into()), ("map", "HB".into()), ("disp", "A".into()),
+        ]),
+    };
+    let mut url = reqwest::Url::parse(&format!("{base}{path}")).ok()?;
+    if !params.is_empty() || key.is_some() {
+        let mut query = url.query_pairs_mut();
+        for (name, value) in params { query.append_pair(name, &value); }
+        if let Some(key) = key { query.append_pair("authKey", key); }
+    }
+    Some(url.into())
+}
+
+/// Uses the existing server authorization gate and bounded response cache. When this host has
+/// no KMA key it can use the fixed HookEcho gateway; it never becomes an arbitrary URL proxy.
+fn regional_radar(server: &Server, path: &str, query: &str, if_none_match: Option<&str>) -> Reply {
+    let Some(request) = regional_radar_request(path, query, chrono::Utc::now()) else {
+        return ("400 Bad Request", "application/json", br#"{"error":"invalid regional radar request"}"#.to_vec()).into();
+    };
+    let configured = std::env::var("KMA_API_KEY").ok()
+        .map(|key| key.trim().to_owned()).filter(|key| (8..=512).contains(&key.len()));
+    if request == RegionalRadarRequest::Status && configured.is_some() {
+        return ("200 OK", "application/json", br#"{"kma":true}"#.to_vec()).into();
+    }
+    let Some(url) = regional_radar_upstream(&request, configured.as_deref()) else {
+        return ("503 Service Unavailable", "application/json", br#"{"error":"KMA is unavailable"}"#.to_vec()).into();
+    };
+    let ttl = match request { RegionalRadarRequest::Status => 0, RegionalRadarRequest::Catalog(_) => 120, RegionalRadarRequest::Grid(_) => 1800 };
+    let cache_key = format!("regional:{}:{path}?{query}", configured.is_some());
+    if ttl > 0 {
+        let hit = server.proxy_cache.lock().unwrap().get(&cache_key)
+            .filter(|hit| hit.at.elapsed() < Duration::from_secs(ttl))
+            .map(|hit| (hit.ctype, hit.body.clone(), hit.etag.clone()));
+        if let Some((ctype, body, etag)) = hit { return proxy_reply(ctype, body, etag, ttl, if_none_match); }
+    }
+    let limit = match request { RegionalRadarRequest::Status => 1024, RegionalRadarRequest::Catalog(_) => 1024 * 1024, RegionalRadarRequest::Grid(_) => wxdata::world_radar::KMA_MAX_BYTES };
+    let fetched = server.rt.block_on(async {
+        tokio::time::timeout(wxdata::net::FEED_TIMEOUT, fetch_capped(&server.proxy_http, &url, limit)).await?
+    });
+    // Do not log `url` or the reqwest error: both can contain the server-side authKey.
+    let Ok((_, mut body)) = fetched else {
+        return ("503 Service Unavailable", "application/json", br#"{"error":"KMA radar is temporarily unavailable"}"#.to_vec()).into();
+    };
+    if matches!(request, RegionalRadarRequest::Catalog(_)) {
+        let Ok(catalog) = regional_radar_catalog(&body) else {
+            return ("502 Bad Gateway", "application/json", br#"{"error":"KMA returned an invalid radar response"}"#.to_vec()).into();
+        };
+        body = catalog;
+    }
+    let valid = std::str::from_utf8(&body).ok().is_some_and(|text| {
+        !text.as_bytes().windows(7).any(|name| name.eq_ignore_ascii_case(b"authkey"))
+            && !text.as_bytes().windows(10).any(|name| name.eq_ignore_ascii_case(b"servicekey"))
+            && !configured.as_ref().is_some_and(|key| text.contains(key)) && match &request {
+            RegionalRadarRequest::Status => serde_json::from_str::<serde_json::Value>(text).ok()
+                .is_some_and(|status| status.get("kma").is_some_and(serde_json::Value::is_boolean)),
+            RegionalRadarRequest::Catalog(_) => !text.contains('<') && wxdata::world_radar::parse_kma_frames(&body).is_ok(),
+            RegionalRadarRequest::Grid(time) => wxdata::world_radar::parse_kma_grid(&body, *time).is_ok(),
+        }
+    });
+    if !valid {
+        return ("502 Bad Gateway", "application/json", br#"{"error":"KMA returned an invalid radar response"}"#.to_vec()).into();
+    }
+    if request == RegionalRadarRequest::Status {
+        // Re-serialize the single public boolean rather than forwarding arbitrary provider fields.
+        let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        return ("200 OK", "application/json", serde_json::json!({ "kma": status["kma"] }).to_string().into_bytes()).into();
+    }
+    let body = Arc::new(body);
+    let etag = etag_of(&body);
+    let ctype = "text/plain; charset=utf-8";
+    let mut cache = server.proxy_cache.lock().unwrap();
+    cache.put(cache_key, ProxyHit { at: Instant::now(), ctype, body: body.clone(), etag: etag.clone() });
+    while cache.iter().map(|(_, hit)| hit.body.len()).sum::<usize>() > PROXY_CACHE_BYTES && cache.len() > 1 { cache.pop_lru(); }
+    drop(cache);
+    proxy_reply(ctype, body, etag, ttl, if_none_match)
 }
 
 /// `GET /proxy/{host}/{rest}` → `https://{host}/{rest}`, for the browser build.
@@ -1958,13 +2145,20 @@ fn proxy_content_type(upstream: &str) -> &'static str {
 // binary. If it ever wants charts, it wants `--web-root` and the real app instead.
 fn index(server: &Server) -> String {
     // The nearest radar to home, so the picture is of somewhere the user cares about.
-    let site = server
+    let home = server
         .spots
         .iter()
         .find(|s| s.home)
-        .or_else(|| server.spots.first())
-        .and_then(|s| crate::geo::nearest_site_id(s.lon, s.lat))
-        .unwrap_or_else(|| "KTLX".to_string());
+        .or_else(|| server.spots.first());
+    let site = match home {
+        Some(spot) => crate::geo::nearest_site_id(spot.lon, spot.lat).unwrap_or_default(),
+        None => "KTLX".to_string(),
+    };
+    let radar_links = if !site.is_empty() && wxdata::sites::is_nexrad(&site) {
+        format!(r#"<a href="/cells.json?site={site}">cells</a> · <a href="/loop.gif?site={site}">loop</a> · "#)
+    } else {
+        String::new()
+    };
     let version = env!("CARGO_PKG_VERSION");
     format!(
         r##"<!doctype html><html lang="en"><meta charset="utf-8">
@@ -1980,6 +2174,7 @@ body {{ margin:0; font:15px/1.5 system-ui,sans-serif; background:#0e1116; color:
 @media (max-width:800px) {{ body {{ grid-template-columns:1fr; }} }}
 h1 {{ font-size:16px; margin:0 0 8px; font-weight:600; letter-spacing:.02em; }}
 img {{ width:100%; border-radius:10px; display:block; background:#161b22; }}
+img[hidden] {{ display:none; }}
 .card {{ background:#161b22; border:1px solid #21262d; border-radius:10px; padding:12px; margin-bottom:12px; }}
 .spot {{ font-weight:600; }}
 .cond {{ color:#9aa7b4; }}
@@ -1999,8 +2194,7 @@ a {{ color:#58a6ff; }}
 </aside>
 <footer>
   hookecho {version} · <span id="when">—</span> ·
-  <a href="/status.json">status</a> · <a href="/cells.json?site={site}">cells</a> ·
-  <a href="/loop.gif?site={site}">loop</a> · <a href="/health.json">health</a> ·
+  <a href="/status.json">status</a> · {radar_links}<a href="/health.json">health</a> ·
   <a href="/metrics">metrics</a>
 </footer>
 <script>
@@ -2011,6 +2205,11 @@ const q = (path, extra) => path + (path.includes("?") ? "&" : "?") +
 const site = document.getElementById("site").textContent;
 
 function radar() {{
+  if (!site) {{
+    document.getElementById("radar").hidden = true;
+    document.getElementById("site").textContent = "No nearby native radar — use Worldwide radar in the app";
+    return;
+  }}
   // The server caches a render for five minutes; the cache-buster is what stops the browser
   // holding on to it for longer than that.
   document.getElementById("radar").src = q("/snapshot.png", "site=" + site + "&size=900&t=" + Date.now());
@@ -2220,7 +2419,7 @@ mod tests {
 
     #[test]
     fn the_dashboard_points_at_the_radar_nearest_home() {
-        let server = Server {
+        let mut server = Server {
             token: String::new(),
             public: false,
             spots: vec![Spot {
@@ -2251,6 +2450,12 @@ mod tests {
         assert!(page.contains("setInterval"));
         // Spot names reach the page as `textContent`, never pasted into HTML.
         assert!(page.contains("name.textContent = s.name"));
+        server.spots[0].lon = 151.21;
+        server.spots[0].lat = -33.87;
+        let page = index(&server);
+        assert!(page.contains(r#"id="site"></span>"#));
+        assert!(!page.contains("KTLX"));
+        assert!(!page.contains("/cells.json?site="));
     }
 
     #[test]

@@ -127,10 +127,31 @@ pub fn escape_bearing(cell: [f64; 2], dir_deg: f64, target: [f64; 2]) -> f64 {
     (dir_deg + turn + 360.0) % 360.0
 }
 
-/// The NEXRAD site id nearest to `[lon, lat]` (chase-mode auto-handoff), or `None` if the
-/// registry is somehow empty. Delegates to the registry's own nearest-site lookup.
+/// Prefer the full-product NEXRAD network where it covers the location, otherwise the
+/// nearest supported radar. Nominal range bounds selection, not feed health or beam coverage.
 pub fn nearest_site_id(lon: f64, lat: f64) -> Option<String> {
-    wxdata::sites::nearest_site(lat as f32, lon as f32).map(|s| s.id.to_string())
+    nearest_nexrad_site_id(lon, lat)
+        .or_else(|| nearest_matching_site(lon, lat, |_| true))
+}
+
+/// NEXRAD-only algorithm products must not query a nearby TDWR or European radar.
+pub fn nearest_nexrad_site_id(lon: f64, lat: f64) -> Option<String> {
+    nearest_matching_site(lon, lat, wxdata::sites::is_nexrad)
+}
+
+fn nearest_matching_site(lon: f64, lat: f64, supported: impl Fn(&str) -> bool) -> Option<String> {
+    use wxdata::sites::Network;
+    if !lon.is_finite() || !lat.is_finite() || !(-180.0..=180.0).contains(&lon)
+        || !(-90.0..=90.0).contains(&lat) { return None; }
+    wxdata::sites::all().filter(|site| supported(site.id)).filter_map(|site| {
+        let distance = great_circle([lon, lat], [site.longitude as f64, site.latitude as f64]).0;
+        let range = match wxdata::sites::network(site.id) {
+            Network::Nexrad => 460.0,
+            Network::Tdwr => 90.0,
+            Network::Dwd | Network::Opera => 250.0,
+        };
+        (distance <= range).then_some((site.id, distance))
+    }).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(id, _)| id.to_string())
 }
 
 /// 16-point compass label for a bearing in degrees. Lives here rather than beside any one caller
@@ -218,6 +239,23 @@ mod tests {
     fn nearest_site_to_okc_is_ktlx() {
         // Oklahoma City sits right by the KTLX (Twin Lakes) radar.
         assert_eq!(nearest_site_id(-97.5, 35.47).as_deref(), Some("KTLX"));
+    }
+
+    #[test]
+    fn nearest_site_selects_europe_and_rejects_uncovered_locations() {
+        for (lon, lat, network) in [
+            (8.68, 50.11, wxdata::sites::Network::Dwd),
+            (2.35, 48.86, wxdata::sites::Network::Opera),
+        ] {
+            let id = nearest_site_id(lon, lat).expect("European station");
+            assert_eq!(wxdata::sites::network(&id), network);
+        }
+        for (lon, lat) in [(151.21, -33.87), (139.69, 35.68), (0.0, 0.0), (181.0, 20.0), (0.0, f64::NAN)] {
+            assert!(nearest_site_id(lon, lat).is_none(), "{lon}, {lat}");
+        }
+        assert_eq!(nearest_site_id(-80.273, 26.688).as_deref(), Some("KAMX"));
+        assert_eq!(nearest_nexrad_site_id(-80.273, 26.688).as_deref(), Some("KAMX"));
+        assert!(nearest_nexrad_site_id(2.35, 48.86).is_none());
     }
 
     #[test]

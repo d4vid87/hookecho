@@ -263,11 +263,11 @@ impl HookEchoApp {
                     })
             })
             .collect();
-        let source_label = match active_modes.as_slice() {
+        let source_label = if self.worldwide_view() { "Worldwide radar" } else { match active_modes.as_slice() {
             [mode] => mode.label(),
             [] => "Sources",
             _ => "Mixed sources",
-        };
+        } };
         let mut choose_source = None;
         let mut choose_ndfd_style = None;
         let mut action = None;
@@ -277,6 +277,7 @@ impl HookEchoApp {
         let mut stream_dashboard = false;
         let mut notification_settings = false;
         let mut return_to_radar = false;
+        let mut worldwide = false;
         let mut workspace_choice = None;
         let mut use_standard_layout = false;
         let mut open_search = false;
@@ -310,6 +311,8 @@ impl HookEchoApp {
                         )
                         .ui(ui, |ui| {
                             ui.weak("Choose one source; use Layer manager to combine.");
+                            if ui.selectable_label(self.worldwide_view(), "Worldwide radar").clicked() { worldwide = true; ui.close(); }
+                            ui.separator();
                             for mode in SourceMode::ALL {
                                 ui.menu_button(mode.label(), |ui| {
                                     ui.set_min_width(290.0);
@@ -659,6 +662,7 @@ impl HookEchoApp {
                                     if menu_row(ui, "Radar", !self.analyst_open && self.active_workspace.is_none()).clicked() {
                                         return_to_radar = true;
                                     }
+                                    if menu_row(ui, "Worldwide radar", self.worldwide_view()).clicked() { worldwide = true; }
                                     for name in ["Chase", "National overview", "Analysis"] {
                                         if let Some(index) = self.settings.workspaces.iter().position(|ws| ws.name == name) {
                                             if menu_row(ui, name, self.active_workspace.as_deref() == Some(name)).clicked() {
@@ -828,7 +832,10 @@ impl HookEchoApp {
             self.settings.radar_workspace = false;
             self.settings.save();
         }
-        if return_to_radar {
+        if worldwide {
+            menu_open = false;
+            self.open_worldwide_radar(ctx);
+        } else if return_to_radar {
             menu_open = false;
             self.return_to_radar(ctx);
         } else if let Some(index) = workspace_choice {
@@ -846,7 +853,7 @@ impl HookEchoApp {
         }
         if menu_was_open && !menu_open && action.is_none() && !display && !spotter_settings
             && !notification_settings && !stream_dashboard
-            && !return_to_radar && workspace_choice.is_none() && compare_panes.is_none() {
+            && !return_to_radar && !worldwide && workspace_choice.is_none() && compare_panes.is_none() {
             if let Some((panel, drawer)) = ctx.data_mut(|d| {
                 d.get_temp::<(bool, bool)>(egui::Id::new("zeta_menu_previous_surface"))
             }) {
@@ -864,7 +871,7 @@ impl HookEchoApp {
                     .source_animation_speeds
                     .set(previous, self.views[self.active].timeline.speed);
             }
-            if self.views[self.active].basemap.ndfd_layer().is_some() {
+            if self.views[self.active].basemap.ndfd_layer().is_some() || self.worldwide_view() {
                 self.set_basemap(crate::tiles::BasemapStyle::Dark);
             }
             let changes = source_field_changes(&self.views[self.active].fields_on, source);
@@ -873,6 +880,12 @@ impl HookEchoApp {
             }
             let radar = matches!(source, PaletteAction::SetMoment(..));
             if radar {
+                if self.views[self.active].site.is_none() {
+                    let camera = self.views[self.active].camera;
+                    let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+                    self.views[self.active].site = crate::geo::nearest_site_id(lon, lat);
+                    self.views[self.active].camera_placed = true;
+                }
                 self.apply_palette(source, ctx);
             }
             self.views[self.active].show_radar = radar;

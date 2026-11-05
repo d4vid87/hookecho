@@ -49,6 +49,7 @@ impl HookEchoApp {
 
     pub(crate) fn scrubber(&mut self, ctx: &egui::Context) {
         crate::prof_scope!("scrubber");
+        if self.worldwide_view() { self.worldwide_transport(ctx); return; }
         let view = &self.views[self.active];
         if view.basemap.ndfd_layer().is_some() && !view.show_radar && view.fields_on.is_empty() {
             ctx.data_mut(|d| d.remove::<egui::Rect>(egui::Id::new("corner_scrubber_rect")));

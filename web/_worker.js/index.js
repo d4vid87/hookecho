@@ -6,10 +6,12 @@
 // imported modules in the directory form.
 
 import { cacheSeconds, handleProxy } from "./proxy-core.js";
+import { handleRegionalRadar } from "./regional-radar.js";
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/regional-radar/")) return handleRegionalRadar(request, env);
     // The visitor's rough position, straight off the edge, so the app can open on the nearest
     // radar. Never cached — it is a
     // different answer for every visitor.

@@ -73,6 +73,7 @@ impl HookEchoApp {
         let (mut menu, mut search, mut settings, mut single) = (false, false, false, false);
         let (mut mrms, mut spc, mut outlook_day) = (false, false, None);
         let mut workspace_choice = None;
+        let mut worldwide = false;
         let mut enable_zeta_layout = false;
         let toolbar = egui::Area::new("clearview_toolbar".into())
             .order(egui::Order::Foreground)
@@ -89,7 +90,8 @@ impl HookEchoApp {
                 });
                 let elevation = v.volume.as_ref().and_then(|vol| vol.elevations.get(v.tilt))
                     .map_or_else(|| "…".to_owned(), |a| format!("{a:.1}°"));
-                let summary = format!("{site} · {code} · {elevation}");
+                let summary = if self.worldwide_view() { "Worldwide radar".into() }
+                    else { format!("{site} · {code} · {elevation}") };
                 let full_name = self.pane_identity(self.active);
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgba_unmultiplied(18, 37, 56, 240))
@@ -156,6 +158,8 @@ impl HookEchoApp {
                         let regular_radar = !self.analyst_open && self.workspace_return_session.is_none();
                         single = rail_choice(ui, "▣  Radar", regular_radar)
                             .named_toggle("Single radar map", regular_radar).clicked();
+                        worldwide = rail_choice(ui, "◉  Worldwide radar", self.worldwide_view())
+                            .named("Worldwide radar").clicked();
                         for (name, glyph) in [("Chase", "↗"), ("National overview", "◉"), ("Analysis", "◫")] {
                             if let Some(index) = self.settings.workspaces.iter().position(|ws| ws.name == name) {
                                 let selected = self.active_workspace.as_deref() == Some(name);
@@ -243,6 +247,7 @@ impl HookEchoApp {
                 d.remove::<bool>(egui::Id::new("context_all_controls"));
             });
         }
+        if worldwide { self.open_worldwide_radar(ctx); }
         if single {
             self.return_to_radar(ctx);
             self.panel_open = false;
@@ -267,7 +272,7 @@ impl HookEchoApp {
         let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
         let local_site = crate::geo::nearest_site_id(lon, lat);
         self.apply_palette(PaletteAction::ApplyWorkspace(index), ctx);
-        if self.active_workspace.as_deref() == Some("Analysis") {
+        if self.active_workspace.as_deref() == Some("Analysis") && local_site.is_some() {
             self.apply_palette(PaletteAction::ApplyAnalystPreset(0), ctx);
             for view in &mut self.views {
                 view.tilt = 0;

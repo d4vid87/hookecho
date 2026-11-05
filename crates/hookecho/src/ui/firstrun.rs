@@ -19,6 +19,7 @@ pub struct Finish {
     /// The site was picked from a position fix rather than chosen. The caller says so in a toast,
     /// because a radar the user never selected should explain itself.
     pub located: bool,
+    pub location: Option<(f64, f64)>,
 }
 
 #[derive(Default)]
@@ -59,7 +60,8 @@ impl FirstRun {
     fn fix_site(&mut self) -> Option<(String, f64, f64)> {
         let rx = self.rx.as_ref()?;
         let (lon, lat) = rx.try_recv().ok()?;
-        crate::geo::nearest_site_id(lon, lat).map(|site| (site, lon, lat))
+        if !lon.is_finite() || !lat.is_finite() || !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) { return None; }
+        Some((crate::geo::nearest_site_id(lon, lat).unwrap_or_default(), lon, lat))
     }
 }
 
@@ -72,7 +74,7 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
     // A fix ends the card wherever the user is in it: they asked for the nearest radar, and this
     // is the whole of the ten-second start.
     if let Some((site, lon, lat)) = fr.fix_site() {
-        settings.default_site = site.clone();
+        if !site.is_empty() { settings.default_site = site.clone(); }
         if fr.save_home {
             for marker in &mut settings.markers { marker.home = false; }
             settings.markers.push(crate::settings::Marker {
@@ -92,6 +94,7 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
             site,
             take_tour: false,
             located: true,
+            location: Some((lon, lat)),
         });
     }
 
@@ -258,6 +261,7 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
         site: settings.default_site.clone(),
         take_tour,
         located: false,
+        location: None,
     });
     if finished.is_some() || !open || close {
         fr.open = false;
@@ -269,6 +273,19 @@ pub fn show(ctx: &egui::Context, fr: &mut FirstRun, settings: &mut Settings) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncovered_location_finishes_setup_without_inventing_a_station() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send((151.21, -33.87)).unwrap();
+        let mut fr = FirstRun { open: true, rx: Some(rx), ..Default::default() };
+        let mut settings = Settings::default();
+        let original = settings.default_site.clone();
+        let result = show(&egui::Context::default(), &mut fr, &mut settings).unwrap();
+        assert!(result.site.is_empty() && result.located && !fr.open);
+        assert_eq!(result.location, Some((151.21, -33.87)));
+        assert_eq!(settings.default_site, original);
+    }
 
     #[test]
     fn a_fix_picks_the_nearest_site_and_closes() {

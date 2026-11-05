@@ -6,7 +6,7 @@
 
 use crate::render::{mercator::Camera, PendingTile, TileId, VisibleTile};
 use lru::LruCache;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -185,11 +185,19 @@ pub enum BasemapStyle {
     /// User-supplied `{z}/{x}/{y}` URL template from settings. Desktop and Android only; the web
     /// build's proxy is exact-host allowlisted, so an arbitrary host cannot be fetched there.
     CustomXyz,
+    /// EUMETNET continental observed maximum reflectivity.
+    OperaRadar,
+    /// JMA observed radar-derived rainfall (analysis only).
+    JmaRadar,
+    /// CWA quantitative composite reflectivity.
+    TaiwanRadar,
+    /// KMA observed hybrid reflectivity, when enabled by the server administrator.
+    KoreaRadar,
 }
 
 impl BasemapStyle {
     /// Cycle order for the `z` hotkey; provider styles trail the built-ins.
-    pub const ALL: [BasemapStyle; 78] = [
+    pub const ALL: [BasemapStyle; 82] = [
         BasemapStyle::Dark,
         BasemapStyle::Light,
         BasemapStyle::Satellite,
@@ -269,6 +277,10 @@ impl BasemapStyle {
         BasemapStyle::NdfdWindSpeed,
         BasemapStyle::NdfdAlaskaWindSpeed,
         BasemapStyle::NdfdHawaiiWindSpeed,
+        BasemapStyle::OperaRadar,
+        BasemapStyle::JmaRadar,
+        BasemapStyle::TaiwanRadar,
+        BasemapStyle::KoreaRadar,
     ];
 
     /// The handful worth a one-tap chip on a phone: two vector styles, three ways of seeing the
@@ -335,6 +347,10 @@ impl BasemapStyle {
             BasemapStyle::EcccRadarRain => "ECCC radar (rain)",
             BasemapStyle::EcccRadarSnow => "ECCC radar (snow)",
             BasemapStyle::RainViewerGlobal => "Global rain radar (RainViewer)",
+            BasemapStyle::OperaRadar => "Europe radar (OPERA)",
+            BasemapStyle::JmaRadar => "Japan radar rainfall (JMA)",
+            BasemapStyle::TaiwanRadar => "Taiwan reflectivity (CWA)",
+            BasemapStyle::KoreaRadar => "South Korea reflectivity (KMA)",
             BasemapStyle::NdfdRainChance => "NDFD rain chance (12 h)",
             BasemapStyle::NdfdMaxTemp => "NDFD high temperature",
             BasemapStyle::NdfdMinTemp => "NDFD low temperature",
@@ -419,6 +435,10 @@ impl BasemapStyle {
             BasemapStyle::EcccRadarRain => "eccc-radar-rain",
             BasemapStyle::EcccRadarSnow => "eccc-radar-snow",
             BasemapStyle::RainViewerGlobal => "rainviewer-global",
+            BasemapStyle::OperaRadar => "opera-radar",
+            BasemapStyle::JmaRadar => "jma-radar",
+            BasemapStyle::TaiwanRadar => "taiwan-radar",
+            BasemapStyle::KoreaRadar => "korea-radar",
             BasemapStyle::NdfdRainChance => "ndfd-rain-chance",
             BasemapStyle::NdfdMaxTemp => "ndfd-high-temp",
             BasemapStyle::NdfdMinTemp => "ndfd-low-temp",
@@ -538,6 +558,10 @@ impl BasemapStyle {
                     "Radar data © Environment and Climate Change Canada (Open Government Licence – Canada)"
                 }
                 BasemapStyle::RainViewerGlobal => "Weather data by RainViewer ↗",
+                BasemapStyle::OperaRadar => "EUMETNET OPERA · CC BY 4.0 · rendered by HookEcho",
+                BasemapStyle::JmaRadar => "Japan Meteorological Agency · rainfall analysis · rendered by HookEcho",
+                BasemapStyle::TaiwanRadar => "Taiwan Central Weather Administration · Open Government Data License · rendered by HookEcho",
+                BasemapStyle::KoreaRadar => "Korea Meteorological Administration · rendered by HookEcho",
                 _ if self.ndfd_layer().is_some() => "NOAA/NWS National Digital Forecast Database",
                 BasemapStyle::HimawariIR
                 | BasemapStyle::HimawariAirMass
@@ -648,7 +672,43 @@ impl BasemapStyle {
     /// Does this style have a time dimension the frame bar can step through?
     pub fn timed(self) -> bool {
         self.goes_layer().is_some() || self.wms_layer().is_some()
-            || self.ndfd_layer().is_some() || self == BasemapStyle::RainViewerGlobal
+            || self.ndfd_layer().is_some() || self.worldwide_radar()
+    }
+
+    pub fn worldwide_radar(self) -> bool {
+        matches!(self, Self::RainViewerGlobal | Self::OperaRadar | Self::JmaRadar | Self::TaiwanRadar | Self::KoreaRadar
+            | Self::EcccRadarRain | Self::EcccRadarSnow | Self::DwdRadarWN | Self::DwdRadarRV)
+    }
+
+    /// Select an observed regional product; a region is not a promise of coverage at every pixel.
+    pub fn worldwide_for_location(lon: f64, lat: f64) -> Self {
+        if (124.0..=131.5).contains(&lon) && (33.0..=39.5).contains(&lat) {
+            if crate::world_tiles::korea_available() { Self::KoreaRadar } else { Self::RainViewerGlobal }
+        } else if (119.0..=123.0).contains(&lon) && (21.0..=26.0).contains(&lat) {
+            Self::TaiwanRadar
+        } else if (123.0..=146.0).contains(&lon) && (24.0..=46.0).contains(&lat) {
+            Self::JmaRadar
+        } else if (-141.0..=-52.0).contains(&lon) && (49.0..=75.0).contains(&lat)
+            || (-95.0..=-52.0).contains(&lon) && (42.0..49.0).contains(&lat) {
+            Self::EcccRadarRain
+        } else if (-25.0..=45.0).contains(&lon) && (34.0..=72.0).contains(&lat) {
+            Self::OperaRadar
+        } else {
+            Self::RainViewerGlobal
+        }
+    }
+
+    pub fn weather_product_kind(self) -> Option<&'static str> {
+        match self {
+            Self::OperaRadar | Self::TaiwanRadar | Self::KoreaRadar => Some("Radar composite · reflectivity (dBZ)"),
+            Self::JmaRadar | Self::EcccRadarRain => Some("Radar-derived rainfall (mm/h)"),
+            Self::EcccRadarSnow => Some("Radar-derived snowfall"),
+            Self::ImergRate => Some("Satellite rainfall estimate · delayed observations"),
+            Self::DwdRadarRV => Some("Radar analysis and forecast"),
+            Self::DwdRadarWN => Some("Radar analysis"),
+            Self::RainViewerGlobal => Some("Radar composite · coverage varies"),
+            _ => None,
+        }
     }
 
     /// Is this style a raster-tile source (as opposed to the vector MVT basemap or None)?
@@ -682,6 +742,8 @@ impl BasemapStyle {
         if self == BasemapStyle::RainViewerGlobal {
             return 7;
         }
+        if matches!(self, Self::OperaRadar | Self::TaiwanRadar | Self::KoreaRadar) { return 10; }
+        if self == Self::JmaRadar { return 10; }
         if let Some((_, level)) = self.goes_layer() {
             return level;
         }
@@ -742,6 +804,7 @@ impl BasemapStyle {
     /// Is this style selectable given which provider keys are set and whether the user has
     /// configured a custom tile template?
     pub fn available(self, mapbox_key: bool, maptiler_key: bool, custom: bool) -> bool {
+        if self == Self::KoreaRadar { return crate::world_tiles::korea_available(); }
         if self == BasemapStyle::CustomXyz {
             // Nothing to fetch without a template, and the web build cannot fetch an arbitrary
             // host at all: the proxy allowlist is exact-match, and a direct fetch is at the mercy
@@ -771,7 +834,7 @@ impl BasemapStyle {
     pub fn category(self) -> Category {
         // Satellite-derived, but what it shows is precipitation, so it belongs next to the radar
         // composites in the picker rather than next to the imagery.
-        if matches!(self, BasemapStyle::ImergRate | BasemapStyle::RainViewerGlobal) {
+        if self == BasemapStyle::ImergRate || self.worldwide_radar() {
             return Category::Weather;
         }
         if self.goes_layer().is_some() {
@@ -844,7 +907,7 @@ impl BasemapStyle {
             BasemapStyle::Presentation => Some(crate::basemap_style::Palette::Presentation),
             BasemapStyle::BlueMap => Some(crate::basemap_style::Palette::Blue),
             BasemapStyle::HybridSatellite => Some(crate::basemap_style::Palette::HybridOverlay),
-            BasemapStyle::RainViewerGlobal => Some(crate::basemap_style::Palette::HybridOverlay),
+            _ if self.worldwide_radar() => Some(crate::basemap_style::Palette::Dark),
             _ if self.ndfd_layer().is_some() => Some(crate::basemap_style::Palette::HybridOverlay),
             _ => None,
         }
@@ -957,6 +1020,8 @@ impl BasemapStyle {
                 BasemapStyle::CustomXyz => valid_xyz_template(custom)
                     .then(|| crate::vector_tiles::fill_template(custom, z, x, y)),
                 BasemapStyle::RainViewerGlobal => rainviewer_tile_url(None, z, x, y),
+                BasemapStyle::OperaRadar | BasemapStyle::JmaRadar | BasemapStyle::TaiwanRadar | BasemapStyle::KoreaRadar =>
+                    crate::world_tiles::tile_url(self, None, z, x, y),
                 style if style.ndfd_layer().is_some() => Some(wms_url(
                     &format!("https://digital.weather.gov/ndfd.{}/wms", style.ndfd_region().unwrap()),
                     style.ndfd_layer().unwrap(), z, x, y, "",
@@ -1422,6 +1487,12 @@ pub async fn fetch_frame_times(
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
+    if matches!(style, BasemapStyle::OperaRadar | BasemapStyle::JmaRadar | BasemapStyle::TaiwanRadar | BasemapStyle::KoreaRadar) {
+        return crate::world_tiles::frame_times(client, style, from, to, limit).await.unwrap_or_else(|error| {
+            log::warn!("{} catalog: {error}", style.label());
+            Vec::new()
+        });
+    }
     if let Some(layer) = style.ndfd_layer() {
         let url = format!("https://digital.weather.gov/ndfd.{}/wms?REQUEST=GetCapabilities", style.ndfd_region().unwrap());
         let Ok(response) = client.get(wxdata::net::fetch_url(&url))
@@ -1551,9 +1622,6 @@ type TileResult = Result<FetchedTile, crate::render::TileKey>;
 /// itself, so a provider that stalls does not just stop the basemap — it stops the radar too.
 /// Four leaves room for the things the visitor actually came for.
 const MAX_INFLIGHT: usize = if cfg!(target_arch = "wasm32") { 4 } else { 6 };
-/// Leave room below RainViewer's published 100-requests/IP/minute ceiling for its catalog,
-/// thumbnails and other clients on the same network.
-const RAINVIEWER_TILE_REQUESTS_PER_MINUTE: usize = 80;
 
 /// How long one tile fetch may take before its slot is taken back.
 const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -1586,7 +1654,6 @@ pub struct TileManager {
     /// Tiles whose fetch failed, and when. Retried after [`RETRY_AFTER`].
     failed: std::collections::HashMap<crate::render::TileKey, wxdata::clock::Instant>,
     requested: HashSet<crate::render::TileKey>,
-    rainviewer_started: VecDeque<wxdata::clock::Instant>,
     /// NDFD's VTIT names a valid time, not an immutable issue. Recheck resident forecast tiles
     /// once per hour even when the selected valid time has not changed.
     ndfd_refresh_hour: i64,
@@ -1638,7 +1705,6 @@ impl TileManager {
             inflight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             failed: std::collections::HashMap::new(),
             requested: HashSet::new(),
-            rainviewer_started: VecDeque::new(),
             ndfd_refresh_hour: chrono::Utc::now().timestamp().div_euclid(3600),
             uploaded: LruCache::new(NonZeroUsize::new(RASTER_TILE_CACHE).unwrap()),
             evicted: Vec::new(),
@@ -1858,6 +1924,8 @@ impl TileManager {
             let (z, x, y) = v.id;
             let source_url = if style == BasemapStyle::RainViewerGlobal {
                 rainviewer_tile_url(self.goes_time, z, x, y)
+            } else if matches!(style, BasemapStyle::OperaRadar | BasemapStyle::JmaRadar | BasemapStyle::TaiwanRadar | BasemapStyle::KoreaRadar) {
+                crate::world_tiles::tile_url(style, self.goes_time, z, x, y)
             } else {
                 style.url(z, x, y, self.retina, &self.mapbox_key, &self.maptiler_key, &self.custom_template)
             };
@@ -1869,7 +1937,7 @@ impl TileManager {
             let time_tag = match self.goes_time {
                 Some(t) if style.timed() => {
                     let iso = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                    if style == BasemapStyle::RainViewerGlobal {
+                    if matches!(style, BasemapStyle::RainViewerGlobal | BasemapStyle::OperaRadar | BasemapStyle::JmaRadar | BasemapStyle::TaiwanRadar | BasemapStyle::KoreaRadar) {
                         // Its opaque path already names the selected immutable frame.
                     } else if style.ndfd_layer().is_some() {
                         url.push_str(&format!("&VTIT={}", t.format("%Y-%m-%dT%H:%M")));
@@ -1889,16 +1957,6 @@ impl TileManager {
                 }
                 _ => "default".to_string(),
             };
-            if style == BasemapStyle::RainViewerGlobal {
-                self.rainviewer_started.retain(|started| started.elapsed() < std::time::Duration::from_secs(60));
-                if self.rainviewer_started.len() >= RAINVIEWER_TILE_REQUESTS_PER_MINUTE {
-                    if let Some(ctx) = &self.ctx {
-                        ctx.request_repaint_after(std::time::Duration::from_secs(5));
-                    }
-                    break;
-                }
-                self.rainviewer_started.push_back(wxdata::clock::Instant::now());
-            }
             self.requested.insert((skey, v.id));
             let path = self.cache_root.as_ref().map(|d| {
                 d.join(style.provider(self.retina, &self.custom_template))
@@ -2146,12 +2204,37 @@ pub async fn fetch_visible(
     mapbox_key: &str,
     maptiler_key: &str,
 ) -> Vec<PendingTile> {
+    if visible.is_empty() { return Vec::new(); }
+    // Standalone renders have no UI timeline to initialize these catalogs. Resolve one actual
+    // observed frame up front and pin it across the whole image, including WMS sources.
+    let latest = if style.worldwide_radar() {
+        if style == BasemapStyle::KoreaRadar {
+            crate::world_tiles::discover_providers(client).await;
+        }
+        let now = chrono::Utc::now();
+        let Some(time) = fetch_frame_times(client, style, now - chrono::Duration::hours(3), now, 1)
+            .await.into_iter().max() else {
+            log::warn!("{}: no recent advertised radar frame", style.label());
+            return Vec::new();
+        };
+        Some(time)
+    } else { None };
     let mut out = Vec::new();
     for v in visible {
         let (z, x, y) = v.id;
-        let Some(url) = style.url(z, x, y, false, mapbox_key, maptiler_key, "") else {
+        let source_url = if style == BasemapStyle::RainViewerGlobal {
+            rainviewer_tile_url(latest, z, x, y)
+        } else if matches!(style, BasemapStyle::OperaRadar | BasemapStyle::JmaRadar | BasemapStyle::TaiwanRadar | BasemapStyle::KoreaRadar) {
+            crate::world_tiles::tile_url(style, latest, z, x, y)
+        } else {
+            style.url(z, x, y, false, mapbox_key, maptiler_key, "")
+        };
+        let Some(mut url) = source_url else {
             continue;
         };
+        if let Some(time) = latest.filter(|_| style.wms_layer().is_some()) {
+            url.push_str(&format!("&TIME={}", time.format("%Y-%m-%dT%H:%M:%SZ")));
+        }
         match load_raster_tile(client, &url, None).await {
             Ok(rgba) => {
                 let (width, height) = rgba.dimensions();
@@ -2175,7 +2258,12 @@ pub(crate) async fn load_tile_bytes(
 }
 
 async fn load_tile_bytes_inner(client: &reqwest::Client, url: &str, path: Option<&std::path::Path>, refresh: bool) -> anyhow::Result<Vec<u8>> {
+    let weather = crate::weather_tile_cache::is_weather_tile(url);
+    if refresh && weather { crate::weather_tile_cache::invalidate(url); }
     if !refresh {
+        if weather {
+            if let Some(bytes) = crate::weather_tile_cache::get(url) { return Ok(bytes.as_ref().clone()); }
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(bytes) = crate::offline::cached_tile(url).await { return Ok(bytes); }
         if let Some(p) = path {
@@ -2189,12 +2277,25 @@ async fn load_tile_bytes_inner(client: &reqwest::Client, url: &str, path: Option
     // user's API key in a shared cache. Native builds get the URL back unchanged.
     let http = client.clone();
     let request_url = wxdata::net::fetch_url(url);
+    let source_url = url.to_owned();
     let bytes = wxdata::shared_read::bytes(format!("tile:{refresh}:{request_url}"), async move {
+        let _permit = if weather { Some(crate::weather_tile_cache::start(&source_url).await?) } else { None };
         let mut request = http.get(request_url).timeout(TILE_TIMEOUT);
         if refresh { request = request.header(reqwest::header::CACHE_CONTROL, "no-cache"); }
-        Ok(request.send().await?
-            .error_for_status()?.bytes().await?.to_vec())
+        let response = request.send().await?.error_for_status()?;
+        if weather {
+            use futures_util::StreamExt;
+            let mut stream = response.bytes_stream();
+            let mut bytes = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                anyhow::ensure!(bytes.len() + chunk.len() <= 4 * 1024 * 1024, "Weather tile exceeds size limit");
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(bytes)
+        } else { Ok(response.bytes().await?.to_vec()) }
     }).await?;
+    if weather { crate::weather_tile_cache::put(url, Arc::clone(&bytes)); }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(p) = path {
         if let Some(parent) = p.parent() {
@@ -2236,6 +2337,7 @@ where
 }
 
 async fn load_raster_tile(client: &reqwest::Client, url: &str, path: Option<&std::path::Path>) -> anyhow::Result<image::RgbaImage> {
+    if url.starts_with("world-radar:") { return crate::world_tiles::load_tile(client, url).await; }
     load_tile_decoded(client, url, path, |bytes| async move {
         wxdata::task::blocking(move || image::load_from_memory(&bytes).map(|image| image.to_rgba8())).await?
             .map_err(Into::into)
@@ -3028,7 +3130,7 @@ mod tests {
             let both = s.is_raster() && s.vector_palette().is_some();
             assert_eq!(
                 both,
-                matches!(s, BasemapStyle::HybridSatellite | BasemapStyle::RainViewerGlobal)
+                s == BasemapStyle::HybridSatellite || s.worldwide_radar()
                     || s.ndfd_layer().is_some(),
                 "{s:?} raster+vector should be an intentional hybrid"
             );
@@ -3113,6 +3215,25 @@ mod tests {
         assert_eq!(BasemapStyle::RainViewerGlobal.max_raster_z(), 7);
         assert!(BasemapStyle::RainViewerGlobal.timed());
         assert_eq!(BasemapStyle::RainViewerGlobal.key(), 62);
+    }
+
+    #[test]
+    fn worldwide_sources_keep_region_identity_without_automatic_satellite_substitution() {
+        for (lon, lat, source) in [
+            (2.35, 48.86, BasemapStyle::OperaRadar),
+            (-79.38, 43.65, BasemapStyle::EcccRadarRain),
+            (139.69, 35.68, BasemapStyle::JmaRadar),
+            (121.56, 25.03, BasemapStyle::TaiwanRadar),
+            (151.21, -33.87, BasemapStyle::RainViewerGlobal),
+            (179.9, -20.0, BasemapStyle::RainViewerGlobal),
+        ] {
+            assert_eq!(BasemapStyle::worldwide_for_location(lon, lat), source);
+            assert!(source.worldwide_radar() && source.timed() && source.is_raster());
+            assert!(source.vector_palette().is_some());
+            assert!(source.weather_product_kind().is_some());
+        }
+        assert!(!BasemapStyle::ImergRate.worldwide_radar());
+        assert!(BasemapStyle::ImergRate.weather_product_kind().unwrap().contains("Satellite"));
     }
 
     #[test]

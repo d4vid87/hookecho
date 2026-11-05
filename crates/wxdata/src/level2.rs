@@ -615,7 +615,7 @@ pub async fn list_volumes_from(site: &str, date: chrono::NaiveDate, provider: Le
 }
 
 /// Take just enough of `older` (oldest first) to bring `today` up to `min`, and put it in front.
-fn with_previous_tail(
+pub(crate) fn with_previous_tail(
     mut older: Vec<Identifier>,
     today: Vec<Identifier>,
     min: usize,

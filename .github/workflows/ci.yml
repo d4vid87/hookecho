@@ -157,6 +157,7 @@ jobs:
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/outlook-rail.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/site-selector.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/workflow-upgrades.mjs
+          HOOKECHO_BASE_URL=http://127.0.0.1:8080/ HOOKECHO_WORLD_OUTPUT=outputs/worldwide node scripts/web/worldwide.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/velocity-comparison.mjs
           node scripts/web/offline-shell.mjs
           node scripts/web/offline-weather.mjs
@@ -174,6 +175,7 @@ jobs:
             outputs/outlook-rail
             outputs/site-selector
             outputs/workflow-upgrades
+            outputs/worldwide
             outputs/velocity-comparison
             outputs/forecast-recovery
 

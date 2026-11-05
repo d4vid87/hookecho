@@ -4,6 +4,40 @@ use chrono::Timelike as _;
 use crate::ui::a11y::Named as _;
 
 impl HookEchoApp {
+    /// Composite playback lives in the imagery bar; keep navigation without fictitious tilts.
+    pub(super) fn worldwide_transport(&mut self, ctx: &egui::Context) {
+        let mut active = self.active;
+        let mut choice = None;
+        let area = egui::Area::new("worldwide_controls".into())
+            .constrain_to(self.chrome_rect)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -16.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width((self.chrome_rect.width() - 32.0).clamp(240.0, 560.0));
+                    ui.horizontal_wrapped(|ui| {
+                        choice = zeta_layout_menu(ui, self, &mut active);
+                        self.worldwide_source_controls(ui);
+                    });
+                    let source = self.views[self.active].basemap;
+                    if let Some(kind) = source.weather_product_kind() { ui.weak(kind); }
+                    if !source.available(false, false, false) {
+                        ui.label("South Korea radar needs KMA access enabled on the server.");
+                    }
+                    ui.weak("Coverage varies; a blank area may have no radar coverage.");
+                });
+            });
+        self.mobile_occlusion.push(area.response.rect);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("corner_scrubber_rect"), area.response.rect));
+        if active < self.views.len() { self.active = active; }
+        match choice {
+            Some(ZetaLayoutChoice::Radar) => self.return_to_radar(ctx),
+            Some(ZetaLayoutChoice::Worldwide) => self.open_worldwide_radar(ctx),
+            Some(ZetaLayoutChoice::Workspace(index)) => self.activate_workspace_view(index, ctx),
+            Some(ZetaLayoutChoice::Panes(count)) => self.set_pane_count(count),
+            None => {}
+        }
+    }
+
     pub(super) fn zeta_transport(&mut self, ctx: &egui::Context) {
         use egui_phosphor::regular as ph;
         let idx = self.active;
@@ -655,6 +689,7 @@ impl HookEchoApp {
         if active_pane < self.views.len() { self.active = active_pane; }
         match layout_choice {
             Some(ZetaLayoutChoice::Radar) => self.return_to_radar(ctx),
+            Some(ZetaLayoutChoice::Worldwide) => self.open_worldwide_radar(ctx),
             Some(ZetaLayoutChoice::Workspace(index)) => self.activate_workspace_view(index, ctx),
             Some(ZetaLayoutChoice::Panes(count)) => {
                 self.compare_radar_products(count, ctx);
@@ -798,7 +833,7 @@ fn shortcut_label(entry: &PaletteEntry) -> String {
         }
     }
 }
-enum ZetaLayoutChoice { Radar, Workspace(usize), Panes(usize) }
+enum ZetaLayoutChoice { Radar, Worldwide, Workspace(usize), Panes(usize) }
 
 fn zeta_layout_menu(ui: &mut egui::Ui, app: &mut HookEchoApp, active: &mut usize) -> Option<ZetaLayoutChoice> {
     use egui_phosphor::regular as ph;
@@ -821,6 +856,8 @@ fn zeta_layout_menu(ui: &mut egui::Ui, app: &mut HookEchoApp, active: &mut usize
         ui.strong("Map layout");
         if ui.selectable_label(!analyst_open && active_workspace.is_none(), "Radar")
             .named("Single radar layout").clicked() { choice = Some(ZetaLayoutChoice::Radar); ui.close(); }
+        if ui.selectable_label(active_workspace == Some("Worldwide radar"), "Worldwide radar")
+            .named("Worldwide radar layout").clicked() { choice = Some(ZetaLayoutChoice::Worldwide); ui.close(); }
         for name in ["Chase", "National overview", "Analysis"] {
             if let Some(index) = workspaces.iter().position(|ws| ws.name == name) {
                 if ui.selectable_label(active_workspace == Some(name), name)

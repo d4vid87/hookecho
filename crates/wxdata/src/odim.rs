@@ -7,10 +7,7 @@
 //! look". Decoding it lands on the same [`Scan`] the NEXRAD path produces, so rendering, palettes,
 //! SRV and thresholds treat a European radar exactly like a WSR-88D.
 //!
-//! [`crate::dwd`] is the live consumer: `opendata.dwd.de` publishes single-sweep ODIM files
-//! without registration, one per elevation, and hands the bytes here. Other European volumes are
-//! harder to reach — Environment Canada publishes only rendered GIF/CAPPI imagery on Datamart and
-//! keeps its ODIM volumes behind HTTP basic auth, and OPERA's own archive is licensed.
+//! [`crate::dwd`] and [`crate::opera`] fetch public single-sweep files and complete volumes.
 //!
 //! # Azimuth registration
 //!
@@ -58,7 +55,7 @@ fn moment_slot(quantity: &str) -> Option<usize> {
         // The `U` forms are the same quantity before clutter filtering, which is how DWD
         // publishes its dual-pol products.
         "ZDR" | "UZDR" => 3,
-        "PHIDP" | "UPHIDP" | "KDP" => 4,
+        "PHIDP" | "UPHIDP" => 4,
         "RHOHV" | "URHOHV" => 5,
         _ => return None,
     })
@@ -236,6 +233,11 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
         return Ok(None);
     }
 
+    // NI is the instrument's Nyquist interval in m/s, never inferred from observed gates.
+    let nyquist = attrs(format!("{group}/how")).ok()
+        .and_then(|how| num(&how, "NI"))
+        .or_else(|| f.attributes("how").ok().and_then(|how| num(&how, "NI")))
+        .filter(|v| v.is_finite() && *v > 0.0).map(|v| v as f32);
     let spacing = 360.0 / nrays as f32;
     let radials = (0..nrays)
         .map(|i| {
@@ -273,7 +275,7 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
                 phi,
                 rho,
                 None,
-            )
+            ).with_nyquist_velocity_mps(nyquist)
         })
         .collect();
     Ok(Some(Sweep::new(elevation_number, radials)))
@@ -373,6 +375,14 @@ mod tests {
     use super::*;
     use nexrad_model::data::{DataMoment, MomentValue};
 
+    #[test]
+    fn specific_phase_is_never_mislabeled_as_differential_phase() {
+        assert_eq!(moment_slot("PHIDP"), Some(4));
+        assert_eq!(moment_slot("UPHIDP"), Some(4));
+        assert_eq!(moment_slot("KDP"), None);
+        assert_eq!(moment_slot("UKDP"), None);
+    }
+
     /// The same Belgian volume hdf5lite's goldens are built from — five sweeps of DBZH.
     fn fixture() -> Vec<u8> {
         let p = concat!(
@@ -441,6 +451,7 @@ mod tests {
         let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../hdf5lite/tests/data/seang.h5");
         let (_, scan) = decode(std::fs::read(p).expect("seang.h5 fixture")).expect("decode");
         let sweep = &scan.sweeps()[0];
+        assert!((sweep.radials()[0].nyquist_velocity_mps().unwrap() - 24.069).abs() < 0.001);
         let negative = sweep.radials()[2].velocity().unwrap().values()[1];
         let positive = sweep.radials()[1].velocity().unwrap().values()[1];
         assert!(matches!(negative, MomentValue::Value(v) if (v + 0.24069).abs() < 0.001), "{negative:?}");
@@ -448,6 +459,14 @@ mod tests {
         assert_eq!(sweep.radials()[0].velocity().unwrap().values()[0], MomentValue::BelowThreshold);
         let binned = crate::level2::bin_scan(&scan, crate::level2::Moment::Velocity, 0).unwrap();
         assert!(binned.data.iter().filter(|&&v| v >= 2).count() > 1_000);
+    }
+
+    #[test]
+    fn dwd_sweep_preserves_instrument_nyquist() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/dwd-boo-tilt00.h5");
+        let (_, scan) = decode(std::fs::read(path).unwrap()).unwrap();
+        assert!(scan.sweeps()[0].radials().iter().all(|radial|
+            radial.nyquist_velocity_mps().is_some_and(|value| (value - 31.9683).abs() < 0.001)));
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub struct SiteDialog {
     /// also means a user in North America never scrolls far enough to learn that the DWD and
     /// OPERA radars exist.
     pub network: Option<wxdata::sites::Network>,
+    pub country: Option<&'static str>,
 }
 
 struct Row {
@@ -67,6 +68,25 @@ fn network_label(network: wxdata::sites::Network) -> &'static str {
     }
 }
 
+fn country_name(site: &wxdata::sites::SiteEntry) -> &'static str {
+    use wxdata::sites::Network;
+    match wxdata::sites::network(site.id) {
+        Network::Nexrad | Network::Tdwr => match site.state {
+            "GU" => "Guam", "PR" => "Puerto Rico", "KR" => "South Korea", "JP" => "Japan",
+            _ => "United States",
+        },
+        Network::Dwd => "Germany",
+        Network::Opera => match site.state {
+            "BE" => "Belgium", "CZ" => "Czechia", "CH" => "Switzerland", "DK" => "Denmark",
+            "EE" => "Estonia", "ES" => "Spain", "FI" => "Finland", "FR" => "France",
+            "HR" => "Croatia", "IE" => "Ireland", "IS" => "Iceland", "LT" => "Lithuania",
+            "MT" => "Malta", "NL" => "Netherlands", "NO" => "Norway", "PL" => "Poland",
+            "PT" => "Portugal", "RO" => "Romania", "SE" => "Sweden", "SI" => "Slovenia", "SK" => "Slovakia",
+            code => code,
+        },
+    }
+}
+
 fn matching_sites(dialog: &SiteDialog, center: (f64, f64), settings: &Settings) -> Vec<Row> {
     let needle = dialog.filter.trim().to_ascii_uppercase();
     let mut rows: Vec<Row> = wxdata::sites::all()
@@ -75,6 +95,7 @@ fn matching_sites(dialog: &SiteDialog, center: (f64, f64), settings: &Settings) 
                 .network
                 .is_none_or(|n| wxdata::sites::network(s.id) == n)
         })
+        .filter(|s| dialog.country.is_none_or(|country| country_name(s) == country))
         .filter(|s| match dialog.collection {
             Collection::Nearby => true,
             Collection::Favorites => settings.presets.iter().any(|id| id == s.id),
@@ -85,11 +106,14 @@ fn matching_sites(dialog: &SiteDialog, center: (f64, f64), settings: &Settings) 
                 || s.id.to_ascii_uppercase().contains(&needle)
                 || s.city.to_ascii_uppercase().contains(&needle)
                 || s.state.to_ascii_uppercase().contains(&needle)
+                || country_name(s).to_ascii_uppercase().contains(&needle)
         })
         .map(|s| Row {
             id: s.id.to_string(),
             city: s.city.to_string(),
-            state: s.state.to_string(),
+            state: if matches!(wxdata::sites::network(s.id), wxdata::sites::Network::Dwd | wxdata::sites::Network::Opera) {
+                country_name(s).to_string()
+            } else { format!("{}, {}", s.state, country_name(s)) },
             kind: network_label(wxdata::sites::network(s.id)),
             dist_km: haversine_km(center, (s.longitude as f64, s.latitude as f64)),
             starred: settings.presets.iter().any(|id| id == s.id),
@@ -232,7 +256,7 @@ pub fn show(
                                         .color(accent),
                                 );
                                 ui.label(
-                                    egui::RichText::new(format!("{}, {}", site.city, site.state))
+                                    egui::RichText::new(format!("{}, {}", site.city, country_name(site)))
                                         .size(13.0),
                                 );
                                 ui.weak(
@@ -250,10 +274,19 @@ pub fn show(
                 ui.add_sized(
                     [detail_width, 34.0],
                     egui::TextEdit::singleline(&mut dialog.filter)
-                        .hint_text("Search city, state or radar ID")
+                        .hint_text("Search city, country, state or radar ID")
                         .font(egui::TextStyle::Body),
                 );
                 ui.add_space(6.0);
+                egui::ComboBox::from_id_salt("radar_country_filter")
+                    .selected_text(dialog.country.unwrap_or("All countries"))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut dialog.country, None, "All countries");
+                        let countries: std::collections::BTreeSet<_> = wxdata::sites::all().map(country_name).collect();
+                        for country in countries {
+                            ui.selectable_value(&mut dialog.country, Some(country), country);
+                        }
+                    });
                 ui.horizontal_wrapped(|ui| {
                     use wxdata::sites::Network;
                     for (label, network) in [
@@ -324,6 +357,7 @@ pub fn show(
                     if ui.button("Reset filters").clicked() {
                         dialog.filter.clear();
                         dialog.network = None;
+                        dialog.country = None;
                     }
                 } else {
                     // Virtualized buttons keep long global lists responsive and accept touch reliably.
@@ -332,6 +366,7 @@ pub fn show(
                             "signal_site_list",
                             dialog.collection as u8,
                             dialog.network.map(network_label),
+                            dialog.country,
                             &dialog.filter,
                             dialog.sort as u8,
                             dialog.desc,
@@ -525,6 +560,22 @@ mod selector_tests {
         );
         dialog.filter = "not-a-radar".into();
         assert!(matching_sites(&dialog, center, &settings).is_empty());
+    }
+
+    #[test]
+    fn countries_are_searchable_and_filter_independently_of_network() {
+        let settings = Settings::default();
+        let mut dialog = SiteDialog { filter: "germany".into(), ..Default::default() };
+        let rows = matching_sites(&dialog, (8.68, 50.11), &settings);
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row.state == "Germany"));
+        dialog.filter.clear();
+        dialog.country = Some("France");
+        let rows = matching_sites(&dialog, (2.35, 48.86), &settings);
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row.id.starts_with("FR")));
+        dialog.network = Some(wxdata::sites::Network::Dwd);
+        assert!(matching_sites(&dialog, (2.35, 48.86), &settings).is_empty());
     }
 
     #[test]

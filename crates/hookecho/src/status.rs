@@ -179,7 +179,7 @@ async fn nearest_cell(
     spot: &Spot,
     by_site: &mut std::collections::HashMap<String, Vec<wxdata::level3::Cell>>,
 ) -> Option<CellBrief> {
-    let site = crate::geo::nearest_site_id(spot.lon, spot.lat)?;
+    let site = crate::geo::nearest_nexrad_site_id(spot.lon, spot.lat)?;
     if !by_site.contains_key(&site) {
         let cells = wxdata::level3::fetch_cells(http, &site).await;
         by_site.insert(site.clone(), cells);

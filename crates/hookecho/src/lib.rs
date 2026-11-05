@@ -43,6 +43,8 @@ pub mod events;
 pub mod fielddiff;
 pub mod field_atlas;
 pub mod fonts;
+mod weather_tile_cache;
+mod world_tiles;
 pub mod fronts_draw;
 pub mod geo;
 pub mod gps;
@@ -232,6 +234,24 @@ pub fn bin_radar_display(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsVa
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn decode_mrms(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
     wxdata::mrms::decode_worker(payload).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn decode_opera_composite(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::opera_composite::decode_worker(bytes).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn decode_cwa(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::world_radar::decode_cwa_worker(bytes).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn decode_kma(payload: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    wxdata::world_radar::decode_kma_worker(payload).map_err(|e| e.to_string().into())
 }
 
 /// Worker export: decode and triangulate a basemap tile without blocking map input.

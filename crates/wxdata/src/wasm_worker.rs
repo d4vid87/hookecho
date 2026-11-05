@@ -54,6 +54,19 @@ pub async fn decode_mrms(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("mrms", payload).await
 }
 
+/// Decode an OPERA continental composite on the worker heap.
+pub async fn decode_opera(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("opera", bytes).await
+}
+
+pub async fn decode_cwa(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("cwa", bytes).await
+}
+
+pub async fn decode_kma(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call("kma", payload).await
+}
+
 /// Build a vector basemap tile off the thread handling map input.
 pub async fn tessellate_vector(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("vector", payload).await

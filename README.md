@@ -8,6 +8,11 @@ Follow rain and storms with national MRMS radar, Storm Prediction Center outlook
 
 No account. No ads. No API key. Free and open source.
 
+**Worldwide radar:** follow regional observations in Europe, Canada, Japan and Taiwan, with
+global composite coverage where available. Saved map locations stay in place; each source shows
+its product type and observation time. South Korea is available when a server operator configures
+KMA access. See [coverage, source limitations and setup](docs/worldwide-radar.md).
+
 [Open live radar](https://app.hookecho.io/) · [Download the app](https://github.com/d4vid87/hookecho/releases) · [Visit the website](https://hookecho.io/) · [Get help](https://github.com/d4vid87/hookecho/issues)
 
 ![National to local: current HookEcho menu, MRMS, SPC, layouts, and four tilts](docs/shots/national-to-local/tour.gif)

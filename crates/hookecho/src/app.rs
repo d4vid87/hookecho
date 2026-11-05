@@ -2884,6 +2884,48 @@ fn is_embed() -> bool {
         .is_some_and(|s| s.trim_start_matches('?').split('&').any(|p| p == "embed"))
 }
 
+fn resumable_start_view(view: &crate::settings::StartView) -> bool {
+    (view.site.is_empty() || wxdata::sites::site_by_id(&view.site).is_some())
+        && view.x.is_finite() && view.y.is_finite() && view.zoom.is_finite()
+}
+
+fn clear_worldwide_auto_source(ctx: &egui::Context, pane: usize) {
+    ctx.data_mut(|data| {
+        data.remove::<bool>(egui::Id::new(("worldwide_auto_source", pane)));
+        data.remove::<(crate::tiles::BasemapStyle, f64)>(egui::Id::new(("worldwide_source_candidate", pane)));
+    });
+}
+
+/// Browser fetch has no reqwest deadline; completing with an empty result permits another refresh.
+async fn timed_imagery_catalog(
+    deadline: Duration,
+    fetch: impl std::future::Future<Output = Vec<DateTime<Utc>>>,
+) -> Vec<DateTime<Utc>> {
+    wxdata::task::timeout(deadline, fetch).await.unwrap_or_else(|error| {
+        log::warn!("Imagery frame catalog: {error}");
+        Vec::new()
+    })
+}
+
+/// Composite imagery has no station gate values; clear native requests and products together.
+fn configure_composite_view(view: &mut MapView, style: crate::tiles::BasemapStyle) {
+    view.site = None;
+    view.begin_station_switch();
+    view.show_radar = false;
+    view.fields_on.clear();
+    view.custom_product = None;
+    view.srv = false;
+    view.tilt = 0;
+    view.timeline.frames.clear();
+    view.timeline.playing = false;
+    view.loading = false;
+    view.satellite = Default::default();
+    view.satellite.follow_radar = false;
+    view.satellite.source_slug = Some(style.slug().into());
+    view.camera_placed = true;
+    view.basemap = style;
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn is_embed() -> bool {
     false
@@ -4688,9 +4730,9 @@ impl HookEchoApp {
         // improves on it below with the edge's geo-IP.
         #[cfg(target_arch = "wasm32")]
         let opened_on_default =
-            !matches!(resume, Some(sv) if wxdata::sites::site_by_id(&sv.site).is_some());
+            !matches!(resume, Some(sv) if resumable_start_view(sv));
         let (start, camera) = match resume {
-            Some(sv) if wxdata::sites::site_by_id(&sv.site).is_some() => (
+            Some(sv) if resumable_start_view(sv) => (
                 sv.site.clone(),
                 Camera {
                     center: (sv.x, sv.y),
@@ -4708,12 +4750,17 @@ impl HookEchoApp {
                 (s, cam)
             }
         };
-        let mut view = MapView::new(Some(start.clone()), camera);
+        let mut view = MapView::new((!start.is_empty()).then_some(start.clone()), camera);
         view.smooth = settings.smooth_radar;
         // Restore the persisted basemap (empty slug = keep the default; from_slug("") = None).
         if !settings.basemap.is_empty() {
             view.basemap = crate::tiles::BasemapStyle::from_slug(&settings.basemap);
         }
+        if view.basemap.weather_product_kind().is_some() {
+            let style = view.basemap;
+            configure_composite_view(&mut view, style);
+        }
+        view.camera_placed = resume.is_some_and(resumable_start_view);
         let settings_setup_done = settings.setup_done;
 
         let mut app = Self {
@@ -5324,6 +5371,7 @@ impl HookEchoApp {
         // Recovery is only a fallback. A user-directed link or pending notification must win
         // over the saved session; otherwise its camera is restored after the link is applied and
         // the permalink writer promptly replaces the requested URL with that stale view.
+        if app.worldwide_view() { app.discover_worldwide_providers(&cc.egui_ctx); }
         app.apply_goto_env(&cc.egui_ctx);
         app.drain_goto_file(&cc.egui_ctx);
         #[cfg(target_arch = "wasm32")]
@@ -5383,6 +5431,9 @@ impl HookEchoApp {
         self.firstrun.open = false;
         self.settings.setup_done = true;
         self.goto_view(&g.site, g.lon, g.lat, g.zoom, g.time);
+        if g.basemap.is_some() {
+            clear_worldwide_auto_source(ctx, self.active);
+        }
         let view = &mut self.views[self.active];
         if let Some(m) = g.moment {
             view.moment = m;
@@ -5391,7 +5442,11 @@ impl HookEchoApp {
             view.tilt = t;
         }
         if let Some(slug) = &g.basemap {
-            view.basemap = crate::tiles::BasemapStyle::from_slug(slug);
+            let style = crate::tiles::BasemapStyle::from_slug(slug);
+            if style.weather_product_kind().is_some() {
+                configure_composite_view(view, style);
+                view.satellite.time = g.time;
+            } else { view.basemap = style; }
         }
         if let Some(globe) = g.globe { view.camera.set_globe(globe); }
         if g.pitch_deg.is_some() || g.bearing_deg.is_some() {
@@ -5572,6 +5627,7 @@ impl HookEchoApp {
     /// Which moments the active pane's volume carries. All true when nothing is loaded, so an
     /// empty pane still offers the full product list.
     fn available_moments(&self) -> [bool; Moment::ALL.len()] {
+        if self.worldwide_view() { return [false; Moment::ALL.len()]; }
         // The pane's remembered union, not this instant's volume: a half-arrived live volume
         // carries fewer moments than the radar sends, and the rows must not blink.
         self.views[self.active].moments()
@@ -7499,14 +7555,20 @@ impl HookEchoApp {
         }
         let times = self.goes[idx].times.clone();
         let forecast = self.views[idx].basemap.ndfd_layer().is_some();
-        let loop_times = if forecast { times.as_slice() } else {
+        let composite = self.worldwide_view();
+        let loop_times = if forecast { times.as_slice() }
+        else if self.views[idx].basemap == crate::tiles::BasemapStyle::ImergRate && self.goes[idx].hour.is_none() {
+            // Satellite rainfall is delayed beyond the normal live-radar loop window.
+            &times[times.len().saturating_sub(8)..]
+        } else {
             crate::satellite_time::loop_window(&times, Utc::now(), self.goes[idx].hour)
         };
         let radar = self.views[idx].displayed_time();
         let frame_interval = Duration::from_secs_f32(
             1.0 / self.settings.source_animation_speeds.get(if forecast {
                 crate::settings::AnimationSource::Forecasts
-            } else { crate::settings::AnimationSource::Satellite })
+            } else if composite { crate::settings::AnimationSource::Radar }
+            else { crate::settings::AnimationSource::Satellite })
         );
         if self.goes[idx].playing {
             if loop_times.len() < 2 || self.goes[idx].imagery_incomplete {
@@ -7546,20 +7608,24 @@ impl HookEchoApp {
                     if workspace {
                         ui.set_max_width((self.chrome_rect.width() - 32.0).clamp(240.0, 480.0));
                     }
+                    let state = if selected.is_none() && self.goes[idx].rx.is_none() {
+                        "frame unavailable"
+                    } else if self.goes[idx].imagery_ready {
+                        "displayed"
+                    } else if self.goes[idx].imagery_incomplete {
+                        "selected (incomplete)"
+                    } else {
+                        "selected (loading)"
+                    };
+                    let source_status = format!("{} {state}:", self.views[idx].basemap.label());
+                    if composite {
+                        ui.add(egui::Label::new(&source_status).wrap());
+                    }
                     ui.horizontal_wrapped(|ui| {
-                        let state = if selected.is_none() && self.goes[idx].rx.is_none() {
-                            "frame unavailable"
-                        } else if self.goes[idx].imagery_ready {
-                            "displayed"
-                        } else if self.goes[idx].imagery_incomplete {
-                            "selected (incomplete)"
-                        } else {
-                            "selected (loading)"
-                        };
-                        ui.label(format!("{} {state}:", self.views[idx].basemap.label()));
+                        if !composite { ui.label(&source_status); }
                         let selection = &mut self.views[idx].satellite;
-                        if ui
-                            .selectable_label(selection.follow_radar, if forecast { "Auto-follow" } else { "Follow radar" })
+                        if !composite && ui
+                            .add(egui::Button::selectable(selection.follow_radar, if forecast { "Auto-follow" } else { "Follow radar" }))
                             .clicked()
                         {
                             self.goes[idx].playing = false;
@@ -7596,8 +7662,15 @@ impl HookEchoApp {
                             selection.time = cur.map(|i| times[i - 1]);
                         }
                         if let Some(time) = selected {
-                            ui.monospace(if forecast { time.format("%a %b %-d %HZ").to_string() }
-                                else { crate::timefmt::fmt_clock(time, tz, false) });
+                            let timestamp = if forecast { time.format("%a %b %-d %HZ").to_string() }
+                                else if composite { time.format("%b %-d %H:%M UTC").to_string() }
+                                else { crate::timefmt::fmt_clock(time, tz, false) };
+                            if composite {
+                                ui.add(egui::Label::new(egui::RichText::new(timestamp).monospace()).extend());
+                                ui.add(egui::Label::new(format!("{} min old", Utc::now().signed_duration_since(time).num_minutes().max(0))).extend());
+                            } else {
+                                ui.monospace(timestamp);
+                            }
                             if let Some(radar) = radar.filter(|_| !forecast) {
                                 ui.label(format!(
                                     "Δ radar {:+.1}s",
@@ -7670,7 +7743,9 @@ impl HookEchoApp {
         let radar = self.views[idx].displayed_time();
         let selection_clock = if self.settings.link_satellite_times { self.views[self.active].displayed_time() } else { radar };
         // An explicit satellite selection must fetch its own archive window.
-        let clock = if self.views[idx].satellite.follow_radar {
+        let clock = if style == crate::tiles::BasemapStyle::ImergRate && self.goes[idx].playing && self.goes[idx].hour.is_none() {
+            None
+        } else if self.views[idx].satellite.follow_radar {
             selection_clock
         } else {
             self.views[idx].satellite.time
@@ -7699,7 +7774,10 @@ impl HookEchoApp {
             catalog.rx = Some(rx);
             let http = self.http.clone();
             self.spawner.spawn(async move {
-                let times = crate::tiles::fetch_frame_times(&http, style, from, to, 48).await;
+                let times = timed_imagery_catalog(
+                    Duration::from_secs(60),
+                    crate::tiles::fetch_frame_times(&http, style, from, to, 48),
+                ).await;
                 let _ = tx.send(times);
             });
         }
@@ -7753,9 +7831,17 @@ impl HookEchoApp {
         if self.chase_applied == Some((lon, lat)) {
             return;
         }
+        let zoom = self.views[self.active].camera.zoom.max(8.0);
         if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
-            let zoom = self.views[self.active].camera.zoom.max(8.0);
+            if self.worldwide_view() { self.set_basemap(crate::tiles::BasemapStyle::Dark); }
+            self.views[self.active].show_radar = true;
             self.goto_view(&site, lon, lat, zoom, None);
+        } else {
+            let style = crate::tiles::BasemapStyle::worldwide_for_location(lon, lat);
+            if !self.worldwide_view() || self.views[self.active].basemap != style {
+                self.select_worldwide_source(style);
+            }
+            self.views[self.active].camera.center = crate::render::mercator::lonlat_to_world(lon, lat);
         }
         self.chase_applied = Some((lon, lat));
         self.warm_next_site();
@@ -9855,6 +9941,7 @@ impl HookEchoApp {
     /// The same question for a specific pane, which is what a per-pane drawing (the measure tool)
     /// wants: split panes can show Oklahoma beside Bavaria.
     fn metric_in(&self, idx: usize) -> bool {
+        if self.views[idx].site.is_none() && self.views[idx].basemap.weather_product_kind().is_some() { return true; }
         !matches!(
             self.views[idx]
                 .site
@@ -10427,6 +10514,10 @@ impl HookEchoApp {
         if matches!(action, PaletteAction::OpenWindow(_)) { self.drawer.resume(); }
         match action {
             PaletteAction::SetMoment(m, srv) => {
+                if self.worldwide_view() {
+                    self.toast(ToastKind::Info, "This imagery source has no native radar moments or elevation scans. Choose a radar station for analysis.");
+                    return;
+                }
                 let v = &mut self.views[self.active];
                 v.moment = m;
                 v.custom_product = None;
@@ -10610,6 +10701,16 @@ impl HookEchoApp {
             }
             PaletteAction::ApplyWorkspace(i) => {
                 if let Some(ws) = self.settings.workspaces.get(i).cloned() {
+                    if ws.adopt_site && self.views[self.active].site.is_none() {
+                        let camera = self.views[self.active].camera;
+                        let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+                        let local = crate::geo::nearest_site_id(lon, lat);
+                        if local.is_none() {
+                            self.toast(ToastKind::Info, "No nearby supported radar provides native scans here. Worldwide imagery remains available.");
+                            return;
+                        }
+                        self.views[self.active].site = local;
+                    }
                     self.apply_workspace(&ws, ctx);
                     self.toast(ToastKind::Info, format!("Workspace: {}", ws.name));
                 }
@@ -13100,7 +13201,7 @@ impl HookEchoApp {
                     // the frame list so the loop window slides forward. A frame-fetch result for a
                     // scrubbed/loop-display frame is older than the head and isn't a new head.
                     let _new_head = v.timeline.following
-                        && v.site.as_deref().is_some_and(|site| matches!(wxdata::sites::network(site), wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr))
+                        && v.site.as_deref().is_some_and(|site| wxdata::sites::site_by_id(site).is_some())
                         && {
                             let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
                             if time.date_naive() != v.timeline.date {
@@ -13520,6 +13621,12 @@ impl HookEchoApp {
         // Site change: retain an explicitly identified prior scan until the replacement is ready.
         let site_changed = self.views[idx].site != self.views[idx].loaded_site;
         if site_changed {
+            if self.views[idx].site.is_some() && !self.views[idx].show_radar
+                && self.views[idx].basemap.weather_product_kind().is_some() {
+                self.views[idx].basemap = crate::tiles::BasemapStyle::Dark;
+                self.views[idx].show_radar = true;
+                if idx == self.active { self.settings.basemap = "dark".into(); }
+            }
             self.record_interaction("switch_station");
             if idx == self.active {
                 if let Some(site) = self.views[idx].site.as_deref() {
@@ -13709,9 +13816,8 @@ impl HookEchoApp {
         let (site, date, following, need_list, listing) = {
             let v = &self.views[idx];
             let key = v.site.clone().map(|s| (s, v.timeline.date));
-            // NEXRAD and TDWR have timestamped public archives. DWD and OPERA currently
-            // expose only their newest assembled volume to this timeline.
-            let need = v.site.as_deref().is_some_and(|site| matches!(wxdata::sites::network(site), wxdata::sites::Network::Nexrad | wxdata::sites::Network::Tdwr))
+            // European listings expose the provider's rolling cache, not a long-term archive.
+            let need = v.site.as_deref().is_some_and(|site| wxdata::sites::site_by_id(site).is_some())
                 && v.timeline.frames_key != key
                 && v.last_list_failure.is_none_or(|at| at.elapsed().as_secs() >= 10);
             (
@@ -13914,10 +14020,11 @@ impl HookEchoApp {
             let fetched = wxdata::task::timeout(
                 VOLUME_TIMEOUT,
                 async {
-                    if wxdata::tdwr::is_tdwr(&site) {
-                        wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan)
-                    } else {
-                        crate::volume::fetch(id, crate::paths::cache_dir()).await
+                    match wxdata::sites::network(&site) {
+                        wxdata::sites::Network::Tdwr => wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
+                        wxdata::sites::Network::Dwd => wxdata::dwd::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
+                        wxdata::sites::Network::Opera => wxdata::opera::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
+                        wxdata::sites::Network::Nexrad => crate::volume::fetch(id, crate::paths::cache_dir()).await,
                     }
                 },
             )
@@ -13990,13 +14097,14 @@ impl HookEchoApp {
             // deadline a swallowed request never took either arm, and a pane stuck on `loading`
             // stops polling for the rest of the session.
             let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
-                if wxdata::tdwr::is_tdwr(&site) {
-                    wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan)
-                } else {
-                    crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
+                match wxdata::sites::network(&site) {
+                    wxdata::sites::Network::Tdwr => wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
+                    wxdata::sites::Network::Dwd => wxdata::dwd::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
+                    wxdata::sites::Network::Opera => wxdata::opera::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
+                    wxdata::sites::Network::Nexrad => crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
                         let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
                         ctx.request_repaint();
-                    }).await
+                    }).await,
                 }
             })
             .await
@@ -14041,10 +14149,11 @@ impl HookEchoApp {
         let http = self.http.clone();
         let handle = self.spawner.spawn_abortable(async move {
             let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
-                if wxdata::tdwr::is_tdwr(&site) {
-                    wxdata::tdwr::list_volumes(&http, &site, date).await
-                } else {
-                    level2::list_volumes_from(&site, date, provider).await
+                match wxdata::sites::network(&site) {
+                    wxdata::sites::Network::Tdwr => wxdata::tdwr::list_volumes(&http, &site, date).await,
+                    wxdata::sites::Network::Dwd => wxdata::dwd::list_volumes(&http, &site, date).await,
+                    wxdata::sites::Network::Opera => wxdata::opera::list_volumes(&http, &site, date).await,
+                    wxdata::sites::Network::Nexrad => level2::list_volumes_from(&site, date, provider).await,
                 }
             }).await.unwrap_or_else(Err);
             let result = match fetched {
@@ -14791,6 +14900,26 @@ impl HookEchoApp {
         let mut place_label_work = 0;
         let mut place_label_budget = crate::map_work::LabelBudget::default();
         use crate::tiles::BasemapStyle;
+        if idx == self.active && self.worldwide_view()
+            && ctx.data(|data| data.get_temp::<bool>(egui::Id::new(("worldwide_auto_source", idx))).unwrap_or(false)) {
+            let center = self.views[idx].camera.center;
+            let (lon, lat) = crate::render::mercator::world_to_lonlat(center.0, center.1);
+            let source = BasemapStyle::worldwide_for_location(lon, lat);
+            let key = egui::Id::new(("worldwide_source_candidate", idx));
+            if self.gesture_live || self.views[idx].camera_motion.active() || source == self.views[idx].basemap {
+                ctx.data_mut(|data| data.remove::<(BasemapStyle, f64)>(key));
+            } else {
+                let now = ctx.input(|input| input.time);
+                let candidate = ctx.data_mut(|data| *data.get_temp_mut_or_insert_with(key, || (source, now)));
+                if candidate.0 != source {
+                    ctx.data_mut(|data| data.insert_temp(key, (source, now)));
+                } else if now - candidate.1 >= 1.5 {
+                    self.select_worldwide_source(source);
+                    ctx.data_mut(|data| data.remove::<(BasemapStyle, f64)>(key));
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(1500));
+            }
+        }
         // This pane's own basemap: panes are independent, the tile caches are keyed by style.
         // `Auto` resolves here rather than where it is stored, so the stored choice keeps
         // following the theme instead of being frozen the first time it is rendered.
@@ -19525,7 +19654,58 @@ impl HookEchoApp {
         ctx.data_mut(|data| data.remove::<Option<&'static str>>(egui::Id::new("panel_settings_page")));
     }
 
+    fn worldwide_view(&self) -> bool {
+        let view = &self.views[self.active];
+        !view.show_radar && (view.basemap.worldwide_radar()
+            || view.basemap == crate::tiles::BasemapStyle::ImergRate)
+    }
+
+    fn discover_worldwide_providers(&self, ctx: &egui::Context) {
+        let http = self.http.clone();
+        let ctx = ctx.clone();
+        self.spawner.spawn(async move {
+            crate::world_tiles::discover_providers(&http).await;
+            ctx.request_repaint();
+        });
+    }
+
+    fn open_worldwide_radar(&mut self, ctx: &egui::Context) {
+        self.discover_worldwide_providers(ctx);
+        let camera = self.views[self.active].camera;
+        let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+        if self.workspace_return_session.is_none() {
+            self.workspace_return_session = Some(self.capture_mode_session());
+        }
+        self.switch_mode(ViewMode::Radar, ctx);
+        self.views[self.active].camera = camera;
+        self.select_worldwide_source(crate::tiles::BasemapStyle::worldwide_for_location(lon, lat));
+        self.active_workspace = Some("Worldwide radar".into());
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(("worldwide_auto_source", self.active)), true));
+        self.panel_open = false;
+        self.drawer.show_search();
+    }
+
+    fn select_worldwide_source(&mut self, style: crate::tiles::BasemapStyle) {
+        configure_composite_view(&mut self.views[self.active], style);
+        self.tool = MapTool::Interrogate;
+        self.set_basemap(style);
+    }
+
     fn return_to_radar(&mut self, ctx: &egui::Context) {
+        if self.worldwide_view() && self.workspace_return_session.is_none() {
+            let camera = self.views[self.active].camera;
+            let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+            let Some(site) = crate::geo::nearest_site_id(lon, lat) else {
+                self.toast(ToastKind::Info, "No nearby native radar. Choose a station from the site selector, or keep worldwide imagery.");
+                return;
+            };
+            self.set_basemap(crate::tiles::BasemapStyle::Dark);
+            let view = &mut self.views[self.active];
+            view.site = Some(site);
+            view.show_radar = true;
+            view.camera_placed = true;
+        }
+        clear_worldwide_auto_source(ctx, self.active);
         self.switch_mode(ViewMode::Radar, ctx);
         if let Some(session) = self.workspace_return_session.take() {
             self.restore_mode_session(session, ctx);
@@ -19534,10 +19714,19 @@ impl HookEchoApp {
         }
         self.active_workspace = None;
         self.panel_open = false;
+        // Returning from imagery must not leave it as the next launch's saved basemap.
+        let style = self.views[self.active].basemap;
+        self.set_basemap(style);
     }
 
     fn apply_workspace(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
         if ws.panes.is_empty() { return; }
+        let regional = (ws.name == "National overview").then(|| {
+            let mut ws = ws.clone();
+            ws.regionalize_overview(self.views[self.active].camera);
+            ws
+        });
+        let ws = regional.as_ref().unwrap_or(ws);
         self.remember_layout();
         self.record_interaction("apply_workspace");
         let suspended = self.undo_suspended;
@@ -19550,9 +19739,16 @@ impl HookEchoApp {
         } else { ViewMode::Radar };
         self.switch_mode(mode, ctx);
         self.apply_workspace_raw(ws, ctx);
+        // Workspaces and scene links name their sources explicitly, including in other panes.
+        for pane in 0..self.views.len() {
+            clear_worldwide_auto_source(ctx, pane);
+        }
         self.analyst_open = mode == ViewMode::Analyst;
         self.active_workspace = Some(ws.name.clone());
         self.undo_suspended = suspended;
+        if self.views[self.active].basemap.weather_product_kind().is_some() {
+            self.set_basemap(self.views[self.active].basemap);
+        }
     }
 
     fn apply_workspace_raw(&mut self, ws: &crate::workspace::Workspace, ctx: &egui::Context) {
@@ -22789,9 +22985,9 @@ impl eframe::App for HookEchoApp {
         if self.settings.start_view.is_none() {
             log::debug!("remembering the last view for next launch");
             let view = &self.views[self.active];
-            if let Some(site) = &view.site {
+            if view.site.is_some() || view.basemap.weather_product_kind().is_some() {
                 self.settings.last_view = Some(crate::settings::StartView {
-                    site: site.clone(),
+                    site: view.site.clone().unwrap_or_default(),
                     x: view.camera.center.0,
                     y: view.camera.center.1,
                     zoom: view.camera.zoom,
@@ -23841,7 +24037,8 @@ impl eframe::App for HookEchoApp {
                 }
                 if !phone_layout && !self.analyst_open && !self.drawer.is_open() {
                     self.priority_dock(ctx);
-                    if self.active_workspace.as_deref() == Some("National overview") {
+                    if self.active_workspace.as_deref() == Some("National overview")
+                        && self.views[self.active].fields_on.contains(&crate::render::FieldLayer::Mrms) {
                         self.national_signal_strip(ctx);
                     }
                 }
@@ -23931,9 +24128,15 @@ impl eframe::App for HookEchoApp {
             self.settings.setup_done = true;
             self.settings.save();
             let v = &mut self.views[self.active];
-            v.site = Some(fin.site.clone());
-            ui::site_dialog::center_on_site(&mut v.camera, &fin.site);
-            if fin.located {
+            if let Some((lon, lat)) = fin.location.filter(|_| fin.site.is_empty()) {
+                v.camera = crate::render::mercator::Camera::at_lonlat(lon, lat, 6.0);
+                self.select_worldwide_source(crate::tiles::BasemapStyle::worldwide_for_location(lon, lat));
+                self.toast(ToastKind::Info, "No nearby supported radar station. Showing worldwide imagery for your location.");
+            } else {
+                v.site = Some(fin.site.clone());
+                ui::site_dialog::center_on_site(&mut v.camera, &fin.site);
+            }
+            if fin.located && !fin.site.is_empty() {
                 self.quick_start_offer = !fin.take_tour;
                 // Nobody chose this site, so say which one it is and that it can be changed.
                 self.toast(
@@ -24091,6 +24294,10 @@ impl eframe::App for HookEchoApp {
             }
             if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
                 self.goto_view(&site, lon, lat, 8.0, None);
+            } else {
+                self.views[self.active].camera = crate::render::mercator::Camera::at_lonlat(lon, lat, 6.0);
+                self.select_worldwide_source(crate::tiles::BasemapStyle::worldwide_for_location(lon, lat));
+                self.active_workspace = Some("Worldwide radar".into());
             }
         }
         // Drain search-pill geocoding results.
@@ -24108,6 +24315,12 @@ impl eframe::App for HookEchoApp {
                     let cam = &mut self.views[self.active].camera;
                     cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
                     cam.zoom = cam.zoom.max(9.0);
+                    if self.worldwide_view() || crate::geo::nearest_site_id(lon, lat).is_none() {
+                        self.select_worldwide_source(crate::tiles::BasemapStyle::worldwide_for_location(lon, lat));
+                    } else {
+                        self.views[self.active].site = crate::geo::nearest_site_id(lon, lat);
+                        self.views[self.active].camera_placed = true;
+                    }
                     self.save_offer = Some((
                         short_place_name(&name).to_string(),
                         lat,
@@ -24147,10 +24360,14 @@ impl eframe::App for HookEchoApp {
             if let Some(marker) = self.settings.markers.get(index) {
                 let (lon, lat) = (marker.lon, marker.lat);
                 if let Some(site) = crate::geo::nearest_site_id(lon, lat) {
+                    if self.worldwide_view() { self.set_basemap(crate::tiles::BasemapStyle::Dark); }
                     self.goto_view(&site, lon, lat, 9.0, None);
                     self.views[self.active].show_radar = true;
-                    self.marker_window.open = false;
+                } else {
+                    self.select_worldwide_source(crate::tiles::BasemapStyle::worldwide_for_location(lon, lat));
+                    self.views[self.active].camera = crate::render::mercator::Camera::at_lonlat(lon, lat, 8.0);
                 }
+                self.marker_window.open = false;
             }
         }
         if let Some(index) = self.marker_window.forecast_place.take() {
@@ -25743,6 +25960,75 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn stalled_imagery_catalog_finishes_and_next_refresh_can_succeed() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) { self.0.store(true, Ordering::Relaxed); }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let request_dropped = dropped.clone();
+        let result = super::timed_imagery_catalog(std::time::Duration::from_millis(10), async move {
+            let _guard = Dropped(request_dropped);
+            std::future::pending().await
+        }).await;
+        assert!(result.is_empty(), "a stalled request must finish so the catalog receiver can clear");
+        assert!(dropped.load(Ordering::Relaxed), "the timed-out request must be cancelled");
+
+        let frames = vec![chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()];
+        assert_eq!(super::timed_imagery_catalog(
+            std::time::Duration::from_secs(1), std::future::ready(frames.clone()),
+        ).await, frames, "a later successful refresh still supplies its frames");
+    }
+
+    #[test]
+    fn explicit_navigation_discards_pending_automatic_source_switch() {
+        let ctx = egui::Context::default();
+        let source = crate::tiles::BasemapStyle::JmaRadar;
+        ctx.data_mut(|data| {
+            for pane in 0usize..2 {
+                data.insert_temp(egui::Id::new(("worldwide_auto_source", pane)), true);
+                data.insert_temp(egui::Id::new(("worldwide_source_candidate", pane)), (source, 1.0f64));
+            }
+        });
+        super::clear_worldwide_auto_source(&ctx, 0);
+        ctx.data(|data| {
+            assert!(data.get_temp::<bool>(egui::Id::new(("worldwide_auto_source", 0usize))).is_none());
+            assert!(data.get_temp::<(crate::tiles::BasemapStyle, f64)>(
+                egui::Id::new(("worldwide_source_candidate", 0usize))).is_none());
+            assert_eq!(data.get_temp::<bool>(egui::Id::new(("worldwide_auto_source", 1usize))), Some(true),
+                "another pane keeps its independently selected automatic mode");
+        });
+    }
+
+    #[test]
+    fn worldwide_view_preserves_camera_and_clears_native_controls_and_requests() {
+        let camera = crate::render::mercator::Camera::at_lonlat(139.69, 35.68, 8.0);
+        let mut view = crate::view::MapView::new(Some("KTLX".into()), camera);
+        view.srv = true;
+        view.tilt = 3;
+        view.custom_product = Some("old product".into());
+        view.fields_on.insert(crate::render::FieldLayer::Mrms);
+        view.timeline.playing = true;
+        view.head_request.start("KTLX".into());
+        super::configure_composite_view(&mut view, crate::tiles::BasemapStyle::JmaRadar);
+        assert_eq!(view.camera.center, camera.center);
+        assert_eq!(view.camera.zoom, camera.zoom);
+        assert!(view.site.is_none() && !view.show_radar && !view.srv);
+        assert!(view.fields_on.is_empty() && view.custom_product.is_none());
+        assert!(view.head_request.pending_name().is_none());
+        assert!(!view.timeline.playing && !view.satellite.follow_radar);
+        view.satellite.time = Some(chrono::Utc::now());
+        let selected = view.satellite.time;
+        view.satellite.bind_source(view.basemap.slug());
+        assert_eq!(view.satellite.time, selected, "first catalog fetch preserves an explicit source time");
+        assert_eq!(view.basemap, crate::tiles::BasemapStyle::JmaRadar);
+        let saved = crate::settings::StartView { site: String::new(), x: camera.center.0, y: camera.center.1, zoom: camera.zoom };
+        assert!(super::resumable_start_view(&saved));
+        assert!(!super::resumable_start_view(&crate::settings::StartView { x: f64::NAN, ..saved }));
+    }
+
     #[test]
     fn coverage_range_uses_observed_full_gate_depth_per_product() {
         use super::RadarUpload;

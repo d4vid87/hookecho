@@ -5,6 +5,7 @@ use crate::ui::a11y::Named as _;
 impl HookEchoApp {
     pub(crate) fn pane_identity(&self, idx: usize) -> String {
         let v = &self.views[idx];
+        if !v.show_radar && v.basemap.weather_product_kind().is_some() { return v.basemap.label().into(); }
         format!(
             "{} · {}",
             v.custom_product
@@ -16,6 +17,7 @@ impl HookEchoApp {
     }
 
     pub(crate) fn radar_identity_controls(&mut self, ui: &mut egui::Ui) {
+        if self.worldwide_view() { self.worldwide_source_controls(ui); return; }
         let idx = self.active;
         let site = self.views[idx]
             .site
@@ -59,6 +61,42 @@ impl HookEchoApp {
             ));
         }
     }
+    pub(super) fn worldwide_source_controls(&mut self, ui: &mut egui::Ui) {
+        use crate::tiles::BasemapStyle;
+        let current = self.views[self.active].basemap;
+        let mut selected = None;
+        let key = egui::Id::new(("worldwide_auto_source", self.active));
+        let mut automatic = ui.ctx().data(|data| data.get_temp::<bool>(key).unwrap_or(false));
+        ui.menu_button(format!("{} ▾", current.label()), |ui| {
+            ui.set_max_width(320.0);
+            if ui.selectable_label(automatic, "Follow map location automatically").clicked() {
+                automatic = true;
+                let camera = self.views[self.active].camera;
+                let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+                selected = Some(BasemapStyle::worldwide_for_location(lon, lat));
+                ui.close();
+            }
+            ui.separator();
+            for &style in BasemapStyle::ALL.iter().filter(|style| style.worldwide_radar()) {
+                let available = style.available(false, false, false);
+                if ui.add_enabled(available, egui::Button::selectable(style == current, style.label()))
+                    .on_hover_text(if available { style.weather_product_kind().unwrap_or("") }
+                        else { "Requires KMA radar access to be configured on the server." }).clicked() {
+                    automatic = false; selected = Some(style); ui.close();
+                }
+            }
+            ui.separator();
+            if ui.selectable_label(current == BasemapStyle::ImergRate, "Satellite rainfall estimate · NASA IMERG").clicked() {
+                automatic = false; selected = Some(BasemapStyle::ImergRate); ui.close();
+            }
+            ui.weak("Satellite rainfall is delayed and is not a radar observation.");
+        }).response.named("Worldwide radar source");
+        if let Some(style) = selected {
+            ui.ctx().data_mut(|data| data.insert_temp(key, automatic));
+            self.select_worldwide_source(style);
+        }
+    }
+
     /// The NDFD map is a forecast source, so a radar moment/elevation picker would be misleading.
     fn ndfd_forecast_controls(&mut self, ui: &mut egui::Ui) {
         let idx = self.active;
@@ -92,6 +130,7 @@ impl HookEchoApp {
     }
     /// Active-pane product, elevation and appearance choices for every radar toolbar.
     pub(crate) fn radar_product_controls(&mut self, ui: &mut egui::Ui, full_name: bool) {
+        if self.worldwide_view() { self.worldwide_source_controls(ui); return; }
         let idx = self.active;
         let phone = compact(ui.ctx());
         let product = self.views[idx].custom_product.clone().unwrap_or_else(|| {

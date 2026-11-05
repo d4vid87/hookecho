@@ -1,10 +1,7 @@
-//! Germany's radar network from `opendata.dwd.de` — the one keyless international volume feed.
+//! Germany's radar network from the keyless `opendata.dwd.de` volume feed.
 //!
 //! DWD publishes every sweep of every C-band radar as a single-sweep ODIM_H5 file, no
-//! registration and no key, which makes it the only foreign network this app can actually carry:
-//! Environment Canada's Datamart has rendered GIFs only and keeps its ODIM volumes behind HTTP
-//! basic auth, Australia's BOM volumetric feed requires registration, and OPERA's composite is
-//! licensed. Bytes land in [`crate::odim`] and come back out as a [`Scan`], so rendering,
+//! registration and no key. Bytes land in [`crate::odim`] and come back out as a [`Scan`], so rendering,
 //! palettes, SRV and thresholds treat Essen exactly like they treat Oklahoma City.
 //!
 //! The five-minute volume scan is ten separate files per moment, one per elevation, and they are
@@ -28,7 +25,8 @@
 //! ponytail: no per-moment toggles and no partial retry — a moment that fails to arrive is simply
 //! absent from the sweep, exactly as it was when this module fetched reflectivity alone.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
+use crate::level2::Identifier;
 use nexrad_model::data::{MomentData, Radial, Scan, Sweep};
 use nexrad_model::meta::registry::SiteEntry;
 
@@ -167,6 +165,9 @@ pub(crate) fn merge(base: &Sweep, extra: &[Sweep]) -> Sweep {
                 f(r).or_else(|| extra.iter().find_map(|s| s.radials().get(i).and_then(f)))
                     .cloned()
             };
+            let velocity_source = std::iter::once(r)
+                .chain(extra.iter().filter_map(|s| s.radials().get(i)))
+                .find(|r| r.velocity().is_some());
             Radial::new(
                 r.collection_timestamp(),
                 r.azimuth_number(),
@@ -182,7 +183,7 @@ pub(crate) fn merge(base: &Sweep, extra: &[Sweep]) -> Sweep {
                 pick(Radial::differential_phase),
                 pick(Radial::correlation_coefficient),
                 None,
-            )
+            ).with_nyquist_velocity_mps(velocity_source.and_then(Radial::nyquist_velocity_mps))
         })
         .collect();
     Sweep::new(base.elevation_number(), radials)
@@ -208,10 +209,68 @@ pub(crate) fn assemble(mut parts: Vec<(f32, Sweep)>) -> Vec<Sweep> {
                 r.spectrum_width().cloned(), r.differential_reflectivity().cloned(),
                 r.differential_phase().cloned(), r.correlation_coefficient().cloned(),
                 r.clutter_filter_power().cloned(),
-            )).collect();
+            ).with_nyquist_velocity_mps(r.nyquist_velocity_mps())).collect();
             Sweep::new(number, radials)
         })
         .collect()
+}
+
+fn cycle_time(time: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp(time.timestamp().div_euclid(300) * 300, 0).expect("valid scan time")
+}
+
+fn listed_sweeps(html: &str, slug: &str, wmo: u16) -> Vec<(u8, DateTime<Utc>, String)> {
+    html.split("href=\"").skip(1).filter_map(|rest| {
+        let name = rest.split_once('"')?.0;
+        let tail = name.strip_prefix("ras07-vol5minng01_sweeph5onem_th_")?;
+        let (slot, tail) = tail.split_once('-')?;
+        let (stamp, suffix) = tail.split_once('-')?;
+        if suffix != format!("{slug}-{wmo}-hd5") || stamp.len() != 16
+            || !stamp.bytes().all(|c| c.is_ascii_digit()) { return None; }
+        let tilt = slot.parse::<u8>().ok().filter(|t| *t < TILTS)?;
+        let time = chrono::NaiveDateTime::parse_from_str(&stamp[..14], "%Y%m%d%H%M%S").ok()?.and_utc();
+        Some((tilt, cycle_time(time), format!("{BASE}/sweep_vol_z/{slug}/unfiltered/{name}")))
+    }).collect()
+}
+
+async fn sweep_listing(http: &reqwest::Client, slug: &str) -> anyhow::Result<std::sync::Arc<str>> {
+    type Entry = (crate::clock::Instant, std::sync::Arc<str>);
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<lru::LruCache<String, Entry>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(8).unwrap())));
+    if let Some((at, html)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(slug).cloned() {
+        if at.elapsed().as_secs() < 60 { return Ok(html); }
+    }
+    let url = format!("{BASE}/sweep_vol_z/{slug}/unfiltered/");
+    let bytes = crate::opera::bounded_get(http, &url, 8 * 1024 * 1024).await?;
+    let html: std::sync::Arc<str> = String::from_utf8(bytes)?.into();
+    cache.lock().unwrap_or_else(|e| e.into_inner()).put(slug.to_string(), (crate::clock::Instant::now(), html.clone()));
+    Ok(html)
+}
+
+/// Recent published five-minute cycles. DWD's rolling directory is not a long-term archive.
+pub async fn list_volumes(http: &reqwest::Client, id: &str, date: NaiveDate) -> anyhow::Result<Vec<Identifier>> {
+    let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a DWD radar"))?;
+    let (slug, wmo) = path_for(meta.id).expect("registered DWD path");
+    let html = sweep_listing(http, slug).await?;
+    let mut cycles = std::collections::BTreeMap::<DateTime<Utc>, u16>::new();
+    for (tilt, time, _) in listed_sweeps(&html, slug, wmo) {
+        *cycles.entry(time).or_default() |= 1 << tilt;
+    }
+    // Wait for all ten reflectivity cuts; a partly published next cycle is not playback-ready.
+    let complete: Vec<_> = cycles.into_iter().filter(|(_, mask)| *mask == (1 << TILTS) - 1)
+        .map(|(time, _)| Identifier::new(volume_name(meta.id, time))).collect();
+    let frames: Vec<_> = complete.iter().filter(|frame| frame.date_time().is_some_and(|at| at.date_naive() == date)).cloned().collect();
+    if date != Utc::now().date_naive() || frames.len() >= 24 { return Ok(frames); }
+    let older = complete.into_iter().filter(|frame| frame.date_time().is_some_and(|at| Some(at.date_naive()) == date.pred_opt())).collect();
+    Ok(crate::level2::with_previous_tail(older, frames, 24))
+}
+
+/// Fetch the exact selected cycle; never substitute today's newest volume for an expired frame.
+pub async fn fetch_volume_at(http: &reqwest::Client, frame: &Identifier) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    let id = frame.site().filter(|id| is_dwd(id)).ok_or_else(|| anyhow::anyhow!("invalid DWD frame"))?;
+    let time = frame.date_time().ok_or_else(|| anyhow::anyhow!("invalid DWD frame time"))?;
+    fetch_volume_inner(http, id, None, Some(time)).await?
+        .ok_or_else(|| anyhow::anyhow!("DWD frame unavailable"))
 }
 
 /// Fetch the newest volume for a DWD radar: ten elevations at once, assembled into one [`Scan`].
@@ -223,23 +282,27 @@ pub async fn fetch_volume(
     id: &str,
     current_name: Option<&str>,
 ) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
+    fetch_volume_inner(http, id, current_name, None).await
+}
+
+async fn fetch_volume_inner(
+    http: &reqwest::Client, id: &str, current_name: Option<&str>, target: Option<DateTime<Utc>>,
+) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a DWD radar"))?;
     let (slug, wmo) = path_for(id).ok_or_else(|| anyhow::anyhow!("{id} has no DWD path"))?;
+    let historical = if let Some(target) = target {
+        let html = sweep_listing(http, slug).await?;
+        let urls: std::collections::HashMap<_, _> = listed_sweeps(&html, slug, wmo).into_iter()
+            .filter(|(_, at, _)| *at == target).map(|(tilt, _, url)| (tilt, url)).collect();
+        anyhow::ensure!(urls.len() == TILTS as usize, "DWD cycle is incomplete or expired");
+        Some(urls)
+    } else { None };
 
     let get = |url: String| {
         let http = http.clone();
         async move {
-            let bytes = http
-                .get(crate::net::fetch_url(&url))
-                .timeout(crate::net::FEED_TIMEOUT)
-                .send()
-                .await
-                .ok()?
-                .bytes()
-                .await
-                .ok()?;
-            crate::stats::net(bytes.len());
-            Some((url, bytes.to_vec()))
+            let bytes = crate::opera::bounded_get(&http, &url, 8 * 1024 * 1024).await.ok()?;
+            Some((url, bytes))
         }
     };
 
@@ -254,7 +317,7 @@ pub async fn fetch_volume(
     // are handed to the sweep job below rather than thrown away, so when the volume *has* moved
     // on, the probe costs nothing at all.
     let probe_url = sweep_url(slug, wmo, 0);
-    let probe = match probe_sweep(http, &probe_url, id, current_name).await {
+    let probe = match if target.is_some() { Probe::Unreadable } else { probe_sweep(http, &probe_url, id, current_name).await } {
         Probe::UpToDate => {
             crate::stats::bump(crate::stats::Counter::FetchSkipped);
             return Ok(None);
@@ -266,12 +329,13 @@ pub async fn fetch_volume(
 
     let jobs = (0..TILTS).map(|tilt| {
         let get = &get;
+        let url = historical.as_ref().and_then(|urls| urls.get(&tilt).cloned()).unwrap_or_else(|| sweep_url(slug, wmo, tilt));
         // Tilt 0 was already fetched by the probe above; the rest go over the wire now.
         let prefetched = (tilt == 0).then(|| probe.take()).flatten();
         async move {
             let (url, bytes) = match prefetched {
                 Some(pair) => pair,
-                None => get(sweep_url(slug, wmo, tilt)).await?,
+                None => get(url).await?,
             };
             // The stamp has to come off the reflectivity file before anything else is asked for:
             // it is the only name the other moments answer to — and it comes out of the same
@@ -284,6 +348,7 @@ pub async fn fetch_volume(
                     return None;
                 }
             };
+            if target.is_some_and(|at| cycle_time(time) != at) { return None; }
             // One file is one sweep; a volume with more would mean the feed changed shape.
             let base = scan.sweeps().first()?;
             let angle = base.radials().first()?.elevation_angle_degrees();
@@ -338,7 +403,8 @@ pub async fn fetch_volume(
         .map(|(t, _, _)| *t)
         .min()
         .unwrap_or_else(Utc::now);
-    let sweeps = assemble(found.into_iter().map(|(_, a, s)| (a, s)).collect());
+    let sweeps = assemble(found.into_iter().filter(|(at, _, _)| cycle_time(*at) == cycle_time(time))
+        .map(|(_, a, s)| (a, s)).collect());
 
     // ODIM carries no VCP: `vol5minng01` is a free-text scan strategy. Pattern 0 says so rather
     // than borrowing a NEXRAD number that would imply elevations this radar never scanned.
@@ -465,7 +531,7 @@ async fn finish_probe(
 /// two spellings of this format that drifted apart would mean a volume that never looks up to
 /// date, and a poll that downloads two megabytes every thirty seconds forever.
 fn volume_name(id: &str, time: DateTime<Utc>) -> String {
-    format!("{id}-{}", time.format("%Y%m%d%H%M%S"))
+    format!("{id}{}_DWD", cycle_time(time).format("%Y%m%d_%H%M%S"))
 }
 
 #[cfg(test)]
@@ -481,7 +547,19 @@ mod tests {
         let t = chrono::DateTime::parse_from_rfc3339("2026-08-29T15:31:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        assert_eq!(volume_name("DEBO", t), "DEBO-20260829153100");
+        assert_eq!(volume_name("DEBO", t), "DEBO20260829_153000_DWD");
+    }
+
+    #[test]
+    fn historical_listing_uses_real_named_cuts_and_ignores_symlinks_and_foreign_paths() {
+        let html = "<a href=\"ras07-vol5minng01_sweeph5onem_th_00-2026110323555700-boo-10132-hd5\">a</a>                    <a href=\"ras07-vol5minng01_sweeph5onem_th_05-2026110323580100-boo-10132-hd5\">b</a>                    <a href=\"ras07-vol5minng01_sweeph5onem_th_00-LATEST-boo-10132-hd5\">c</a>                    <a href=\"ras07-vol5minng01_sweeph5onem_th_00-2026110400005700-other-10132-hd5\">d</a>";
+        let files = listed_sweeps(html, "boo", 10132);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].1, files[1].1);
+        assert_eq!(files[0].1.to_rfc3339(), "2026-11-03T23:55:00+00:00");
+        let id = Identifier::new(volume_name("DEBO", files[0].1));
+        assert_eq!(id.site(), Some("DEBO"));
+        assert_eq!(id.date_time(), Some(files[0].1));
     }
 
     /// Two real sweeps of Boostedt, saved from the live feed: publication slot 0 is 5.5° and slot
@@ -576,7 +654,7 @@ mod tests {
                         None,
                         None,
                         None,
-                    )
+                    ).with_nyquist_velocity_mps(Some(25.0))
                 })
                 .collect(),
         );
@@ -585,6 +663,8 @@ mod tests {
         let r = &merged.radials()[0];
         assert_eq!(r.reflectivity().map(|m| m.values().len()), before);
         assert!(r.velocity().is_some(), "velocity came from the extra sweep");
+        assert_eq!(r.nyquist_velocity_mps(), Some(25.0));
+        assert_eq!(assemble(vec![(0.5, merged.clone())])[0].radials()[0].nyquist_velocity_mps(), Some(25.0));
         assert_eq!(merged.radials().len(), base.radials().len());
     }
 

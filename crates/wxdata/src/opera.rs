@@ -1,11 +1,10 @@
 //! Europe's radars from EUMETNET's OpenRadarData feed — the fourth network, and the first that
 //! spans more than one country.
 //!
-//! ORD is an OGC EDR API on `api.meteogate.eu`, but the API only serves CoverageJSON: the ODIM
-//! files themselves live in a public S3 bucket, `openradar-24h`, one object per volume per moment,
+//! ORD exposes OGC EDR discovery on `api.meteogate.eu`; ODIM objects also live in a public S3 bucket, `openradar-24h`, one object per volume per moment,
 //! keyed `YYYY/MM/DD/CC/nod/PVOL/nod@YYYYMMDDThhmm@<elevations>@<moments>.h5`. Nordic sites
 //! instead publish one `SCAN` object per elevation. Anonymous, no key,
-//! no registration, CC BY 4.0, and the bucket lists with a prefix — so finding the newest volume
+//! no registration (provider terms vary), and the bucket lists with a prefix — so finding the newest volume
 //! is one ~5 KB listing of the current hour rather than the megabyte of HTML DWD charges for the
 //! same question.
 //!
@@ -29,7 +28,8 @@
 //!
 //! Growing the table is adding rows. Growing the machinery is not required.
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use crate::level2::Identifier;
 use nexrad_model::data::{Scan, Sweep};
 use nexrad_model::meta::registry::SiteEntry;
 
@@ -413,6 +413,122 @@ fn key_minute(key: &str) -> Option<DateTime<Utc>> {
     Some(Utc.from_utc_datetime(&naive))
 }
 
+/// Fetch a provider response with a hard body ceiling before parsing or decompressing it.
+pub(crate) async fn bounded_get(http: &reqwest::Client, url: &str, limit: usize) -> anyhow::Result<Vec<u8>> {
+    let response = http.get(crate::net::fetch_url(url)).timeout(crate::net::FEED_TIMEOUT)
+        .send().await?.error_for_status()?;
+    anyhow::ensure!(response.content_length().is_none_or(|n| n <= limit as u64), "radar response exceeds limit");
+    #[cfg(not(target_arch = "wasm32"))]
+    let out = {
+        let mut response = response;
+        let mut out = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            anyhow::ensure!(out.len().saturating_add(chunk.len()) <= limit, "radar response exceeds limit");
+            out.extend_from_slice(&chunk);
+        }
+        out
+    };
+    #[cfg(target_arch = "wasm32")]
+    let out = {
+        let bytes = response.bytes().await?;
+        anyhow::ensure!(bytes.len() <= limit, "radar response exceeds limit");
+        bytes.to_vec()
+    };
+    crate::stats::net(out.len());
+    Ok(out)
+}
+
+async fn listing(http: &reqwest::Client, url: String) -> anyhow::Result<String> {
+    type Entry = (crate::clock::Instant, String);
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<lru::LruCache<String, Entry>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(64).unwrap())));
+    if let Some((at, xml)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&url).cloned() {
+        if at.elapsed().as_secs() < 45 { return Ok(xml); }
+    }
+    let xml = String::from_utf8(bounded_get(http, &url, 2 * 1024 * 1024).await?)?;
+    anyhow::ensure!(!xml.contains("<IsTruncated>true</IsTruncated>"), "OPERA hourly listing is truncated");
+    cache.lock().unwrap_or_else(|e| e.into_inner()).put(url, (crate::clock::Instant::now(), xml.clone()));
+    Ok(xml)
+}
+
+fn group_for<'a>(xml: &'a str, meta: &SiteEntry, nod: &str) -> Vec<&'a str> {
+    if meta.id == "IEDUB" { newest_dublin_scan_group(xml) }
+    else { match meta.state {
+        "FR" => newest_french_scan_group(xml, nod),
+        "ES" => newest_spanish_group(xml, nod),
+        "SK" => newest_slovak_group(xml, nod),
+        "SE" | "FI" | "CH" | "EE" | "LT" => newest_scan_group(xml, nod, if meta.state == "CH" { 2 } else { 5 }),
+        "NO" => newest_norwegian_group(xml, nod),
+        _ => newest_group(xml, nod),
+    }}
+}
+
+fn groups_in(xml: &str, meta: &SiteEntry) -> Vec<Vec<String>> {
+    let nod = meta.id.to_ascii_lowercase();
+    let prefix = format!("/{}/{nod}/", meta.state);
+    let mut remaining: Vec<_> = keys(xml).into_iter().filter(|key| key.contains(&prefix)
+        && !key.contains("..") && key.ends_with(".h5") && key_minute(key).is_some()).collect();
+    remaining.sort_unstable();
+    let mut groups = Vec::new();
+    // Reuse exactly the live publisher-specific completeness rules for every historical frame.
+    for _ in 0..120 {
+        let xml: String = remaining.iter().map(|key| format!("<Key>{key}</Key>")).collect();
+        let group = group_for(&xml, meta, &nod);
+        if group.is_empty() { break; }
+        let Some(anchor) = key_minute(group[0]) else { break };
+        let earliest = group.iter().filter_map(|key| key_minute(key)).min().unwrap_or(anchor);
+        let owned = group.iter().map(|key| key.to_string()).collect();
+        remaining.retain(|key| key_minute(key).is_some_and(|time| time < earliest));
+        groups.push(owned);
+    }
+    groups
+}
+
+/// List complete frames still present in ORD's rolling 24-hour cache, oldest first.
+pub async fn list_volumes(http: &reqwest::Client, id: &str, date: NaiveDate) -> anyhow::Result<Vec<Identifier>> {
+    let frames = list_day(http, id, date, 24).await?;
+    if date != Utc::now().date_naive() || frames.len() >= 24 { return Ok(frames); }
+    let Some(previous) = date.pred_opt() else { return Ok(frames) };
+    // Six hours covers 24 frames even for fifteen-minute scan strategies.
+    let older = list_day(http, id, previous, 6).await.unwrap_or_default();
+    Ok(crate::level2::with_previous_tail(older, frames, 24))
+}
+
+async fn list_day(http: &reqwest::Client, id: &str, date: NaiveDate, hours: i64) -> anyhow::Result<Vec<Identifier>> {
+    use futures_util::{stream, StreamExt};
+    let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not an OPERA radar"))?;
+    let nod = id.to_ascii_lowercase();
+    let now = Utc::now();
+    if date < (now - chrono::Duration::hours(24)).date_naive() || date > now.date_naive() { return Ok(Vec::new()); }
+    let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let hours: Vec<_> = (24 - hours..24).map(|hour| start + chrono::Duration::hours(hour))
+        .filter(|hour| *hour <= now && *hour + chrono::Duration::hours(1) > now - chrono::Duration::hours(24)).collect();
+    let results: Vec<_> = stream::iter(hours.into_iter().map(|hour| listing(http, index_url(meta.state, &nod, hour))))
+        .buffer_unordered(3).collect().await;
+    let mut frames = Vec::new();
+    let mut successes = 0;
+    for xml in results.into_iter().flatten() {
+        successes += 1;
+        frames.extend(groups_in(&xml, meta).into_iter().filter_map(|group| key_minute(&group[0]))
+            .map(|time| Identifier::new(volume_name(meta.id, time))));
+    }
+    anyhow::ensure!(successes > 0, "OPERA hourly listings unavailable for {id}");
+    frames.sort_by(|a, b| a.name().cmp(b.name()));
+    frames.dedup_by(|a, b| a.name() == b.name());
+    Ok(frames)
+}
+
+/// Fetch the published objects belonging to this exact timeline frame.
+pub async fn fetch_volume_at(http: &reqwest::Client, frame: &Identifier) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    let meta = frame.site().and_then(site_by_id).ok_or_else(|| anyhow::anyhow!("invalid OPERA frame"))?;
+    let time = frame.date_time().ok_or_else(|| anyhow::anyhow!("invalid OPERA frame time"))?;
+    let xml = listing(http, index_url(meta.state, &meta.id.to_ascii_lowercase(), time)).await?;
+    let group = groups_in(&xml, meta).into_iter().find(|group| key_minute(&group[0]) == Some(time))
+        .ok_or_else(|| anyhow::anyhow!("OPERA frame incomplete or expired"))?;
+    fetch_group(http, meta, group, None, time).await?
+        .ok_or_else(|| anyhow::anyhow!("OPERA frame unavailable"))
+}
+
 /// The newest volume for `id`, assembled from the objects EUMETNET published for it.
 pub async fn fetch_volume(
     http: &reqwest::Client,
@@ -422,74 +538,28 @@ pub async fn fetch_volume(
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not an OPERA radar"))?;
     let nod = id.to_ascii_lowercase();
 
-    let text = |url: String| {
-        let http = http.clone();
-        async move {
-            http.get(crate::net::fetch_url(&url))
-            .timeout(crate::net::FEED_TIMEOUT)
-                .send()
-                .await
-                .ok()?
-                .text()
-                .await
-                .ok()
-                .inspect(|t: &String| crate::stats::net(t.len()))
-        }
-    };
-
-    // The listing is keyed by hour, so a volume published at :02 is alone in its hour and the one
-    // before it is in the previous one. Two listings is the worst case and they cost ~5 KB each.
     let now = Utc::now();
-    let mut group: Vec<String> = Vec::new();
     for back in 0..2 {
-        let index = text(index_url(
-            meta.state,
-            &nod,
-            now - chrono::Duration::hours(back),
-        ))
-        .await
-        .unwrap_or_default();
-        group = (if id.eq_ignore_ascii_case("IEDUB") {
-            newest_dublin_scan_group(&index)
-        } else if meta.state == "FR" {
-            newest_french_scan_group(&index, &nod)
-        } else if meta.state == "ES" {
-            newest_spanish_group(&index, &nod)
-        } else if meta.state == "SK" {
-            newest_slovak_group(&index, &nod)
-        } else if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT") {
-            newest_scan_group(&index, &nod, if meta.state == "CH" { 2 } else { 5 })
-        } else if meta.state == "NO" {
-            newest_norwegian_group(&index, &nod)
-        } else {
-            newest_group(&index, &nod)
-        })
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let xml = listing(http, index_url(meta.state, &nod, now - chrono::Duration::hours(back))).await.unwrap_or_default();
+        let group = groups_in(&xml, meta).into_iter().next().unwrap_or_default();
         if !group.is_empty() {
-            break;
+            let anchor = key_minute(&group[0]).ok_or_else(|| anyhow::anyhow!("invalid OPERA frame timestamp"))?;
+            return fetch_group(http, meta, group, current_name, anchor).await;
         }
     }
-    if group.is_empty() {
-        anyhow::bail!("no OPERA volume published for {id} in the last two hours");
-    }
+    anyhow::bail!("no OPERA volume published for {id} in the last two hours")
+}
 
+async fn fetch_group(
+    http: &reqwest::Client, meta: &SiteEntry, group: Vec<String>, current_name: Option<&str>, anchor: DateTime<Utc>,
+) -> anyhow::Result<Option<(String, DateTime<Utc>, Scan)>> {
+    let id = meta.id;
     let fetch = |key: String| {
         let http = http.clone();
         let url = format!("{BUCKET}/{key}");
         async move {
-            let bytes = http
-                .get(crate::net::fetch_url(&url))
-                .timeout(crate::net::FEED_TIMEOUT)
-                .send()
-                .await
-                .ok()?
-                .bytes()
-                .await
-                .ok()?;
-            crate::stats::net(bytes.len());
-            match crate::odim::decode(bytes.to_vec()) {
+            let bytes = bounded_get(&http, &url, 32 * 1024 * 1024).await.ok()?;
+            match crate::odim::decode(bytes) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     // A moment that fails to arrive is simply absent from the volume.
@@ -500,29 +570,26 @@ pub async fn fetch_volume(
         }
     };
 
-    // Reflectivity first, alone, and then ask whether the rest is worth fetching. The key carries
-    // a timestamp, but only to the minute, and the name this returns is built from the decoded
-    // volume time — so comparing keys would be comparing something subtly different from what the
-    // caller holds. Decoding the one object the volume is anchored on answers exactly, and it is
-    // the object every other moment gets folded into, so nothing is wasted when the answer is
-    // "yes, this is new".
+    // Keep the published group timestamp as frame identity and decoded radial times as observations.
     let (time, base) = fetch(group[0].clone())
         .await
         .ok_or_else(|| anyhow::anyhow!("no decodable OPERA volume for {id}"))?;
     let mut dublin_velocity = None;
     if id.eq_ignore_ascii_case("IEDUB") {
         for back in 0..2 {
-            let index = text(dublin_velocity_index_url(now - chrono::Duration::hours(back)))
+            let index = listing(http, dublin_velocity_index_url(anchor - chrono::Duration::hours(back)))
                 .await.unwrap_or_default();
-            if let Some(key) = newest_dublin_velocity_key(&index) {
-                if key_minute(key).is_some_and(|at| (time - at).num_minutes().abs() <= 30) {
+            let eligible: String = keys(&index).into_iter().filter(|key| key_minute(key).is_some_and(|at| at <= anchor))
+                .map(|key| format!("<Key>{key}</Key>")).collect();
+            if let Some(key) = newest_dublin_velocity_key(&eligible) {
+                if key_minute(key).is_some_and(|at| (anchor - at).num_minutes() <= 30) {
                     dublin_velocity = Some(key.to_string());
                 }
                 break;
             }
         }
     }
-    let base_name = volume_name(id, time);
+    let base_name = volume_name(id, anchor);
     let candidate_name = if let Some(key) = dublin_velocity.as_deref() {
         format!("{base_name}~{}", key_minute(key).expect("checked key time").format("%Y%m%d%H%M"))
     } else {
@@ -610,7 +677,7 @@ pub async fn fetch_volume(
         .collect();
 
     Ok(Some((
-        volume_name(id, time),
+        volume_name(id, anchor),
         time,
         // The decoder already built the pattern-0 placeholder ODIM's free-text scan strategy
         // deserves; there is nothing better to say about it here.
@@ -625,7 +692,7 @@ pub async fn fetch_volume(
 /// The name an OPERA volume is known by. Same shape as the DWD one and for the same reason: the
 /// probe above has to predict exactly what a full fetch returns.
 fn volume_name(id: &str, time: DateTime<Utc>) -> String {
-    format!("{id}-{}", time.format("%Y%m%d%H%M%S"))
+    format!("{id}{}_OPERA", time.format("%Y%m%d_%H%M00"))
 }
 
 /// The elevation a sweep was cut at, or `NaN` for an empty one — which no decoded sweep is.
@@ -640,6 +707,20 @@ fn angle(sweep: &Sweep) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn history_uses_complete_publisher_groups_and_parseable_full_site_names() {
+        let older = LISTING.replace("T1531", "T1526").replace("T1536", "T1531");
+        let xml = format!("{older}{LISTING}");
+        let groups = groups_in(&xml, site_by_id("PLGSA").unwrap());
+        assert_eq!(groups.len(), 2);
+        let times: Vec<_> = groups.iter().map(|group| key_minute(&group[0]).unwrap()).collect();
+        assert!(times[0] > times[1]);
+        assert!(groups.iter().all(|group| group[0].ends_with("DBZH.h5")));
+        let id = Identifier::new(volume_name("PLGSA", times[0]));
+        assert_eq!(id.site(), Some("PLGSA"));
+        assert_eq!(id.date_time(), Some(times[0]));
+    }
+
     /// Same contract as the DWD one: the probe's predicted name and the fetched volume's name are
     /// the same function, or the "already showing it" comparison never fires.
     #[test]
@@ -647,7 +728,7 @@ mod tests {
         let t = chrono::DateTime::parse_from_rfc3339("2026-08-29T15:31:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        assert_eq!(volume_name("HRBIL", t), "HRBIL-20260829153100");
+        assert_eq!(volume_name("HRBIL", t), "HRBIL20260829_153100_OPERA");
     }
 
     const LISTING: &str = "<ListBucketResult>\

@@ -65,6 +65,8 @@ pub fn next_site(track: &Track, current: Option<&str>, minutes: f64) -> Option<S
 /// Nothing is shown and nothing is reported: a failed warm-up is a handoff that behaves the way
 /// it did before this module existed.
 pub async fn warm(site: String, provider: wxdata::level2::Level2Provider) {
+    // Only NEXRAD has the on-disk archive cache this warm-up populates.
+    if !wxdata::sites::is_nexrad(&site) { return; }
     let date = chrono::Utc::now().date_naive();
     let Ok(ids) = wxdata::level2::list_volumes_from(&site, date, provider).await else {
         return;

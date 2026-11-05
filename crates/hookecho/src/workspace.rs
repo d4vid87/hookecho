@@ -655,6 +655,32 @@ fn pane(moment: wxdata::level2::Moment, tilt: usize, srv: bool) -> PaneSnap {
     }
 }
 
+impl Workspace {
+    /// The starter overview follows the region being viewed rather than jumping to the US.
+    pub(crate) fn regionalize_overview(&mut self, camera: crate::render::mercator::Camera) {
+        let (lon, lat) = crate::render::mercator::world_to_lonlat(camera.center.0, camera.center.1);
+        let source = crate::tiles::BasemapStyle::worldwide_for_location(lon, lat);
+        let conus = (-125.0..=-66.0).contains(&lon) && (24.0..=50.0).contains(&lat)
+            && source != crate::tiles::BasemapStyle::EcccRadarRain;
+        self.adopt_site = false;
+        self.fields_on = if conus { vec!["mrms".into()] } else { Vec::new() };
+        if !conus { self.overlays_on.retain(|name| name == "RadarSites"); }
+        for pane in &mut self.panes {
+            pane.lon = lon;
+            pane.lat = lat;
+            pane.zoom = camera.zoom.min(5.0);
+            pane.site = None;
+            pane.show_radar = false;
+            pane.fields_on = Some(self.fields_on.clone());
+            pane.basemap = if conus { "dark".into() }
+                else { crate::tiles::BasemapStyle::worldwide_for_location(lon, lat).slug().into() };
+            pane.satellite = Default::default();
+            pane.satellite.follow_radar = false;
+            pane.satellite.source_slug = Some(pane.basemap.clone());
+        }
+    }
+}
+
 /// The three arrangements worth having before you have built any of your own. Seeded once, on
 /// first run; deleting them is final (see `Settings::seeded_workspaces`).
 pub fn starters() -> Vec<Workspace> {
@@ -748,6 +774,19 @@ pub fn starters() -> Vec<Workspace> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn overview_keeps_current_region_and_uses_a_regional_source() {
+        for (lon, lat, conus) in [(2.35, 48.86, false), (-79.38, 43.65, false), (139.69, 35.68, false), (-97.5, 35.5, true)] {
+            let mut ws = super::starters().into_iter().find(|ws| ws.name == "National overview").unwrap();
+            ws.regionalize_overview(crate::render::mercator::Camera::at_lonlat(lon, lat, 8.0));
+            let pane = &ws.panes[0];
+            assert!((pane.lon - lon).abs() < 1e-6 && (pane.lat - lat).abs() < 1e-6);
+            assert_eq!(pane.zoom, 5.0);
+            assert!(pane.site.is_none() && !pane.show_radar && !ws.adopt_site);
+            assert_eq!(ws.fields_on.contains(&"mrms".to_string()), conus);
+        }
+    }
+
     #[test]
     fn velocity_workspace_keeps_each_panes_motion_and_dealias_choice() {
         use wxdata::level2::Moment;
