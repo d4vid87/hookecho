@@ -35,6 +35,10 @@ try {
   await wait(2000);
   await page.evaluate(() => document.getElementById('dismiss-install')?.click());
   const settings = () => page.evaluate(() => JSON.parse(localStorage.getItem('hookecho-settings')));
+  // Canvas hit targets at the fixed desktop viewport. The country filter sits above networks
+  // and moves the station list down one 32px row; the search, rail and close stay in place.
+  const networkY = 392;
+  const stationY = index => 482 + index * 60;
   async function click(x, y) {await page.mouse.click(x, y); await wait(500);}
   async function open() {await click(605, 48);}
   async function search(text) {
@@ -45,32 +49,32 @@ try {
   await open();
   await page.screenshot({path: `${output}/nearby.png`});
   // Favorite button has its own hit target and must not select the station.
-  await click(501, 510);
+  await click(501, stationY(1));
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho-settings')).presets.includes('TFLL'));
   assert.equal((await settings()).recent_sites[0], 'TDJT');
   await click(62, 276); // Favorites
   await search('Miami');
   await page.screenshot({path: `${output}/favorite-search.png`});
-  await click(240, 450); // KAMX is the only matching favorite
+  await click(240, stationY(0)); // KAMX is the only matching favorite
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho-settings')).recent_sites[0] === 'KAMX');
   await open();
   await click(62, 344); // Recent
   await page.screenshot({path: `${output}/recent.png`});
   await search('TDJT');
-  await click(240, 450);
+  await click(240, stationY(0));
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho-settings')).recent_sites[0] === 'TDJT');
   assert.deepEqual((await settings()).recent_sites.slice(0, 2), ['TDJT', 'KAMX']);
   assert((await settings()).presets.includes('TFLL'));
   await open();
   for (const [network, x] of [['DWD', 327], ['OPERA', 384]]) {
-    await click(x, 360);
+    await click(x, networkY);
     await page.screenshot({path: `${output}/${network}.png`});
   }
-  await click(143, 360); // All
+  await click(143, networkY); // All
   const favoritesBeforeClose = (await settings()).presets;
   await click(501, 143); // Right-hand close, replacing fullscreen
   await page.screenshot({path: `${output}/closed.png`});
-  await click(501, 450); // Former favorite target must no longer be active
+  await click(501, stationY(0)); // Former favorite target must no longer be active
   assert.deepEqual((await settings()).presets, favoritesBeforeClose);
   await open();
   for (const [width, height] of [[390, 844], [320, 568]]) {
