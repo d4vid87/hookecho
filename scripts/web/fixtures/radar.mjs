@@ -8,6 +8,11 @@ export async function fixtureRadar(page, options = {}) {
  await page.setRequestInterception(true);
  page.on('request',async request=>{
   const url = new URL(request.url());
+  if(options.emptyOverlays && (url.href.includes('api.weather.gov/alerts/')
+    || url.href.includes('mapservices.weather.noaa.gov/') || url.href.includes('www.nhc.noaa.gov/CurrentStorms.json'))) {
+   const body = url.href.includes('CurrentStorms.json') ? {activeStorms: []} : {type: 'FeatureCollection', features: []};
+   await request.respond({status: 200, contentType: 'application/json', body: JSON.stringify(body)}); return;
+  }
   if(options.alertsResponse && url.pathname.startsWith('/proxy/api.weather.gov/')) {
    counts.alertsRequests.push(url.href);
    await request.respond(await options.alertsResponse(url)); return;

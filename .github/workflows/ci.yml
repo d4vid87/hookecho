@@ -159,6 +159,7 @@ jobs:
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/settings-bundle.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/feed-retry.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/workflow-upgrades.mjs
+          HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/chrome-polish.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ HOOKECHO_WORLD_OUTPUT=outputs/worldwide node scripts/web/worldwide.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/velocity-comparison.mjs
           node scripts/web/offline-shell.mjs
@@ -179,6 +180,7 @@ jobs:
             outputs/settings-bundle
             outputs/feed-retry
             outputs/workflow-upgrades
+            outputs/chrome-polish
             outputs/worldwide
             outputs/velocity-comparison
             outputs/forecast-recovery

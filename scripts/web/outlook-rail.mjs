@@ -2,8 +2,9 @@ import puppeteer from 'puppeteer';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {fixtureRadar} from './fixtures/radar.mjs';
+import {installUiTargets, clickTarget, targetPoint} from './fixtures/ui.mjs';
 
-// Fixed canvas coordinates deliberately check the compact toolbar and category hit targets.
+// Named toolbar geometry keeps the shortcut order check independent of button styling.
 const output = process.env.HOOKECHO_OUTLOOK_OUTPUT ?? 'outputs/outlook-rail';
 await fs.mkdir(output, {recursive: true});
 const browser = await puppeteer.launch({
@@ -17,6 +18,7 @@ try {
   page = await browser.newPage();
   await page.setViewport({width: 1280, height: 900});
   await page.setBypassServiceWorker(true);
+  await installUiTargets(page);
   const requests = await fixtureRadar(page, {outlooks: true});
   page.on('pageerror', error => report.errors.push(error.message));
   page.on('console', message => {
@@ -31,17 +33,20 @@ try {
   await page.goto(process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/', {waitUntil: 'domcontentloaded'});
   await page.waitForFunction(() => !document.getElementById('boot'), {timeout: 90000});
   await wait(2000);
-  await page.mouse.click(612, 856); // MRMS immediately left of SPC
+  const mrms = await targetPoint(page, 'National mosaic (MRMS)');
+  const spc = await targetPoint(page, 'SPC convective outlook');
+  assert(mrms.x < spc.x && Math.abs(mrms.y - spc.y) < 1, 'MRMS remains immediately left of SPC');
+  await clickTarget(page, 'National mosaic (MRMS)');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho-settings')).recent_fields?.includes('mrms.composite-reflectivity'));
   await page.screenshot({path: `${output}/mrms-on.png`});
-  await page.mouse.click(612, 856); // Restore the overlay before testing SPC
+  await clickTarget(page, 'National mosaic (MRMS)'); // Restore the overlay before testing SPC.
   await wait(500);
   report.checks.push('minimal MRMS shortcut enables existing reflectivity layer');
   // SPC must take over from Alerts, not inherit its panel section or visibility flag.
-  await page.mouse.click(1225, 40);
+  await clickTarget(page, 'Open alerts');
   await wait(800);
   await page.screenshot({path: `${output}/alerts-before-spc.png`});
-  await page.mouse.click(685, 856); // SPC, immediately right of MRMS in minimal controls
+  await clickTarget(page, 'SPC convective outlook');
   await wait(800);
   assert.equal(requests.outlookRequests.length, 0, 'opening outlooks must not enable an overlay');
   await page.screenshot({path: `${output}/severe-off.png`});

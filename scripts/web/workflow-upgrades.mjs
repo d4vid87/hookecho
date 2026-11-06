@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {fixtureRadar} from './fixtures/radar.mjs';
+import {installUiTargets, clickTarget} from './fixtures/ui.mjs';
 
 const base = process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8765/';
 const output = process.env.HOOKECHO_WORKFLOW_OUTPUT ?? 'outputs/workflow-upgrades';
@@ -42,6 +43,7 @@ async function command(text) {
 try {
   await page.setViewport({width: 1280, height: 900});
   await page.setBypassServiceWorker(true);
+  await installUiTargets(page);
   await fixtureRadar(page, {loopFrames: true, forecast: true, vector: true, vectorResponse: async () => ({
     status: 200, contentType: 'application/json',
     body: JSON.stringify({tiles: [base + 'vector-fixture/{z}/{x}/{y}.pbf']}),
@@ -62,10 +64,10 @@ try {
   await page.waitForFunction(() => location.hash.startsWith('#scene='), {timeout: 30000});
   await wait(2500);
   await page.screenshot({path: `${output}/desktop.png`});
-  await page.mouse.click(737, 846);
+  await clickTarget(page, 'Customize toolbar shortcuts');
   await wait(400);
   await page.screenshot({path: `${output}/shortcut-chooser.png`});
-  await page.mouse.click(736, 592); // Pin the available ZDR product.
+  await clickTarget(page, 'Pin toolbar shortcut: Drop shape (ZDR)');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('hookecho-settings')).compact_shortcuts?.length === 3);
   const pinned = await page.evaluate(() => JSON.parse(localStorage.getItem('hookecho-settings')).compact_shortcuts);
   assert.equal(pinned[0], 'mrms.composite-reflectivity');

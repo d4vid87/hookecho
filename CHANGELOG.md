@@ -8,6 +8,15 @@ Tested `main` builds publish as immutable Preview releases. Named entries below
 record major updates; versioned entries match GitHub tags. Older releases stay
 available for rollback.
 
+## Radar control polish - 2026-11-06 (rolling release)
+
+- Give the radar workspace consistent button heights, spacing and glass surfaces,
+  with clearer alerts, station controls, playback status and product selection.
+- Keep pinned shortcuts readable and wrap the playback controls before they overlap
+  the corner cards. Preserve touch-sized controls on narrow screens.
+- Hide the floating warning summary by default. Enable it under **Settings → Alerts
+  → Map → Floating warning summary**; map warnings and notifications stay independent.
+
 ## Data, rendering and sync reliability - 2026-11-04 (rolling release)
 
 - Fix high-zoom alignment between radar, basemap tiles, weather grids and overlays,

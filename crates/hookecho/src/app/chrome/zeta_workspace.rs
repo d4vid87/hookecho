@@ -161,14 +161,6 @@ fn workspace_style(ui: &mut egui::Ui) {
     ui.spacing_mut().button_padding = egui::vec2(10.0, 7.0);
 }
 
-fn surface() -> egui::Frame {
-    egui::Frame::new()
-        .fill(SURFACE)
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(48, 57, 71)))
-        .corner_radius(6.0)
-        .inner_margin(egui::Margin::symmetric(8, 5))
-}
-
 fn menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     ui.add_sized(
         [ui.available_width(), 40.0],
@@ -288,22 +280,23 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::LEFT_TOP, egui::vec2(12.0, 24.0))
             .show(ctx, |ui| {
-                workspace_style(ui);
-                surface().show(ui, |ui| {
+                crate::ui::style::zeta_controls(ui);
+                crate::ui::style::zeta_glass(ui).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui
-                            .button(ph::LIST)
+                        if crate::ui::style::zeta_chip(ui, ph::LIST, crate::ui::style::ZETA_CONTROL_HEIGHT, menu_open)
                             .named_toggle("Open workspace menu", menu_open)
                             .clicked()
                         {
                             menu_open = !menu_open;
                         }
-                        if ui.button(ph::POWER).on_hover_text("Return to live radar").clicked() {
+                        if crate::ui::style::zeta_chip(ui, ph::POWER, crate::ui::style::ZETA_CONTROL_HEIGHT, false)
+                            .named("Return to live radar").clicked() {
                             action = Some(PaletteAction::GoLive);
                         }
-                        egui::containers::menu::MenuButton::new(
-                            egui::RichText::new(format!("{} {}", if source_label == "Radar" { "Single site" } else { source_label }, ph::CARET_DOWN))
-                                .size(16.0),
+                        egui::containers::menu::MenuButton::from_button(
+                            egui::Button::new(egui::RichText::new(format!("{}  {}", if source_label == "Radar" { "Single site" } else { source_label }, ph::CARET_DOWN))
+                                .size(13.0))
+                                .min_size(egui::vec2(120.0, crate::ui::style::ZETA_CONTROL_HEIGHT)),
                         )
                         .config(
                             egui::containers::menu::MenuConfig::new()
@@ -413,7 +406,7 @@ impl HookEchoApp {
                         })
                         .0
                         .named("Weather source mode");
-                        open_search = ui.button(ph::MAGNIFYING_GLASS)
+                        open_search = crate::ui::style::zeta_chip(ui, ph::MAGNIFYING_GLASS, crate::ui::style::ZETA_CONTROL_HEIGHT, false)
                             .named("Search places and tools")
                             .clicked();
                     });
@@ -460,8 +453,8 @@ impl HookEchoApp {
                 egui::vec2(if room_for_center { 0.0 } else { -12.0 }, 24.0),
             )
             .show(ctx, |ui| {
-                workspace_style(ui);
-                surface().show(ui, |ui| {
+                crate::ui::style::zeta_controls(ui);
+                crate::ui::style::zeta_glass(ui).show(ui, |ui| {
                     let view = &self.views[self.active];
                     let show_station_radar = view.show_radar;
                     if view.show_radar {
@@ -474,19 +467,14 @@ impl HookEchoApp {
                                     label.to_owned()
                                 })
                                 .size(10.0)
-                                .color(egui::Color32::from_gray(175)),
+                                .color(ui.visuals().weak_text_color()),
                             )
                             .on_hover_text(&volume.vcp);
                         }
                     }
                     ui.horizontal(|ui| {
                         if show_station_radar
-                            && ui
-                                .button(
-                                    egui::RichText::new(format!("{station} {}", ph::CARET_DOWN))
-                                        .strong()
-                                        .color(ACCENT),
-                                )
+                            && crate::ui::style::zeta_chip(ui, &format!("{station}  {}", ph::CARET_DOWN), 86.0, false)
                                 .named("Select radar station")
                                 .on_hover_text(&station_details)
                                 .clicked()
@@ -496,7 +484,7 @@ impl HookEchoApp {
                         let mut globe = self.views[self.active].camera.globe;
                         let mut pitch = self.views[self.active].camera.pitch_deg;
                         let mut bearing = self.views[self.active].camera.bearing_deg;
-                        egui::containers::menu::MenuButton::new(format!(
+                        egui::containers::menu::MenuButton::from_button(egui::Button::new(format!(
                             "{} {}",
                             if globe {
                                 "Globe"
@@ -506,7 +494,7 @@ impl HookEchoApp {
                                 "2D"
                             },
                             ph::CARET_DOWN
-                        ))
+                        )).min_size(egui::vec2(66.0, crate::ui::style::ZETA_CONTROL_HEIGHT)))
                         .config(
                             egui::containers::menu::MenuConfig::new()
                                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
@@ -582,13 +570,19 @@ impl HookEchoApp {
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 24.0))
                 .show(ctx, |ui| {
-                    workspace_style(ui);
-                    ui.visuals_mut().widgets.inactive.weak_bg_fill = ACCENT;
-                    ui.visuals_mut().widgets.hovered.weak_bg_fill = ACCENT;
-                    if ui.button(egui::RichText::new(format!("{warning_count} ALERTS")).strong().color(egui::Color32::BLACK))
-                        .named("Open alerts").clicked() {
-                        action = Some(PaletteAction::ToggleOverlay(OverlayToggle::AlertPanel));
-                    }
+                    crate::ui::style::zeta_controls(ui);
+                    crate::ui::style::zeta_glass(ui).show(ui, |ui| {
+                        let has_alerts = warning_count > 0;
+                        let accent = if ui.visuals().dark_mode { ACCENT } else { egui::Color32::from_rgb(134, 79, 0) };
+                        let foreground = if has_alerts { accent } else { ui.visuals().weak_text_color() };
+                        let button = egui::Button::new(egui::RichText::new(format!("{}  {warning_count} alerts", ph::BELL))
+                            .size(13.0).strong().color(foreground))
+                            .min_size(egui::vec2(108.0, crate::ui::style::ZETA_CONTROL_HEIGHT))
+                            .stroke(egui::Stroke::new(1.0, if has_alerts { accent.gamma_multiply(0.35) } else { ui.visuals().widgets.inactive.bg_stroke.color }));
+                        if ui.add(button).named("Open alerts").clicked() {
+                            action = Some(PaletteAction::ToggleOverlay(OverlayToggle::AlertPanel));
+                        }
+                    });
                 });
             self.mobile_occlusion.push(alerts.response.rect);
         }

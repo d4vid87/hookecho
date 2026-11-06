@@ -220,7 +220,11 @@ impl HookEchoApp {
         let mut save_pack = false;
         #[cfg(target_arch = "wasm32")]
         let mut load_pack = None;
-        let accent = egui::Color32::from_rgb(255, 190, 42);
+        let dark = ctx.global_style().visuals.dark_mode;
+        let accent = if dark { egui::Color32::from_rgb(255, 190, 42) }
+            else { egui::Color32::from_rgb(134, 79, 0) };
+        let live_color = if dark { ui::style::ZETA_GREEN }
+            else { egui::Color32::from_rgb(22, 110, 57) };
         let expanded_id = egui::Id::new("zeta_transport_expanded");
         let split = self.chrome_rect.width() >= 1100.0;
         let mut expanded = ctx.data_mut(|d| d.get_temp::<bool>(expanded_id).unwrap_or(false));
@@ -229,18 +233,10 @@ impl HookEchoApp {
             .constrain_to(self.chrome_rect)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgba_unmultiplied(8, 11, 12, 242))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(58)))
-                    .corner_radius(16.0)
-                    .inner_margin(egui::Margin::symmetric(12, 9))
+                ui::style::zeta_glass(ui)
                     .show(ui, |ui| {
                         ui.set_width(440.0_f32.min((self.chrome_rect.width() - 48.0).max(240.0)));
-                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                        ui.spacing_mut().interact_size.y = if compact(ctx) { 44.0 } else { 28.0 };
-                        ui.visuals_mut().override_text_color = Some(egui::Color32::from_gray(235));
-                        ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 33, 33);
-                        ui.visuals_mut().selection.bg_fill = egui::Color32::from_rgb(88, 65, 17);
+                        ui::style::zeta_controls(ui);
                         ui.horizontal_wrapped(|ui| {
                             if radar_visible {
                             egui::ComboBox::from_id_salt("zeta_frame_count")
@@ -422,13 +418,14 @@ impl HookEchoApp {
                             }
                         });
                         ui.horizontal_wrapped(|ui| {
-                            let color = if mode == "Live" { egui::Color32::from_rgb(69, 210, 110) } else { accent };
+                            let color = if mode == "Live" { live_color } else { accent };
                             ui.label(egui::RichText::new(format!("● {mode}")).size(11.0).color(color))
                                 .on_hover_text(&status_hint);
                             ui.label(egui::RichText::new(displayed_clock.as_deref().unwrap_or("No displayed scan")).size(12.0));
                             layout_choice = zeta_layout_menu(ui, self, &mut active_pane);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.button(format!("{} Minimal controls", ph::CARET_DOWN))
+                                        .named("Minimal playback controls")
                                         .on_hover_text("Collapse playback controls")
                                         .clicked() { expanded = false; }
                             });
@@ -501,7 +498,7 @@ impl HookEchoApp {
                             ui.colored_label(accent, format!("Pane times differ by {}", humanize(gap)));
                         }
                         if !status.is_empty() {
-                            ui.add(egui::Label::new(egui::RichText::new(&status).size(11.0).color(egui::Color32::from_gray(190))).wrap())
+                            ui.add(egui::Label::new(egui::RichText::new(&status).size(11.0).weak()).wrap())
                                 .on_hover_text(&status_hint);
                         }
                     });
@@ -512,15 +509,12 @@ impl HookEchoApp {
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -18.0))
                 .show(ctx, |ui| {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgba_unmultiplied(8, 11, 17, 244))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(68)))
-                        .corner_radius(18.0)
-                        .inner_margin(egui::Margin::symmetric(10, 8))
+                    ui::style::zeta_glass(ui)
                         .show(ui, |ui| {
-                            ui.set_width((if split { 600.0_f32 } else { 640.0_f32 })
-                                .min((self.chrome_rect.width() - 48.0).max(240.0)));
-                            ui.spacing_mut().interact_size.y = if compact(ctx) { 44.0 } else { 30.0 };
+                            // Reserve both corner cards; additional pinned shortcuts wrap within the dock.
+                            ui.set_max_width((self.chrome_rect.width() - if split { 560.0 } else { 48.0 })
+                                .clamp(240.0, 760.0));
+                            ui::style::zeta_controls(ui);
                             ui.horizontal_wrapped(|ui| {
                                 if radar_visible {
                                     if zeta_button(ui, ph::SKIP_BACK, "Previous frame", false).clicked() { self.views[idx].timeline.step_cut(-1); }
@@ -536,7 +530,9 @@ impl HookEchoApp {
                                     ui.colored_label(accent, format!("Δ {}", humanize(gap)))
                                         .on_hover_text("Radar pane observation times differ.");
                                 }
-                                ui.menu_button("Tools", |ui| {
+                                egui::containers::menu::MenuButton::from_button(egui::Button::new("Tools")
+                                    .min_size(egui::vec2(60.0, ui::style::zeta_control_height(ui))))
+                                    .ui(ui, |ui| {
                                     for (label, selected, tool) in [
                                         ("Set chase location", self.tool == MapTool::Chase, MapTool::Chase),
                                         ("Inspect radar value", self.tool == MapTool::Interrogate, MapTool::Interrogate),
@@ -550,7 +546,7 @@ impl HookEchoApp {
                                     }
                                     if ui.button("Choose outlooks").clicked() { action = Some(PaletteAction::OpenOutlooks); ui.close(); }
                                     if ui.button("Layers").clicked() { show_layers = true; ui.close(); }
-                                });
+                                }).0.named("Map tools");
                                 if zeta_button(ui, ph::SLIDERS_HORIZONTAL, "Full playback controls", false).clicked() { expanded = true; }
                             });
                             if self.views.len() > 1 {
@@ -572,15 +568,26 @@ impl HookEchoApp {
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -18.0))
                 .show(ctx, |ui| {
-                    egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(8, 11, 17, 244))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(68)))
-                        .corner_radius(14.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-                            ui.set_width(240.0);
-                            if ui.add(egui::Button::new(format!("{mode} · {} · {effective_loop} frames",
-                                displayed_clock.as_deref().unwrap_or("No displayed scan"))).wrap())
-                                .named("Playback status — open full controls").on_hover_text(&status_hint).clicked() { expanded = true; }
-                            ui.add(egui::Label::new(&status).wrap());
+                    let card = ui::style::zeta_glass(ui).show(ui, |ui| {
+                        ui.set_width(228.0);
+                        ui.set_min_height(ui::style::ZETA_CONTROL_HEIGHT);
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.horizontal(|ui| {
+                            let color = if mode == "Live" { live_color } else { accent };
+                            ui.label(egui::RichText::new(format!("● {mode}")).size(11.0).color(color));
+                            ui.label(egui::RichText::new(displayed_clock.as_deref().unwrap_or("No displayed scan"))
+                                .size(13.0).strong());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(ph::CARET_UP).size(12.0));
+                                ui.label(egui::RichText::new(format!("{effective_loop} frames")).size(10.0).weak());
+                            });
                         });
+                        ui.add(egui::Label::new(egui::RichText::new(&status).size(11.0).weak()).wrap());
+                    });
+                    if card.response.interact(egui::Sense::click())
+                        .named("Playback status — open full controls")
+                        .on_hover_text(format!("{effective_loop} frames · {status_hint}"))
+                        .clicked() { expanded = true; }
                 });
             self.mobile_occlusion.push(history.response.rect);
             let product = egui::Area::new(egui::Id::new("zeta_product_compact"))
@@ -588,9 +595,9 @@ impl HookEchoApp {
                 .constrain_to(self.chrome_rect)
                 .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -18.0))
                 .show(ctx, |ui| {
-                    egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(8, 11, 17, 244))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(68)))
-                        .corner_radius(14.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                    ui::style::zeta_glass(ui).show(ui, |ui| {
+                            ui.set_max_width(228.0);
+                            ui::style::zeta_controls(ui);
                             self.radar_product_controls(ui, true);
                         });
                 });
@@ -726,12 +733,13 @@ impl HookEchoApp {
                 _ => false,
             };
             let label = shortcut_label(entry);
-            if zeta_button(ui, &label, &entry.label, on).on_hover_text(entry.desc).clicked() {
+            if ui::style::zeta_chip(ui, &label, 56.0, on)
+                .named_toggle(&entry.label, on).on_hover_text(entry.desc).clicked() {
                 action = Some(entry.action);
             }
         }
         let mut changed = false;
-        let pin_size = if compact(ui.ctx()) { 44.0 } else { 34.0 };
+        let pin_size = ui::style::zeta_control_height(ui);
         egui::containers::menu::MenuButton::from_button(egui::Button::new(egui_phosphor::regular::PUSH_PIN)
             .min_size(egui::vec2(pin_size, pin_size))).ui(ui, |ui| {
             let entries = self.palette_entries();
@@ -772,9 +780,11 @@ impl HookEchoApp {
                 for entry in choices.iter().filter(|entry| query.is_empty() || entry.label.to_lowercase().contains(&query)) {
                     let key = shortcut_key(entry.action).expect("filtered shortcut");
                     let mut pinned = selected.contains(&key);
-                    if ui.add_enabled(pinned || selected.len() < 4,
+                    let response = ui.add_enabled(pinned || selected.len() < 4,
                         egui::Checkbox::new(&mut pinned, format!("{}{}", if entry.favorite { "★ " } else { "" }, entry.label)))
-                        .on_hover_text(entry.desc).changed() {
+                        .on_hover_text(entry.desc);
+                    ui::a11y::record_target(&response, &format!("Pin toolbar shortcut: {}", entry.label));
+                    if response.changed() {
                         if pinned { selected.push(key); } else { selected.retain(|saved| saved != &key); }
                         changed = true;
                     }
@@ -844,9 +854,9 @@ fn zeta_layout_menu(ui: &mut egui::Ui, app: &mut HookEchoApp, active: &mut usize
     let link_maps = &mut app.link_cameras;
     let link_times = &mut app.link_times;
     let mut choice = None;
-    egui::containers::menu::MenuButton::new(
-        egui::RichText::new(format!("{} Layout", ph::SQUARES_FOUR)).size(14.0),
-    )
+    egui::containers::menu::MenuButton::from_button(egui::Button::new(
+        egui::RichText::new(format!("{} Layout", ph::SQUARES_FOUR)).size(13.0),
+    ).min_size(egui::vec2(88.0, ui::style::zeta_control_height(ui))))
     .config(egui::containers::menu::MenuConfig::new()
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
     .ui(ui, |ui| {
@@ -906,20 +916,23 @@ fn radar_playback_mode(following: bool, playing: bool, at_latest: bool, displaye
 
 #[inline(never)]
 fn zeta_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool) -> egui::Response {
+    let size = ui::style::zeta_control_height(ui);
     ui.add_sized(
-        if compact(ui.ctx()) { [44.0, 44.0] } else { [36.0, 34.0] },
+        [size, size],
         egui::Button::new(egui::RichText::new(glyph).size(18.0).color(if active {
-            egui::Color32::from_rgb(255, 190, 42)
+            if ui.visuals().dark_mode { egui::Color32::from_rgb(255, 190, 42) }
+            else { egui::Color32::from_rgb(134, 79, 0) }
         } else {
-            egui::Color32::from_gray(210)
+            ui.visuals().text_color()
         }))
         .fill(if active {
-            egui::Color32::from_rgba_unmultiplied(92, 64, 10, 155)
+            egui::Color32::from_rgba_unmultiplied(182, 126, 22, 40)
         } else {
-            egui::Color32::TRANSPARENT
+            ui.visuals().widgets.inactive.weak_bg_fill
         })
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(16.0),
+        .stroke(if active { egui::Stroke::new(1.0, egui::Color32::from_rgb(166, 128, 46)) }
+            else { ui.visuals().widgets.inactive.bg_stroke })
+        .corner_radius(9.0),
     )
     .named_toggle(label, active)
 }
@@ -977,6 +990,26 @@ mod tests {
         let stored = vec![product.clone(), "outlooks".into()];
         assert_eq!(normalized_shortcuts(&stored, &entries), stored,
             "editing shortcuts at a site without a pinned product must retain that product");
+    }
+
+    #[test]
+    fn desktop_transport_icons_and_labels_share_height_without_cramping_text() {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1464.0, 1029.0))), ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| {
+            ui::style::zeta_controls(ui);
+            ui.horizontal(|ui| {
+                let icon = zeta_button(ui, "▶", "Play", false);
+                let mrms = ui::style::zeta_chip(ui, "MRMS", 56.0, false);
+                let spc = ui::style::zeta_chip(ui, "SPC", 56.0, true);
+                assert_eq!(icon.rect.height(), 36.0);
+                assert_eq!(mrms.rect.height(), icon.rect.height());
+                assert_eq!(spc.rect.height(), icon.rect.height());
+                assert!(mrms.rect.width() >= 56.0);
+                assert!((mrms.rect.left() - icon.rect.right() - 6.0).abs() < 0.01);
+                assert!((spc.rect.left() - mrms.rect.right() - 6.0).abs() < 0.01);
+            });
+        });
     }
 
     #[test]

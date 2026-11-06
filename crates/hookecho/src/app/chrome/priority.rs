@@ -142,6 +142,9 @@ impl HookEchoApp {
         }
     }
     pub(crate) fn priority_dock(&mut self, ctx: &egui::Context) {
+        if !self.settings.show_warning_summary {
+            return;
+        }
         let (point, reference) = self.priority_reference();
         let now = self.priority_time();
         let key = (

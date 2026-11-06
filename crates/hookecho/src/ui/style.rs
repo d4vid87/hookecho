@@ -19,6 +19,45 @@ pub const ZETA_BLUE: Color32 = Color32::from_rgb(0x2D, 0x9C, 0xDB);
 /// Reserved for live/recording semantics only — the theme accent is the accent.
 pub const ZETA_GREEN: Color32 = Color32::from_rgb(0x3D, 0xD5, 0x6B);
 
+pub const ZETA_CONTROL_HEIGHT: f32 = 36.0;
+
+pub fn zeta_control_height(ui: &egui::Ui) -> f32 {
+    if cfg!(target_os = "android") || ui.ctx().content_rect().width() < 600.0 { 44.0 }
+    else { ZETA_CONTROL_HEIGHT }
+}
+
+/// A common surface and rhythm for the radar workspace's floating controls.
+pub fn zeta_glass(ui: &egui::Ui) -> Frame {
+    glass(ui, 242)
+        .corner_radius(14.0)
+        .inner_margin(Margin::symmetric(8, 8))
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 3], blur: 12, spread: 0,
+            color: Color32::from_black_alpha(40),
+        })
+}
+
+pub fn zeta_controls(ui: &mut egui::Ui) {
+    let height = zeta_control_height(ui);
+    ui.style_mut().text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(FONT_BASE));
+    ui.spacing_mut().interact_size = vec2(height, height);
+    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+    ui.spacing_mut().button_padding = vec2(10.0, 6.0);
+    let visuals = ui.visuals_mut();
+    for widget in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active, &mut visuals.widgets.open] {
+        widget.corner_radius = 9.into();
+    }
+}
+
+pub fn zeta_chip(ui: &mut egui::Ui, text: &str, width: f32, active: bool) -> egui::Response {
+    let height = zeta_control_height(ui);
+    ui.add(egui::Button::new(RichText::new(text).size(FONT_BASE))
+        .min_size(vec2(width, height))
+        .selected(active)
+        .corner_radius(9.0))
+}
+
 /// Type scale for chrome text.
 pub const FONT_SM: f32 = 11.0;
 pub const FONT_BASE: f32 = 13.0;

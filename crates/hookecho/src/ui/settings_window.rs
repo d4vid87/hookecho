@@ -1521,6 +1521,9 @@ fn alert_map_settings(ui: &mut egui::Ui, settings: &mut Settings, filters: &mut 
         changed |= super::style::toggle(ui, &mut filters.show_alerts, "Official alert areas").changed();
         ui.small("Warnings, watches, advisories and statements");
         changed |= super::style::toggle(ui, &mut filters.show_watches, "SPC watch boxes").changed();
+        super::style::toggle(ui, &mut settings.show_warning_summary, "Floating warning summary")
+            .on_hover_text("Show the warning summary above the bottom-right radar controls");
+        ui.small("Optional summary card. Map alerts and notifications keep their own settings.");
         ui.collapsing("Filter alert areas by hazard", |ui| {
             for category in wxdata::alerts::Category::ALL {
                 changed |= super::style::toggle(ui, &mut filters.alert_cats[category.index()], category.label()).changed();

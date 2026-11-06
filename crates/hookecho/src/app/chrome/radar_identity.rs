@@ -133,6 +133,7 @@ impl HookEchoApp {
         if self.worldwide_view() { self.worldwide_source_controls(ui); return; }
         let idx = self.active;
         let phone = compact(ui.ctx());
+        let control_height = if self.settings.radar_workspace { ui::style::zeta_control_height(ui) } else { 44.0 };
         let product = self.views[idx].custom_product.clone().unwrap_or_else(|| {
             self.views[idx].velocity_processing_label(self.settings.dealias_velocity)
                 .unwrap_or_else(|| crate::products::name(self.views[idx].moment, self.views[idx].srv)).into()
@@ -154,7 +155,7 @@ impl HookEchoApp {
                         .unwrap_or(crate::products::info(self.views[idx].moment).short)
                 },
                 egui_phosphor::regular::CARET_DOWN
-            )).min_size(egui::vec2(0.0, 44.0)).wrap())
+            )).min_size(egui::vec2(0.0, control_height)).wrap())
             .config(
                 egui::containers::menu::MenuConfig::new()
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
@@ -437,7 +438,8 @@ impl HookEchoApp {
 
     /// The same per-pane control is reachable without opening the product picker.
     pub(super) fn radar_opacity_menu(&mut self, ui: &mut egui::Ui) {
-        let button = ui.add_sized([68.0, 44.0], egui::Button::new("Opacity"))
+        let height = if self.settings.radar_workspace { ui::style::zeta_control_height(ui) } else { 44.0 };
+        let button = ui.add_sized([68.0, height], egui::Button::new("Opacity"))
             .named("Radar opacity").on_hover_text("Fade the active pane's radar");
         egui::Popup::menu(&button)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)

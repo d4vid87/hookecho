@@ -621,6 +621,9 @@ pub struct Settings {
     pub alert_min_escalation: u8,
     #[serde(default)]
     pub priority_rules: PriorityRules,
+    /// Optional floating warning summary; map alerts and notifications are independent.
+    #[serde(default)]
+    pub show_warning_summary: bool,
     /// Optional alert products explicitly enabled by the user; absent in older installs = off.
     #[serde(default)]
     pub optional_alert_events: Vec<String>,
@@ -1537,6 +1540,7 @@ impl Default for Settings {
             quiet_end_hour: default_quiet_end(),
             alert_min_escalation: 0,
             priority_rules: PriorityRules::default(),
+            show_warning_summary: false,
             optional_alert_events: Vec::new(),
             alert_rollup_threshold: default_alert_rollup_threshold(),
             alert_rollup_window_min: default_alert_rollup_window_min(),
@@ -2092,6 +2096,19 @@ mod tests {
     }
 
     #[test]
+    fn floating_warning_summary_defaults_off_and_preserves_choice() {
+        let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
+        assert!(!Settings::default().show_warning_summary);
+        assert!(!old.show_warning_summary);
+        assert!(!Settings::from_json_lossy("{}").show_warning_summary);
+        for enabled in [true, false] {
+            let settings = Settings { show_warning_summary: enabled, ..Settings::default() };
+            let restored = Settings::from_json_lossy(&serde_json::to_string(&settings).unwrap());
+            assert_eq!(restored.show_warning_summary, enabled);
+        }
+    }
+
+    #[test]
     fn rules_are_absent_from_old_settings_and_start_disabled() {
         let old: Settings = serde_json::from_str(r#"{"default_site":"KTLX"}"#).unwrap();
         assert!(old.alert_rules.is_empty());
@@ -2398,6 +2415,7 @@ mod tests {
             quiet_end_hour: 7,
             alert_min_escalation: 0,
             priority_rules: PriorityRules::default(),
+            show_warning_summary: false,
             optional_alert_events: Vec::new(),
             alert_rollup_threshold: default_alert_rollup_threshold(),
             alert_rollup_window_min: default_alert_rollup_window_min(),
