@@ -8,6 +8,135 @@ Tested `main` builds publish as immutable Preview releases. Named entries below
 record major updates; versioned entries match GitHub tags. Older releases stay
 available for rollback.
 
+## Data, rendering and sync reliability - 2026-11-04 (rolling release)
+
+- Fix high-zoom alignment between radar, basemap tiles, weather grids and overlays,
+  including tilted maps, globe views, the date line and polar tile boundaries.
+- Match animated wind colors to the knots legend, preserve missing-data areas during
+  interpolation, apply opacity correctly and release inactive wind-trail buffers.
+- Cancel obsolete radar, model and satellite requests when changing sites, times or
+  panes, while retaining work another pane still needs. Move supported model decoding
+  off the browser UI thread and limit concurrent native decoding.
+- Correct RAP wind-component selection and keep missing model inputs from producing
+  misleading significant-tornado or supercell-composite values.
+- Recover from damaged cached radar scans, reject incomplete model byte-range
+  responses and write cache files atomically. Preserve downloaded offline maps when
+  clearing ordinary caches.
+- Bound browser tile-cache copies and writes, image downloads and decoded image
+  dimensions. Resize imported marker icons for display and prevent icons with the
+  same filename from replacing one another.
+- Preserve in-app settings edits made during a Drive pull. When local and remote
+  changes conflict, offer **Keep this device** or **Use Drive copy**. Signing out
+  cancels pending sync and prevents late results from restoring the session.
+- Include custom palette contents in cloud sync and settings backups, including
+  browser import/export. Custom sound files and marker images remain device-local.
+  A Drive pull can still replace the active palette selection if its local file is
+  edited externally during the pull; the original file is not overwritten.
+- Use Android's document picker for imports and offer **Save to files** or **Share**
+  for exports. Imported palettes and alert sounds survive cache clearing.
+- Initialize the browser's Amy voice when needed, reuse its verified local model and
+  report recoverable startup failures. Android Stop and emergency preemption cancel
+  queued or active speech without reporting cancellation as a voice failure.
+- Use service-worker notifications where supported, assign distinct Matrix message
+  identifiers and honor server retry delays within a bounded delivery window.
+- Correct chase-replay timing across frame rates and sparse GPS fixes, and avoid large
+  jumps after a stalled frame.
+- Keep the radar-site selector inside resized windows and improve accessible labels
+  for its search, collections and network filters.
+
+## Worldwide regional radar - 2026-11-04 (rolling release)
+
+- Add region-aware overview selection and country filters in the site selector,
+  retaining saved map positions and the products available from each selected radar.
+- Add the European OPERA composite, Japanese JMA observed rainfall tiles and Taiwan
+  CWA numeric reflectivity to regional overview alongside Canadian ECCC imagery.
+  Support available European site history and use published observation times for
+  playback.
+- Add a server-side gateway for South Korea's KMA composite. It requires an authorized
+  KMA API key and has not been live-verified without that credential.
+- Use RainViewer as a composite fallback in supported regions, with shared request
+  limits and bounded frame/tile caches. Decode large supported composites in the
+  browser worker when available.
+- Keep source attribution, native units and missing-data distinctions visible.
+  Coverage and history vary by provider; composite imagery does not supply invented
+  velocity, elevation or dual-polarization products. Satellite precipitation remains
+  a separate estimate layer, not ground radar.
+
+## Radar accuracy and workflows - 2026-11-03 (rolling release)
+
+- Compare raw and corrected NEXRAD velocity in linked panes paused on the same archive
+  scan. Use the measured Nyquist limit; leave correction unavailable when that limit
+  is missing or inconsistent.
+- Keep the displayed scan clock tied to the image actually painted. Label an absent
+  product unavailable instead of drawing a different measurement under its legend.
+- Notify when a warning's impact tier increases, including continuation bulletins,
+  while suppressing duplicate county parts and ordinary repeated updates. Retry
+  missing warning geometry after temporary failures.
+- Preserve per-pane velocity processing and storm motion in workspaces and recovery.
+  Undo workspace actions restores replaced forecast, outlook and time-link settings.
+- Add a visible **Done** action for armed map tools, compact drawing and storm-track
+  controls, and individual radar-appearance resets. Escape and Android Back dismiss
+  active controls in order.
+- Customize up to four playback shortcuts, retain product favorites and use the same
+  choices in minimal and full controls. MRMS and SPC remain the default shortcuts.
+- Share complete multi-pane live views or exact displayed times through web links.
+  Keep credentials and private settings out of links; historical data still depends
+  on source archive availability.
+- Add saved-place briefings with matching loaded alerts, radar age and forecasts,
+  plus direct links to the nearby radar and detailed forecast.
+- Recover automatic U.S. radar loading between NOAA/S3 and Iowa State after repeated
+  failures or stale scans, without rewinding the received live head. Explicit source
+  selections and archive browsing retain their own behavior.
+- Bring saved map areas and dated weather replay together under **Offline readiness**.
+  Validate saved areas, recover corrupt map tiles and preserve the previous weather
+  replay if a replacement download is interrupted.
+- Open storm chasers' self-published YouTube links from map details and the dashboard.
+  Optional API-backed broadcast checks report unknown when unchecked, failed or
+  expired; a recent position alone does not imply a live stream.
+- Improve cold offline startup and recovery from temporary server errors, and reduce
+  repeated map geometry work and unnecessary weather-cache reads.
+
+## Aurora Glass controls and radar refinements - 2026-10-31 (rolling release)
+
+- Add Aurora Glass radar-opacity controls with percentage presets and a reset,
+  accessible from both minimal and full playback controls. Preserve range-folded
+  colors during smoothing when that option is enabled.
+- Let Analysis show beam height in feet or meters, relative to the radar antenna or
+  sea level. Reject probes outside measured radials, including partial-scan gaps.
+- Add Iowa State's recent Level II volumes as an optional WSR-88D feed; older archive
+  dates continue to use S3.
+- Keep linked radar playback together by waiting for requested sweeps to be displayed,
+  with a bounded wait for unavailable panes.
+
+## MRMS playback shortcut - 2026-10-27 (rolling release)
+
+- Add an MRMS reflectivity toggle immediately left of SPC in both minimal and full
+  playback controls.
+
+## Updated feature tour - 2026-10-26 (rolling release)
+
+- Refresh the website and GitHub README with screenshots, GIFs and videos showing
+  national-to-local radar, layouts, multiple tilts, MRMS and SPC.
+
+## Signal rail menus and radar continuity - 2026-10-25 (rolling release)
+
+- Introduce the Signal rail outlook menu with Severe, Fire, Rain, Winter and Climate
+  sections. Add SPC to minimal playback controls and fix opening it after other panels.
+- Introduce the Signal rail radar-site selector with Nearby, Favorites and Recent
+  collections, search and network filters. Double-clicking a radar site centers it
+  at the closest supported zoom.
+- Clarify playback status, displayed-scan time and buffering; improve touch targets
+  and access to active-pane, linked-map and linked-time controls.
+- Add a Storm chasers dashboard with filtering and map selection, plus searchable
+  alert categories and filtering around saved places.
+- Refine wheel zoom, prepare radar/MRMS displays in background work and reuse cached
+  smoothing. Keep the previous radar image visible while its replacement is prepared.
+
+## Map zoom and loading - 2026-10-24 (rolling release)
+
+- Add double-click map zoom. Keep cached map detail visible across zoom levels and
+  prioritize missing detail over redundant background-tile downloads.
+
 ## Reliability and release safety - 2026-10-24
 
 - Require successful CI for the exact main commit before website deployment or packaging.
