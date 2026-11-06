@@ -14,6 +14,28 @@ const errors = [];
 const checks = [];
 const page = await browser.newPage();
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function rendered() {
+  const frame = await page.evaluate(() => {
+    const frames = globalThis.__hookechoMapTrace?.frames;
+    const latest = frames?.at(-1)?.[2] ?? 0;
+    if (frames) frames.length = 0; // Keep the bounded trace buffer recording during long tests.
+    return latest;
+  });
+  await page.waitForFunction(previous => globalThis.__hookechoMapTrace?.frames.at(-1)?.[2] >= previous + 2,
+    {timeout: 30000}, frame);
+}
+async function command(text) {
+  await page.focus('#hookecho');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyS');
+  await page.keyboard.up('Control');
+  // Wait for egui focus and results before sending more input on slower CI GPUs.
+  await rendered();
+  await page.keyboard.type(text);
+  await rendered();
+  await page.keyboard.press('Enter');
+  await rendered();
+}
 try {
   await page.setViewport({width: 1280, height: 900});
   await page.setBypassServiceWorker(true);
@@ -91,13 +113,7 @@ try {
   checks.push('Same-tab scene restores independent radar sites and products with linked cameras');
   assert.equal(restored.workspace.panes[1].dealias_override, false);
   assert.deepEqual(restored.workspace.panes[1].storm_motion, [90, 50]);
-  await page.keyboard.down('Control');
-  await page.keyboard.press('KeyS');
-  await page.keyboard.up('Control');
-  await wait(300);
-  await page.keyboard.type('Undo workspace action');
-  await wait(300);
-  await page.keyboard.press('Enter');
+  await command('Undo workspace action');
   await page.waitForFunction(expected => {
     if (!location.hash.startsWith('#scene=')) return false;
     const value = JSON.parse(atob(location.hash.slice(7).replaceAll('-', '+').replaceAll('_', '/')));
@@ -120,13 +136,7 @@ try {
   }
   await page.setViewport({width: 1280, height: 900});
   await wait(500);
-  await page.keyboard.down('Control');
-  await page.keyboard.press('KeyK');
-  await page.keyboard.up('Control');
-  await wait(500);
-  await page.keyboard.type('Location markers');
-  await wait(400);
-  await page.keyboard.press('Enter');
+  await command('Location markers');
   await wait(1000);
   await page.screenshot({path: `${output}/saved-places.png`});
   await page.mouse.click(83, 515); // The saved DFW place's View radar here button.
@@ -141,13 +151,7 @@ try {
     const session = JSON.parse(localStorage.getItem('hookecho.recovery.v1')).session;
     return session.workspace.panes[session.workspace.active].site;
   });
-  await page.keyboard.down('Control');
-  await page.keyboard.press('KeyS');
-  await page.keyboard.up('Control');
-  await wait(300);
-  await page.keyboard.type('Compare raw / corrected velocity');
-  await wait(300);
-  await page.keyboard.press('Enter');
+  await command('Compare raw / corrected velocity');
   await page.waitForFunction(station => {
     const state = JSON.parse(localStorage.getItem('hookecho.recovery.v1'))?.session.workspace;
     return state?.panes.length === 2 && state.link_cameras && state.link_times
