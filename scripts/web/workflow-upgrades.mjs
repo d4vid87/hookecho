@@ -31,6 +31,9 @@ async function command(text) {
   await page.keyboard.up('Control');
   // Wait for egui focus and results before sending more input on slower CI GPUs.
   await rendered();
+  await page.mouse.click(200, 269); // Search field in the fixed 1280px desktop viewport.
+  await rendered();
+  await page.waitForFunction(() => document.activeElement?.tagName === 'INPUT', {timeout: 10000});
   await page.keyboard.type(text);
   await rendered();
   await page.keyboard.press('Enter');
