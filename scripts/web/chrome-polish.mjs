@@ -73,6 +73,28 @@ async function closeSettings() {
       && !saved.session.workspace.chrome?.drawer;
   }, {timeout: 15000});
 }
+async function pinShortcut(label, key) {
+  await clickTarget(page, 'Customize toolbar shortcuts');
+  const name = `Pin toolbar shortcut: ${label}`;
+  // Adding a selected row changes the popup height and moves its checkbox rows.
+  await page.waitForFunction(name => {
+    const targets = globalThis.__hookechoUiTargets;
+    const rows = targets?.controls[name];
+    if (rows?.length !== 1) return false;
+    const rect = JSON.stringify(rows[0]);
+    const previous = globalThis.__hookechoStablePin;
+    if (previous?.name === name && previous.pass === targets.pass) return previous.stable >= 2;
+    const stable = previous?.name === name && previous.rect === rect ? previous.stable + 1 : 0;
+    globalThis.__hookechoStablePin = {name, pass: targets.pass, rect, stable};
+    return stable >= 2;
+  }, {timeout: 30000}, name);
+  await clickTarget(page, name);
+  await page.waitForFunction(({label, key}) => {
+    const saved = JSON.parse(localStorage.getItem('hookecho-settings'));
+    return saved.compact_shortcuts?.includes(key)
+      && globalThis.__hookechoUiTargets?.controls[label]?.length === 1;
+  }, {timeout: 30000}, {label, key});
+}
 
 try {
   await page.setViewport({width: 1464, height: 1029});
@@ -175,10 +197,8 @@ try {
 
   await page.setViewport({width: 1280, height: 900});
   await wait(1000);
-  await clickTarget(page, 'Customize toolbar shortcuts');
-  await clickTarget(page, 'Pin toolbar shortcut: Rain intensity (reflectivity)');
-  await clickTarget(page, 'Customize toolbar shortcuts');
-  await clickTarget(page, 'Pin toolbar shortcut: Drop shape (ZDR)');
+  await pinShortcut('Rain intensity (reflectivity)', 'radar.moment.0.0');
+  await pinShortcut('Drop shape (ZDR)', 'radar.moment.3.0');
   // Four shortcuts fit at 1280px; 1120px leaves just over 1100px inside the map frame,
   // exercising wrapping at the smallest split-card desktop.
   await page.setViewport({width: 1120, height: 900});
