@@ -8,6 +8,14 @@ Tested `main` builds publish as immutable Preview releases. Named entries below
 record major updates; versioned entries match GitHub tags. Older releases stay
 available for rollback.
 
+## Quiet Contour warnings - 2026-11-06 (rolling release)
+
+- Replace heavy white warning halos with fine hazard-colored contours, narrow
+  charcoal edges and lightly tinted fills across live and archived map alerts.
+- Give warning labels rounded dark surfaces, readable text and a colored accent.
+- Preserve hazard colors, dashed watches, dotted advisories, emergency double
+  borders and high-contrast scaling. Mesoscale discussions keep their Aurora rim.
+
 ## Radar control polish - 2026-11-06 (rolling release)
 
 - Give the radar workspace consistent button heights, spacing and glass surfaces,

@@ -51,7 +51,7 @@ pub fn draw(
             hatch(&painter, &rings, area, dir, stroke);
         }
         let style = crate::field_atlas::Style {
-            rgb: [f.stroke[0], f.stroke[1], f.stroke[2]], fill: 0, dash: None, emergency: false, warning: false, mesoscale: false,
+            rgb: [f.stroke[0], f.stroke[1], f.stroke[2]], fill: 0, dash: None, emergency: false, hazard: false, mesoscale: false,
         };
         for ring in &rings {
             let mut edge = ring.clone();
@@ -60,7 +60,7 @@ pub fn draw(
         }
         if area.width() > 65.0 && area.height() > 50.0 {
             if let Some(anchor) = rings[0].iter().copied().find(|p| clip.shrink(12.0).contains(*p)) {
-                crate::field_atlas::label(&painter, clip, anchor, &format!("OUT · {}", f.title), style.color(), &mut taken);
+                crate::field_atlas::label(&painter, clip, anchor, &format!("OUT · {}", f.title), style, &mut taken);
             }
         }
     }

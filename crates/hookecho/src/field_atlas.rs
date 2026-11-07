@@ -12,7 +12,7 @@ pub struct Style {
     pub fill: u8,
     pub dash: Option<(f32, f32)>,
     pub emergency: bool,
-    pub warning: bool,
+    pub hazard: bool,
     pub mesoscale: bool,
 }
 impl Style {
@@ -35,37 +35,37 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         FeatureKind::Watch | FeatureKind::Advisory | FeatureKind::Statement
             if matches!(event, "Air Quality Alert" | "Air Quality Watch") =>
         {
-            ([255, 255, 255], 6, Some((1.5, 5.0)))
+            ([255, 255, 255], 4, Some((1.5, 5.0)))
         }
-        FeatureKind::Warning if emergency => ([255, 118, 213], 18, None),
-        FeatureKind::Warning if event == "Flash Flood Warning" => ([57, 255, 20], 12, None),
+        FeatureKind::Warning if emergency => ([255, 118, 213], 10, None),
+        FeatureKind::Warning if event == "Flash Flood Warning" => ([57, 255, 20], 8, None),
         FeatureKind::Warning
             if f.alert
                 .as_ref()
                 .map_or(f.title.as_str(), |a| a.event.as_str())
                 == "Flood Warning" =>
         {
-            ([0, 160, 90], 12, None)
+            ([0, 160, 90], 8, None)
         }
         FeatureKind::Warning if event == "Severe Thunderstorm Warning" =>
-            ([255, 225, 40], 12, None),
+            ([255, 225, 40], 8, None),
         FeatureKind::Warning if event == "Freeze Warning" =>
-            ([f.stroke[0], f.stroke[1], f.stroke[2]], 12, None),
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 8, None),
         FeatureKind::Warning
             if matches!(event, "Red Flag Warning" | "Extreme Heat Warning" | "Excessive Heat Warning") =>
         {
-            ([f.stroke[0], f.stroke[1], f.stroke[2]], 12, None)
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 8, None)
         }
-        FeatureKind::Warning => ([255, 117, 93], 12, None),
+        FeatureKind::Warning => ([255, 117, 93], 8, None),
         FeatureKind::Watch | FeatureKind::WatchBox if event.starts_with("Tornado Watch") => {
-            ([230, 40, 40], 8, Some((5.0, 5.0)))
+            ([230, 40, 40], 6, Some((5.0, 5.0)))
         }
         FeatureKind::Watch if matches!(event, "Fire Weather Watch" | "Extreme Heat Watch" | "Freeze Watch") => {
-            ([f.stroke[0], f.stroke[1], f.stroke[2]], 8, Some((5.0, 5.0)))
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 6, Some((5.0, 5.0)))
         }
-        FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 8, Some((5.0, 5.0))),
+        FeatureKind::Watch | FeatureKind::WatchBox => ([255, 226, 108], 6, Some((5.0, 5.0))),
         FeatureKind::Advisory if event == "Heat Advisory" => {
-            ([f.stroke[0], f.stroke[1], f.stroke[2]], 6, Some((1.5, 5.0)))
+            ([f.stroke[0], f.stroke[1], f.stroke[2]], 4, Some((1.5, 5.0)))
         }
         FeatureKind::Statement
             if f.alert
@@ -73,9 +73,9 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
                 .map_or(f.title.as_str(), |a| a.event.as_str())
                 == "Special Weather Statement" =>
         {
-            ([255, 228, 181], 6, Some((1.5, 5.0)))
+            ([255, 228, 181], 4, Some((1.5, 5.0)))
         }
-        FeatureKind::Advisory | FeatureKind::Statement => ([114, 186, 255], 6, Some((1.5, 5.0))),
+        FeatureKind::Advisory | FeatureKind::Statement => ([114, 186, 255], 4, Some((1.5, 5.0))),
         FeatureKind::MesoDiscussion => ([189, 104, 255], 48, None),
         // Wind radii and surge share this kind; keep their source intensity colors and fills.
         FeatureKind::TropicalCone if f.title.ends_with(" cone") => {
@@ -88,7 +88,8 @@ pub fn style(f: &GeoFeature) -> Option<Style> {
         fill,
         dash,
         emergency,
-        warning: f.kind == FeatureKind::Warning,
+        hazard: matches!(f.kind, FeatureKind::Warning | FeatureKind::Watch | FeatureKind::WatchBox
+            | FeatureKind::Advisory | FeatureKind::Statement),
         mesoscale: f.kind == FeatureKind::MesoDiscussion,
     })
 }
@@ -122,7 +123,7 @@ fn clip_segment(a: Pos2, b: Pos2, clip: Rect) -> Option<[Pos2; 2]> {
     Some([a + d * lo, a + d * hi])
 }
 
-/// Warnings use a white halo and bold colored core; other overlays keep their dark casing.
+/// Quiet Contour keeps hazard outlines legible without a wide white halo over the radar.
 pub fn boundary(painter: &Painter, points: &[Pos2], clip: Rect, style: Style, scale: f32) {
     let mut shapes = Vec::new();
     boundary_shapes(&mut shapes, points, clip, style, scale);
@@ -147,15 +148,14 @@ fn boundary_shapes(shapes: &mut Vec<Shape>, points: &[Pos2], clip: Rect, style: 
                 shapes.push(Shape::line_segment(segment, stroke));
             }
         };
-        if style.warning {
-            draw(9.0, INK);
-            draw(7.0, Color32::WHITE);
+        if style.hazard {
             if style.emergency {
-                draw(5.0, style.color());
-                draw(2.5, Color32::WHITE);
-                draw(1.2, style.color());
+                draw(6.6, INK);
+                draw(4.6, style.color());
+                draw(2.0, INK);
             } else {
-                draw(3.2, style.color());
+                draw(3.8, INK);
+                draw(1.8, style.color());
             }
         } else if style.mesoscale {
             // Aurora rim: violet halo, dark separation, and a crisp pale centerline.
@@ -170,13 +170,13 @@ fn boundary_shapes(shapes: &mut Vec<Shape>, points: &[Pos2], clip: Rect, style: 
     }
 }
 
-/// Small square technical label, with corner ticks and collision rejection.
+/// Hazard chips use quiet surfaces; technical overlays retain their original labels.
 pub fn label(
     painter: &Painter,
     clip: Rect,
     anchor: Pos2,
     text: &str,
-    color: Color32,
+    style: Style,
     taken: &mut Vec<Rect>,
 ) {
     let text: String = if text.chars().count() > 42 {
@@ -184,8 +184,14 @@ pub fn label(
     } else {
         text.to_owned()
     };
-    let galley = painter.layout_no_wrap(text, FontId::monospace(11.0), color);
-    let size = galley.size() + egui::vec2(12.0, 8.0);
+    let color = style.color();
+    let (font, text_color, padding) = if style.hazard {
+        (FontId::proportional(11.0), Color32::from_rgb(226, 235, 243), egui::vec2(10.0, 6.0))
+    } else {
+        (FontId::monospace(11.0), color, egui::vec2(6.0, 4.0))
+    };
+    let galley = painter.layout_no_wrap(text, font, text_color);
+    let size = galley.size() + padding * 2.0;
     for offset in [
         egui::vec2(8.0, -size.y - 7.0),
         egui::vec2(8.0, 8.0),
@@ -198,29 +204,39 @@ pub fn label(
             continue;
         }
         taken.push(rect);
-        painter.line_segment([anchor, rect.center()], Stroke::new(1.0, color));
-        painter.rect_filled(rect, 2.0, INK);
-        painter.rect_stroke(rect, 2.0, Stroke::new(0.8, color), egui::StrokeKind::Inside);
-        for (p, dx, dy) in [
-            (rect.left_top(), -1.0, -1.0),
-            (rect.right_bottom(), 1.0, 1.0),
-        ] {
+        if style.hazard {
+            painter.line_segment([anchor, rect.center()], Stroke::new(0.8, color.gamma_multiply(0.5)));
+            painter.rect_filled(rect, 7.0, Color32::from_rgb(16, 29, 41));
+            painter.rect_stroke(rect, 7.0, Stroke::new(0.8, Color32::from_rgb(70, 88, 102)), egui::StrokeKind::Inside);
             painter.line_segment(
-                [
-                    p + egui::vec2(dx * 4.0, 0.0),
-                    p + egui::vec2(dx * 4.0, dy * 4.0),
-                ],
-                Stroke::new(1.0, color),
+                [rect.left_top() + egui::vec2(2.0, 6.0), rect.left_bottom() + egui::vec2(2.0, -6.0)],
+                Stroke::new(2.0, color),
             );
-            painter.line_segment(
-                [
-                    p + egui::vec2(0.0, dy * 4.0),
-                    p + egui::vec2(dx * 4.0, dy * 4.0),
-                ],
-                Stroke::new(1.0, color),
-            );
+        } else {
+            painter.line_segment([anchor, rect.center()], Stroke::new(1.0, color));
+            painter.rect_filled(rect, 2.0, INK);
+            painter.rect_stroke(rect, 2.0, Stroke::new(0.8, color), egui::StrokeKind::Inside);
+            for (p, dx, dy) in [
+                (rect.left_top(), -1.0, -1.0),
+                (rect.right_bottom(), 1.0, 1.0),
+            ] {
+                painter.line_segment(
+                    [
+                        p + egui::vec2(dx * 4.0, 0.0),
+                        p + egui::vec2(dx * 4.0, dy * 4.0),
+                    ],
+                    Stroke::new(1.0, color),
+                );
+                painter.line_segment(
+                    [
+                        p + egui::vec2(0.0, dy * 4.0),
+                        p + egui::vec2(dx * 4.0, dy * 4.0),
+                    ],
+                    Stroke::new(1.0, color),
+                );
+            }
         }
-        painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, color);
+        painter.galley(rect.min + padding, galley, text_color);
         break;
     }
 }
@@ -279,7 +295,7 @@ pub fn draw(
                     .replace("Mesoscale Discussion", "MD")
                     .replace("Mesoscale discussion", "MD")
             };
-            label(&painter, clip, p, &title, s.color(), &mut taken);
+            label(&painter, clip, p, &title, s, &mut taken);
         }
     }
 }
@@ -506,8 +522,8 @@ impl Cache {
                         let a = key.clip.min + egui::vec2(a.0, a.1);
                         let b = key.clip.min + egui::vec2(b.0, b.1);
                         if let Some(edge) = clip_segment(a, b, key.clip.expand(8.0)) {
-                            if p.style.warning {
-                                boundary_shapes(&mut shapes, &edge, key.clip, p.style, key.scale * if key.globe { 0.5 } else { 1.0 });
+                            if p.style.hazard {
+                                boundary_shapes(&mut shapes, &edge, key.clip, p.style, key.scale);
                             } else if let Some((dash, gap)) = p.style.dash {
                                 shapes.extend(Shape::dashed_line(&edge, stroke, dash, gap));
                             } else {
@@ -661,7 +677,7 @@ impl Cache {
         painter.add(Shape::Mesh(cached.mesh.clone()));
         let mut taken = Vec::new();
         for &(i, s, p) in cached.labels.iter().rev() {
-            label(&painter, clip, p, &features[i].title, s.color(), &mut taken);
+            label(&painter, clip, p, &features[i].title, s, &mut taken);
         }
         for c in &cached.clusters {
             let clicked = egui::Area::new(egui::Id::new(("regional_cluster", pane, c.name)))
@@ -1021,13 +1037,14 @@ mod tests {
         assert!(style(&tropical).is_some());
     }
     #[test]
-    fn warning_edges_have_a_white_halo_and_hazard_colored_core() {
+    fn quiet_contour_keeps_warning_edges_thin_and_scales_for_high_contrast() {
         let clip = Rect::from_min_max(Pos2::ZERO, egui::pos2(100.0, 100.0));
         let points = [egui::pos2(10.0, 10.0), egui::pos2(90.0, 10.0)];
         let mut warning = feature(FeatureKind::Warning);
-        for event in ["Severe Thunderstorm Warning", "Tornado Warning", "Flood Warning", "Freeze Warning"] {
+        for event in ["Severe Thunderstorm Warning", "Tornado Warning", "Flash Flood Warning",
+            "Flood Warning", "Freeze Warning", "Winter Storm Warning", "High Wind Warning"] {
             warning.title = event.into();
-            for scale in [0.5, 1.0, 2.0] {
+            for scale in [0.5, 1.0, crate::theme::overlay_stroke_scale(crate::settings::Theme::HighContrast)] {
                 let mut shapes = Vec::new();
                 let style = style(&warning).unwrap();
                 boundary_shapes(&mut shapes, &points, clip, style, scale);
@@ -1035,14 +1052,40 @@ mod tests {
                     Shape::LineSegment { stroke, .. } => Some(*stroke),
                     _ => None,
                 }).collect();
-                assert_eq!(strokes.len(), 3);
-                assert_eq!(strokes[1], Stroke::new(7.0 * scale, Color32::WHITE));
-                assert_eq!(strokes[2], Stroke::new(3.2 * scale, style.color()));
-                assert!(strokes[0].width > strokes[1].width);
+                assert_eq!(strokes, [Stroke::new(3.8 * scale, INK), Stroke::new(1.8 * scale, style.color())]);
+                assert_eq!(style.fill, 8, "normal warnings have a three-percent tint");
             }
         }
-        assert!(!style(&feature(FeatureKind::Watch)).unwrap().warning);
-        assert!(!style(&feature(FeatureKind::Statement)).unwrap().warning);
+    }
+
+    #[test]
+    fn quiet_contour_preserves_patterned_hazards_and_emergency_double_edges() {
+        let clip = Rect::from_min_max(Pos2::ZERO, egui::pos2(100.0, 100.0));
+        let points = [egui::pos2(10.0, 10.0), egui::pos2(90.0, 10.0)];
+        for kind in [FeatureKind::Watch, FeatureKind::WatchBox, FeatureKind::Advisory, FeatureKind::Statement] {
+            let style = style(&feature(kind)).unwrap();
+            assert!(style.hazard);
+            let dash = style.dash.unwrap();
+            assert_eq!(dash, if matches!(kind, FeatureKind::Watch | FeatureKind::WatchBox) { (5.0, 5.0) } else { (1.5, 5.0) });
+            let mut shapes = Vec::new();
+            boundary_shapes(&mut shapes, &points, clip, style, 1.0);
+            assert!(shapes.len() > 2, "watch/advisory boundaries remain segmented");
+            assert!(shapes.iter().all(|s| matches!(s, Shape::LineSegment { stroke, .. }
+                if *stroke == Stroke::new(3.8, INK) || *stroke == Stroke::new(1.8, style.color()))));
+        }
+        let mut emergency = feature(FeatureKind::Warning);
+        emergency.alert = Some(serde_json::from_value(serde_json::json!({
+            "id":"emergency", "event":"Tornado Warning", "headline":"Tornado Emergency",
+            "area":"Test only", "description":"", "instruction":""
+        })).unwrap());
+        let style = style(&emergency).unwrap();
+        let mut shapes = Vec::new();
+        boundary_shapes(&mut shapes, &points, clip, style, 1.0);
+        let strokes: Vec<_> = shapes.iter().filter_map(|s| match s {
+            Shape::LineSegment { stroke, .. } => Some(*stroke), _ => None,
+        }).collect();
+        assert_eq!(strokes, [Stroke::new(6.6, INK), Stroke::new(4.6, style.color()), Stroke::new(2.0, INK)]);
+        assert!(!super::style(&feature(FeatureKind::MesoDiscussion)).unwrap().hazard);
     }
 
     #[test]
@@ -1078,7 +1121,7 @@ mod tests {
         alert.stroke = [0, 153, 255, 235];
         let warning = style(&alert).unwrap();
         assert_eq!(warning.rgb, [0, 153, 255]);
-        assert!(warning.warning);
+        assert!(warning.hazard);
     }
 
     #[test]
