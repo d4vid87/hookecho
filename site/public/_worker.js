@@ -18,21 +18,25 @@ export async function downloadRedirect(request) {
   const name = new URL(request.url).pathname.slice("/download-file/".length);
   if (!DOWNLOAD_FILES.includes(name)) return new Response("Not found", {status: 404});
   if (!["GET", "HEAD"].includes(request.method)) return new Response("Method not allowed", {status: 405});
-  let destination = "https://github.com/d4vid87/hookecho/releases";
+  let destination;
+  const init = {
+    headers: {"User-Agent": "HookEcho downloads", "Accept": "application/vnd.github+json"},
+    cf: {cacheTtl: 300, cacheEverything: true},
+  };
   try {
-    const init = {
-      headers: {"User-Agent": "HookEcho downloads", "Accept": "application/vnd.github+json"},
-      cf: {cacheTtl: 300, cacheEverything: true},
-    };
-    const [latest, list] = await Promise.all([
-      fetch("https://api.github.com/repos/d4vid87/hookecho/releases/latest", init),
-      fetch("https://api.github.com/repos/d4vid87/hookecho/releases?per_page=30", init),
-    ]);
-    const releases = list.ok ? await list.json() : [];
-    if (latest.ok) releases.push(await latest.json());
-    destination = selectDownload(releases, name) ?? destination;
-  } catch { /* The releases page remains usable when the API is unavailable. */ }
-  return new Response(null, {status: 302, headers: {location: destination, "cache-control": "no-store"}});
+    const latest = await fetch("https://api.github.com/repos/d4vid87/hookecho/releases/latest", init);
+    if (latest.ok) {
+      const release = await latest.json();
+      if (release.assets?.some(asset => asset.name === "SHA256SUMS")) destination = selectDownload([release], name);
+    }
+  } catch { /* A release-list fallback can still provide a complete build. */ }
+  if (!destination) {
+    try {
+      const list = await fetch("https://api.github.com/repos/d4vid87/hookecho/releases?per_page=30", init);
+      if (list.ok) destination = selectDownload(await list.json(), name);
+    } catch { /* The releases page remains usable when the API is unavailable. */ }
+  }
+  return new Response(null, {status: 302, headers: {location: destination ?? "https://github.com/d4vid87/hookecho/releases", "cache-control": "no-store"}});
 }
 
 export const GO_TARGETS = Object.freeze({

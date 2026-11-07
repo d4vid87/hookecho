@@ -22,6 +22,31 @@ test('download links survive the transition away from the legacy rolling release
   const preview = release('build-new');
   assert.equal(selectDownload([legacy, preview], name), preview.assets[0].browser_download_url);
 });
+test('downloads honor GitHub latest over a stale list and fall back when latest is unusable', async () => {
+  const original = globalThis.fetch;
+  const previous = release('v1.2.3', false);
+  const latest = release('build-new', false);
+  try {
+    for (const candidate of [latest, {...latest, assets: latest.assets.slice(1)},
+      {...latest, tag_name: 'latest', assets: latest.assets.slice(0, -1)},
+      {...latest, assets: latest.assets.map(a => ({...a, browser_download_url: 'https://evil.example/file'}))},
+      {...latest, draft: true}, null]) {
+      let listRequests = 0;
+      globalThis.fetch = async url => {
+        if (url.endsWith('/latest')) {
+          if (!candidate) throw new Error('latest unavailable');
+          return Response.json(candidate);
+        }
+        listRequests++;
+        return Response.json([previous]);
+      };
+      const response = await downloadRedirect(new Request(`https://hookecho.io/download-file/${names[0]}`));
+      const expected = candidate === latest ? latest : previous;
+      assert.equal(response.headers.get('location'), expected.assets[0].browser_download_url);
+      assert.equal(listRequests, candidate === latest ? 0 : 1);
+    }
+  } finally { globalThis.fetch = original; }
+});
 test('a GitHub outage falls back to the releases page without an open redirect', async () => {
   const original = globalThis.fetch;
   try {
