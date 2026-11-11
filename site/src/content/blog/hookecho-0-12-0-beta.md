@@ -2,7 +2,7 @@
 title: "HookEcho v0.12.0 beta: a new interface, top to bottom"
 description: "The docked panels are gone, the setup wizard is gone, and the phone got the same rebuild the desktop did. What's in the v0.12.0 beta."
 date: 2026-08-26
-image: /shots/layers.jpg
+image: /shots/layers.jpg?v=20261111
 ---
 
 The **v0.12.0 beta** is out, and it's the largest change HookEcho has had. The

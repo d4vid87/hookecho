@@ -15,9 +15,9 @@ KMA access. See [coverage, source limitations and setup](docs/worldwide-radar.md
 
 [Open live radar](https://app.hookecho.io/) · [Download the app](https://github.com/d4vid87/hookecho/releases) · [Visit the website](https://hookecho.io/) · [Get help](https://github.com/d4vid87/hookecho/issues)
 
-![National to local: current HookEcho menu, MRMS, SPC, layouts, and four tilts](docs/shots/national-to-local/tour.gif)
+![National to local: current HookEcho menu, MRMS, SPC, layouts, and four tilts](docs/shots/national-to-local/tour.gif?v=20261111)
 
-*An 18-second tour that leads with MRMS and SPC before moving into storm detail. Real interface screenshots captured October 26, 2026. Storm views use the KTLX archive from May 20, 2013; MRMS and SPC show conditions at capture time.*
+*A recorded tour that leads with MRMS and SPC before moving into storm detail. Real interface screenshots captured November 11, 2026. Storm views use the KTLX archive from May 20, 2013; MRMS and SPC show conditions at capture time.*
 
 ## Explore the highlights
 
@@ -25,41 +25,41 @@ KMA access. See [coverage, source limitations and setup](docs/worldwide-radar.md
 
 **Find the tool. Keep the map.** Search weather layers, observations, forecast models, and analysis tools. Open storm attributes, alerts, and map controls from one organized menu.
 
-![HookEcho menu with searchable categories and severe-weather tools](docs/shots/national-to-local/features.png)
+![HookEcho menu with searchable categories and severe-weather tools](docs/shots/national-to-local/features.png?v=20261111)
 
-*Current HookEcho menu · captured October 26, 2026 · archived KTLX backdrop.*
+*Current HookEcho menu · captured November 11, 2026 · national radar view.*
 
 ### MRMS national radar
 
 **Start with the whole country.** Use the Multi-Radar / Multi-Sensor mosaic to follow rain and storms across the United States, then switch to a radar site for a closer look.
 
-![HookEcho national overview displaying the MRMS reflectivity mosaic](docs/shots/national-to-local/mrms.png)
+![HookEcho national overview displaying the MRMS reflectivity mosaic](docs/shots/national-to-local/mrms.png?v=20261111)
 
-*MRMS national reflectivity · October 26, 2026 · conditions at capture time.*
+*MRMS national reflectivity · November 11, 2026 · conditions at capture time.*
 
 ### Storm Prediction Center
 
 **Put the outlook on the map.** View SPC Day 1–3 convective outlooks. For Day 1, compare categorical risk with tornado, wind, and hail probabilities.
 
-![HookEcho SPC outlook library with day and hazard controls beside the national map](docs/shots/national-to-local/spc.png)
+![HookEcho SPC outlook library with day and hazard controls beside the national map](docs/shots/national-to-local/spc.png?v=20261111)
 
-*SPC Day 1 categorical outlook · October 26, 2026 · conditions at capture time.*
+*SPC Day 1 categorical outlook · November 11, 2026 · conditions at capture time.*
 
 ### Flexible layouts
 
 **Choose the view for the job.** Move between Radar, Chase, National overview, and Analysis. Work with one, two, or four panes, and link map positions and timelines when comparing scans.
 
-![HookEcho navigation showing Radar, Chase, National overview, Analysis, and comparison layouts](docs/shots/national-to-local/layouts.png)
+![HookEcho navigation showing Radar, Chase, National overview, Analysis, and comparison layouts](docs/shots/national-to-local/layouts.png?v=20261111)
 
-*Current HookEcho layout menu · October 26, 2026 · archived KTLX backdrop.*
+*Current HookEcho layout menu · November 11, 2026 · archived KTLX backdrop.*
 
 ### Compare four tilts
 
 **Look above the lowest scan.** Show four reflectivity tilts together to examine storm structure at different elevations. Four tilts and four radar products answer different questions.
 
-![Actual Compare 4 tilts view with four populated reflectivity panes](docs/shots/national-to-local/four-tilts.png)
+![Actual Compare 4 tilts view with four populated reflectivity panes](docs/shots/national-to-local/four-tilts.png?v=20261111)
 
-*Compare 4 tilts · KTLX archive, May 20, 2013 · captured October 26, 2026.*
+*Compare 4 tilts · KTLX archive, May 20, 2013 · captured November 11, 2026.*
 
 ## Radar products and playback
 
@@ -71,7 +71,9 @@ Step through radar scans or play a loop. Compare reflectivity, velocity, correla
 
 Keep the map visible and open the controls when you need them. Use the browser app or install the Android build.
 
-<img src="docs/shots/android/map.jpg" alt="HookEcho Signal Deck on Android" width="320">
+<img src="docs/shots/mobile/map.jpg?v=20261111" alt="Current HookEcho mobile browser layout with Quiet Contour warning boundaries" width="320">
+
+*Mobile browser capture · November 11, 2026 · archived KTLX radar. This is the responsive web app, not a native Android device recording.*
 
 [Phone instructions](https://hookecho.io/docs/on-your-phone/)
 
@@ -141,19 +143,19 @@ main map.
 
 ## Find your way around
 
-- **Radar | Analyst:** choose one map or resume your analysis arrangement.
+- **Layout** in the playback dock: choose Radar, Chase, National overview, or Analysis, and change pane layouts.
 - **Search or Ctrl+S:** find a place, radar, setting, or weather layer.
 - **Play button or Space:** start and stop recent radar animation.
-- **Escape:** hide all map controls; press it again to bring them back.
-- **Timeline:** move backward through recent scans or forward into future radar.
+- **Escape:** dismiss the frontmost panel, or hide and restore the map controls when no panel is open.
+- **Full playback controls:** expand the dock to scrub through scans or a selected forecast product.
 - **LIVE button:** jump back to current conditions.
-- **Radar section:** site, product, tilt, threshold, and custom locations.
-- **Overlays section:** storm tracks, MRMS, storm attributes, and SPC outlook.
-- **Alerts section:** see warnings covering the area on screen. It stays closed until you open it.
-- **Tools section:** search the product catalog and open saved workspaces.
-- **Settings gear:** open Settings directly from the fixed header.
+- **Site and product selectors:** choose the radar, measurement, and tilt.
+- **MRMS and SPC:** open national radar and outlook controls from the playback dock.
+- **Alerts badge:** browse available warnings and their details. It stays closed until you open it.
+- **Tools and search:** find the product catalog, map tools, and saved workspaces.
+- **Main menu:** open Settings and the other weather layers.
 
-![HookEcho showing the current Radar section over a historic storm](docs/shots/radar-mode.jpg)
+![Current HookEcho Radar layout and compact playback controls over a historic storm](docs/shots/radar-mode.jpg?v=20261111)
 
 ## Made for different kinds of weather watchers
 

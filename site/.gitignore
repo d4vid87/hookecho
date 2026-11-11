@@ -3,6 +3,8 @@ dist/
 .astro/
 # Copied source screenshots stay ignored; optimized site-only assets are committed here.
 public/shots/*
+!public/shots/radar-mode-20261111.webp
+!public/shots/analyst-mode-20261111.webp
 !public/shots/reflectivity-640.webp
 !public/shots/reflectivity-1280.webp
 !public/shots/stormdesk-wide-800.webp

@@ -2,7 +2,7 @@
 title: "How to read weather radar"
 description: "Green, yellow and red is where most people stop. Here's what the rest of a radar display is telling you, and how to use it."
 date: 2026-08-26
-image: /shots/velocity.jpg
+image: /shots/velocity.jpg?v=20261111
 ---
 
 Most people read weather radar exactly one way: green is rain, yellow is more

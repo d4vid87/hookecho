@@ -1,7 +1,19 @@
-# HookEcho media capture · October 16, 2026
+# HookEcho media capture · November 11, 2026
 
-Desktop media on the site and GitHub gallery were recaptured with the Radar Zeta layout. Archive media use real KTLX Level 2 scans and timestamped warning polygons from May 20, 2013, near Moore, Oklahoma. Live storm attributes and national MRMS media were captured on October 16, 2026. The Android recording remains the October 4 Signal Deck and Quiet Shelf capture from a Galaxy S24 Ultra; Radar Zeta is a desktop layout and does not replace the phone UI.
+The website and GitHub gallery were recaptured from HookEcho commit `94a1ae36` with the current Radar Zeta controls and Quiet Contour warning boundaries. Desktop and scientific-gallery frames came from the current WASM web build at `http://127.0.0.1:8767`, backed by the native local proxy and real radar and weather feeds. Desktop screenshots use a 1600 × 1000 browser viewport; no debug/FPS overlay is shown. Phone media use the responsive web app in a 430 × 932 browser viewport; they are not a recording or validation of a native Android build.
 
-The web source scenes were `https://app.hookecho.io/#goto=KTLX,-97.36,35.40,9.9,2013-05-20T20:15:00Z`, `https://app.hookecho.io/#goto=KBMX,-86.6,32.4,6.8,thr:16,bm:dark`, and a live CONUS MRMS view. `scripts/shots/capture-web-showcase.cjs` captured the deployed app in fresh browser profiles for each scene. `scripts/shots/encode-web-showcase.sh` encoded the MP4, WebP, GIF, and README assets without interpolating scans. `scripts/shots/shoot.sh` captured desktop gallery scenes on Xvfb. Android frames came from `adb exec-out screencap` on October 4 and were encoded by `scripts/shots/encode-android-showcase.sh`; the personal status bar was cropped before publishing. The Android capture preserved the phone's app data and saved places.
+## Scenes and provenance
 
-The animated media is archival or recorded. It is not a live forecast. The homepage identifies the archive date and the capture date beside each clip. The live October 16 captures are frozen examples of the interface and weather at recording time.
+- Radar playback, four-product analysis and four tilts use archived KTLX scans from the May 20, 2013 Moore, Oklahoma event. Historical warning polygons follow the archive time.
+- The scientific gallery includes the Tuscaloosa (April 27, 2011), El Reno (May 31, 2013), Mayfield (December 11, 2021), and Hurricane Ian (September 28, 2022) archives. Each caption identifies its event.
+- The menu over the national view, MRMS, SPC, model fields, observations and other current-data views show conditions or source availability at capture time on November 11, 2026.
+- The recorded HRRR one-hour forecast is initialized at 17:00 UTC on November 11 and valid at 18:00 UTC. The QPE capture shows 24-hour accumulation at 17:00 UTC over northern Illinois, aligned with its radar frame.
+- Phone media show the archived Moore storm through the current mobile web interface. Native Android device testing was skipped; no Galaxy device or signed-APK capture is claimed.
+
+## Outputs
+
+`scripts/shots/capture-web-showcase.cjs` stages the web scenes, and `scripts/shots/encode-web-showcase.sh` encodes the website videos, posters and GitHub GIFs. The older native Xvfb workflow remains available in `scripts/shots/shoot.sh`, but its debug frames were not used for this refresh. Full frames are preserved so controls are not clipped; radar scans are not interpolated or synthesized.
+
+The website build copies the shared JPGs and hero GIF from `docs/shots`. Optimized WebP posters, responsive images, mobile movies and showcase assets are refreshed alongside those source images. Existing media aliases remain available with current images for incoming links. Press links point to the same GitHub gallery used by the README.
+
+All screenshots and animations are recorded examples, not live forecasts. Event dates describe the weather being replayed; the November 11 capture date describes the interface build. Live weather is available only by opening the app.

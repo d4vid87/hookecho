@@ -1,10 +1,10 @@
 # Radar and Analyst interface
 
-HookEcho opens in **Radar**: one map, one timeline, and a short menu. **Analyst** is an optional workbench for comparing products. The **Radar | Analyst** switch, search, and Settings stay in the fixed header, even when the menu is closed.
+HookEcho opens in **Radar**: one map with compact playback controls. Select **Layout** in the bottom dock to choose **Radar**, **Chase**, **National overview**, or **Analysis**. Analysis opens the Analyst workbench for comparing products. Menu and search stay at the upper left; the radar site and product have their own controls over the map.
 
-![Radar mode and its short product panel](shots/radar-mode.jpg)
+![Current Radar layout with its compact playback dock](shots/radar-mode.jpg?v=20261111)
 
-*Archive capture from KTLX on May 20, 2013; not current weather.*
+*Current interface captured November 11, 2026, replaying KTLX on May 20, 2013; not current weather.*
 
 ## Find a control
 
@@ -15,7 +15,7 @@ HookEcho opens in **Radar**: one map, one timeline, and a short menu. **Analyst*
 | **Alerts** | Warning visibility and the alerts in view. The badge shows the count; incoming alerts do not open the section. |
 | **Tools** | Searchable products and tools, plus saved workspaces. |
 
-Click the gear for Settings in one step. **Ctrl+S** opens and focuses global search. **Space** plays or pauses radar; **Escape** hides or restores the map controls.
+Open Settings from the main menu. **Ctrl+S** opens and focuses global search. **Space** plays or pauses radar; **Escape** hides or restores the map controls.
 
 The Radar Zeta playback bar's **pin** button customizes up to four shortcuts. MRMS and SPC remain the defaults. Starred products appear first in the chooser; pinned products unavailable at the current radar remain saved for other sites. The same choices appear in minimal and full playback controls.
 
@@ -39,13 +39,13 @@ Outline meshes are cached per pane and viewport. New feeds, camera changes, scal
 
 ## Build an analysis view
 
-1. Click **Analyst**. On the first entry, the current radar map becomes pane 1.
-2. Select a preset such as **Tornado**, or choose 1, 2, or 4 panes from the fixed analyst toolbar.
+1. Select **Layout → Analysis** from the playback dock. On the first entry, the current radar map becomes pane 1.
+2. Use the analysis toolbar to select a preset or choose 1, 2, or 4 panes.
 3. Click the pane to edit. Its label tells you which pane is active; radar product and overlay changes target it.
 4. Enable **Maps** or **Time** to link pane positions or timeline selection. Open **Inspector** to view values and actual source times.
-5. Click **Radar** to restore the previous single-map view. Click **Analyst** again to resume the analysis arrangement.
+5. Select **Layout → Radar** to restore the previous single-map view. Select **Layout → Analysis** again to resume the analysis arrangement.
 
-![Four-pane Analyst Workstation with the inspector open](shots/analyst-mode.jpg)
+![Four-pane Analyst Workstation with the inspector open](shots/analyst-mode.jpg?v=20261111)
 
 The app remembers each mode's site, camera, product, overlays, thresholds (including disabled thresholds), active pane, links, and selected live or archive time for the current session. It does not keep extra inactive renderers or downloads running. Save a workspace in Tools if you need the arrangement after restarting. Ordinary single-pane workspaces open in Radar; multi-pane and explicitly analyst workspaces open in Analyst. Older workspace files remain readable.
 
@@ -57,8 +57,8 @@ Displayed scan times follow the image actually painted on the map. A requested p
 
 To send the arrangement to someone else, open **Share** or search for **Share live view** / **Share this exact time**. Both links include every visible pane, its products and layers, and camera/time links. Live opens with current data; exact-time opens paused at the displayed timestamps. The link uses the web app even when copied from desktop. Archives must still be available from their original source. Saved places, credentials, placefiles, custom palettes and user-defined radar products are not included; the Share page explains any unavailable choice.
 
-On a phone, the mode switch remains available and sections open in a sheet. The menu header stays fixed while content scrolls, and the pane picker lets you move between analyst panes.
+On a phone, layout choices remain available in the compact controls and sections open in a sheet. The menu header stays fixed while content scrolls, and the pane picker lets you move between analyst panes.
 
-![Radar menu opening over the map](shots/radar-mode.gif)
+![Archived radar playback with the current compact controls](shots/radar-mode.gif?v=20261111)
 
 For the first scan and playback controls, start with the [user guide](GUIDE.md). The [website guide](https://hookecho.io/docs/radar-and-analyst/) covers the same workflow for browser users.

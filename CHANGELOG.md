@@ -24,6 +24,9 @@ available for rollback.
   evict invalid cached tiles and retry once.
 - Bound loop-capture memory, reducing export resolution for long clips. Encode
   native loops and browser GIFs away from the map UI, with progress and cancellation.
+- Refresh the website and GitHub screenshots, feature tours and playback loops
+  with the current controls and Quiet Contour warnings. Preserve full-frame media,
+  identify capture sources and dates, and check published media references.
 
 ## Quiet Contour warnings - 2026-11-06 (rolling release)
 

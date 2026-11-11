@@ -20,15 +20,15 @@ If HookEcho is useful to you, please [give the project a star](https://github.co
 
 <a id="screenshots"></a>
 
-![Current Radar view stepping through a KTLX archive replay](shots/radar-mode.gif)
+![Current Radar view stepping through a KTLX archive replay](shots/radar-mode.gif?v=20261111)
 
-<sub>**Radar Zeta — KTLX, May 20, 2013.** Recaptured October 16, 2026 over an archived storm; not live weather.</sub>
+<sub>**Radar Zeta — KTLX, May 20, 2013.** Recaptured November 11, 2026 over an archived storm; not live weather.</sub>
 
-![Analyst Workstation advancing four linked radar products](shots/analyst-mode.gif)
+![Analyst Workstation advancing four linked radar products](shots/analyst-mode.gif?v=20261111)
 
 <sub>**Analyst mode.** Linked four-pane comparison with an inspector. Radar restores the earlier single-map view.</sub>
 
-![HRRR 10 m wind drawn as drifting particles across the CONUS](shots/wind.gif)
+![HRRR 10 m wind drawn as drifting particles across the CONUS](shots/wind.gif?v=20261111)
 
 <sub>**Animated wind.** HRRR 10 m wind as drifting particles coloured by speed —
 built from NOAA's free GRIB grids, so it needs no API key.</sub>
@@ -82,18 +82,19 @@ has a default and lives in **Settings**. A short tour is optional.
 ## The interface
 
 HookEcho opens in **Radar Zeta**, a full-bleed single map with a compact command
-row at the top and playback and map tools along the bottom. The menu groups
-**Views**, **Layers**, and **Your Map**; search reaches the full product and tool
-catalog. Ctrl+K opens search; Space plays or pauses radar, and Escape hides
-or restores map controls.
+row at the top and playback and map tools along the bottom. **Layout** in the
+playback dock switches between Radar, Chase, National overview, and Analysis.
+Menu and search reach the weather layers, product catalog, and settings. Ctrl+K
+opens search; Space plays or pauses radar. Escape dismisses an open panel before
+hiding or restoring map controls.
 
-**Analyst** uses the same header plus a fixed toolbar for presets, pane count,
-linked map/time, active pane and Inspector. Returning to Radar restores the
-earlier single map; Analyst resumes its arrangement. The [interface guide](INTERFACE.md)
+**Analysis** opens the Analyst workbench with a toolbar for presets, pane count,
+linked map/time, active pane and Inspector. **Layout → Radar** restores the
+earlier single map; **Layout → Analysis** resumes its arrangement. The [interface guide](INTERFACE.md)
 explains mode sessions and workspace persistence.
 
 - **The menu** shows one task at a time. Alerts do not expand automatically.
-- **The scrubber** floats along the bottom: site, clock, play, a LIVE badge that
+- **Full playback controls** expand the compact dock to show the clock, play, a LIVE badge that
   snaps back to the newest scan, and a time track marked with one tick per volume
   and labelled by the hour, in the radar's own timezone. Drag it or click anywhere
   on it. The shaded stretch at the live end is the loop the play button cycles.
@@ -102,7 +103,7 @@ explains mode sessions and workspace persistence.
 
 | Radar mode | Analyst Workstation |
 |---|---|
-| ![Single map with a short Radar section](shots/radar-mode.jpg) | ![Four products with the inspector](shots/analyst-mode.jpg) |
+| ![Single map with the current compact playback dock](shots/radar-mode.jpg?v=20261111) | ![Four products with the inspector](shots/analyst-mode.jpg?v=20261111) |
 
 Radar times read in **the selected radar's local time**, not Zulu — a KEPZ pane
 shows MDT while a KTLX pane shows CDT, side by side. Settings → Units puts it
@@ -110,6 +111,8 @@ back to UTC if you'd rather work in Zulu.
 
 Advanced product settings remain collapsed until requested. The Tools section
 provides search for less common fields and actions.
+
+[See the current product library](shots/products.jpg?v=20261111).
 
 Search a place in the panel and it flies there, with a **Save marker** button
 if you want to keep it. Markers are what the warning, lightning and rain-arrival
@@ -119,20 +122,19 @@ alerts watch. Tap one on the map to rename or remove it.
 
 *Storm screenshots are historic events replayed through the app's own archive
 timeline — the same scrubbing you'd do live. Forecast and national layers are
-live data, captured as they came in. Everything is on the Mapbox Satellite
-Streets basemap; a dozen others ship too, from a dark vector map to GOES
-satellite imagery.*
+live data, captured as they came in. Captures use the current dark map and Quiet Contour boundaries. Other basemaps
+ship too, including satellite imagery.*
 
 ### Watching a storm
 
 All six Level 2 moments on a GPU polar pipeline, with VCP-aware tilt selection,
 velocity dealiasing, storm-relative velocity, and GRLevelX `.pal` color tables.
 Reflectivity shows you the storm's structure; velocity shows you what it's doing —
-the tight red-against-green couplet below is a tornado on the ground.
+the adjacent inbound and outbound velocities below reveal strong rotation; radar alone does not confirm a tornado on the ground.
 
 | Reflectivity | Velocity (dealiased) |
 |---|---|
-| ![A classic supercell with a hook echo](shots/reflectivity.jpg) | ![A tornadic velocity couplet](shots/velocity.jpg) |
+| ![A classic supercell with a hook echo](shots/reflectivity.jpg?v=20261111) | ![A tornadic velocity couplet](shots/velocity.jpg?v=20261111) |
 | <sub>KBMX — Tuscaloosa, AL, 27 Apr 2011</sub> | <sub>KTLX — El Reno, OK, 31 May 2013</sub> |
 
 Split the window into four panes and give each one its own product, cameras
@@ -144,14 +146,14 @@ the storm in profile, core and overhang and all.
 
 | Four products at once | Derived hail signal |
 |---|---|
-| ![The same storm in reflectivity, velocity, correlation coefficient and differential reflectivity](shots/alltilts.jpg) | ![VIL density derived from an archived storm volume](shots/derived.jpg) |
+| ![The same storm in reflectivity, velocity, correlation coefficient and differential reflectivity](shots/alltilts.jpg?v=20261111) | ![VIL density derived from an archived storm volume](shots/derived.jpg?v=20261111) |
 | <sub>KTLX — Moore, OK, 20 May 2013</sub> | <sub>KPAH — Mayfield, KY, 11 December 2021</sub> |
 
 Every screenshot in this section is a replay. The timeline reaches back to June
 1991, so any archived storm loads the same way the live one does — a supercell
 from fifteen years ago, or a hurricane coming ashore:
 
-![Hurricane Ian's eyewall coming ashore over southwest Florida](shots/tropical.jpg)
+![Hurricane Ian's eyewall coming ashore over southwest Florida](shots/tropical.jpg?v=20261111)
 
 <sub>**KTBW 0.5° reflectivity — Hurricane Ian, 28 September 2022.**</sub>
 
@@ -162,7 +164,7 @@ including the reports nobody warned for (the red dots on the map). The
 arbitration is the Iowa Environmental Mesonet's, so the numbers agree with the
 published ones instead of being a private opinion.
 
-![Warning verification for Norman, OK on 20 May 2013](shots/verify.jpg)
+![Warning verification for Norman, OK on 20 May 2013](shots/verify.jpg?v=20261111)
 
 <sub>**KTLX — 20 May 2013.** OUN's warnings scored against that day's reports.</sub>
 
@@ -174,14 +176,16 @@ worst-first, with clickable NWS bulletins and parsed storm-motion vectors. Scrub
 into the archive and the panel fills with the warnings that were actually in
 force at that moment.
 
-| Storm attributes | Active alerts |
+| Storm attributes | Archived warning reader |
 |---|---|
-| ![The storm attributes table listing tracked cells](shots/stormtable.jpg) | ![The glass warning reader with the official bulletin immediately visible](shots/alerts.jpg) |
-| <sub>KTBW — live</sub> | <sub>Actual NWS warning captured in the app</sub> |
+| ![The storm attributes table listing tracked cells](shots/stormtable.jpg?v=20261111) | ![Archived Tuscaloosa tornado warning details in the current app](shots/alerts.jpg?v=20261111) |
+| <sub>KILX — Illinois · November 11, 2026</sub> | <sub>BMX tornado warning · April 27, 2011 · expired today</sub> |
 
-![An archived tornado warning over the Moore storm](shots/warning-detail.jpg)
+[Selected-cell detail capture](shots/cellconsole.jpg?v=20261111).
 
-<sub>**Emergency-severity warning presentation.** KTLX — 20 May 2013 archive replay.</sub>
+![An archived tornado warning over the Moore storm](shots/warning-detail.jpg?v=20261111)
+
+<sub>**Archived tornado warning reader.** KTLX — May 20, 2013. The IEM archive summary describes the historical warning; it is expired today.</sub>
 
 ### Looking ahead
 
@@ -189,10 +193,10 @@ HRRR future radar rides the timeline's forecast tail, so scrubbing past the
 present keeps going into the model. It is labeled the whole time it is on —
 model output should never be mistaken for something a radar actually saw.
 
-![Radar Zeta showing the HRRR forecast layer's stale-source notice](shots/hrrr.jpg)
+![Current HookEcho layout displaying the HRRR one-hour forecast reflectivity field](shots/hrrr.jpg?v=20261111)
 
-<sub>**HRRR forecast layer.** At this capture time the model data failed the
-freshness check, so the layer was hidden rather than shown as current radar.</sub>
+<sub>**HRRR forecast layer.** Recorded one-hour forecast initialized at 17:00 UTC
+on November 11, 2026, valid at 18:00 UTC. This is model output, not a radar observation.</sub>
 
 Any point on the map gives you the plain NWS forecast for that spot, and the WPC
 surface analysis draws the national weather map — fronts with their proper pips,
@@ -200,8 +204,8 @@ highs and lows with pressures.
 
 | Surface analysis | Point forecast |
 |---|---|
-| ![Radar Zeta national view after enabling surface analysis](shots/fronts.jpg) | ![A seven-day forecast for a clicked point](shots/forecast.jpg) |
-| <sub>WPC surface analysis enabled; no front lines visible in this capture</sub> | <sub>Tap the map for a live point forecast</sub> |
+| ![Radar Zeta national view after enabling surface analysis](shots/fronts.jpg?v=20261111) | ![A seven-day forecast for a clicked point](shots/forecast.jpg?v=20261111) |
+| <sub>WPC surface analysis enabled; no front lines visible in this capture</sub> | <sub>Recorded NWS point forecast; SPC risk summary unavailable in this panel</sub> |
 
 Also on the forecast tail: **rotation tracks** (HRRR max updraft-helicity swaths
 — where storms are forecast to rotate, accumulated across the hours you scrub
@@ -215,8 +219,8 @@ happening here" — plus rainfall accumulated over the last hour or day.
 
 | National mosaic | 24-hour rainfall |
 |---|---|
-| ![MRMS composite reflectivity across the continental US](shots/mrms.jpg) | ![Radar Zeta showing the 24-hour rainfall layer's stale-source notice](shots/qpe.jpg) |
-| <sub>MRMS composite reflectivity, live</sub> | <sub>24-hour rainfall hidden because the source was older than the selected scan at capture time</sub> |
+| ![MRMS composite reflectivity across the continental US](shots/mrms.jpg?v=20261111) | ![Current HookEcho displaying recorded 24-hour precipitation accumulation over northern Illinois](shots/qpe.jpg?v=20261111) |
+| <sub>MRMS composite reflectivity, live</sub> | <sub>Recorded 24-hour accumulation over northern Illinois · November 11, 2026 at 17:00 UTC</sub> |
 
 There is also a **multi-radar mosaic** built the other way round: instead of a
 national 1 km product, every radar covering your view contributes its own base
@@ -225,7 +229,7 @@ sites join without a seam. It shows which radars it used and how old the oldest
 scan in it is, because radars scan on their own schedules and a composite is
 never one instant.
 
-![Base reflectivity from neighboring radars composited across the southern Plains](shots/mosaic.jpg)
+![Base reflectivity from neighboring radars composited across central Illinois](shots/mosaic.jpg?v=20261111)
 
 <sub>Neighboring radars, one picture — live N0B composite</sub>
 
@@ -304,7 +308,7 @@ layer draws its own scale and units.
 
 ### Products computed from the volume itself
 
-![VIL density over the Mayfield supercell, computed from an archived 2021 volume](shots/derived.jpg)
+![VIL density over the Mayfield supercell, computed from an archived 2021 volume](shots/derived.jpg?v=20261111)
 
 <sub>VIL density over the Mayfield, KY supercell — computed here from the 11 Dec
 2021 volume, four years after it was recorded.</sub>
@@ -455,22 +459,22 @@ clearing a cache costs the next fetch and nothing else.
 
 ### On your phone
 
-These captures show the current Signal Deck UI from the signed Android build on a Galaxy S24 Ultra.
-They were recaptured on October 4, 2026. The store images use the same device captures.
+These captures show the current responsive web app in a 430 × 932 phone viewport,
+recorded on November 11, 2026. They are browser captures, not native Android device tests.
 
-![HookEcho Android replaying the Moore, Oklahoma tornado of 20 May 2013](shots/android/hero.gif)
+![Current HookEcho mobile browser replaying archived Moore radar](shots/mobile/hero.gif?v=20261111)
 
-<sub>**Android Signal Deck.** KTLX 0.5° reflectivity, 20 May 2013, stepped
-through the archive. The current compact controls are shown below.</sub>
+<sub>**Mobile browser.** KTLX reflectivity from May 20, 2013, with the current
+compact controls and Quiet Contour warning boundaries.</sub>
 
-Android uses the same radar data and renderer with a thumb-sized presentation.
-The Signal Deck keeps playback and warnings over the map; the Quiet Shelf opens
-Radar, Layers, Alerts, and More controls when needed:
+![Current compact HookEcho radar controls in a mobile browser](shots/mobile/radar-mode.jpg?v=20261111)
 
-![The current Radar section in the Android Quiet Shelf](shots/mobile/radar-mode.jpg)
+**Current compact layout.** Playback and map controls stay close to the radar.
+The site picker sorts nearby radar sites first.
 
-**Current compact layout.** The sheet offers large targets while leaving the radar
-visible. The site picker still sorts nearby radar sites first.
+[Map](shots/mobile/map.jpg?v=20261111) · [Layers](shots/mobile/layers.jpg?v=20261111) · [Alerts](shots/mobile/alerts.jpg?v=20261111) · [More tools](shots/mobile/more.jpg?v=20261111)
+
+The native Android build shares the radar data and renderer and also includes:
 
 - Every tool window — soundings, cross-sections, settings, the site picker — is
   a full-screen surface, because that is what the compact width class is for.
@@ -962,9 +966,9 @@ cargo run --release -- --headless-rules KTLX                # would your alert r
 cargo test
 ```
 
-The mode screenshots and clips above were captured from the released web app
-over a fixed KTLX archive scene. The older scientific gallery is regenerated
-by `scripts/shots/shoot.sh`; see [`scripts/shots/README.md`](../scripts/shots/README.md).
+The mode screenshots and clips above were recaptured on November 11, 2026
+from the current app over real archive and live data. The scientific gallery
+uses the same current code; capture commands and provenance are documented in [`scripts/shots/README.md`](../scripts/shots/README.md).
 
 ## Community
 

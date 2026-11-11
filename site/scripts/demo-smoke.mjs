@@ -37,9 +37,27 @@ try {
   await desktop.locator('#analyst [data-action="play"]').click();
   await desktop.waitForFunction(() => document.querySelector('[data-stage="single"] video')?.currentTime > 1.7);
   await desktop.locator('#analyst [data-action="play"]').click();
-  await desktop.locator('[data-feature="2"]').click();
-  assert.equal(await desktop.locator('[data-feature="2"]').getAttribute("aria-pressed"), "true");
-  assert.ok((await desktop.locator('[data-feature-image]').getAttribute("src")).includes("mrms"));
+  for (const [label, poster] of [
+    ["Menu & features", "features.png"], ["MRMS national radar", "mrms.png"],
+    ["Storm Prediction Center", "spc.png"], ["Flexible layouts", "layouts.png"],
+    ["Compare four tilts", "four-tilts.png"],
+  ]) {
+    const choice = desktop.getByRole("button", { name: new RegExp(label) });
+    await choice.click();
+    assert.equal(await choice.getAttribute("aria-pressed"), "true");
+    assert.ok((await desktop.locator('[data-feature-image]').getAttribute("src")).includes(poster));
+    await desktop.locator('[data-feature-image]').evaluate(image => image.decode());
+    await desktop.locator('[data-feature-play]').click();
+    await desktop.waitForFunction(() => document.querySelector('[data-feature-video]')?.currentTime > 0);
+  }
+  const phone = desktop.locator('.guided-media.phone');
+  await phone.scrollIntoViewIfNeeded();
+  await phone.locator('.guided-frame img').evaluate(image => image.decode());
+  await desktop.waitForFunction(() => document.querySelector('.phone .guided-frame video')?.currentTime > 0);
+  await phone.locator('[data-action="toggle"]').click();
+  assert.ok(await phone.locator('.guided-frame video').evaluate(video => video.paused));
+  await phone.locator('[data-action="replay"]').click();
+  await desktop.waitForFunction(() => !document.querySelector('.phone .guided-frame video')?.paused);
   assert.equal(await desktop.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0);
   await desktop.close();
 

@@ -2,28 +2,28 @@
 import Base from "../layouts/Base.astro";
 import ShotGallery from "../components/ShotGallery.astro";
 
-const repoShots = "https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.1/docs/shots";
+const repoShots = "https://raw.githubusercontent.com/d4vid87/hookecho/main/docs/shots";
 
 const shots = [
   {
-    src: `${repoShots}/products.jpg`,
-    alt: "The product picker showing Level 3 algorithm products for the selected site",
-    caption: "Level 3 products, decoded on your machine.",
+    src: `${repoShots}/products.jpg?v=20261111`,
+    alt: "The current searchable radar product library filtered to hail products",
+    caption: "Search the product library by name or weather feature.",
   },
   {
-    src: `${repoShots}/fronts.jpg`,
-    alt: "Surface analysis fronts and pressure centers drawn over the map",
-    caption: "Surface analysis, from the same charts forecasters draw.",
+    src: `${repoShots}/fronts.jpg?v=20261111`,
+    alt: "National radar view with surface analysis enabled",
+    caption: "National view with surface analysis enabled; no front symbols were available in this capture.",
   },
   {
-    src: `${repoShots}/forecast.jpg`,
+    src: `${repoShots}/forecast.jpg?v=20261111`,
     alt: "A point forecast panel opened by clicking a location on the map",
-    caption: "Click anywhere: that is the NWS forecast for that point.",
+    caption: "Recorded NWS point forecast; the SPC risk summary was unavailable in this panel.",
   },
   {
-    src: `${repoShots}/qpe.jpg`,
+    src: `${repoShots}/qpe.jpg?v=20261111`,
     alt: "Multi-hour precipitation accumulation shaded across a region",
-    caption: "Rainfall accumulation, straight from MRMS.",
+    caption: "Recorded MRMS 24-hour accumulation over northern Illinois · November 11, 2026 at 17:00 UTC.",
   },
 ];
 ---

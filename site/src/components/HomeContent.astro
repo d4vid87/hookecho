@@ -17,12 +17,12 @@ const features = highlights;
   <section class="capabilities" id="showcase">
     <div class="wrap">
       <div class="section-intro"><p class="eyebrow">Inside HookEcho</p><h2>The features behind the map.</h2><p>Find tools in the menu, follow the national MRMS mosaic, check Storm Prediction Center outlooks, choose a layout, and compare four tilts. Select a feature to see the current interface.</p></div>
-      <div class="capability-layout" data-feature-showcase data-features={JSON.stringify(features.map(f => ({...f, src: `${f.src}.mp4`})))}>
+      <div class="capability-layout" data-feature-showcase data-features={JSON.stringify(features.map(f => ({...f, src: `${f.src}.mp4?v=20261111`})))}>
         <div class="feature-choices" role="group" aria-label="Explore HookEcho capabilities">
           {features.map((feature, index) => <button type="button" data-feature={index} aria-pressed={index === 0 ? "true" : "false"}><span>{feature.label}</span><strong>{feature.title}</strong><small>{feature.body}</small></button>)}
         </div>
         <div class="feature-display">
-          <div class="feature-frame"><img data-feature-image src={features[0].poster} alt={features[0].alt} width="1280" height="800" loading="lazy" /><video data-feature-video muted loop playsinline preload="none" controls poster={features[0].poster} aria-label={features[0].alt}><source data-feature-source type="video/mp4" /></video></div>
+          <div class="feature-frame"><img data-feature-image src={features[0].poster} alt={features[0].alt} width="1600" height="1000" loading="lazy" /><video data-feature-video muted loop playsinline preload="none" controls poster={features[0].poster} aria-label={features[0].alt}><source data-feature-source type="video/mp4" /></video></div>
           <div class="feature-caption"><span data-feature-source-label>{features[0].source}</span><button type="button" data-feature-play>Play capture</button></div>
         </div>
       </div>
@@ -31,7 +31,7 @@ const features = highlights;
 
   <section class="anywhere"><div class="wrap anywhere-grid">
     <div class="anywhere-copy"><p class="eyebrow">On your screen</p><h2>Take the radar with you.</h2><p>Keep radar in view and open the menu when you need layers, outlooks, or analysis tools. Use HookEcho in your browser, or install it on Android, Windows, macOS, or Linux.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar</a><a class="btn" href="/download/">Download HookEcho</a></div></div>
-    <div class="phone-capture"><GuidedMedia phone src="/showcase/phone-current" poster="/showcase/phone-current-poster.webp" alt="Current HookEcho Android Signal Deck UI following the archived Moore storm" cues={[{ at: 0, text: "Signal Deck keeps radar in focus." }, { at: 2, text: "Step through archived scans." }, { at: 4, text: "Warnings remain visible over the map." }]} /><p>Recorded on a Samsung Galaxy S24 Ultra · October 4, 2026 · Archived KTLX radar</p></div>
+    <div class="phone-capture"><GuidedMedia phone src="/showcase/phone-current" poster="/showcase/phone-current-poster.webp?v=20261111" alt="Current HookEcho mobile browser layout following the archived Moore storm" cues={[{ at: 0, text: "Compact controls keep radar in focus." }, { at: 2, text: "Step through archived scans." }, { at: 4, text: "Warnings remain visible over the map." }]} /><p>Mobile browser viewport · November 11, 2026 · Archived KTLX radar</p></div>
   </div></section>
 
   <section class="closing"><div class="wrap closing-inner"><p class="eyebrow">Built in the open</p><h2>The data is public.<br /><span>The radar is yours.</span></h2><p>Free and open source. NOAA and NWS public data. No account, ads, or app telemetry.</p><div class="actions"><a class="btn btn-primary" href="https://app.hookecho.io/">Open live radar <span aria-hidden="true">↗</span></a><a href="https://github.com/d4vid87/hookecho">View on GitHub</a><a href={DISCORD_INVITE}>Join Discord</a></div></div></section>

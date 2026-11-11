@@ -2,7 +2,7 @@
 title: "What is a hook echo?"
 description: "The radar signature that named this app: what makes the hook, why it means a tornado might be underneath it, and how to spot one yourself."
 date: 2026-08-26
-image: /shots/reflectivity.jpg
+image: /shots/reflectivity.jpg?v=20261111
 ---
 
 On 9 April 1953, a radar operator at the Illinois State Water Survey named

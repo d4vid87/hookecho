@@ -22,7 +22,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$REPO/docs/shots"
-BIN="$REPO/target/release/hookecho"
+BIN="${HOOKECHO_CAPTURE_BIN:-$REPO/target/release/hookecho}"
 DISPLAY_NUM=":77"
 W=1600
 H=1000
@@ -66,8 +66,11 @@ preflight() {
   done
   # A stale binary is the classic failure: the palette answers "No matches" for anything added
   # since the last build, and the scene silently shoots without its layer.
-  log "building release"
-  (cd "$REPO" && cargo build --release --quiet)
+  if [ "${HOOKECHO_CAPTURE_SKIP_BUILD:-0}" != 1 ]; then
+    log "building release"
+    (cd "$REPO" && cargo build --release --quiet)
+  fi
+  [ -x "$BIN" ] || die "capture binary is missing: $BIN"
   # The registry moved out of app.rs in the R18 chrome extraction; labels can legitimately live
   # in either file, so both are searched.
   REGISTRY="$REPO/crates/hookecho/src/app/chrome/registry.rs"

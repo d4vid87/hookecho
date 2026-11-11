@@ -15,8 +15,8 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
   <div class="guided-frame">
     <img src={poster} alt={alt} loading={eager ? "eager" : "lazy"} decoding="async" />
     <video muted loop playsinline preload="none" aria-hidden="true">
-      <source data-src={`${src}.webm`} type="video/webm" />
-      <source data-src={`${src}.mp4`} type="video/mp4" />
+      <source data-src={`${src}.webm?v=20261111`} type="video/webm" />
+      <source data-src={`${src}.mp4?v=20261111`} type="video/mp4" />
     </video>
     <p class="guided-callout" aria-hidden="true">{cues[0]?.text}</p>
   </div>
@@ -31,8 +31,8 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
   <dialog aria-label="Enlarged weather demonstration">
     <button type="button" class="dialog-close" data-action="close">Close</button>
     <video muted loop playsinline controls poster={poster} aria-label={alt}>
-      <source data-src={`${src}.webm`} type="video/webm" />
-      <source data-src={`${src}.mp4`} type="video/mp4" />
+      <source data-src={`${src}.webm?v=20261111`} type="video/webm" />
+      <source data-src={`${src}.mp4?v=20261111`} type="video/mp4" />
     </video>
   </dialog>
 </figure>
@@ -128,8 +128,8 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
   img, video { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
   img[hidden] { display: none; }
   video { position: absolute; inset: 0; }
-  .phone .guided-frame { width: min(100%, 330px); aspect-ratio: 540 / 1170; margin-inline: auto; }
-  .phone img, .phone video { aspect-ratio: 540 / 1170; }
+  .phone .guided-frame { width: min(100%, 330px); aspect-ratio: 430 / 932; margin-inline: auto; }
+  .phone img, .phone video { aspect-ratio: 430 / 932; object-fit: contain; }
   .guided-callout { position: absolute; left: 16px; bottom: 16px; max-width: min(28rem, calc(100% - 150px)); margin: 0; padding: 0.65rem 0.85rem; border: 1px solid rgb(255 255 255 / 0.16); border-radius: 10px; background: rgb(0 0 0 / 0.82); backdrop-filter: blur(14px); color: #f4f7fa; font-size: 0.86rem; }
   .guided-controls { display: flex; justify-content: flex-end; gap: 6px; margin-top: .65rem; }
   button { min-height: 36px; padding: 0.45rem 0.65rem; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 8px; background: rgb(0 0 0 / 0.88); color: #f4f7fa; cursor: pointer; }
@@ -140,7 +140,7 @@ const { src, poster, alt, cues, eager = false, phone = false } = Astro.props;
   dialog { width: min(94vw, 1400px); padding: 3rem 0 0; border: 1px solid var(--stroke-strong); border-radius: 18px; background: #000; color: var(--text); box-shadow: 0 30px 100px #000c; }
   dialog::backdrop { background: rgb(1 5 10 / .86); backdrop-filter: blur(8px); }
   dialog video { position: static; width: 100%; height: auto; aspect-ratio: 16 / 10; }
-  .phone dialog video { aspect-ratio: 540 / 1170; max-height: 82vh; object-fit: contain; }
+  .phone dialog video { aspect-ratio: 430 / 932; max-height: 82vh; object-fit: contain; }
   .dialog-close { position: absolute; right: .7rem; top: .55rem; }
   @media (max-width: 620px) {
     .guided-callout { position: static; max-width: none; border-width: 1px 0 0; border-radius: 0; backdrop-filter: none; }

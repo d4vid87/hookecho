@@ -11,28 +11,28 @@ order: 1
 2. Allow location access to choose a nearby radar, or search for your place or
    a radar's four-letter ID, such as **KTLX**. Location access is optional.
 3. Start with **Reflectivity (Z)** to see precipitation. Wait for the first scan
-   to load; the time is shown on the bottom timeline.
-4. Press **Play** to watch recent scans. Drag the timeline to inspect one moment.
+   to load; the time is shown beside the playback controls.
+4. Press **Play** to watch recent scans. Expand playback controls and drag the timeline to inspect one moment.
 5. Press **LIVE** to return to the newest scan whenever you have moved into the past.
 
 You should now see the map, a radar timestamp, and the colour scale. An empty
 map can mean dry weather; check the timestamp before assuming data is missing.
 If the first scan never appears, use [Troubleshooting](/docs/troubleshooting/).
 
-![HookEcho Radar mode showing reflectivity and playback during the archived Moore storm](/shots/radar-mode-20261016.webp)
+![HookEcho Radar mode showing reflectivity and playback during the archived Moore storm](/shots/radar-mode-20261111.webp?v=20261111)
 
-*KTLX archive replay from May 20, 2013, recaptured October 16, 2026; this is not live weather.*
+*KTLX archive replay from May 20, 2013, recaptured November 11, 2026; this is not live weather.*
 
 ## What you're looking at
 
 The app is a full-bleed map with three main controls over it:
 
-- **Menu**, top-left. Choose Radar or Analysis under Views. Layers and Your Map
-  hold weather overlays, places, forecasts, and storm attributes; search and
-  Settings sit beside the menu.
+- **Menu and search**, top-left. Find weather overlays, places, forecasts, storm
+  attributes, and Settings in the menu. Use **Layout** in the bottom dock to
+  choose Radar, Chase, National overview, or Analysis.
 - **The colour scale**, on the map edge, shows what the selected product means.
-- **The scrubber**, along the bottom: the radar's clock, a play button, a LIVE
-  badge, and a time track with one tick per scan.
+- **Playback**, along the bottom: the radar's clock and play controls. Expand
+  the controls for the full time track, then select LIVE to return to the newest scan.
 
 Radar mode keeps one map. In Analyst, the inspector can dock beside linked panes.
 
