@@ -9,7 +9,8 @@ dependencies {
     // what gives the app the real system IME instead of NativeActivity's raw ASCII key events.
     // Pulls androidx.appcompat transitively — hence the AppCompat theme in res/values/themes.xml,
     // without which the activity throws at startup.
-    implementation("androidx.games:games-activity:3.0.5")
+    // Match android-activity 0.6.1's bundled native GameActivity 4.4.0 glue.
+    implementation("androidx.games:games-activity:4.4.0")
     // Named explicitly rather than left to games-activity: the AAR marks its appcompat dependency
     // compile-only, so without this the Theme.AppCompat parent style doesn't resolve at all.
     implementation("androidx.appcompat:appcompat:1.7.0")

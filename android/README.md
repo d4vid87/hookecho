@@ -27,17 +27,23 @@ creation.
 
 Prerequisites:
 
-- Android SDK + NDK (r26+); set `ANDROID_HOME` and `ANDROID_NDK_HOME`
+- Android SDK + NDK r26d (`26.3.11579264`, matching release CI); set `ANDROID_HOME` and `ANDROID_NDK_HOME`
 - JDK 17+
-- `rustup target add aarch64-linux-android`
+- `rustup toolchain install 1.99.1 --profile minimal`
+- `rustup target add --toolchain 1.99.1 aarch64-linux-android`
 - `cargo install cargo-ndk`
 
 Then, from the repo root:
 
 ```sh
-android/build.sh            # release .so in a debug-signed APK (directly sideloadable)
+RUSTUP_TOOLCHAIN=1.99.1 android/build.sh # release .so in a debug-signed APK
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Rust 1.99.1 matches the compiler validated in the November 11 release checks. A local
+Rust 1.98.0 ARM64 build failed during JNI startup in the emulator; rebuilding the same
+source with 1.99.1 passed. Keep the Java GameActivity dependency aligned with the version
+bundled by the Rust `android-activity` crate.
 
 `INSTALL=1 android/build.sh` installs it for you. The Rust library is always
 optimised; `build.sh debug` builds an opt-level-0 `.so` with symbols for native crash
@@ -60,7 +66,7 @@ produces `libhookecho.so` before Gradle runs — verbatim:
 ```yaml
     sudo:
       - curl -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-      - sh /tmp/rustup.sh -y --default-toolchain 1.96.1 --profile minimal
+      - sh /tmp/rustup.sh -y --default-toolchain 1.99.1 --profile minimal
       - . $HOME/.cargo/env
       - rustup target add aarch64-linux-android
       - cargo install cargo-ndk --version 4.1.2 --locked
@@ -73,7 +79,7 @@ produces `libhookecho.so` before Gradle runs — verbatim:
       - yes
 ```
 
-Notes for the MR: the toolchain is pinned (`1.96.1`, matching CI) and `cargo-ndk` is version-pinned
+Notes for the MR: the toolchain is pinned (`1.99.1`, validated with release CI) and `cargo-ndk` is version-pinned
 for reproducibility, and `Cargo.lock` is committed so the F-Droid build resolves the same crates
 this repo builds against; the `.so` lands in `app/src/main/jniLibs/` and
 a Gradle `preBuild` hook deletes anything in that directory that is not `libhookecho.so`.

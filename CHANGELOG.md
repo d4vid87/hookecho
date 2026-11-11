@@ -24,6 +24,7 @@ available for rollback.
   evict invalid cached tiles and retry once.
 - Bound loop-capture memory, reducing export resolution for long clips. Encode
   native loops and browser GIFs away from the map UI, with progress and cancellation.
+- Align Android's Java GameActivity dependency with the bundled Rust native glue.
 - Refresh the website and GitHub screenshots, feature tours and playback loops
   with the current controls and Quiet Contour warnings. Preserve full-frame media,
   identify capture sources and dates, and check published media references.
