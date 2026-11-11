@@ -38,6 +38,30 @@ async function rectangles() {
       }))]));
   });
 }
+async function stableRectangles(afterPass) {
+  // egui anchors Areas using the previous pass's measured size. After wrapping,
+  // wait for repeated geometry on distinct passes, not a wall-clock delay.
+  const handle = await page.waitForFunction(afterPass => {
+    const targets = globalThis.__hookechoUiTargets;
+    if (!targets || targets.pass <= afterPass) return false;
+    const canvas = document.getElementById('hookecho');
+    const box = canvas.getBoundingClientRect();
+    const signature = JSON.stringify([canvas.width, canvas.height, box.width, box.height, targets.controls]);
+    const previous = globalThis.__hookechoStableChromeRects;
+    if (previous?.pass === targets.pass) return false;
+    const stable = previous?.signature === signature ? previous.stable + 1 : 0;
+    globalThis.__hookechoStableChromeRects = {pass: targets.pass, signature, stable};
+    if (stable < 2) return false;
+    return Object.fromEntries(Object.entries(targets.controls)
+      .map(([name, rows]) => [name, rows.map(({x, y, w, h, scale}) => ({
+        x: box.left + x * scale * box.width / canvas.width,
+        y: box.top + y * scale * box.height / canvas.height,
+        w: w * scale * box.width / canvas.width,
+        h: h * scale * box.height / canvas.height,
+      }))]));
+  }, {timeout: 30000}, afterPass);
+  try { return await handle.jsonValue(); } finally { await handle.dispose(); }
+}
 function rect(all, name) {
   assert.equal(all[name]?.length, 1, `one visible ${name}`);
   return {...all[name][0], name};
@@ -201,9 +225,10 @@ try {
   await pinShortcut('Drop shape (ZDR)', 'radar.moment.3.0');
   // Four shortcuts fit at 1280px; 1120px leaves just over 1100px inside the map frame,
   // exercising wrapping at the smallest split-card desktop.
+  const beforeResizePass = await page.evaluate(() => globalThis.__hookechoUiTargets.pass);
   await page.setViewport({width: 1120, height: 900});
-  await wait(1000);
-  const pinned = await rectangles();
+  const pinned = await stableRectangles(beforeResizePass);
+  report.pinned = {width: 1120, height: 900, targets: pinned};
   const pinNames = [...transport.map(name => name === 'Pause' && !pinned.Pause ? 'Play' : name),
     'Rain intensity (reflectivity)', 'Drop shape (ZDR)'];
   const pinControls = pinNames.map(name => rect(pinned, name));
