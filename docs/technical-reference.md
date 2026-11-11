@@ -132,9 +132,9 @@ velocity dealiasing, storm-relative velocity, and GRLevelX `.pal` color tables.
 Reflectivity shows you the storm's structure; velocity shows you what it's doing —
 the adjacent inbound and outbound velocities below reveal strong rotation; radar alone does not confirm a tornado on the ground.
 
-| Reflectivity | Velocity (dealiased) |
+| Reflectivity | Raw velocity |
 |---|---|
-| ![A classic supercell with a hook echo](shots/reflectivity.jpg?v=20261111) | ![A tornadic velocity couplet](shots/velocity.jpg?v=20261111) |
+| ![A classic supercell with a hook echo](shots/reflectivity.jpg?v=20261111) | ![Raw base velocity showing a rotation couplet in the El Reno storm](shots/velocity.jpg?v=20261111) |
 | <sub>KBMX — Tuscaloosa, AL, 27 Apr 2011</sub> | <sub>KTLX — El Reno, OK, 31 May 2013</sub> |
 
 Split the window into four panes and give each one its own product, cameras
@@ -473,6 +473,17 @@ compact controls and Quiet Contour warning boundaries.</sub>
 The site picker sorts nearby radar sites first.
 
 [Map](shots/mobile/map.jpg?v=20261111) · [Layers](shots/mobile/layers.jpg?v=20261111) · [Alerts](shots/mobile/alerts.jpg?v=20261111) · [More tools](shots/mobile/more.jpg?v=20261111)
+
+#### Native Android captures
+
+<img src="shots/android/map.jpg?v=20261111" alt="Current native Android HookEcho interface replaying archived Moore radar with Quiet Contour warnings" width="320">
+
+Recorded November 11, 2026 in an Android 15 / API 35 Pixel 7 emulator, using an
+x86_64 debug-signed APK with release-optimized Rust code. These show the actual
+native Radar Focus layout and Quiet Shelf menus, replaying KTLX on May 20, 2013.
+They do not represent physical-device or signed-release validation.
+
+[Playback GIF](shots/android/hero.gif?v=20261111) · [Layers](shots/android/layers.jpg?v=20261111) · [Alerts](shots/android/alerts.jpg?v=20261111) · [More tools](shots/android/more.jpg?v=20261111)
 
 The native Android build shares the radar data and renderer and also includes:
 

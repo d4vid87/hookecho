@@ -75,6 +75,8 @@ Keep the map visible and open the controls when you need them. Use the browser a
 
 *Mobile browser capture · November 11, 2026 · archived KTLX radar. This is the responsive web app, not a native Android device recording.*
 
+[Native Android gallery](docs/technical-reference.md#native-android-captures) · Captured separately in an Android 15 emulator on November 11, 2026.
+
 [Phone instructions](https://hookecho.io/docs/on-your-phone/)
 
 ## Start here

@@ -18,8 +18,8 @@ const sections = [
     eyebrow: "Radar mode",
     title: "A clear map for the weather right now",
     body:
-      "One map and one timeline are the default. The menu groups Views, Layers, and Your Map, " +
-      "with radar products, storm attributes, forecasts, and saved places close at hand.",
+      "One map and compact playback controls are the default. Layout in the playback dock selects " +
+      "the view; Menu and search keep products, storm attributes, forecasts, and saved places close at hand.",
     shot: "/shots/radar-mode-20261111.webp?v=20261111",
     alt: "Current Radar mode with warning polygons and archive playback",
     link: { href: ktlx(",thr:16"), label: "Open Radar mode" },
@@ -31,9 +31,9 @@ const sections = [
     body:
       "Open Analyst from the radar map to compare reflectivity, velocity, correlation " +
       "coefficient and differential reflectivity at the same place and time. Velocity can reveal " +
-      "a possible rotation signature; the other products add context. Return to Radar in one click.",
+      "a possible rotation signature; the other products add context. Use Layout → Radar to return to one map.",
     shot: "/shots/analyst-mode-20261111.webp?v=20261111",
-    alt: "Current four-panel Analyst view with one-click return to Radar",
+    alt: "Current four-panel Analyst view with linked radar products",
     link: { href: "/docs/radar-and-analyst/", label: "Follow the Analyst guide" },
   },
   {
@@ -46,7 +46,7 @@ const sections = [
       "tilt. Step up through the tilts to see how a storm leans, or put four of them on screen " +
       "at once.",
     shot: "alltilts.jpg",
-    alt: "Reflectivity, velocity, correlation coefficient and spectrum width views of the same storm",
+    alt: "Reflectivity, storm-relative velocity, correlation coefficient and differential reflectivity views of the same storm",
     link: { href: ktlx(), label: "Open the radar" },
   },
   {
@@ -58,7 +58,7 @@ const sections = [
       "dual-polarization set — ZDR, CC, KDP and differential phase. Compare products at the same " +
       "location and time; a single color or signature does not confirm a hazard.",
     shot: "velocity.jpg",
-    alt: "Storm-relative velocity showing a tight rotation couplet in a supercell",
+    alt: "Raw base velocity showing a rotation couplet in the archived El Reno storm",
     link: { href: ktlx(",VEL,srv"), label: "Open storm-relative velocity" },
   },
   {
@@ -144,8 +144,8 @@ const sections = [
       "draws the same products, with a layout built for one thumb. Home-screen widget, quick " +
       "settings tile, and warning notifications for where you actually are — which, when you are " +
       "chasing, keeps changing.",
-    shot: "/showcase/phone-poster.webp?v=20261111",
-    alt: "The Android app: opening to live radar, panning the map and opening a warning",
+    shot: "/showcase/android-current-poster.webp?v=20261111",
+    alt: "The native Android app replaying the archived Moore storm in an Android 15 emulator",
     link: { href: "/download/", label: "Get the Android build" },
   },
 ];
