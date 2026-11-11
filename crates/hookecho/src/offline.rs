@@ -118,10 +118,34 @@ pub fn verify(spawner: &crate::rt::Spawner, ctx: egui::Context) {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
 const OFFLINE = 'hookecho-offline-maps-v1';
-export async function offlineRead(url) {
+export async function offlineRead(url, maxBytes) {
   const c = await caches.open(OFFLINE);
   const hit = await c.match(url);
-  return hit ? new Uint8Array(await hit.arrayBuffer()) : null;
+  if (!hit) return null;
+  if (Number(hit.headers.get('Content-Length')) > maxBytes) {
+    await hit.body?.cancel();
+    throw new Error('Cached tile exceeds size limit');
+  }
+  const reader = hit.body?.getReader();
+  if (!reader) return null;
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new Error('Cached tile exceeds size limit');
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return bytes;
 }
 export async function offlineDelete(url) {
   for (const name of await caches.keys()) {
@@ -146,7 +170,7 @@ export async function offlineWrite(url, bytes) {
 "#)]
 extern "C" {
     #[wasm_bindgen::prelude::wasm_bindgen(catch)]
-    async fn offlineRead(url: &str) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>;
+    async fn offlineRead(url: &str, max_bytes: u32) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>;
     #[wasm_bindgen::prelude::wasm_bindgen(catch)]
     async fn offlineDelete(url: &str) -> Result<(), wasm_bindgen::JsValue>;
     #[wasm_bindgen::prelude::wasm_bindgen(catch)]
@@ -173,7 +197,13 @@ pub async fn invalidate_tile(url: &str) {
 pub async fn cached_tile(url: &str) -> Option<Vec<u8>> {
     if !state().lock().ok()?.is_some() { return None; }
     use wasm_bindgen::JsCast;
-    let value = offlineRead(&wxdata::net::fetch_url(url)).await.ok()?;
+    let value = match offlineRead(&wxdata::net::fetch_url(url), crate::tiles::MAX_TILE_BYTES as u32).await {
+        Ok(value) => value,
+        Err(_) => {
+            invalidate_tile(url).await;
+            return None;
+        }
+    };
     let bytes = value.dyn_into::<js_sys::Uint8Array>().ok()?.to_vec();
     (!bytes.is_empty()).then_some(bytes)
 }

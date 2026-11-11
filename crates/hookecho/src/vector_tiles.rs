@@ -262,10 +262,13 @@ fn append(
 
 /// Gunzip if the bytes are a gzip stream, else pass through (OpenFreeMap serves `.pbf` gzipped).
 fn maybe_gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    const MAX_INFLATED_BYTES: u64 = 16 * 1024 * 1024;
+    anyhow::ensure!(bytes.len() <= crate::tiles::MAX_TILE_BYTES, "Vector tile exceeds size limit");
     if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
         use std::io::Read;
         let mut out = Vec::new();
-        flate2::read::GzDecoder::new(bytes).read_to_end(&mut out)?;
+        flate2::read::GzDecoder::new(bytes).take(MAX_INFLATED_BYTES + 1).read_to_end(&mut out)?;
+        anyhow::ensure!(out.len() as u64 <= MAX_INFLATED_BYTES, "Decompressed vector tile exceeds size limit");
         return Ok(out);
     }
     Ok(bytes.to_vec())
@@ -862,7 +865,7 @@ pub async fn fetch_tilejson(
                     .map(|e| e.as_secs() < 12 * 3600)
                     .unwrap_or(false)
                 {
-                    if let Ok(s) = std::fs::read_to_string(&p) {
+                    if let Ok(s) = crate::image_load::read(&p).and_then(|bytes| Ok(String::from_utf8(bytes)?)) {
                         return Some(s.trim().to_string());
                     }
                 }
@@ -872,11 +875,7 @@ pub async fn fetch_tilejson(
     let fallback = crate::offline::snapshot().and_then(|pack| pack.vector_template.clone());
     #[cfg(target_arch = "wasm32")]
     if !web_sys::window().is_some_and(|w| w.navigator().on_line()) { return fallback; }
-    let http = client.clone();
-    let body = wxdata::shared_read::bytes(format!("tilejson:{TILEJSON_URL}"), async move {
-        Ok(http.get(wxdata::net::fetch_url(TILEJSON_URL))
-            .timeout(TILE_TIMEOUT).send().await?.error_for_status()?.bytes().await?.to_vec())
-    }).await;
+    let body = crate::tiles::load_tile_bytes(client, TILEJSON_URL, None).await;
     let body = match body { Ok(bytes) => bytes, Err(_) => return fallback };
     let v: serde_json::Value = serde_json::from_slice(&body).ok()?;
     let t = v["tiles"].get(0)?.as_str()?.to_string();
@@ -1493,6 +1492,22 @@ impl VectorTileManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vector_tile_bytes_and_inflation_are_bounded() {
+        use std::io::{Read, Write};
+        let mut ordinary = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        ordinary.write_all(b"vector tile").unwrap();
+        assert_eq!(super::maybe_gunzip(&ordinary.finish().unwrap()).unwrap(), b"vector tile");
+        assert_eq!(super::maybe_gunzip(b"vector tile").unwrap(), b"vector tile");
+        assert!(super::maybe_gunzip(&vec![0; crate::tiles::MAX_TILE_BYTES + 1]).is_err());
+
+        let mut oversized = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::copy(&mut std::io::repeat(0).take(32 * 1024 * 1024), &mut oversized).unwrap();
+        let compressed = oversized.finish().unwrap();
+        assert!(compressed.len() < 64 * 1024, "small gzip reproduces the expansion attack");
+        assert!(super::maybe_gunzip(&compressed).unwrap_err().to_string().contains("Decompressed vector tile"));
+    }
+
     use super::*;
 
     #[test]

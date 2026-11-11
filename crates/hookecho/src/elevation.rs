@@ -2,7 +2,7 @@
 //!
 //! Heights come from the AWS Open Data *terrarium* tiles — free, keyless PNGs where the height in
 //! metres is packed as `R*256 + G + B/256 - 32768`. They ride the same read-through disk cache the
-//! basemap uses ([`crate::tiles::load_tile_bytes`]), so a chase pack that pre-downloaded them
+//! basemap uses ([`crate::tiles::load_tile_decoded`]), so a chase pack that pre-downloaded them
 //! works with the radio off.
 //!
 //! The product on top is the blockage raster: for each cell of a world-space grid, how far the
@@ -133,24 +133,12 @@ pub async fn elevation_m(client: &reqwest::Client, lat: f64, lon: f64) -> Option
         return sample(&hit);
     }
     let path = crate::paths::cache_dir().map(|d| tile_path(&d.join("tiles"), tx, ty));
-    let decoded = match crate::tiles::load_tile_bytes(client, &tile_url(tx, ty), path.as_deref())
-        .await
-        .ok()
-        .and_then(|b| image::load_from_memory(&b).ok())
-    {
-        Some(img) => {
-            let rgb = img.to_rgb8();
-            // Terrarium tiles are 256x256; anything else is a proxy/error page, not a DEM.
-            (rgb.dimensions() == (256, 256)).then(|| {
-                Arc::new(
-                    rgb.pixels()
-                        .map(|p| decode_height([p[0], p[1], p[2]]))
-                        .collect::<Vec<f32>>(),
-                )
-            })
-        }
-        None => None,
-    };
+    let decoded = crate::tiles::load_tile_decoded(client, &tile_url(tx, ty), path.as_deref(), |bytes| async move {
+        let image = crate::image_load::decode_tile(&bytes)?;
+        // A wrong-size DEM must be evicted and retried, just like any other invalid tile.
+        anyhow::ensure!(image.dimensions() == (256, 256), "Terrarium tile must be 256x256");
+        Ok(Arc::new(image.pixels().map(|p| decode_height([p[0], p[1], p[2]])).collect::<Vec<f32>>()))
+    }).await.ok();
     if let Ok(mut c) = cache().lock() {
         c.put((tx, ty), decoded.clone());
     }

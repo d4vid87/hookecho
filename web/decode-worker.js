@@ -1,4 +1,5 @@
 // Radar, vector-tile and GOES decode, off the thread that draws the map.
+// GIF export boots a separate instance of this worker, so encoding cannot hold up radar jobs.
 //
 // A volume is a gzip wrapper around ~130 bzip2 records — seconds of solid CPU, and on the main
 // thread that is seconds of frozen map. The live stream pays a smaller version of the same bill
@@ -17,6 +18,8 @@
 //                                "bin", "mrms", "model", "opera", "cwa", "kma", "assemble", "vector", "abi", "abi-project", "abi-rgb", or "decode".
 //   out  { id, ok: ArrayBuffer } postcard-encoded Scan (transferred out)
 //   out  { id, err, fatal }      the job failed; `fatal` means a trap poisoned this heap
+//   in   { id, op: "gif", frames, width, height, delayMs } transferable RGBA images
+//   out  { id, progress }        completed GIF frames (followed by the normal result)
 
 let ready = null;
 
@@ -42,6 +45,12 @@ self.onmessage = async (e) => {
   const { id, bytes, op } = msg;
   try {
     const wasm = await ready;
+    if (op === "gif") {
+      const out = wasm.encode_gif_worker(msg.frames, msg.width, msg.height, msg.delayMs,
+        progress => self.postMessage({ id, progress }));
+      self.postMessage({ id, ok: out.buffer }, [out.buffer]);
+      return;
+    }
     const run = op === "vector" ? wasm.tessellate_vector_tile
       : op === "assemble" ? wasm.assemble_live_chunks
       : op === "bin" ? wasm.bin_radar_display

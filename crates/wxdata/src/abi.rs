@@ -295,25 +295,21 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
                 && (image.valid_time - first.valid_time).num_seconds().abs() <= 120),
         "ABI RGB channels differ in band or valid time"
     );
-    let pixels = (0..first.values.len())
-        .map(|index| {
+    let display = first.display_grid(first.width.min(700), first.height.min(700))?;
+    let pixels = display.values.iter().enumerate()
+        .map(|(index, &red)| {
             let mut pixel = [0, 0, 0, 0];
-            let row = index / first.width;
-            let col = index % first.width;
-            let values = first
-                .projection
-                .lon_lat(first.x[col], first.y[row])
-                .map(|(lon, lat)| {
-                    std::array::from_fn(|channel| {
-                        let image = channels[channel];
-                        if image.x == first.x && image.y == first.y {
-                            image.sample_at(index)
-                        } else {
-                            image.sample_nearest(lon, lat)
-                        }
-                    })
-                });
-            if let Some([Some(red), Some(green), Some(blue)]) = values {
+            let row = index / display.nx;
+            let col = index % display.nx;
+            let lon = display.lon_west + (display.lon_east - display.lon_west)
+                * col as f64 / (display.nx - 1) as f64;
+            let lat = display.lat_north - (display.lat_north - display.lat_south)
+                * row as f64 / (display.ny - 1) as f64;
+            if let [Some(red), Some(green), Some(blue)] = [
+                red.is_finite().then_some(red),
+                channels[1].sample_nearest(lon, lat),
+                channels[2].sample_nearest(lon, lat),
+            ] {
                 let values = [red, green, blue];
                 for channel in 0..3 {
                     let (low, high) = recipe.ranges[channel];
@@ -327,12 +323,9 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
             pixel
         })
         .collect();
-    let (lon_west, lon_east, lat_south, lat_north) = first
-        .bounds()
-        .ok_or_else(|| anyhow::anyhow!("ABI RGB image is off Earth"))?;
     Ok(RgbImage {
-        width: first.width,
-        height: first.height,
+        width: display.nx,
+        height: display.ny,
         pixels,
         valid_time: channels
             .iter()
@@ -340,10 +333,10 @@ pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow:
             .min()
             .unwrap_or(first.valid_time),
         recipe,
-        lon_west,
-        lon_east,
-        lat_north,
-        lat_south,
+        lon_west: display.lon_west,
+        lon_east: display.lon_east,
+        lat_north: display.lat_north,
+        lat_south: display.lat_south,
         source_identity: channels
             .iter()
             .map(|image| image.source_identity.as_str())
@@ -890,15 +883,80 @@ mod tests {
     }
 
     #[test]
+    fn rgb_places_native_fixture_pixels_on_the_geographic_display_grid() {
+        let mut red = decode(include_bytes!("../tests/data/g19-c13-meso.nc").to_vec()).unwrap();
+        red.band = 2;
+        red.values.fill(0.0);
+        red.quality.fill(0);
+        let mut green = red.clone();
+        green.band = 3;
+        green.values.fill(0.25);
+        let mut blue = green.clone();
+        blue.band = 1;
+        for row in 247..=253 {
+            for col in 247..=253 {
+                red.values[row * red.width + col] = 1.0;
+            }
+        }
+        let rgb = compose_rgb(&TRUE_COLOR, [&red, &green, &blue]).unwrap();
+        let (lon, lat) = red.projection.lon_lat(red.x[250], red.y[250]).unwrap();
+        let col = ((lon - rgb.lon_west) / (rgb.lon_east - rgb.lon_west)
+            * (rgb.width - 1) as f64)
+            .round() as usize;
+        let row = ((rgb.lat_north - lat) / (rgb.lat_north - rgb.lat_south)
+            * (rgb.height - 1) as f64)
+            .round() as usize;
+        assert_eq!(rgb.pixels[row * rgb.width + col], [255, 136, 136, 255]);
+        assert_eq!(rgb.pixels[250 * rgb.width + 250], [0, 136, 136, 255]);
+    }
+
+    #[test]
+    fn rgb_bounds_output_and_keeps_off_earth_pixels_transparent() {
+        let mut red = decode_with_max_dim(
+            include_bytes!("../tests/data/g19-c13-meso.nc").to_vec(),
+            3,
+        ).unwrap();
+        red.band = 2;
+        red.x = vec![-0.15, 0.0, 0.15];
+        red.y = vec![0.15, 0.0, -0.15];
+        red.values.fill(0.25);
+        red.quality.fill(0);
+        let mut green = red.clone();
+        green.band = 3;
+        let mut blue = red.clone();
+        blue.band = 1;
+        let rgb = compose_rgb(&TRUE_COLOR, [&red, &green, &blue]).unwrap();
+        assert_eq!(rgb.pixels[4], [136, 136, 136, 255]);
+        for corner in [0, 2, 6, 8] {
+            assert_eq!(rgb.pixels[corner], [0, 0, 0, 0]);
+        }
+        red.x.fill(0.3);
+        assert!(compose_rgb(&TRUE_COLOR, [&red, &green, &blue]).is_err());
+
+        red.width = 701;
+        red.x = (0..701).map(|col| (col as f64 - 350.0) * 0.00001).collect();
+        red.y = vec![0.001, 0.0, -0.001];
+        red.values = vec![0.25; red.width * red.height];
+        red.quality = vec![0; red.values.len()];
+        green = red.clone();
+        green.band = 3;
+        blue = red.clone();
+        blue.band = 1;
+        let rgb = compose_rgb(&TRUE_COLOR, [&red, &green, &blue]).unwrap();
+        assert_eq!((rgb.width, rgb.height, rgb.pixels.len()), (700, 3, 2100));
+        assert!(rgb.pixels.iter().all(|pixel| *pixel == [136, 136, 136, 255]));
+    }
+
+    #[test]
     fn declarative_rgb_rejects_bad_pixels_and_mismatched_channels() {
         let base = Image {
             width: 2,
-            height: 1,
+            height: 2,
             band: 2,
-            values: vec![0.25, 1.0],
-            quality: vec![0, 3],
-            x: vec![0.0, 1.0],
-            y: vec![0.0],
+            values: vec![0.25, 1.0, 0.25, 1.0],
+            quality: vec![0, 3, 0, 0],
+            x: vec![0.0, 0.01],
+            y: vec![0.01, 0.0],
             projection: Projection {
                 longitude_origin_deg: -75.0,
                 perspective_height_m: 35_786_023.0,
@@ -913,15 +971,36 @@ mod tests {
         green.band = 3;
         let mut blue = base.clone();
         blue.band = 1;
+        green.valid_time += chrono::Duration::seconds(30);
+        blue.received_time = Some(base.valid_time + chrono::Duration::minutes(1));
         let rgb = compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).unwrap();
         assert_eq!(rgb.pixels[0], [136, 136, 136, 255]);
         assert_eq!(rgb.pixels[1], [0, 0, 0, 0]);
+        assert_eq!(rgb.valid_time, base.valid_time);
+        assert_eq!(rgb.received_time, blue.received_time);
+        assert_eq!(rgb.source_identity, "fixture + fixture + fixture");
         blue.width = 3;
-        blue.x = vec![0.0, 0.5, 1.0];
-        blue.values = vec![0.25; 3];
-        blue.quality = vec![0; 3];
-        assert!(compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).is_ok());
+        blue.height = 3;
+        blue.x = vec![0.0, 0.005, 0.01];
+        blue.y = vec![0.01, 0.005, 0.0];
+        blue.values = vec![1.0, 0.5, 0.25, 0.5, 0.5, 0.5, 0.0, 0.5, 1.0];
+        blue.quality = vec![0; 9];
+        let rgb = compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).unwrap();
+        assert_eq!(rgb.pixels, vec![
+            [136, 136, 255, 255],
+            [0, 0, 0, 0],
+            [136, 136, 0, 255],
+            [255, 255, 255, 255],
+        ]);
+        blue.quality[6] = 2;
+        green.values[0] = f32::NAN;
+        let rgb = compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).unwrap();
+        assert_eq!(rgb.pixels[0], [0, 0, 0, 0]);
+        assert_eq!(rgb.pixels[2], [0, 0, 0, 0]);
         blue.valid_time += chrono::Duration::minutes(3);
+        assert!(compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).is_err());
+        blue.valid_time = base.valid_time;
+        blue.band = 2;
         assert!(compose_rgb(&TRUE_COLOR, [&base, &green, &blue]).is_err());
     }
 }

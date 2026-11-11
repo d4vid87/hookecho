@@ -137,7 +137,7 @@ jobs:
       # the browser smoke test can ask for on demand, so the bridge takes its spawn as a callback
       # and this drives it with a stub.
       - name: Test the decode bridge
-        run: node --test web/feed-fetch.test.mjs web/amy-bootstrap.test.mjs web/decode-bridge.test.mjs web/offline-maps.test.mjs web/sw.test.mjs web/notifications.test.mjs scripts/web/shell-assets.test.mjs
+        run: node --test web/feed-fetch.test.mjs web/amy-bootstrap.test.mjs web/decode-bridge.test.mjs web/video-export.test.mjs web/offline-maps.test.mjs web/sw.test.mjs web/notifications.test.mjs scripts/web/shell-assets.test.mjs
 
       - name: Install puppeteer
         run: npm install --no-save puppeteer@23
@@ -159,6 +159,7 @@ jobs:
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/settings-bundle.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/feed-retry.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/workflow-upgrades.mjs
+          HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/loop-export.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/chrome-polish.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ HOOKECHO_WORLD_OUTPUT=outputs/worldwide node scripts/web/worldwide.mjs
           HOOKECHO_BASE_URL=http://127.0.0.1:8080/ node scripts/web/velocity-comparison.mjs
@@ -180,6 +181,7 @@ jobs:
             outputs/settings-bundle
             outputs/feed-retry
             outputs/workflow-upgrades
+            outputs/loop-export
             outputs/chrome-polish
             outputs/worldwide
             outputs/velocity-comparison

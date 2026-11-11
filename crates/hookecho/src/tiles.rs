@@ -2278,28 +2278,43 @@ pub async fn fetch_visible(
     out
 }
 
-/// Read-through disk cache: return the cached PNG if present, else fetch and store it.
-///
+/// Maximum encoded size for one raster/vector tile, including disk and offline cache reads.
+pub(crate) const MAX_TILE_BYTES: usize = crate::image_load::MAX_BYTES;
+
+/// Read-through disk cache: return the cached tile if present, else fetch and store it.
 /// Decoders use `load_tile_decoded` to evict corrupt entries and retry once.
 pub(crate) async fn load_tile_bytes(
     client: &reqwest::Client,
     url: &str,
     path: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<u8>> {
-    load_tile_bytes_inner(client, url, path, false).await
+    load_tile_decoded(client, url, path, |bytes| async move { Ok(bytes) }).await
 }
 
 async fn load_tile_bytes_inner(client: &reqwest::Client, url: &str, path: Option<&std::path::Path>, refresh: bool) -> anyhow::Result<Vec<u8>> {
     let weather = crate::weather_tile_cache::is_weather_tile(url);
+    let max_bytes = if weather { 4 * 1024 * 1024 } else { MAX_TILE_BYTES };
     if refresh && weather { crate::weather_tile_cache::invalidate(url); }
     if !refresh {
         if weather {
-            if let Some(bytes) = crate::weather_tile_cache::get(url) { return Ok(bytes.as_ref().clone()); }
+            if let Some(bytes) = crate::weather_tile_cache::get(url) {
+                anyhow::ensure!(bytes.len() <= max_bytes, "Cached tile exceeds size limit");
+                return Ok(bytes.as_ref().clone());
+            }
         }
         #[cfg(target_arch = "wasm32")]
-        if let Some(bytes) = crate::offline::cached_tile(url).await { return Ok(bytes); }
+        if let Some(bytes) = crate::offline::cached_tile(url).await {
+            anyhow::ensure!(bytes.len() <= max_bytes, "Cached tile exceeds size limit");
+            return Ok(bytes);
+        }
         if let Some(p) = path {
-            if let Ok(bytes) = std::fs::read(p) { return Ok(bytes); }
+            if let Ok(file) = std::fs::File::open(p) {
+                use std::io::Read;
+                let mut bytes = Vec::new();
+                file.take(max_bytes as u64 + 1).read_to_end(&mut bytes)?;
+                anyhow::ensure!(bytes.len() <= max_bytes, "Cached tile exceeds size limit");
+                return Ok(bytes);
+            }
         }
     }
     // Browser builds cannot fetch most tile hosts directly — they send no CORS header — so the
@@ -2315,17 +2330,16 @@ async fn load_tile_bytes_inner(client: &reqwest::Client, url: &str, path: Option
         let mut request = http.get(request_url).timeout(TILE_TIMEOUT);
         if refresh { request = request.header(reqwest::header::CACHE_CONTROL, "no-cache"); }
         let response = request.send().await?.error_for_status()?;
-        if weather {
-            use futures_util::StreamExt;
-            let mut stream = response.bytes_stream();
-            let mut bytes = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                anyhow::ensure!(bytes.len() + chunk.len() <= 4 * 1024 * 1024, "Weather tile exceeds size limit");
-                bytes.extend_from_slice(&chunk);
-            }
-            Ok(bytes)
-        } else { Ok(response.bytes().await?.to_vec()) }
+        anyhow::ensure!(response.content_length().is_none_or(|n| n <= max_bytes as u64), "Tile exceeds size limit");
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            anyhow::ensure!(bytes.len().saturating_add(chunk.len()) <= max_bytes, "Tile exceeds size limit");
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }).await?;
     if weather { crate::weather_tile_cache::put(url, Arc::clone(&bytes)); }
     #[cfg(not(target_arch = "wasm32"))]
@@ -2355,11 +2369,15 @@ where
     Fut: std::future::Future<Output = anyhow::Result<T>>,
 {
     for attempt in 0..2 {
-        let bytes = load_tile_bytes_inner(client, url, path, attempt > 0).await?;
-        match decode(bytes).await {
+        let decoded = async {
+            let bytes = load_tile_bytes_inner(client, url, path, attempt > 0).await?;
+            decode(bytes).await
+        }.await;
+        match decoded {
             Ok(tile) => return Ok(tile),
             Err(error) => {
                 if let Some(path) = path { let _ = std::fs::remove_file(path); }
+                crate::weather_tile_cache::invalidate(url);
                 crate::offline::invalidate_tile(url).await;
                 if attempt == 1 { return Err(error); }
             }
@@ -2371,8 +2389,7 @@ where
 async fn load_raster_tile(client: &reqwest::Client, url: &str, path: Option<&std::path::Path>) -> anyhow::Result<image::RgbaImage> {
     if url.starts_with("world-radar:") { return crate::world_tiles::load_tile(client, url).await; }
     load_tile_decoded(client, url, path, |bytes| async move {
-        wxdata::task::blocking(move || image::load_from_memory(&bytes).map(|image| image.to_rgba8())).await?
-            .map_err(Into::into)
+        wxdata::task::blocking(move || crate::image_load::decode_tile(&bytes)).await?
     }).await
 }
 
@@ -2696,25 +2713,40 @@ mod tests {
         let mut png = std::io::Cursor::new(Vec::new());
         image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
             .write_to(&mut png, image::ImageFormat::Png).unwrap();
-        for (index, (body, vector, valid)) in [(png.into_inner(), false, true),
-            (Vec::new(), true, true), (b"<html>upstream error</html>".to_vec(), false, false)].into_iter().enumerate() {
+        let png = png.into_inner();
+        let mut oversized_png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(8193, 1).write_to(&mut oversized_png, image::ImageFormat::Png).unwrap();
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::copy(&mut std::io::repeat(0).take(16 * 1024 * 1024 + 1), &mut gzip).unwrap();
+        let oversized_gzip = gzip.finish().unwrap();
+        for (index, (cached, body, vector, valid)) in [
+            (b"not a tile".to_vec(), png.clone(), false, true),
+            (b"not a tile".to_vec(), Vec::new(), true, true),
+            (b"not a tile".to_vec(), b"<html>upstream error</html>".to_vec(), false, false),
+            (vec![0; MAX_TILE_BYTES + 1], png.clone(), false, true),
+            (oversized_png.into_inner(), png, false, true),
+            (oversized_gzip, Vec::new(), true, true),
+            (b"not a tile".to_vec(), vec![0; MAX_TILE_BYTES + 1], false, false),
+        ].into_iter().enumerate() {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}/tile-{index}", listener.local_addr().unwrap());
             let expected = body.clone();
             let server = std::thread::spawn(move || {
                 let (mut stream, _) = listener.accept().unwrap();
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+                stream.set_write_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
                 let mut request = [0; 2048];
                 assert!(stream.read(&mut request).unwrap() > 0);
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-                stream.write_all(&body).unwrap();
+                // The byte limit may reject the header before reading the advertised body.
+                let _ = stream.write_all(&body);
             });
             let path = std::env::temp_dir().join(format!("hookecho-corrupt-tile-{}-{index}", std::process::id()));
-            std::fs::write(&path, b"not a tile").unwrap();
+            std::fs::write(&path, cached).unwrap();
             let result = super::load_tile_decoded(&client, &url, Some(&path), |bytes| async move {
                 if vector {
                     crate::vector_tiles::build_tile(&bytes, (2, 1, 1), crate::basemap_style::Palette::Dark, 2.0).map(|_| ())
-                } else { image::load_from_memory(&bytes).map(|_| ()).map_err(Into::into) }
+                } else { crate::image_load::decode_tile(&bytes).map(|_| ()) }
             }).await;
             server.join().unwrap();
             assert_eq!(result.is_ok(), valid);
@@ -2722,6 +2754,34 @@ mod tests {
                 assert_eq!(std::fs::read(&path).unwrap(), expected);
                 std::fs::remove_file(path).unwrap();
             } else { assert!(!path.exists(), "a failed retry must not leave another poisoned entry"); }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn tile_downloads_bound_headers_and_chunked_bodies_before_caching() {
+        use std::io::{Read, Write};
+        for chunked in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/tile", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                stream.set_write_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let _ = stream.read(&mut [0; 4096]);
+                if chunked {
+                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n", MAX_TILE_BYTES + 1);
+                    let _ = stream.write_all(&vec![0; MAX_TILE_BYTES + 1]);
+                    let _ = stream.write_all(b"\r\n0\r\n\r\n");
+                } else {
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", MAX_TILE_BYTES + 1).unwrap();
+                }
+            });
+            let path = std::env::temp_dir().join(format!("hookecho-tile-limit-{}-{chunked}", std::process::id()));
+            let error = load_tile_bytes_inner(&reqwest::Client::new(), &url, Some(&path), false).await.unwrap_err();
+            assert!(error.to_string().contains("size limit"));
+            assert!(!path.exists(), "oversized responses must not enter the disk cache");
+            server.join().unwrap();
         }
     }
 

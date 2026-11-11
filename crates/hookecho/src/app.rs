@@ -94,10 +94,137 @@ fn new_tds_locations(
 /// Soft encoded-payload cap. Displayed frames and actively borrowed scans are never evicted;
 /// diagnostics explicitly report when those pinned allocations alone exceed the cap.
 pub const NATIVE_RADAR_PAYLOAD_BUDGET: usize = 512 * 1024 * 1024;
+
+const DERIVED_LAYERS: [crate::render::FieldLayer; 6] = [
+    crate::render::FieldLayer::CompositeLocal,
+    crate::render::FieldLayer::VilLocal,
+    crate::render::FieldLayer::VilDensity,
+    crate::render::FieldLayer::EtopLocal,
+    crate::render::FieldLayer::HailMehs,
+    crate::render::FieldLayer::HailPosh,
+];
+const DERIVED_HAIL_BITS: u8 = (1 << 4) | (1 << 5);
+type DerivedKey = (String, u32, u8, Option<(i64, u64, u64)>);
+
+fn ready_derived_mask(mask: u8, hail_available: bool) -> u8 {
+    if hail_available { mask } else { mask & !DERIVED_HAIL_BITS }
+}
+
+fn derived_field_allowed(layer: crate::render::FieldLayer, live: bool) -> bool {
+    live || !matches!(layer, crate::render::FieldLayer::HailMehs | crate::render::FieldLayer::HailPosh)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FreezingLevels {
+    valid_time: DateTime<Utc>,
+    h0: f64,
+    hm20: f64,
+}
+
+#[derive(Default)]
+struct FreezingLevelEntry {
+    levels: Option<FreezingLevels>,
+    last_fetch: Option<Instant>,
+}
+
+#[derive(Default)]
+struct FreezingLevelCache(std::collections::HashMap<String, FreezingLevelEntry>);
+
+impl FreezingLevelCache {
+    fn request(&mut self, site: &str, now: Instant) -> (Option<FreezingLevels>, bool) {
+        let entry = self.0.entry(site.to_owned()).or_default();
+        let due = entry.last_fetch.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(900));
+        if due { entry.last_fetch = Some(now); }
+        (entry.levels, due)
+    }
+
+    fn complete(&mut self, site: &str, levels: FreezingLevels) -> bool {
+        let Some(entry) = self.0.get_mut(site) else { return false; };
+        let changed = entry.levels != Some(levels);
+        entry.levels = Some(levels);
+        changed
+    }
+}
+
 fn radar_payload_budget(settings: &Settings) -> usize {
     if cfg!(target_os = "android") { 96 * 1024 * 1024 }
     else if cfg!(target_arch = "wasm32") { settings.web_radar_memory_mib.clamp(192, 768) * 1024 * 1024 }
     else { NATIVE_RADAR_PAYLOAD_BUDGET }
+}
+
+#[cfg(test)]
+mod derived_input_tests {
+    use super::*;
+
+    #[test]
+    fn only_hail_products_need_model_levels_and_are_excluded_from_archives() {
+        use crate::render::FieldLayer as FL;
+        for (index, layer) in DERIVED_LAYERS.iter().enumerate() {
+            let mask = 1 << index;
+            let hail = matches!(layer, FL::HailMehs | FL::HailPosh);
+            assert_eq!(mask & DERIVED_HAIL_BITS != 0, hail, "{layer:?}");
+            assert_eq!(mask & !DERIVED_HAIL_BITS != 0, !hail, "{layer:?}");
+            assert_eq!(ready_derived_mask(mask, false), if hail { 0 } else { mask });
+            assert_eq!(ready_derived_mask(mask, true), mask);
+            assert_eq!(derived_field_allowed(*layer, false), !hail);
+            assert!(derived_field_allowed(*layer, true));
+        }
+        assert_eq!(ready_derived_mask(DERIVED_HAIL_BITS, false), 0);
+        assert_eq!(ready_derived_mask(DERIVED_HAIL_BITS | (1 << 3), false), 1 << 3);
+    }
+
+    #[test]
+    fn derived_request_can_restart_after_disable_without_accepting_old_results() {
+        let mut requests = RequestBook::default();
+        let lane = RequestLane::Feed("Derived radar fields");
+        let first = requests.start(lane.clone(), 42).unwrap();
+        assert!(requests.start(lane.clone(), 42).is_none());
+        assert!(requests.cancel(&lane));
+        let second = requests.start(lane.clone(), 42).unwrap();
+        assert_ne!(first, second);
+        assert!(!requests.finish(&lane, first, None, None));
+        assert!(requests.finish(&lane, second, None, None));
+    }
+
+    #[test]
+    fn missing_levels_and_station_changes_drop_cached_zdr_and_bright_band() {
+        let old_key: TunedKey = ((0, "KTLX-volume".into(), 12), 0);
+        let new_key: TunedKey = ((0, "KFWS-volume".into(), 12), 0);
+        let cached = (
+            old_key.clone(),
+            vec![wxdata::dualpol::ZdrColumnHit {
+                lon: -97.0, lat: 35.0, depth_km: 2.0, top_km: 6.0, max_zdr: 3.0,
+            }],
+            Some(wxdata::dualpol::BrightBand { height_km: 3.0, samples: 20, mean_cc: 0.9 }),
+        );
+        let mut cache = Some(cached.clone());
+        retain_zdr_cache(&mut cache, &old_key, true);
+        assert_eq!(cache.as_ref(), Some(&cached));
+        retain_zdr_cache(&mut cache, &old_key, false);
+        assert!(cache.is_none());
+        cache = Some(cached);
+        retain_zdr_cache(&mut cache, &new_key, true);
+        assert!(cache.is_none());
+    }
+
+    #[test]
+    fn freezing_replies_keep_their_station_and_refresh_cached_levels() {
+        let now = Instant::now();
+        let levels = FreezingLevels {
+            valid_time: "2026-11-11T12:00:00Z".parse().unwrap(), h0: 3000.0, hm20: 6000.0,
+        };
+        let mut cache = FreezingLevelCache::default();
+        assert_eq!(cache.request("KTLX", now), (None, true));
+        assert_eq!(cache.request("KFWS", now), (None, true), "a site switch must bypass the other station's throttle");
+        assert!(cache.complete("KTLX", levels));
+        assert_eq!(cache.request("KFWS", now), (None, false), "an old station reply cannot populate the active station");
+        assert_eq!(cache.request("KTLX", now + Duration::from_secs(899)), (Some(levels), false));
+        assert_eq!(cache.request("KTLX", now + Duration::from_secs(900)), (Some(levels), true));
+        assert_ne!(OverlaySource::FreezingLevels("KTLX".into(), -97.0, 35.0).lane(),
+            OverlaySource::FreezingLevels("KFWS".into(), -97.0, 32.0).lane());
+        cache.0.remove("KTLX");
+        assert!(!cache.complete("KTLX", levels), "a removed pane's late result stays removed");
+    }
 }
 
 /// Shared panes keep a fetch alive until no pane needs its station.
@@ -323,7 +450,7 @@ enum OverlayMsg {
     GefsDistribution(wxdata::global::GefsPointPlume),
     GefsPostage(wxdata::global::GefsPostageStamps),
     /// `(0 °C, −20 °C)` level heights above sea level, in metres, at the active radar.
-    FreezingLevels(f64, f64),
+    FreezingLevels(String, FreezingLevels),
     /// Local storm reports: live trailing window (`None`) or an archive bucket (feature CC).
     StormReports(Option<i64>, Vec<wxdata::spc::StormReport>),
     /// Live Spotter Network positions (CONUS-wide; filtered to the active site at draw time).
@@ -470,7 +597,7 @@ enum OverlaySource {
     /// Gridded L3 product for one pane's selected radar site.
     L3Grid(usize, crate::render::FieldLayer, String),
     /// Melting-level and −20 °C heights at `(lon, lat)`, for the derived hail grids.
-    FreezingLevels(f64, f64),
+    FreezingLevels(String, f64, f64),
     /// NOHRSC observed snowfall analysis over an accumulation window (hours).
     Snow(u16),
     /// Banded snow: the MRMS mosaic cut to elongated echo and masked to snow.
@@ -561,6 +688,7 @@ enum RequestLane {
     Field(crate::render::FieldLayer),
     PaneField(usize, crate::render::FieldLayer),
     Placefile(String),
+    FreezingLevels(String),
     Feed(&'static str),
 }
 
@@ -570,6 +698,7 @@ impl RequestLane {
             Self::Field(layer) => format!("field {}", layer.slug()),
             Self::PaneField(pane, layer) => format!("pane {} field {}", pane + 1, layer.slug()),
             Self::Placefile(source) => format!("Placefile {source}"),
+            Self::FreezingLevels(site) => format!("Freezing levels {site}"),
             Self::Feed(label) => (*label).into(),
         }
     }
@@ -578,6 +707,7 @@ impl RequestLane {
         let secs = match self {
             Self::Field(layer) | Self::PaneField(_, layer) => field_refresh_secs(*layer),
             Self::Placefile(_) => 120,
+            Self::FreezingLevels(_) => 900,
             Self::Feed(label) => match *label {
                 "Spotter Network" | "Live stations" | "Field mill" | "Derived radar fields" => 60,
                 "Surface observations" => 75,
@@ -748,7 +878,7 @@ impl OverlaySource {
             Self::GoesAbi(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
             Self::GoesRgb(pane, ..) => RequestLane::PaneField(*pane, crate::render::FieldLayer::GoesTrueColor),
             Self::L3Grid(pane, layer, ..) => RequestLane::PaneField(*pane, *layer),
-            Self::FreezingLevels(..) => RequestLane::Feed("Freezing levels"),
+            Self::FreezingLevels(site, ..) => RequestLane::FreezingLevels(site.clone()),
             Self::Obs { .. } => RequestLane::Feed("Nearest station observations"),
             Self::SensorHrrr { .. } => RequestLane::Feed("HRRR station temperature"),
             Self::SensorRtma { .. } => RequestLane::Feed("RTMA station temperature"),
@@ -1178,33 +1308,22 @@ impl OverlaySource {
                 wxdata::nohrsc::fetch_frame(http, hours).await?,
                 None,
             ),
-            OverlaySource::FreezingLevels(lon, lat) => {
+            OverlaySource::FreezingLevels(site, lon, lat) => {
                 // HRRR carries both isotherm heights as analysis fields, so the hail algorithm
                 // sources its own thermodynamics instead of asking the user for a freezing level.
-                let h0 = wxdata::hrrr::fetch_field(
-                    http,
-                    wxdata::hrrr::Model::Hrrr,
-                    "HGT",
-                    "0C isotherm",
-                    0,
-                    f64::NEG_INFINITY,
-                )
-                .await?;
-                // 253 K is −20.15 °C — the level Witt's hail weighting tops out at.
-                let hm20 = wxdata::hrrr::fetch_field(
-                    http,
-                    wxdata::hrrr::Model::Hrrr,
-                    "HGT",
-                    "253 K level",
-                    0,
-                    f64::NEG_INFINITY,
-                )
-                .await?;
+                // Both heights must come from the same model analysis.
+                let (valid_time, fields) = wxdata::hrrr::fetch_fields_one_run(
+                    http, wxdata::hrrr::Model::Hrrr, 0,
+                    &[("HGT", "0C isotherm", f64::NEG_INFINITY),
+                      ("HGT", "253 K level", f64::NEG_INFINITY)],
+                ).await?;
                 match (
-                    h0.field.sample_bilinear(lon, lat),
-                    hm20.field.sample_bilinear(lon, lat),
+                    fields[0].sample_bilinear(lon, lat),
+                    fields[1].sample_bilinear(lon, lat),
                 ) {
-                    (Some(a), Some(b)) => OverlayMsg::FreezingLevels(a as f64, b as f64),
+                    (Some(a), Some(b)) => OverlayMsg::FreezingLevels(site, FreezingLevels {
+                        valid_time, h0: a as f64, hm20: b as f64,
+                    }),
                     _ => anyhow::bail!("no freezing levels at {lon},{lat}"),
                 }
             }
@@ -2488,6 +2607,12 @@ type ZdrCache = (
     Option<wxdata::dualpol::BrightBand>,
 );
 
+fn retain_zdr_cache(cache: &mut Option<ZdrCache>, key: &TunedKey, has_levels: bool) {
+    if !has_levels || cache.as_ref().is_some_and(|(cached, ..)| cached != key) {
+        *cache = None;
+    }
+}
+
 /// Per-field-layer UI + fetch state (toggle, pending upload, refresh clock).
 #[derive(Default)]
 pub(crate) struct FieldState {
@@ -2585,6 +2710,7 @@ struct LoopExport {
     resume_playing: bool,
     prior_playhead: usize,
     frames: Vec<image::RgbaImage>,
+    capture_dimensions: Option<((u32, u32), (u32, u32))>,
     /// Slots still to capture (counts down as frames are grabbed).
     remaining: usize,
     requested_count: usize,
@@ -2603,6 +2729,15 @@ struct LoopExport {
     center: [f64; 2],
     zoom: f64,
     sources: Vec<String>,
+}
+
+struct LoopEncoding {
+    control: crate::loopexport::ExportControl,
+    total: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    dest: std::path::PathBuf,
+    #[cfg(target_arch = "wasm32")]
+    cancel_browser: js_sys::Function,
 }
 
 /// A placefile the app has fetched and is tracking (mirrors a `PlacefileConfig` by URL).
@@ -3817,6 +3952,7 @@ pub struct HookEchoApp {
     hrrr_layer_hour: std::collections::HashMap<crate::render::FieldLayer, u8>,
     /// Level 3 clickable storm cells for `cells_site` (the active site when last fetched).
     storm_cells: Vec<Cell>,
+    cell_warnings: CellWarningCache,
     cells_site: Option<String>,
     /// Per-cell-id trend history (VIL/top/dBZ across volumes); cleared when the site changes.
     cell_trends: std::collections::HashMap<String, Vec<ui::cell_window::CellSample>>,
@@ -3960,12 +4096,9 @@ pub struct HookEchoApp {
     /// the Screenshot event arrives rather than removing it in the command frame.
     share_card_capture_frames: u8,
     loop_export: Option<LoopExport>,
-    #[cfg(target_arch = "wasm32")]
-    video_export_tx: Sender<Result<String, String>>,
-    #[cfg(target_arch = "wasm32")]
-    video_export_rx: Receiver<Result<String, String>>,
-    #[cfg(target_arch = "wasm32")]
-    video_export_pending: bool,
+    loop_encoding: Option<LoopEncoding>,
+    loop_encode_tx: Sender<Result<String, String>>,
+    loop_encode_rx: Receiver<Result<String, String>>,
     /// When true, all panes share the active pane's camera.
     link_cameras: bool,
     /// When true, all panes follow the active pane's valid time.
@@ -4007,11 +4140,9 @@ pub struct HookEchoApp {
     /// What the locally derived products (VIL/VILD/echo tops) were last computed from:
     /// `(volume name, echo-top threshold, enabled-layer mask, melting level)`. Any of them moving
     /// recomputes.
-    derived_key: Option<(String, u32, u8, i32)>,
-    /// `(site, 0 °C height, −20 °C height)` above sea level in metres, for the hail grids, plus
-    /// the clock that refreshes them on the environment cadence.
-    freezing: Option<(String, f64, f64)>,
-    freezing_last_fetch: Option<Instant>,
+    derived_key: Option<DerivedKey>,
+    /// Per-station thermodynamics shared by hail grids and ZDR columns.
+    freezing: FreezingLevelCache,
     /// Accumulation window (hours) for the observed snowfall analysis, and the one last fetched.
     snow_hours: u16,
     snow_fetched: Option<u16>,
@@ -4702,8 +4833,7 @@ impl HookEchoApp {
         #[cfg(not(target_arch = "wasm32"))]
         vtiles.ensure_template();
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
-        #[cfg(target_arch = "wasm32")]
-        let (video_export_tx, video_export_rx) = std::sync::mpsc::channel();
+        let (loop_encode_tx, loop_encode_rx) = std::sync::mpsc::channel();
         let (overlay_tx, overlay_rx) = std::sync::mpsc::channel();
         // Loaded off the launch path: the snapshot is a few MB of JSON, and parsing it before
         // the first paint bought nothing — it is applied as `OverlayMsg::AlertSeed`, and dropped
@@ -4944,6 +5074,7 @@ impl HookEchoApp {
             radar_issues: Default::default(),
             hrrr_layer_hour: std::collections::HashMap::new(),
             storm_cells: Vec::new(),
+            cell_warnings: CellWarningCache::default(),
             ui_scale_applied: -1.0,
             ime_shown: false,
             pending_paste: None,
@@ -5024,12 +5155,9 @@ impl HookEchoApp {
             share_card: None,
             share_card_capture_frames: 0,
             loop_export: None,
-            #[cfg(target_arch = "wasm32")]
-            video_export_tx,
-            #[cfg(target_arch = "wasm32")]
-            video_export_rx,
-            #[cfg(target_arch = "wasm32")]
-            video_export_pending: false,
+            loop_encoding: None,
+            loop_encode_tx,
+            loop_encode_rx,
             link_cameras: false,
             link_times: false,
             lock_source_frame: false,
@@ -5065,8 +5193,7 @@ impl HookEchoApp {
             derived_key: None,
             snow_hours: 24,
             snow_fetched: None,
-            freezing: None,
-            freezing_last_fetch: None,
+            freezing: FreezingLevelCache::default(),
             show_metar: false,
             metars: Vec::new(),
             tafs: Default::default(),
@@ -5691,41 +5818,26 @@ impl HookEchoApp {
     /// work in archive replay and on each live tilt.
     fn recompute_derived(&mut self, ctx: &egui::Context) {
         use crate::render::FieldLayer as FL;
-        const LAYERS: [FL; 6] = [
-            FL::CompositeLocal,
-            FL::VilLocal,
-            FL::VilDensity,
-            FL::EtopLocal,
-            FL::HailMehs,
-            FL::HailPosh,
-        ];
-        /// Bit positions in the mask for the two hail grids.
-        const HAIL_BITS: u8 = 0b11000;
-        let mask = LAYERS
+        let mask = DERIVED_LAYERS
             .iter()
             .enumerate()
             .fold(0u8, |m, (i, l)| m | u8::from(self.field_wanted(*l)) << i);
-        if mask == 0 {
-            self.derived_key = None;
-            return;
-        }
         let site = self.views[self.active].site.clone();
         // The hail algorithm needs the melting level, and the only source for it is the current
         // model analysis — so, like the live mosaic, the hail grids are live-only rather than
         // quietly applying today's freezing level to a storm from 2021.
         let live = self.views[self.active].timeline.following;
-        let mask = if live { mask } else { mask & !HAIL_BITS };
+        let mask = ready_derived_mask(mask, live);
+        // Freezing levels are only worth a request when a hail grid is actually on.
+        let levels = if mask & DERIVED_HAIL_BITS != 0 {
+            self.fetch_freezing_levels(self.active, ctx)
+        } else { None };
+        let mask = ready_derived_mask(mask, levels.is_some());
         if mask == 0 {
             self.derived_key = None;
+            self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                .cancel(&RequestLane::Feed("Derived radar fields"));
             return;
-        }
-        // Freezing levels are only worth a request when a hail grid is actually on.
-        let levels = match (mask & HAIL_BITS != 0, &self.freezing, &site) {
-            (true, Some((s, h0, hm20)), Some(cur)) if s == cur => Some((*h0, *hm20)),
-            _ => None,
-        };
-        if mask & HAIL_BITS != 0 && levels.is_none() {
-            self.fetch_freezing_levels(ctx);
         }
         // Beam heights are above the radar; the model heights are above sea level.
         let radar_m = site
@@ -5739,7 +5851,7 @@ impl HookEchoApp {
             vol.name.clone(),
             self.settings.etop_dbz.to_bits(),
             mask,
-            levels.map_or(0, |(h0, _)| h0 as i32),
+            levels.map(|levels| (levels.valid_time.timestamp(), levels.h0.to_bits(), levels.hm20.to_bits())),
         );
         if self.derived_key.as_ref() == Some(&key) {
             return;
@@ -5763,17 +5875,17 @@ impl HookEchoApp {
         self.derived_key = Some(key);
         let tx = self.overlay_tx.clone();
         let lane = RequestLane::Feed("Derived radar fields");
-        let generation = self
+        let Some(generation) = self
             .overlay_requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .start(lane.clone(), derived_identity)
-            .expect("a changed derived-field key cannot duplicate an in-flight request");
+        else { return; };
         let cap = self.field_texture_cap();
         let ctx = ctx.clone();
         self.spawner.spawn_blocking(move || {
             let mut out: Vec<(FL, wxdata::mrms::MrmsField)> = Vec::new();
-            if mask & !HAIL_BITS != 0 {
+            if mask & !DERIVED_HAIL_BITS != 0 {
                 if let Some(d) = wxdata::derived::derive(&sweeps, &opts) {
                     out.extend([
                         (FL::CompositeLocal, d.composite),
@@ -5783,14 +5895,20 @@ impl HookEchoApp {
                     ]);
                 }
             }
-            if let Some((h0, hm20)) = levels.filter(|_| mask & HAIL_BITS != 0) {
-                if let Some(h) = wxdata::derived::hail(&sweeps, h0 - radar_m, hm20 - radar_m, &opts)
+            if let Some(levels) = levels.filter(|_| mask & DERIVED_HAIL_BITS != 0) {
+                if let Some(h) = wxdata::derived::hail(&sweeps, levels.h0 - radar_m, levels.hm20 - radar_m, &opts)
                 {
                     out.extend([(FL::HailMehs, h.mehs), (FL::HailPosh, h.posh)]);
                 }
             }
+            if out.is_empty() {
+                let _ = tx.send(OverlayDelivery::Fetched {
+                    lane: lane.clone(), generation,
+                    result: Err("No usable sweeps for derived radar fields".into()),
+                });
+            }
             for (layer, f) in out {
-                let bit = LAYERS.iter().position(|l| *l == layer).unwrap_or(0);
+                let bit = DERIVED_LAYERS.iter().position(|l| *l == layer).unwrap_or(0);
                 if mask & (1 << bit) != 0 {
                     let _ = tx.send(OverlayDelivery::Fetched {
                         lane: lane.clone(),
@@ -5804,25 +5922,27 @@ impl HookEchoApp {
     }
 
     /// Refresh the melting-level heights the hail grids need, on the environment cadence.
-    fn fetch_freezing_levels(&mut self, ctx: &egui::Context) {
-        let Some(site) = self.views[self.active]
+    fn fetch_freezing_levels(&mut self, pane: usize, ctx: &egui::Context) -> Option<FreezingLevels> {
+        let site = self.views[pane]
             .site
             .as_deref()
-            .and_then(wxdata::sites::site_by_id)
-        else {
-            return;
-        };
-        if self
-            .freezing_last_fetch
-            .is_some_and(|t| t.elapsed().as_secs() < 900)
-        {
-            return;
+            .and_then(wxdata::sites::site_by_id)?;
+        // Closed/switched panes must not retain requests or cached station data indefinitely.
+        self.freezing.0.retain(|station, _| {
+            let keep = self.views.iter().any(|view| view.site.as_deref() == Some(station));
+            if !keep {
+                self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .cancel(&RequestLane::FreezingLevels(station.clone()));
+            }
+            keep
+        });
+        let (levels, due) = self.freezing.request(site.id, Instant::now());
+        if due {
+            self.spawn_overlay(ctx, OverlaySource::FreezingLevels(
+                site.id.into(), site.longitude as f64, site.latitude as f64,
+            ));
         }
-        self.freezing_last_fetch = Some(Instant::now());
-        self.spawn_overlay(
-            ctx,
-            OverlaySource::FreezingLevels(site.longitude as f64, site.latitude as f64),
-        );
+        levels
     }
 
     fn spawn_overlay(&self, ctx: &egui::Context, source: OverlaySource) {
@@ -8630,15 +8750,16 @@ impl HookEchoApp {
         idx: usize,
         ctx: &egui::Context,
     ) -> Vec<wxdata::dualpol::ZdrColumnHit> {
+        let levels = self.fetch_freezing_levels(idx, ctx);
         let key = self.tuned_key(idx);
+        retain_zdr_cache(&mut self.zdr_cache, &key, levels.is_some());
+        let Some(levels) = levels else { return Vec::new(); };
         let (min_zdr, min_depth) = (
             self.settings.detectors.zdr_min_db,
             self.settings.detectors.zdr_min_depth_km,
         );
-        if let Some((k, v, _)) = &self.zdr_cache {
-            if *k == key {
-                return v.clone();
-            }
+        if let Some((_, v, _)) = &self.zdr_cache {
+            return v.clone();
         }
         // Model heights are above sea level; beam heights are above the radar.
         let site = self.views[idx].site.clone();
@@ -8646,13 +8767,7 @@ impl HookEchoApp {
             .as_deref()
             .and_then(wxdata::sites::site_by_id)
             .map_or(0.0, |s| s.elevation_meters as f64 / 1000.0);
-        let h0_km = match (&self.freezing, &site) {
-            (Some((s, h0, _)), Some(cur)) if s == cur => *h0 / 1000.0 - radar_km,
-            _ => {
-                self.fetch_freezing_levels(ctx);
-                return Vec::new();
-            }
-        };
+        let h0_km = levels.h0 / 1000.0 - radar_km;
         let Some(vol) = self.views[idx].volume.as_mut() else {
             return Vec::new();
         };
@@ -10842,6 +10957,7 @@ impl HookEchoApp {
                             Some(frame.stamp.valid_time)
                         }
                         Ok(OverlayMsg::MrmsHistory(_, _, frames)) => frames.last().map(|frame| frame.stamp.valid_time),
+                        Ok(OverlayMsg::FreezingLevels(_, levels)) => Some(levels.valid_time),
                         _ => None,
                     };
                     let current = self
@@ -11157,10 +11273,8 @@ impl HookEchoApp {
                 OverlayMsg::Spotters(spotters) => self.spotters = spotters,
                 OverlayMsg::RadarSiteStatus(report) => self.radar_site_status = Some(report),
                 OverlayMsg::Fronts(a) => self.fronts = Some(a),
-                OverlayMsg::FreezingLevels(h0, hm20) => {
-                    if let Some(site) = self.views[self.active].site.clone() {
-                        self.freezing = Some((site, h0, hm20));
-                    }
+                OverlayMsg::FreezingLevels(site, levels) => {
+                    if self.freezing.complete(&site, levels) { self.zdr_cache = None; }
                 }
                 OverlayMsg::ProbSevere(f) => {
                     self.evaluate_probsevere_rules(&f);
@@ -16255,30 +16369,33 @@ impl HookEchoApp {
         // must not lose its slot to a town name that merely happened to be painted earlier.
         let cell_labels_shown: std::collections::HashMap<String, (String, Option<f32>, Option<f32>)> = if self.filters.show_cells
             && self.cells_site.as_deref() == view.site.as_deref()
+            && self.archive_bucket().is_none()
         {
             let selected = self.cell_popup.as_ref().map(|c| c.id.as_str());
             type CellLabelCandidate = (String, String, Option<f32>, Option<f32>, egui::Pos2, bool, bool, i32);
             let mut ids: Vec<CellLabelCandidate> = self
-                .active_storm_cells()
+                .storm_cells
                 .iter()
-                .filter(|c| ui::priority::cell_marker_visible(c) && c.kind == CellKind::Storm && !c.id.is_empty())
-                .map(|c| {
+                .enumerate()
+                .filter(|(_, c)| ui::priority::cell_marker_visible(c) && c.kind == CellKind::Storm && !c.id.is_empty())
+                .filter_map(|(cell_index, c)| {
                     let w = crate::render::mercator::lonlat_to_world(c.lon, c.lat);
                     let (sx, sy) = cam.world_to_screen(w, vp);
-                    let warned = self.alert_features.iter().any(|feature| {
-                        feature.kind == overlay::FeatureKind::Warning
-                            && feature.distance_km(c.lon, c.lat) < 0.5
-                    });
-                    (c.id.clone(), cell_glance_label(c), cell_label_dbz(c), c.hail_in.filter(|v| *v > 0.0),
-                        egui::pos2(prect.left() + sx, prect.top() + sy),
-                        selected == Some(c.id.as_str()), warned, cell_strength(c))
+                    let position = egui::pos2(prect.left() + sx, prect.top() + sy);
+                    if !prect.contains(position) {
+                        return None;
+                    }
+                    let warned = self.cell_warnings.is_warned(
+                        self.overlay_gen, &self.alert_features, cell_index, c.lon, c.lat,
+                    );
+                    Some((c.id.clone(), cell_glance_label(c), cell_label_dbz(c), c.hail_in.filter(|v| *v > 0.0),
+                        position, selected == Some(c.id.as_str()), warned, cell_strength(c)))
                 })
                 .collect();
             ids.sort_by_key(|(_, _, _, _, _, selected, warned, strength)| {
                 (!*selected, !*warned, std::cmp::Reverse(*strength))
             });
             ids.into_iter()
-                .filter(|(_, _, _, _, p, _, _, _)| prect.contains(*p))
                 .filter(|(id, label, dbz, hail, p, _, _, _)| {
                     let anchor = *p + egui::vec2(8.0, -8.0);
                     let size = if dbz.is_some() {
@@ -19049,6 +19166,9 @@ impl HookEchoApp {
     /// Whether a registry-backed observed field answers the instant this pane is showing.
     /// Unmigrated fields retain their existing behavior until they carry a `DataStamp`.
     fn field_aligned(&self, pane: usize, layer: crate::render::FieldLayer) -> bool {
+        if !derived_field_allowed(layer, self.views[pane].timeline.following) {
+            return false;
+        }
         if layer.is_native_abi() {
             let selection = if self.settings.link_satellite_times { &self.views[self.active] } else { &self.views[pane] };
             if !selection.satellite.follow_radar && selection.satellite.time.is_none() { return false; }
@@ -20338,7 +20458,7 @@ impl HookEchoApp {
                         self.request_capture(ui.ctx(), ShotDest::Download);
                     }
                     if ui
-                        .add_enabled(self.loop_export.is_none() && !self.video_export_pending, egui::Button::new("Download loop (GIF)"))
+                        .add_enabled(self.loop_export.is_none() && self.loop_encoding.is_none(), egui::Button::new("Download loop (GIF)"))
                         .on_hover_text("Capture the loaded radar timeline as an animated GIF")
                         .clicked()
                     {
@@ -20346,7 +20466,7 @@ impl HookEchoApp {
                         self.start_loop_export(crate::loopexport::LoopFormat::Gif);
                     }
                     if ui
-                        .add_enabled(self.loop_export.is_none() && !self.video_export_pending, egui::Button::new("Download video (MP4 / WebM)"))
+                        .add_enabled(self.loop_export.is_none() && self.loop_encoding.is_none(), egui::Button::new("Download video (MP4 / WebM)"))
                         .on_hover_text("Export the loaded radar timeline; the browser selects a supported video format")
                         .clicked()
                     {
@@ -20382,7 +20502,7 @@ impl HookEchoApp {
                         );
                     if ui
                         .add_enabled(
-                            self.loop_export.is_none(),
+                            self.loop_export.is_none() && self.loop_encoding.is_none(),
                             egui::Button::new("Export loop (GIF)…"),
                         )
                         .on_hover_text("Capture the archive timeline as a looping animation")
@@ -20395,7 +20515,7 @@ impl HookEchoApp {
                     if !cfg!(target_os = "android")
                         && ui
                             .add_enabled(
-                                self.loop_export.is_none(),
+                                self.loop_export.is_none() && self.loop_encoding.is_none(),
                                 egui::Button::new("Export loop (MP4)…"),
                             )
                             .on_hover_text(
@@ -21096,6 +21216,7 @@ impl HookEchoApp {
 
     /// Start a loop export (GIF or MP4): rewind the active timeline and capture every frame.
     fn start_loop_export(&mut self, format: crate::loopexport::LoopFormat) {
+        if self.loop_export.is_some() || self.loop_encoding.is_some() { return; }
         use crate::loopexport::LoopFormat;
         let (name, ext) = match format {
             LoopFormat::Gif => ("hookecho-loop.gif", "gif"),
@@ -21142,6 +21263,7 @@ impl HookEchoApp {
             resume_playing,
             prior_playhead,
             frames: Vec::with_capacity(slots),
+            capture_dimensions: None,
             remaining: slots,
             requested_count: slots,
             settle: LOOP_SETTLE_FRAMES,
@@ -21221,23 +21343,32 @@ impl HookEchoApp {
             return;
         };
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
-        let mut buf = Vec::with_capacity((w * h * 4) as usize);
-        for px in &image.pixels {
-            buf.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
-        }
-        if let Some(img) = image::RgbaImage::from_raw(w, h, buf) {
-            #[cfg(target_arch = "wasm32")]
-            let img = if w > 960 {
-                let scaled_h = ((h as f64 * 960.0 / w as f64).round() as u32).max(1);
-                image::imageops::resize(&img, 960, scaled_h, image::imageops::FilterType::Triangle)
-            } else {
-                img
-            };
-            le.frames.push(img);
-            if let Some(source) = source {
-                le.sources.push(source);
+        let dimensions = match le.capture_dimensions {
+            Some((original, dimensions)) if original == (w, h) => Ok(dimensions),
+            Some(_) => Err(anyhow::anyhow!("The viewport changed size during export; try again")),
+            None => crate::loopexport::capture_dimensions(w, h, le.requested_count, cfg!(target_arch = "wasm32")),
+        }.and_then(|dimensions| {
+            crate::loopexport::validate_capture_bytes(dimensions.0, dimensions.1, le.frames.len() + 1, cfg!(target_arch = "wasm32"))?;
+            Ok(dimensions)
+        });
+        let (width, height) = match dimensions {
+            Ok(dimensions) => dimensions,
+            Err(error) => {
+                self.cancel_loop_export();
+                self.toast(ToastKind::Error, format!("Loop export failed: {error}"));
+                return;
             }
-        }
+        };
+        le.capture_dimensions = Some(((w, h), (width, height)));
+        // Sample directly into the bounded image; a full-resolution intermediate doubles peak memory.
+        let img = image::RgbaImage::from_fn(width, height, |x, y| {
+            let sx = x as usize * image.size[0] / width as usize;
+            let sy = y as usize * image.size[1] / height as usize;
+            let px = image.pixels[sy * image.size[0] + sx];
+            image::Rgba([px.r(), px.g(), px.b(), px.a()])
+        });
+        le.frames.push(img);
+        if let Some(source) = source { le.sources.push(source); }
         le.capturing = false;
         le.remaining -= 1;
         if le.remaining > 0 {
@@ -21251,97 +21382,54 @@ impl HookEchoApp {
         }
     }
 
-    fn finish_loop_export(&mut self, _ctx: &egui::Context) {
+    fn finish_loop_export(&mut self, ctx: &egui::Context) {
         let le = self.loop_export.take().unwrap();
         self.restore_loop_timeline(&le);
         if le.frames.is_empty() {
             self.toast(ToastKind::Error, "Loop export failed: no radar frames were available");
             return;
         }
-        use crate::loopexport::LoopFormat;
+        let total = le.frames.len();
+        let control = crate::loopexport::ExportControl::default();
+        let tx = self.loop_encode_tx.clone();
+        let repaint = ctx.clone();
         #[cfg(target_arch = "wasm32")]
-        if le.format == LoopFormat::Mp4 {
-            match crate::loopexport::begin_browser_video(&le.frames, le.fps) {
-                Ok(promise) => {
-                    let tx = self.video_export_tx.clone();
-                    let repaint = _ctx.clone();
-                    self.video_export_pending = true;
+        {
+            match crate::loopexport::begin_browser_export(le.frames, le.fps, le.format, control.clone()) {
+                Ok(job) => {
+                    self.loop_encoding = Some(LoopEncoding { control, total, cancel_browser: job.cancel.clone() });
                     wasm_bindgen_futures::spawn_local(async move {
-                        let outcome = wasm_bindgen_futures::JsFuture::from(promise).await
-                            .map(|value| value.as_string().unwrap_or_else(|| "Video saved".to_string()))
-                            .map_err(|error| error.as_string().unwrap_or_else(|| format!("{error:?}")));
+                        let outcome = wasm_bindgen_futures::JsFuture::from(job.promise.clone()).await
+                            .map(|value| value.as_string().unwrap_or_else(|| "Loop ready to save".to_string()))
+                            .map_err(|error| {
+                                error.as_string().or_else(|| js_sys::Reflect::get(&error, &"message".into()).ok()?.as_string())
+                                    .unwrap_or_else(|| format!("{error:?}"))
+                            });
+                        drop(job);
                         let _ = tx.send(outcome);
                         repaint.request_repaint();
                     });
-                    self.toast(ToastKind::Info, "Encoding video…");
                 }
-                Err(error) => self.toast(ToastKind::Error, format!("Video export failed: {error}")),
+                Err(error) => self.toast(ToastKind::Error, format!("Loop export failed: {error}")),
             }
-            return;
         }
-        let res = match le.format {
-            #[cfg(not(target_arch = "wasm32"))]
-            LoopFormat::Gif => crate::loopexport::encode_gif(
-                &le.frames,
-                (1000.0 / le.fps.max(0.1)) as u16,
-                &le.dest,
-            ),
-            #[cfg(target_arch = "wasm32")]
-            LoopFormat::Gif => crate::loopexport::encode_gif_bytes(
-                &le.frames,
-                (1000.0 / le.fps.max(0.1)) as u16,
-            )
-            .and_then(|bytes| match crate::dialog::save_bytes("hookecho-loop.gif", "gif", &bytes) {
-                crate::dialog::Saved::Where(_) => Ok(()),
-                crate::dialog::Saved::Failed(e) => Err(anyhow::anyhow!(e)),
-                crate::dialog::Saved::Cancelled => Err(anyhow::anyhow!("download cancelled")),
-            }),
-            // The scrubber's slider is 1..=15 fps, which is also what the encoder accepts.
-            #[cfg(not(target_arch = "wasm32"))]
-            LoopFormat::Mp4 => crate::loopexport::encode_mp4(
-                &le.frames,
-                le.fps.round().clamp(1.0, 15.0) as u32,
-                &le.dest,
-            ),
-            #[cfg(target_arch = "wasm32")]
-            LoopFormat::Mp4 => unreachable!("browser video export returned above"),
-        }
-        .and_then(|()| {
-            #[cfg(target_arch = "wasm32")]
-            { return Ok(()); }
-            #[cfg(not(target_arch = "wasm32"))]
-            crate::loopexport::write_manifest(
-                &le.dest,
-                &crate::loopexport::Manifest {
-                    site: le.site.as_deref(),
-                    product: &le.product,
-                    units: le.units,
-                    tilt: le.tilt,
-                    fps: le.fps,
-                    center: le.center,
-                    zoom: le.zoom,
-                },
-                &le.sources,
-            ).and_then(|()| crate::dialog::finish_save(&le.dest).map(|_| ()).map_err(anyhow::Error::msg))
-        });
-        match res {
-            Ok(()) => {
-                log::info!(
-                    "loop saved: {} ({} frames)",
-                    le.dest.display(),
-                    le.frames.len()
-                );
-                let msg = if le.frames.len() == le.requested_count {
-                    format!("Loop saved ({} frames)", le.frames.len())
-                } else {
-                    format!("Loop saved ({} of {} frames; unavailable scans skipped)", le.frames.len(), le.requested_count)
-                };
-                self.toast(ToastKind::Success, msg);
-            }
-            Err(e) => {
-                log::warn!("loop encode failed: {e}");
-                self.toast(ToastKind::Error, format!("Loop export failed: {e}"));
-            }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.loop_encoding = Some(LoopEncoding { control: control.clone(), total, dest: le.dest.clone() });
+            self.spawner.spawn_blocking(move || {
+                let result = crate::loopexport::encode_export(&le.frames, le.format, &le.dest,
+                    &crate::loopexport::Manifest {
+                        site: le.site.as_deref(), product: &le.product, units: le.units, tilt: le.tilt,
+                        fps: le.fps, center: le.center, zoom: le.zoom,
+                    }, &le.sources, &control)
+                    .map(|()| if total == le.requested_count {
+                        format!("Loop saved ({total} frames)")
+                    } else {
+                        format!("Loop saved ({total} of {} frames; unavailable scans skipped)", le.requested_count)
+                    }).map_err(|error| error.to_string());
+                let _ = tx.send(result);
+                repaint.request_repaint();
+            });
         }
     }
 
@@ -21352,12 +21440,19 @@ impl HookEchoApp {
             timeline.go_head();
             if le.resume_playing && !timeline.playing { timeline.toggle_play(); }
         } else {
+            timeline.following = false;
             timeline.playhead = le.prior_playhead.min(timeline.frames.len().saturating_sub(1));
             timeline.playing = le.resume_playing;
         }
     }
 
     fn cancel_loop_export(&mut self) {
+        if let Some(encoding) = &self.loop_encoding {
+            encoding.control.cancel();
+            #[cfg(target_arch = "wasm32")]
+            let _ = encoding.cancel_browser.call0(&wasm_bindgen::JsValue::UNDEFINED);
+            return;
+        }
         let Some(le) = self.loop_export.take() else { return; };
         self.restore_loop_timeline(&le);
         if matches!(self.screenshot_pending.as_ref(), Some(ShotDest::Loop)) {
@@ -21371,12 +21466,15 @@ impl HookEchoApp {
     }
 
     fn loop_export_progress(&mut self, ctx: &egui::Context) {
-        let Some(le) = self.loop_export.as_ref() else { return; };
         // Screenshots are the source frames for the export. Hide this control while a
         // screenshot is pending so the progress UI never becomes part of the image.
-        if le.capturing { return; }
-        let done = le.requested_count.saturating_sub(le.remaining);
-        let total = le.requested_count;
+        let (done, total, label, cancelling) = if let Some(le) = &self.loop_export {
+            if le.capturing { return; }
+            (le.requested_count.saturating_sub(le.remaining), le.requested_count, "Capturing radar loop", false)
+        } else if let Some(encoding) = &self.loop_encoding {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            (encoding.control.completed(), encoding.total, "Encoding radar loop", encoding.control.is_cancelled())
+        } else { return; };
         let fraction = done as f32 / total.max(1) as f32;
         let mut cancel = false;
         egui::Area::new(egui::Id::new("loop_export_progress"))
@@ -21390,21 +21488,25 @@ impl HookEchoApp {
                     .corner_radius(8.0)
                     .inner_margin(egui::Margin::symmetric(12, 9))
                     .show(ui, |ui| {
-                        ui.label(format!("Exporting radar loop · {done}/{total} scans"));
+                        ui.label(format!("{label} · {done}/{total} scans"));
                         ui.add(egui::ProgressBar::new(fraction).desired_width(220.0));
-                        cancel = ui.button("Cancel export").clicked();
+                        cancel = ui.add_enabled(!cancelling, egui::Button::new(if cancelling { "Cancelling…" } else { "Cancel export" })).clicked();
                     });
             });
         if cancel { self.cancel_loop_export(); }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn poll_video_export(&mut self) {
-        if let Ok(result) = self.video_export_rx.try_recv() {
-            self.video_export_pending = false;
+    fn poll_loop_encoding(&mut self) {
+        if let Ok(result) = self.loop_encode_rx.try_recv() {
+            let Some(encoding) = self.loop_encoding.take() else { return; };
+            #[cfg(not(target_arch = "wasm32"))]
+            let result = result.and_then(|message| crate::dialog::finish_save(&encoding.dest).map(|_| message));
+            #[cfg(target_arch = "wasm32")]
+            let _ = encoding;
             match result {
                 Ok(message) => self.toast(ToastKind::Success, message),
-                Err(error) => self.toast(ToastKind::Error, format!("Video export failed: {error}")),
+                Err(error) if error == "Loop export cancelled" => self.toast(ToastKind::Info, error),
+                Err(error) => self.toast(ToastKind::Error, format!("Loop export failed: {error}")),
             }
         }
     }
@@ -22546,6 +22648,47 @@ fn rgba32(c: [u8; 4]) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
 
+#[derive(Default)]
+struct CellWarningCache {
+    generation: Option<u64>,
+    bounds: Vec<(usize, (f64, f64, f64, f64))>,
+    positions: Vec<Option<(u64, u64, bool)>>,
+    #[cfg(test)]
+    distance_checks: usize,
+}
+
+impl CellWarningCache {
+    fn is_warned(&mut self, generation: u64, features: &[GeoFeature], index: usize, lon: f64, lat: f64) -> bool {
+        // Overlay rebuilds cover alert and cell updates; panes and animation frames share results.
+        if self.generation != Some(generation) {
+            self.bounds = features.iter().enumerate().filter_map(|(i, feature)| {
+                (feature.kind == overlay::FeatureKind::Warning)
+                    .then(|| feature.bbox().map(|bbox| (i, bbox)))
+                    .flatten()
+            }).collect();
+            self.positions.clear();
+            self.generation = Some(generation);
+        }
+        if let Some(Some((x, y, warned))) = self.positions.get(index) {
+            if (*x, *y) == (lon.to_bits(), lat.to_bits()) { return *warned; }
+        }
+        // Match distance_km's local projection, including its polar scale clamp.
+        let dy = 0.5 / 111.194_927;
+        let dx = dy / lat.to_radians().cos().max(0.01);
+        let warned = self.bounds.iter().any(|&(i, (x0, y0, x1, y1))| {
+            if lon < x0 - dx || lon > x1 + dx || lat < y0 - dy || lat > y1 + dy {
+                return false;
+            }
+            #[cfg(test)]
+            { self.distance_checks += 1; }
+            features[i].distance_km(lon, lat) < 0.5
+        });
+        if self.positions.len() <= index { self.positions.resize(index + 1, None); }
+        self.positions[index] = Some((lon.to_bits(), lat.to_bits(), warned));
+        warned
+    }
+}
+
 fn cell_color(kind: CellKind) -> [u8; 4] {
     match kind {
         CellKind::Storm => [255, 235, 60, 255], // yellow
@@ -22980,6 +23123,7 @@ fn nearest_tropical_id(
 impl eframe::App for HookEchoApp {
     /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
     fn on_exit(&mut self) {
+        self.cancel_loop_export();
         self.checkpoint_recovery();
         // Remember where we were looking, so a relaunch picks up the map where it was left. Only
         // while no explicit startup view is saved — that one is the user's choice, not ours.
@@ -23228,8 +23372,7 @@ impl eframe::App for HookEchoApp {
 
         self.drive_snapshot_push(ctx);
         self.drive_widget_snapshot(ctx);
-        #[cfg(target_arch = "wasm32")]
-        self.poll_video_export();
+        self.poll_loop_encoding();
         self.save_pending_screenshot(ctx);
         self.load_marker_icons(ctx);
         self.drive_loop_export(ctx);
@@ -25652,6 +25795,49 @@ mod warning_scope_tests {
             title: String::new(),
             detail: String::new(),
             alert: None,
+        }
+    }
+
+    #[test]
+    fn cell_warning_cache_reuses_checks_and_refreshes_changed_data() {
+        let mut cache = super::CellWarningCache::default();
+        let mut features = vec![poly(-98.0, 32.0, -97.0, 33.0)];
+        assert!(cache.is_warned(1, &features, 0, -97.5, 32.5));
+        assert_eq!(cache.distance_checks, 1);
+        for _ in 0..240 {
+            assert!(cache.is_warned(1, &features, 0, -97.5, 32.5));
+        }
+        assert_eq!(cache.distance_checks, 1, "frames and panes reuse membership");
+        assert!(cache.is_warned(1, &features, 1, -97.4, 32.5));
+        assert!(cache.is_warned(1, &features, 0, -97.5, 32.5));
+        assert_eq!(cache.distance_checks, 2, "each cell has a stable cache slot");
+        assert!(!cache.is_warned(1, &features, 0, -80.0, 26.0));
+        assert_eq!(cache.distance_checks, 2, "moving distant cells skip polygon edges");
+        features.clear();
+        assert!(!cache.is_warned(2, &features, 0, -97.5, 32.5));
+        assert_eq!(cache.positions.len(), 1, "data refresh releases old positions");
+        features.push(poly(-81.0, 25.0, -79.0, 27.0));
+        assert!(cache.is_warned(3, &features, 0, -80.0, 26.0));
+    }
+
+    #[test]
+    fn cell_warning_bounds_preserve_near_edges_holes_and_high_latitudes() {
+        let mut cache = super::CellWarningCache::default();
+        let mut holed = poly(-98.0, 32.0, -97.0, 33.0);
+        holed.rings.push(poly(-97.8, 32.2, -97.2, 32.8).rings.remove(0));
+        let mut advisory = poly(-85.0, 30.0, -84.0, 31.0);
+        advisory.kind = FeatureKind::Advisory;
+        let features = vec![holed, poly(170.0, 80.0, 171.0, 81.0), advisory];
+        for (lon, lat) in [
+            (-98.0, 32.5), (-98.004, 32.5), (-98.01, 32.5),
+            (-97.5, 32.5), (-97.799, 32.5), (-97.1, 32.5),
+            (169.98, 80.5), (169.9, 80.5), (170.5, 81.004), (170.5, 81.01),
+            (-84.5, 30.5),
+        ] {
+            let expected = features.iter().any(|f| {
+                f.kind == FeatureKind::Warning && f.distance_km(lon, lat) < 0.5
+            });
+            assert_eq!(cache.is_warned(1, &features, 0, lon, lat), expected, "{lon}, {lat}");
         }
     }
 

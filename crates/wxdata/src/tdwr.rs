@@ -180,6 +180,10 @@ fn frame_name(site: &str, time: DateTime<Utc>) -> String {
     format!("{site}{}_TDWR", time.format("%Y%m%d_%H%M%S"))
 }
 
+fn product_revision(keys: &[Option<String>]) -> String {
+    keys.iter().map(|key| key.as_deref().unwrap_or("-")).collect::<Vec<_>>().join("|")
+}
+
 fn archive_site_id(id: &str, date: NaiveDate) -> &str {
     if canonical_site_id(id) == "TDJT"
         && date < NaiveDate::from_ymd_opt(2026, 8, 3).unwrap()
@@ -284,7 +288,8 @@ fn sweep_from(
 ///
 /// Returns the scan plus the volume name and time. The name follows the newest low-tilt
 /// reflectivity key, so later product arrivals cannot rename an already displayed frame. The
-/// revision identifies the selected product-key set and allows a same-name frame to gain tilts.
+/// revision identifies the usable product-key set, so failed downloads are retried even when
+/// the listing is unchanged and a same-name frame can gain tilts.
 pub async fn fetch_volume(
     http: &reqwest::Client,
     id: &str,
@@ -329,12 +334,12 @@ pub async fn fetch_volume(
         }
     })).await;
     anyhow::ensure!(keys.first().and_then(|key| key.as_ref()).is_some(), "TDWR low tilt unavailable at selected anchor");
-    let revision = keys.iter().map(|key| key.as_deref().unwrap_or("-")).collect::<Vec<_>>().join("|");
+    let revision = product_revision(&keys);
     if current_name == Some(name.as_str()) && current_revision == Some(revision.as_str()) {
         crate::stats::bump(crate::stats::Counter::FetchSkipped);
         return Ok(None);
     }
-    assemble_volume(http, meta, meta.id, keys, anchor).await.map(|(name, time, scan)| Some((name, time, scan, revision)))
+    assemble_volume(meta, meta.id, keys, anchor, true, |key| fetch_product(http, key)).await.map(Some)
 }
 
 /// Fetch the product set that was current at a listed low-tilt frame, for playback and scrubbing.
@@ -360,64 +365,69 @@ pub async fn fetch_volume_at(http: &reqwest::Client, id: &Identifier) -> anyhow:
         }
     })).await;
     let keys = std::iter::once(Some(low)).chain(other).collect();
-    assemble_volume(http, meta, site, keys, anchor).await
+    // Archive frames have no revision probe: never cache a failed advertised product as complete.
+    assemble_volume(meta, site, keys, anchor, false, |key| fetch_product(http, key))
+        .await.map(|(name, time, scan, _)| (name, time, scan))
 }
 
-async fn assemble_volume(
-    http: &reqwest::Client,
+async fn fetch_product(http: &reqwest::Client, key: String) -> anyhow::Result<nexrad_level3::Level3Product> {
+    let bytes = http
+        .get(crate::net::fetch_url(&format!("{BUCKET}/{key}")))
+        .timeout(crate::net::FEED_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    crate::stats::net(bytes.len());
+    Ok(nexrad_level3::decode(&bytes)?)
+}
+
+async fn assemble_volume<F>(
     meta: &SiteEntry,
     frame_site: &str,
-    keys: Vec<Option<String>>,
+    mut keys: Vec<Option<String>>,
     anchor: DateTime<Utc>,
-) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    allow_partial: bool,
+    fetch: impl Fn(String) -> F,
+) -> anyhow::Result<(String, DateTime<Utc>, Scan, String)>
+where
+    F: std::future::Future<Output = anyhow::Result<nexrad_level3::Level3Product>>,
+{
     // Six products. Serially that was most of the wait for a TDWR site; they're independent, so
     // fetch and decode them all at once.
     let mut jobs = Vec::new();
-    for ((n, (product, gate_len)), key) in PRODUCTS.iter().enumerate().zip(keys) {
-        let http = http.clone();
+    for ((n, (product, gate_len)), key) in PRODUCTS.iter().enumerate().zip(keys.iter().cloned()) {
+        let fetch = &fetch;
         let (product, gate_len) = (*product, *gate_len);
         jobs.push(async move {
             let key = key?;
-            let resp = http
-                .get(crate::net::fetch_url(&format!("{BUCKET}/{key}")))
-                .timeout(crate::net::FEED_TIMEOUT)
-                .send()
-                .await
-                .ok()?;
-            let bytes = resp.bytes().await.ok()?;
-            crate::stats::net(bytes.len());
-            let p = match nexrad_level3::decode(&bytes) {
+            let p = match fetch(key.clone()).await {
                 Ok(p) => p,
                 Err(e) => {
-                    log::warn!("tdwr decode {key}: {e}");
+                    log::warn!("tdwr fetch/decode {key}: {e}");
                     return None;
                 }
             };
             // Elevation numbers must be unique per sweep; reflectivity and velocity at one tilt
             // stay separate sweeps, which the split-cut-aware binning already handles.
             let timestamp = crate::level3::product_time(&p).or_else(|| key_time(&key))?;
-            let sweep = sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"), timestamp.timestamp_millis());
-            Some((n, sweep))
+            sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"), timestamp.timestamp_millis())
         });
     }
     // `join_all` and not a JoinSet: these are six round trips with a small decode each, so the
     // concurrency that matters is the IO, and this way the web build compiles the same code.
-    let mut found: Vec<(usize, Option<Sweep>)> = futures_util::future::join_all(jobs)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
-    // Keep the product order stable: sweeps are keyed by elevation number.
-    found.sort_by_key(|(n, _)| *n);
-    let mut sweeps = Vec::new();
-    for (_, sweep) in found {
-        if let Some(s) = sweep {
-            sweeps.push(s);
+    let found = futures_util::future::join_all(jobs).await;
+    anyhow::ensure!(found.first().is_some_and(Option::is_some), "no usable TDWR low-tilt reflectivity for {}", meta.id);
+    for (key, sweep) in keys.iter_mut().zip(&found) {
+        if sweep.is_none() {
+            anyhow::ensure!(allow_partial || key.is_none(), "TDWR product {} unavailable", key.as_deref().unwrap_or("-"));
+            *key = None;
         }
     }
-    if sweeps.is_empty() {
-        anyhow::bail!("no decodable TDWR tilts for {}", meta.id);
-    }
+    let revision = product_revision(&keys);
+    // join_all preserves product order, including the elevation numbers of missing sweeps.
+    let sweeps = found.into_iter().flatten().collect();
 
     // No separate tower height is published for these.
     let site: Site = meta.to_site();
@@ -438,7 +448,7 @@ async fn assemble_volume(
         false,
         Vec::new(),
     );
-    Ok((frame_name(frame_site, anchor), anchor, Scan::with_site(site, vcp, sweeps)))
+    Ok((frame_name(frame_site, anchor), anchor, Scan::with_site(site, vcp, sweeps), revision))
 }
 
 #[cfg(test)]
@@ -493,6 +503,106 @@ mod tests {
         let low_tilt = key_time("OKC_TZ0_2026_08_01_17_27_13").unwrap();
         assert_eq!(frame_name("TOKC", low_tilt), "TOKC20260801_172713_TDWR");
         assert!(latest_key_at_or_before(vec!["OKC_TV0_2026_08_01_17_28_02".to_owned()], low_tilt).is_none());
+    }
+
+    fn advertised_products() -> Vec<Option<String>> {
+        vec![
+            Some("OKC_TZ0_2026_08_01_17_27_13".into()),
+            None,
+            None,
+            Some("OKC_TV0_2026_08_01_17_27_13".into()),
+            None,
+            None,
+        ]
+    }
+
+    fn fixture_product(key: &str) -> anyhow::Result<nexrad_level3::Level3Product> {
+        let mut product = nexrad_level3::decode(include_bytes!("../../nexrad-level3/tests/data/tz0_okc.l3"))?;
+        if key.contains("_TV0_") {
+            product.code = 182;
+        }
+        Ok(product)
+    }
+
+    #[tokio::test]
+    async fn failed_advertised_product_retries_with_unchanged_keys() {
+        let keys = advertised_products();
+        let anchor = key_time(keys[0].as_deref().unwrap()).unwrap();
+        let meta = site_by_id("TOKC").unwrap();
+        let velocity_attempts = std::cell::Cell::new(0);
+        let fetch = |key: String| {
+            let result = if key.contains("_TV0_") && velocity_attempts.replace(velocity_attempts.get() + 1) == 0 {
+                Err(anyhow::anyhow!("temporary velocity download failure"))
+            } else {
+                fixture_product(&key)
+            };
+            std::future::ready(result)
+        };
+
+        let (name, time, partial, revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, true, &fetch)
+            .await.expect("live reflectivity remains usable");
+        assert!(bin_scan_opts(&partial, Moment::Reflectivity, 0, false).is_ok());
+        assert!(bin_scan_opts(&partial, Moment::Velocity, 0, false).is_err());
+        assert_ne!(revision, product_revision(&keys), "the next poll must not skip the unchanged listing");
+
+        let (next_name, next_time, complete, next_revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, true, &fetch)
+            .await.expect("retry succeeds with the same keys");
+        assert_eq!((next_name, next_time), (name, time));
+        assert_eq!(velocity_attempts.get(), 2);
+        assert_eq!(next_revision, product_revision(&keys), "a complete volume can skip the next unchanged poll");
+        assert!(bin_scan_opts(&complete, Moment::Velocity, 0, false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn failed_or_unusable_anchor_never_returns_a_velocity_only_volume() {
+        let keys = advertised_products();
+        let anchor = key_time(keys[0].as_deref().unwrap()).unwrap();
+        let meta = site_by_id("TOKC").unwrap();
+        for allow_partial in [true, false] {
+            for undecodable in [true, false] {
+                let fetch = |key: String| {
+                    let result = if key.contains("_TZ0_") && undecodable {
+                        Err(anyhow::anyhow!("low reflectivity download failed"))
+                    } else {
+                        fixture_product(&key).map(|mut product| {
+                            if key.contains("_TZ0_") { product.radial = None; }
+                            product
+                        })
+                    };
+                    std::future::ready(result)
+                };
+                let result = assemble_volume(meta, meta.id, keys.clone(), anchor, allow_partial, fetch).await;
+                assert!(result.unwrap_err().to_string().contains("low-tilt reflectivity"));
+            }
+        }
+        let mut missing_anchor = keys;
+        missing_anchor[0] = None;
+        assert!(assemble_volume(meta, meta.id, missing_anchor, anchor, true, |key| std::future::ready(fixture_product(&key)))
+            .await.is_err());
+    }
+
+    #[tokio::test]
+    async fn archive_retries_failed_advertised_products_but_allows_absent_ones() {
+        let keys = advertised_products();
+        let anchor = key_time(keys[0].as_deref().unwrap()).unwrap();
+        let meta = site_by_id("TOKC").unwrap();
+        let velocity_attempts = std::cell::Cell::new(0);
+        let fetch = |key: String| {
+            let result = if key.contains("_TV0_") && velocity_attempts.replace(velocity_attempts.get() + 1) == 0 {
+                Err(anyhow::anyhow!("temporary velocity download failure"))
+            } else {
+                fixture_product(&key)
+            };
+            std::future::ready(result)
+        };
+        assert!(assemble_volume(meta, meta.id, keys.clone(), anchor, false, &fetch).await.is_err());
+        let (_, _, scan, revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, false, &fetch)
+            .await.expect("retry succeeds although unadvertised upper tilts remain absent");
+        assert_eq!(velocity_attempts.get(), 2);
+        assert_eq!(revision, product_revision(&keys));
+        assert_eq!(scan.sweeps().len(), 2);
+        assert!(bin_scan_opts(&scan, Moment::Reflectivity, 0, false).is_ok());
+        assert!(bin_scan_opts(&scan, Moment::Velocity, 0, false).is_ok());
     }
 
     /// A synthetic tilt product round-trips through the fixed-point packing back to its own dBZ.
@@ -574,10 +684,9 @@ mod tests {
             .expect("a fresh fetch is never up to date");
         assert!(name.starts_with("TOKC"), "{name}");
         assert!(revision.contains("OKC_TZ0_"));
-        if let Some((next_name, _, _, next_revision)) = fetch_volume(&http, "TOKC", Some(&name), Some(&revision))
-            .await.expect("TDWR revision probe") {
-            assert!(next_name != name || next_revision != revision, "unchanged product set was decoded again");
-        }
+        // A failed optional download is retried even if the usable subset stays unchanged.
+        fetch_volume(&http, "TOKC", Some(&name), Some(&revision))
+            .await.expect("TDWR revision probe");
         assert!(Identifier::new(name).date_time().is_some());
         let tilts = crate::level2::elevation_angles(&scan);
         assert!(!tilts.is_empty(), "at least one tilt");

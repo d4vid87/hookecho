@@ -30,17 +30,27 @@ pub(crate) async fn fetch(http: &reqwest::Client, url: &str) -> anyhow::Result<V
 }
 
 pub(crate) fn decode(bytes: &[u8]) -> anyhow::Result<image::RgbaImage> {
+    decode_bounded(bytes, MAX_SIDE, MAX_PIXELS, 64 * 1024 * 1024)
+}
+
+/// Providers use 256/512-pixel tiles; allow 1024 for custom sources without large GPU uploads.
+pub(crate) fn decode_tile(bytes: &[u8]) -> anyhow::Result<image::RgbaImage> {
+    decode_bounded(bytes, 1024, 1024 * 1024, 16 * 1024 * 1024)
+}
+
+#[inline(never)] // Share the decoder machinery between image and tile limits.
+fn decode_bounded(bytes: &[u8], max_side: u32, max_pixels: u64, max_alloc: u64) -> anyhow::Result<image::RgbaImage> {
     use image::ImageDecoder;
     anyhow::ensure!(bytes.len() <= MAX_BYTES, "Image exceeds the 8 MiB file limit");
     let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_SIDE);
-    limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(64 * 1024 * 1024);
+    limits.max_image_width = Some(max_side);
+    limits.max_image_height = Some(max_side);
+    limits.max_alloc = Some(max_alloc);
     reader.limits(limits.clone());
     let mut decoder = reader.into_decoder()?;
     let (w, h) = decoder.dimensions();
-    anyhow::ensure!(w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_PIXELS, "Image exceeds the 8 megapixel limit");
+    anyhow::ensure!(w > 0 && h > 0 && u64::from(w) * u64::from(h) <= max_pixels, "Image exceeds the {max_pixels} pixel limit");
     decoder.set_limits(limits)?;
     Ok(image::DynamicImage::from_decoder(decoder)?.into_rgba8())
 }
@@ -66,7 +76,7 @@ mod tests {
     #[test]
     fn oversized_image_header_is_rejected_before_pixel_allocation() {
         let png: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x57, 0xc1, 0x95, 0x85, 0x00, 0x00, 0x00, 0x08, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01, 0x48, 0x06, 0x89, 0xd2, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82];
-        assert!(decode(png).unwrap_err().to_string().contains("8 megapixel"));
+        assert!(decode(png).unwrap_err().to_string().contains("pixel limit"));
     }
 
     #[test]
@@ -86,6 +96,29 @@ mod tests {
         assert_eq!(color(image.clone(), 8, false).unwrap().size, [8, 4]);
         assert!(color(image, 8, true).is_err());
         assert!(decode(&vec![0; MAX_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn raster_tiles_accept_provider_sizes_and_reject_oversized_headers() {
+        for side in [256, 512, 1024] {
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(&vec![120; side as usize * side as usize * 4], side, side, image::ExtendedColorType::Rgba8).unwrap();
+            assert_eq!(decode_tile(&png).unwrap().dimensions(), (side, side));
+        }
+        for format in [image::ImageFormat::Jpeg, image::ImageFormat::WebP] {
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(512, 512, image::Rgb([40, 90, 130])))
+                .write_to(&mut encoded, format).unwrap();
+            assert_eq!(decode_tile(encoded.get_ref()).unwrap().dimensions(), (512, 512));
+        }
+        for (width, height) in [(8193, 1), (1, 8193), (1025, 1025)] {
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(&vec![0; width as usize * height as usize * 4], width, height, image::ExtendedColorType::Rgba8).unwrap();
+            assert!(png.len() < MAX_BYTES);
+            assert!(decode_tile(&png).is_err(), "{width}x{height} must not reach the GPU");
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

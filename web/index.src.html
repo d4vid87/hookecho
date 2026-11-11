@@ -171,6 +171,11 @@
 
       // Job ids, transfers and worker-death handling all live in decode-bridge.js, which takes
       // the spawn as a callback so its failure path can be tested without a browser.
+      globalThis.__hookechoCreateExportWorker = () => {
+        const worker = new Worker(new URL("./decode-worker.js?v=radar-fields", import.meta.url), { type: "module" });
+        worker.postMessage({ module, glue: glueUrl });
+        return worker;
+      };
       const startDecodeWorker = () => {
         globalThis.__decodeVolume = makeBridge({
           spawnWorker: () => {

@@ -8,6 +8,23 @@ Tested `main` builds publish as immutable Preview releases. Named entries below
 record major updates; versioned entries match GitHub tags. Older releases stay
 available for rollback.
 
+## Radar correctness and resource limits - 2026-11-11 (rolling release)
+
+- Align GOES RGB imagery to the geographic display grid and remove repeated
+  channel-coordinate comparisons from the pixel loop.
+- Correct the derived hail-layer mask, preserve archived echo tops and hide live
+  hail products during archive playback. Avoid empty or duplicate hail jobs.
+- Keep freezing levels tied to their radar station, refresh cached levels and use
+  both heights from the same model analysis. Clear stale ZDR/bright-band results.
+- Retry missing advertised TDWR products without treating partial downloads as a
+  complete volume. Require usable low-tilt reflectivity and complete archive data.
+- Reuse storm-cell warning membership across frames and panes, skip offscreen
+  cells and reject distant polygons before checking their edges.
+- Bound tile downloads, cache reads, raster dimensions and vector decompression;
+  evict invalid cached tiles and retry once.
+- Bound loop-capture memory, reducing export resolution for long clips. Encode
+  native loops and browser GIFs away from the map UI, with progress and cancellation.
+
 ## Quiet Contour warnings - 2026-11-06 (rolling release)
 
 - Replace heavy white warning halos with fine hazard-colored contours, narrow
