@@ -4,9 +4,21 @@ Notable changes per release, newest first. Every tagged release's body on GitHub
 is this file's matching section, extracted by `.github/workflows/release.yml` —
 so **write the section before pushing the tag**, or the release job fails.
 
-Tested `main` builds publish as immutable Preview releases. Named entries below
+Tested `main` builds publish as immutable main releases. Named entries below
 record major updates; versioned entries match GitHub tags. Older releases stay
 available for rollback.
+
+## 0.12.0 - 2026-11-11
+
+- Remove beta version suffixes and Preview labels from shipped web, desktop,
+  Android and Docker builds. About, command-line version output and package
+  metadata identify version 0.12.0 on the stable channel.
+- Publish tested main builds as the latest main GitHub release, titled Hookecho,
+  and update Docker's `latest` tag. Keep exact commit tags for reproducible downloads.
+- Increase Android's version code and allow Windows MSI replacement at the same
+  numeric version so existing beta installations can upgrade.
+- Update website download copy, release selection and package metadata to use the
+  main release, and embed the exact source revision in Docker builds.
 
 ## Radar correctness and resource limits - 2026-11-11 (rolling release)
 

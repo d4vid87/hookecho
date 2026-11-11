@@ -12,7 +12,7 @@ export const requiredFiles = [
 
 export function releasePlan(ref, sha) {
   if (!/^[a-f0-9]{40}$/.test(sha ?? '')) throw new Error('Full commit SHA required');
-  if (ref === 'refs/heads/main') return {tag: `build-${sha}`, title: `Preview ${sha.slice(0, 12)}`, prerelease: true};
+  if (ref === 'refs/heads/main') return {tag: `build-${sha}`, title: 'Hookecho', prerelease: false};
   if (!/^refs\/tags\/v\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(ref ?? '')) throw new Error('Only main and version tags can publish');
   const tag = ref.slice('refs/tags/'.length);
   return {tag, title: tag, prerelease: tag.includes('-')};
@@ -72,7 +72,7 @@ async function publish() {
     await fs.copyFile(file, path.join(stage, name));
   }
   await fs.writeFile(path.join(stage, 'SHA256SUMS'), checksums.sort().join('\n') + '\n');
-  let notes = 'Tested preview of main. All platform packages come from the same commit. Older builds remain available for rollback.\n\nmacOS remains experimental.\n';
+  let notes = 'Tested Hookecho release. All platform packages come from the same commit. Older builds remain available for rollback.\n\nmacOS remains experimental.\n';
   if (ref.startsWith('refs/tags/')) {
     const changelog = await fs.readFile('CHANGELOG.md', 'utf8');
     const heading = `## ${plan.tag.slice(1)} `;
@@ -84,7 +84,9 @@ async function publish() {
   await fs.writeFile(path.join(stage, 'notes.md'), `${notes}\n\n${marker}\n`);
   if (!existing) gh(['release', 'create', plan.tag, '--repo', repo, '--target', sha, '--draft', '--title', plan.title, '--notes-file', path.join(stage, 'notes.md')]);
   gh(['release', 'upload', plan.tag, '--repo', repo, '--clobber', ...requiredFiles.map(name => path.join(stage, name)), path.join(stage, 'SHA256SUMS')]);
-  gh(['release', 'edit', plan.tag, '--repo', repo, '--draft=false', `--prerelease=${plan.prerelease}`, `--latest=${!plan.prerelease}`]);
+  // A rerun of an older main commit must not replace a newer release as Latest.
+  const currentMain = ref !== 'refs/heads/main' || JSON.parse(gh(['api', `repos/${repo}/git/ref/heads/main`])).object.sha === sha;
+  gh(['release', 'edit', plan.tag, '--repo', repo, '--title', plan.title, '--draft=false', `--prerelease=${plan.prerelease}`, `--latest=${!plan.prerelease && currentMain}`]);
   // Retire the old mutable channel without removing its last downloadable packages.
   retireLegacy();
   console.log(`Published complete release: https://github.com/${repo}/releases/tag/${plan.tag}`);

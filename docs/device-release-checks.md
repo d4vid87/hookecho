@@ -54,8 +54,8 @@ On the actual refrigerator browser, record the full model and browser version:
 
 ## Release decision
 
-Automated CI is mandatory for the exact commit. Use a preview release until the
-target-device checks pass. An unavailable physical device remains an explicit
+Automated CI and platform packaging checks are mandatory for the exact commit.
+Record the target-device results with the main release. An unavailable physical device remains an explicit
 verification gap; browser simulation and Kotlin unit tests do not close it.
 
 For rollback, download a previous immutable release from GitHub Releases and

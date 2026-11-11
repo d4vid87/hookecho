@@ -33,17 +33,16 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
 
-// Single source of truth for the version: the workspace Cargo.toml. Hand-maintained gradle
-// versions drifted (0.4.0 here vs 0.5.0 there) — 0.5.0 -> versionCode 50000, which also jumps
-// one-way above every previously published code.
+// Keep the display version synchronized with the workspace Cargo.toml.
 val cargoVersion: String =
     Regex("""(?m)^version\s*=\s*"([^"]+)"""")
         .find(rootProject.file("../Cargo.toml").readText())
         ?.groupValues?.get(1)
         ?: error("no version in ../Cargo.toml")
-// major.minor.patch -> MmmmmmPPPP, monotonic: 0.5.0 -> 50000, 1.2.3 -> 1020003.
+// Permanent migration offset: stable 0.12.0 must upgrade beta.2's published code 120000.
+// Later patches remain monotonic: 0.12.0 -> 120001, 0.12.1 -> 120002, 1.2.3 -> 1020004.
 val cargoVersionCode: Int = cargoVersion.split(".", "-")
-    .let { it[0].toInt() * 1_000_000 + it[1].toInt() * 10_000 + it[2].toInt() }
+    .let { it[0].toInt() * 1_000_000 + it[1].toInt() * 10_000 + it[2].toInt() + 1 }
 
 android {
     namespace = "io.hookecho.HookEcho"

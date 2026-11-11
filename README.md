@@ -126,7 +126,7 @@ chmod +x HookEcho-x86_64.AppImage
 Windows or Mac may warn that HookEcho is from an unknown developer. On Windows, choose **More
 info → Run anyway**. On Mac, open **System Settings → Privacy & Security → Open Anyway**.
 
-HookEcho is currently in beta. Please [report anything that does not work](https://github.com/d4vid87/hookecho/issues/new).
+HookEcho 0.12.0 is the main release. Please [report anything that does not work](https://github.com/d4vid87/hookecho/issues/new).
 
 ## What you can do
 

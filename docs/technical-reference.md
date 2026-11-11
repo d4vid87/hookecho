@@ -68,12 +68,12 @@ built from NOAA's free GRIB grids, so it needs no API key.</sub>
   ALSA/Wayland/GTK dev headers — see `.github/workflows/ci.yml`). Android builds
   via `android/build.sh` (NDK + `cargo-ndk`).
 
-Versioned releases without a prerelease suffix are the stable channel. Main-branch
-builds publish as **Preview** releases with an immutable `build-<commit>` tag after
+Version 0.12.0 and tested main builds use the stable channel. Main-branch
+builds publish as the latest **Hookecho** release with an immutable `build-<commit>` tag after
 CI and every platform package succeeds. All packages and `SHA256SUMS` are published
 together; older releases stay public for rollback. The [releases page](https://github.com/d4vid87/hookecho/releases)
-lists both channels. Container `:preview` follows tested main builds; `:latest`
-follows stable version tags, and `:sha-<commit>` identifies an exact image.
+includes earlier releases for rollback. Container `:latest` follows tested main
+builds and stable version tags; `:sha-<commit>` identifies an exact image.
 
 First launch can choose a nearby radar from your location; you can also search
 for a site. Everything else — map, theme, accent color, how warnings reach you —
@@ -681,7 +681,7 @@ docker run -d -p 127.0.0.1:8080:8080 \
   ghcr.io/d4vid87/hookecho:latest
 ```
 
-`:preview` follows tested `main` builds; `:latest` follows stable version tags. Exact images use
+`:latest` follows tested `main` builds and stable version tags. Exact images use
 `:sha-<commit>`, and released versions are tagged
 (`:0.7.0`). `docker build -t hookecho .` still works if you'd rather build it.
 

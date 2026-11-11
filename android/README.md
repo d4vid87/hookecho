@@ -52,7 +52,9 @@ android/build.sh` enables the puffin server (see `crates/hookecho/src/profiling.
 
 Gradle comes from the committed wrapper (`android/gradlew`), so the Gradle version is identical
 locally and in CI. `versionCode`/`versionName` are derived from the workspace `Cargo.toml`
-(0.5.0 → `50000`/`0.5.0`) — bump the crate version, not the Gradle file.
+(0.12.0 → `120001`/`0.12.0`) — bump the crate version, not the Gradle file. A permanent
+one-code offset ensures the stable 0.12.0 APK upgrades the already published beta's
+`120000` code; subsequent patch releases keep increasing.
 
 ## F-Droid
 

@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 COPY . .
+# .git stays out of the build context; CI supplies immutable build provenance instead.
+ARG HOOKECHO_BUILD_REVISION
+ARG SOURCE_DATE_EPOCH
 RUN cargo build --release -p hookecho --bin hookecho
 
 FROM debian:bookworm-slim

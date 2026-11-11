@@ -5,9 +5,9 @@ const DOWNLOAD_FILES = [
 
 export function selectDownload(releases, name) {
   if (!DOWNLOAD_FILES.includes(name)) return null;
-  const complete = releases.filter(release => !release.draft &&
+  const complete = releases.filter(release => !release.draft && !release.prerelease &&
     DOWNLOAD_FILES.every(file => release.assets?.some(asset => asset.name === file)));
-  const stable = complete.filter(release => /^v\d+\.\d+\.\d+$/.test(release.tag_name) && !release.prerelease);
+  const stable = complete.filter(release => /^v\d+\.\d+\.\d+$/.test(release.tag_name));
   const current = release => release.assets.some(asset => asset.name === "SHA256SUMS");
   const selected = stable.find(current) ?? complete.find(current) ?? complete.find(release => release.tag_name === "latest");
   const asset = selected?.assets.find(asset => asset.name === name);

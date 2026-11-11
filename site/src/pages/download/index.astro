@@ -2,7 +2,7 @@
 import Base from "../../layouts/Base.astro";
 import Icon from "../../components/Icon.astro";
 
-const releases = "https://github.com/d4vid87/hookecho/releases";
+const releases = "https://github.com/d4vid87/hookecho/releases/latest";
 const asset = (name: string) => `/download-file/${name}`;
 
 // The `id` values are what the OS sniff below matches on, and the order is the order the grid
@@ -76,10 +76,15 @@ const stores = ["Flathub", "Snap Store", "AUR", "Homebrew", "winget"];
       </div>
 
       <p class="dim">
-        Every build comes from the same
-        <a href={releases}>Releases page</a>. Versioned releases provide stable downloads. Preview releases contain newer tested builds and remain available for rollback. Trouble
+        HookEcho 0.12.0 is the current stable release. Every platform download comes from the
+        <a href={releases}>main release</a>, with checksums included. Trouble
         installing? <a href="/docs/install/">The install guide</a> walks through each platform.
       </p>
+
+      <h2>Docker</h2>
+      <p>Use the current main release from the container registry:</p>
+      <pre><code>docker pull ghcr.io/d4vid87/hookecho:latest</code></pre>
+      <p><a href="/docs/install/#docker">Run HookEcho with Docker</a>.</p>
 
       <h2 class="stores-head">In the app stores</h2>
       <p>

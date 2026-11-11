@@ -57,6 +57,12 @@ jobs:
 
       - name: Smoke-test the AppImage
         run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          channel=Stable
+          [[ "$version" != *-* ]] || channel=Preview
+          output=$(APPIMAGE_EXTRACT_AND_RUN=1 ./dist/HookEcho-x86_64.AppImage --version)
+          printf '%s\n' "$output"
+          [[ "$output" == "hookecho $version ("*"; $channel; built "* ]]
           APPIMAGE_EXTRACT_AND_RUN=1 ./dist/HookEcho-x86_64.AppImage \
             --headless-icon /tmp/icon.png
           test -s /tmp/icon.png
@@ -107,6 +113,12 @@ jobs:
       - name: Smoke-test
         shell: bash
         run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          channel=Stable
+          [[ "$version" != *-* ]] || channel=Preview
+          output=$(./target/release/hookecho.exe --version)
+          printf '%s\n' "$output"
+          [[ "$output" == "hookecho $version ("*"; $channel; built "* ]]
           ./target/release/hookecho.exe --headless-icon icon.png
           test -s icon.png
 
@@ -143,6 +155,25 @@ jobs:
             -o dist/hookecho.wixobj packaging/windows/main.wxs
           candle -nologo -arch x64 -dPiperDir=target/release/piper -o dist/piper.wixobj dist/piper.wxs
           light -nologo -o dist/HookEcho-x86_64.msi dist/hookecho.wixobj dist/piper.wixobj
+
+      - name: Verify MSI version and upgrade policy
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ steps.ver.outputs.numeric }}
+        run: |
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.OpenDatabase((Resolve-Path 'dist/HookEcho-x86_64.msi').Path, 0)
+          $view = $db.OpenView('SELECT `Value` FROM `Property` WHERE `Property` = ''ProductVersion''')
+          $view.Execute()
+          $row = $view.Fetch()
+          if (!$row -or $row.StringData(1) -ne $env:EXPECTED_VERSION) { throw 'MSI ProductVersion does not match the package version' }
+          $view.Close()
+          $view = $db.OpenView('SELECT `VersionMax`, `Attributes` FROM `Upgrade` WHERE `ActionProperty` = ''WIX_UPGRADE_DETECTED''')
+          $view.Execute()
+          $row = $view.Fetch()
+          if (!$row -or $row.StringData(1) -ne $env:EXPECTED_VERSION -or ($row.IntegerData(2) -band 512) -eq 0 -or ($row.IntegerData(2) -band 2) -ne 0) { throw 'MSI must replace installed builds with the same numeric version' }
+          $view.Close()
+          Write-Host "MSI $env:EXPECTED_VERSION has inclusive same-version upgrade detection."
 
       # Inno Setup 6 is preinstalled on windows-latest (not on PATH). pwsh avoids
       # Git-bash mangling of the /D switches.
@@ -260,7 +291,12 @@ jobs:
 
       - name: Smoke-test
         run: |
-          ./dist/HookEcho.app/Contents/MacOS/hookecho --version
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          channel=Stable
+          [[ "$version" != *-* ]] || channel=Preview
+          output=$(./dist/HookEcho.app/Contents/MacOS/hookecho --version)
+          printf '%s\n' "$output"
+          [[ "$output" == "hookecho $version ("*"; $channel; built "* ]]
           ./dist/HookEcho.app/Contents/MacOS/hookecho --headless-icon /tmp/icon.png 64
           test -s /tmp/icon.png
 
@@ -364,7 +400,7 @@ jobs:
           path: HookEcho-arm64-v8a.aab
 
 
-  # Exact images stay addressable; preview and stable aliases point to their own channels.
+  # Exact images stay addressable; current main and stable version tags update latest.
   docker:
     needs: verify
     name: Container image (ghcr.io)
@@ -388,22 +424,43 @@ jobs:
         id: build
         run: |
           image="ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')"
-          docker build -t "$image:sha-$GITHUB_SHA" .
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ "$GITHUB_REF" == refs/heads/main && "$version" == *-* ]]; then
+            echo "Main releases require a stable package version." >&2
+            exit 1
+          fi
+          docker build --build-arg "HOOKECHO_BUILD_REVISION=$GITHUB_SHA" \
+            --build-arg "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$version" \
+            -t "$image:sha-$GITHUB_SHA" .
           case "$GITHUB_REF" in
-            refs/tags/v*-*) docker tag "$image:sha-$GITHUB_SHA" "$image:${GITHUB_REF#refs/tags/v}";;
-            refs/tags/v*) docker tag "$image:sha-$GITHUB_SHA" "$image:${GITHUB_REF#refs/tags/v}"
-                          docker tag "$image:sha-$GITHUB_SHA" "$image:latest";;
-            refs/heads/main) docker tag "$image:sha-$GITHUB_SHA" "$image:preview";;
+            refs/tags/v*) docker tag "$image:sha-$GITHUB_SHA" "$image:${GITHUB_REF#refs/tags/v}";;
           esac
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # A container that can't start is worse than no container; find out here, not in someone's
       # compose file.
       - name: Smoke-test the image
-        run: docker run --rm --entrypoint hookecho ${{ steps.build.outputs.image }}:sha-${{ github.sha }} --version
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          output=$(docker run --rm --entrypoint hookecho "$IMAGE:sha-$GITHUB_SHA" --version)
+          printf '%s\n' "$output"
+          channel=Stable
+          [[ "$VERSION" != *-* ]] || channel=Preview
+          case "$output" in
+            "hookecho $VERSION ($GITHUB_SHA; $channel; built "*) ;;
+            *) echo "Container build provenance does not match this release." >&2; exit 1;;
+          esac
 
       - name: Push
-        run: docker push --all-tags ${{ steps.build.outputs.image }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: bash scripts/release/publish-container.sh
 
   publish:
     name: Publish complete release

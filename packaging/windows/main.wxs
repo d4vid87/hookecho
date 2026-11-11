@@ -9,7 +9,9 @@
            Manufacturer="HookEcho project"
            UpgradeCode="25ff064b-8dc5-4675-b924-414268ca1a45">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of HookEcho is already installed." />
+    <!-- Beta and rolling builds can share X.Y.Z; replace that product instead of installing beside it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of HookEcho is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- The exe embeds its icon (see build.rs), so Add/Remove Programs and the Start Menu

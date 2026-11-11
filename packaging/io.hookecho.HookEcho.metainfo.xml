@@ -32,25 +32,25 @@
 
   <!--
     Flathub requires at least one screenshot, fetched over https at build time — so these point at
-    the same images the README uses, served raw from the tag rather than from `main`, which would
-    let a later commit change what a published listing shows.
+    the current screenshot gallery on main so the listing reflects the shipped layout and warning
+    styling instead of retaining images pinned to an old beta.
   -->
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.2/docs/shots/alltilts.jpg</image>
-      <caption>Level 2 reflectivity at every tilt, over an interactive basemap</caption>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/main/docs/shots/alltilts.jpg</image>
+      <caption>Four-product analysis: reflectivity, storm-relative velocity, CC and ZDR</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.2/docs/shots/mosaic.jpg</image>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/main/docs/shots/mosaic.jpg</image>
       <caption>The national MRMS mosaic</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.2/docs/shots/alerts.jpg</image>
-      <caption>Warnings, storm reports and spotters</caption>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/main/docs/shots/alerts.jpg</image>
+      <caption>Archived tornado warning bulletin for the May 20, 2013 Moore storm</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/d4vid87/hookecho/v0.12.0-beta.2/docs/shots/hrrr.jpg</image>
-      <caption>HRRR model fields and severe composite parameters</caption>
+      <image>https://raw.githubusercontent.com/d4vid87/hookecho/main/docs/shots/hrrr.jpg</image>
+      <caption>HRRR one-hour forecast, valid November 11, 2026 at 18:00 UTC</caption>
     </screenshot>
   </screenshots>
 
@@ -79,8 +79,9 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="0.12.0-beta.2" date="2026-08-30" type="development"/>
-    <release version="0.12.0-beta.1" date="2026-08-26" type="development"/>
+    <release version="0.12.0" date="2026-11-11" type="stable"/>
+    <release version="0.12.0~beta.2" date="2026-08-30" type="development"/>
+    <release version="0.12.0~beta.1" date="2026-08-26" type="development"/>
     <release version="0.11.0" date="2026-08-25"/>
     <release version="0.10.0" date="2026-08-14"/>
     <release version="0.9.0" date="2026-08-11"/>

@@ -1,8 +1,11 @@
 fn main() {
-    let revision = std::process::Command::new("git").args(["describe", "--always", "--dirty", "--exclude", "*"])
-        .output().ok().filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_owned()).unwrap_or_else(|| "unknown".into());
+    let revision = std::env::var("HOOKECHO_BUILD_REVISION").ok()
+        .map(|value| value.trim().to_owned()).filter(|value| !value.is_empty())
+        .or_else(|| std::process::Command::new("git").args(["describe", "--always", "--dirty", "--exclude", "*"])
+            .output().ok().filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|value| value.trim().to_owned()))
+        .unwrap_or_else(|| "unknown".into());
     let epoch = std::env::var("SOURCE_DATE_EPOCH").ok().and_then(|value| value.parse::<u64>().ok())
         .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
     let version = std::env::var("CARGO_PKG_VERSION").unwrap();
@@ -10,6 +13,7 @@ fn main() {
     println!("cargo:rustc-env=HOOKECHO_BUILD_DATE={epoch}");
     println!("cargo:rustc-env=HOOKECHO_BUILD_CHANNEL={}", if version.contains('-') { "Preview" } else { "Stable" });
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    println!("cargo:rerun-if-env-changed=HOOKECHO_BUILD_REVISION");
     // Track the worktree's HEAD/ref as well as source edits, so rebuilt binaries identify their commit.
     let reference = std::process::Command::new("git").args(["symbolic-ref", "-q", "HEAD"])
         .output().ok().filter(|output| output.status.success())

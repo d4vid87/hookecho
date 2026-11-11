@@ -5,10 +5,9 @@ order: 3
 ---
 
 [The download page](/download/) helps you choose the right build for your machine.
-Use [GitHub Releases](https://github.com/d4vid87/hookecho/releases) for the current
-filenames below. Version tags without a prerelease suffix are the stable channel.
-Preview releases contain tested main-branch builds, each with an immutable commit
-tag and checksums. Older releases stay available for rollback.
+HookEcho **0.12.0** is the current stable release. Use the
+[main GitHub release](https://github.com/d4vid87/hookecho/releases/latest) for the
+platform files below and their checksums. Older releases stay available for rollback.
 
 Or don't install anything: [app.hookecho.io](https://app.hookecho.io) is the
 whole app running in your browser on live data.
@@ -59,6 +58,22 @@ brew install --HEAD d4vid87/hookecho/hookecho
 If you run it on a Mac,
 [say what happened](https://github.com/d4vid87/hookecho/issues) — that's the
 only way this build stops being experimental.
+
+## Docker
+
+The `latest` container tag follows the current main release:
+
+```sh
+docker pull ghcr.io/d4vid87/hookecho:latest
+docker run -d -p 127.0.0.1:8080:8080 \
+  -v ~/.config/hookecho:/root/.config/hookecho \
+  -v hookecho-cache:/root/.cache/hookecho \
+  ghcr.io/d4vid87/hookecho:latest
+```
+
+Open `http://127.0.0.1:8080` on the same machine. The settings and cache mounts
+persist between container updates. For an exact build, use the
+`ghcr.io/d4vid87/hookecho:sha-<commit>` tag listed in its release notes.
 
 ## From source
 

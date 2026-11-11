@@ -7,9 +7,9 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {releasePlan, collectReleaseFiles, requiredFiles} from './publish.mjs';
 
-test('previews have immutable commit tags and never become the stable release', () => {
+test('main releases are stable with immutable tags; explicit prerelease tags stay prereleases', () => {
   const sha = 'a'.repeat(40);
-  assert.deepEqual(releasePlan('refs/heads/main', sha), {tag: `build-${sha}`, title: `Preview ${sha.slice(0, 12)}`, prerelease: true});
+  assert.deepEqual(releasePlan('refs/heads/main', sha), {tag: `build-${sha}`, title: 'Hookecho', prerelease: false});
   assert.equal(releasePlan('refs/tags/v1.2.3', sha).prerelease, false);
   assert.equal(releasePlan('refs/tags/v1.2.3-beta.1', sha).prerelease, true);
   assert.throws(() => releasePlan('refs/heads/other', sha));
@@ -45,6 +45,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(args) + '\\n');
 const state = process.env.FAKE_STATE;
 if (args[0] === 'api') {
+  if (args[1].endsWith('/git/ref/heads/main')) { console.log(JSON.stringify({object:{sha:process.env.FAKE_MAIN_SHA || process.env.GITHUB_SHA}})); process.exit(0); }
   if (args[1].endsWith('/tags/latest')) { console.error('HTTP 404'); process.exit(1); }
   if (!fs.existsSync(state)) { console.error('HTTP 404'); process.exit(1); }
   console.log(fs.readFileSync(state, 'utf8'));
@@ -66,9 +67,22 @@ if (args[0] === 'api') {
     const retry = run({}); assert.equal(retry.status, 0, retry.stderr);
     assert.equal(JSON.parse(await fs.readFile(state)).draft, false);
     const before = await fs.readFile(log, 'utf8');
+    const commands = before.trim().split('\n').map(line => JSON.parse(line));
+    const published = commands.find(args => args.includes('--draft=false'));
+    assert(published.includes('--prerelease=false'));
+    assert(published.includes('--latest=true'));
+    assert.equal(published[published.indexOf('--title') + 1], 'Hookecho');
+    assert(!JSON.parse(await fs.readFile(state)).body.includes('preview'));
     assert.equal(run({}).status, 0);
     const added = (await fs.readFile(log, 'utf8')).slice(before.length);
     assert(!added.includes('upload'));
     assert.equal((await fs.readFile(path.join(root, 'dist/publish/SHA256SUMS'), 'utf8')).trim().split('\n').length, requiredFiles.length);
+    await fs.rm(state);
+    await fs.writeFile(log, '');
+    const oldCommit = run({FAKE_MAIN_SHA: 'b'.repeat(40)});
+    assert.equal(oldCommit.status, 0, oldCommit.stderr);
+    const oldPublish = (await fs.readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).find(args => args.includes('--draft=false'));
+    assert(oldPublish.includes('--prerelease=false'));
+    assert(oldPublish.includes('--latest=false'));
   } finally { await fs.rm(root, {recursive: true, force: true}); }
 });

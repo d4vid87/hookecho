@@ -4,13 +4,15 @@ import {selectDownload, downloadRedirect} from '../public/_worker.js';
 
 const names = ['HookEcho-x86_64.AppImage', 'HookEcho-amd64.deb', 'hookecho-windows-x86_64.zip', 'HookEcho-x86_64.msi', 'HookEcho-setup-x86_64.exe', 'HookEcho-macos.zip', 'HookEcho-arm64-v8a.apk', 'SHA256SUMS'];
 const release = (tag, prerelease = true) => ({tag_name: tag, prerelease, draft: false, assets: names.map(name => ({name, browser_download_url: `https://github.com/d4vid87/hookecho/releases/download/${tag}/${name}`}))});
-test('downloads prefer a complete stable release and otherwise use a complete preview', () => {
+test('downloads choose complete stable releases and never fall back to prereleases', () => {
   const preview = release('build-abc');
   const stable = release('v1.2.3', false);
   const name = names[0];
   assert.equal(selectDownload([preview, stable], name), stable.assets[0].browser_download_url);
-  assert.equal(selectDownload([preview, {...stable, draft: true}], name), preview.assets[0].browser_download_url);
+  assert.equal(selectDownload([preview, {...stable, draft: true}], name), null);
   assert.equal(selectDownload([{...preview, assets: preview.assets.slice(1)}, stable], name), stable.assets[0].browser_download_url);
+  assert.equal(selectDownload([preview], name), null);
+  assert.equal(selectDownload([release('v0.12.0-beta.1')], name), null);
   assert.equal(selectDownload([preview], '../settings.json'), null);
   assert.equal(selectDownload([{...preview, assets: preview.assets.map(a => ({...a, browser_download_url: 'https://evil.example/file'}))}], name), null);
 });
@@ -20,7 +22,9 @@ test('download links survive the transition away from the legacy rolling release
   const name = names[0];
   assert.equal(selectDownload([legacy], name), legacy.assets[0].browser_download_url);
   const preview = release('build-new');
-  assert.equal(selectDownload([legacy, preview], name), preview.assets[0].browser_download_url);
+  assert.equal(selectDownload([legacy, preview], name), legacy.assets[0].browser_download_url);
+  const promoted = release('build-main', false);
+  assert.equal(selectDownload([legacy, promoted], name), promoted.assets[0].browser_download_url);
 });
 test('downloads honor GitHub latest over a stale list and fall back when latest is unusable', async () => {
   const original = globalThis.fetch;
@@ -30,7 +34,7 @@ test('downloads honor GitHub latest over a stale list and fall back when latest 
     for (const candidate of [latest, {...latest, assets: latest.assets.slice(1)},
       {...latest, tag_name: 'latest', assets: latest.assets.slice(0, -1)},
       {...latest, assets: latest.assets.map(a => ({...a, browser_download_url: 'https://evil.example/file'}))},
-      {...latest, draft: true}, null]) {
+      {...latest, draft: true}, {...latest, prerelease: true}, null]) {
       let listRequests = 0;
       globalThis.fetch = async url => {
         if (url.endsWith('/latest')) {

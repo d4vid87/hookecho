@@ -1,16 +1,19 @@
 ---
-title: "HookEcho v0.12.0 beta: a new interface, top to bottom"
-description: "The docked panels are gone, the setup wizard is gone, and the phone got the same rebuild the desktop did. What's in the v0.12.0 beta."
+title: "Archive: HookEcho v0.12.0 beta interface announcement"
+description: "The August 2026 interface announcement, preserved for reference. HookEcho 0.12.0 is now the current stable release."
 date: 2026-08-26
 image: /shots/layers.jpg?v=20261111
 ---
+
+> Historical announcement from August 26, 2026. HookEcho **0.12.0** is now the
+> current stable release. [Download the current build](/download/).
 
 The **v0.12.0 beta** is out, and it's the largest change HookEcho has had. The
 whole interface was rebuilt, the phone app along with it, and about a dozen data
 lanes landed on top. It's a prerelease — a couple of things arrive at the final
 0.12.0 — but it's the version worth using.
 
-[Get it from Releases](https://github.com/d4vid87/hookecho/releases), or just
+[Get the current main release](https://github.com/d4vid87/hookecho/releases/latest), or just
 [open it in your browser](https://app.hookecho.io).
 
 ## The map got the whole window
