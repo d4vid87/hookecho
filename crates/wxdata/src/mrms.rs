@@ -13,6 +13,10 @@ use crate::field::{
 };
 
 const BUCKET: &str = "https://noaa-mrms-pds.s3.amazonaws.com";
+const MAX_COMPRESSED_BYTES: usize = 64 * 1024 * 1024;
+const MAX_GRIB_BYTES: usize = 512 * 1024 * 1024;
+// Includes the 14000 × 7000 high-resolution MRMS products.
+const MAX_GRID_CELLS: usize = 100_000_000;
 
 /// National composite reflectivity mosaic (dBZ).
 pub const REFLECTIVITY: &str = "CONUS/MergedReflectivityQCComposite_00.50";
@@ -899,19 +903,16 @@ async fn fetch_key_display(
     max_dim: Option<usize>,
 ) -> anyhow::Result<(MrmsField, Option<MrmsField>, chrono::DateTime<chrono::Utc>)> {
     if let Some(cached) = crate::object_cache::get("mrms", key).await {
-        let (field, display) = decode_gz_async(product, cached.bytes, max_dim).await?;
+        crate::stats::radar_event("cache_hit", key, serde_json::json!({"source":"MRMS", "bytes":cached.bytes.len()}));
+        let (field, display) = decode_gz_async(product, key, cached.bytes, max_dim).await?;
         return Ok((field, display, cached.received_at));
     }
     let url = format!("{BUCKET}/{key}");
-    let gz = http
-        .get(&url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    crate::stats::radar_event("request_start", key, serde_json::json!({"source":"MRMS"}));
+    let gz = crate::opera::bounded_get(http, &url, MAX_COMPRESSED_BYTES).await?;
     let received_at = chrono::Utc::now();
-    let (field, display) = decode_gz_async(product, gz.to_vec(), max_dim).await?;
+    crate::stats::radar_event("download_complete", key, serde_json::json!({"source":"MRMS", "bytes":gz.len()}));
+    let (field, display) = decode_gz_async(product, key, gz.clone(), max_dim).await?;
     if let Err(error) = crate::object_cache::put("mrms", key, &gz, received_at).await {
         log::warn!("MRMS browser cache write failed: {error}");
     }
@@ -920,23 +921,31 @@ async fn fetch_key_display(
 
 async fn decode_gz_async(
     product: &str,
+    key: &str,
     gz: Vec<u8>,
     max_dim: Option<usize>,
 ) -> anyhow::Result<(MrmsField, Option<MrmsField>)> {
+    crate::stats::radar_event("decode_queued", key, serde_json::json!({"source":"MRMS", "bytes":gz.len()}));
     #[cfg(not(target_arch = "wasm32"))]
-    {
+    let result = {
         let product = product.to_owned();
-        crate::task::blocking(move || decode_gz(&product, &gz, max_dim)).await?
-    }
+        let key = key.to_owned();
+        crate::task::blocking(move || {
+            crate::stats::radar_event("decode_started", &key, serde_json::json!({"source":"MRMS"}));
+            decode_gz(&product, &gz, max_dim)
+        }).await?
+    };
     #[cfg(target_arch = "wasm32")]
-    {
+    let result = {
         let request = postcard::to_allocvec(&(product, &gz, max_dim))?;
-        match crate::wasm_worker::decode_mrms(request).await {
+        match crate::wasm_worker::decode_mrms(request, key).await {
             Ok(wire) => postcard::from_bytes(&wire).map_err(Into::into),
             Err(crate::wasm_worker::Error::Unavailable) => decode_gz(product, &gz, max_dim),
             Err(error) => anyhow::bail!("{error}"),
         }
-    }
+    };
+    crate::stats::radar_event("decode_complete", key, serde_json::json!({"source":"MRMS", "ok":result.is_ok()}));
+    result
 }
 
 fn decode_gz(
@@ -948,9 +957,10 @@ fn decode_gz(
         max_dim != Some(0),
         "MRMS display dimension must be positive"
     );
+    anyhow::ensure!(gz.len() <= MAX_COMPRESSED_BYTES, "MRMS compressed object exceeds byte limit");
     // Some GRIB packings panic; contain both decoding and preparation on every execution path.
     crate::task::guarded(|| {
-        let raw = gunzip(gz)?;
+        let raw = gunzip(gz, MAX_GRIB_BYTES)?;
         let mut field = decode_grib2(&raw)?;
         normalize_product_missing(product, &mut field);
         let display = prepare_display(product, &field, max_dim);
@@ -1092,10 +1102,11 @@ async fn latest_available_key(http: &reqwest::Client, product: &str) -> anyhow::
     }
 }
 
-fn gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+fn gunzip(bytes: &[u8], limit: usize) -> anyhow::Result<Vec<u8>> {
     use std::io::Read;
     let mut out = Vec::new();
-    flate2::read::GzDecoder::new(bytes).read_to_end(&mut out)?;
+    flate2::read::GzDecoder::new(bytes).take(limit as u64 + 1).read_to_end(&mut out)?;
+    anyhow::ensure!(out.len() <= limit, "MRMS expanded object exceeds byte limit");
     Ok(out)
 }
 
@@ -1123,7 +1134,22 @@ pub fn decode_grib2(raw: &[u8]) -> anyhow::Result<MrmsField> {
         );
     }
     let msg = read_message(raw, 0).ok_or_else(|| anyhow::anyhow!("no GRIB2 message"))?;
-    let time = msg.forecast_date().unwrap_or_else(|_| chrono::Utc::now());
+    let time = msg.forecast_date().map_err(|error| anyhow::anyhow!("GRIB valid time unavailable: {error:?}"))?;
+    let shape = msg.grid_dimensions().map_err(|error| anyhow::anyhow!("GRIB grid dimensions unavailable: {error:?}"))?;
+    let cells = checked_grid_cells(shape)?;
+    let declared_cells = msg.sections().find_map(|section| match section {
+        gribberish::sections::section::Section::GridDefinition(grid) => Some(grid.data_point_count()),
+        _ => None,
+    });
+    anyhow::ensure!(declared_cells == Some(cells), "GRIB point count disagrees with grid dimensions");
+    anyhow::ensure!(msg.data_point_count().is_ok_and(|points| points <= cells), "GRIB packed point count exceeds grid dimensions");
+    for section in msg.sections() {
+        if let gribberish::sections::section::Section::Bitmap(bitmap) = section {
+            if bitmap.has_bitmap() {
+                anyhow::ensure!(bitmap.raw_bitmap_data().len() == cells.div_ceil(8), "GRIB bitmap size disagrees with grid dimensions");
+            }
+        }
+    }
     let dm = DataMessage::try_from(&msg).map_err(|e| anyhow::anyhow!("grib decode: {e:?}"))?;
     let (ny, nx) = dm.metadata.grid_shape;
     let (lat0, lon0) = dm.metadata.projector.latlng_start();
@@ -1141,7 +1167,7 @@ pub fn decode_grib2(raw: &[u8]) -> anyhow::Result<MrmsField> {
     #[cfg(target_arch = "wasm32")]
     let values: Vec<f32> = dm.data.iter().map(mask).collect();
     anyhow::ensure!(
-        values.len() == nx * ny,
+        (ny, nx) == shape && values.len() == cells,
         "grid size {}x{} != {} values",
         nx,
         ny,
@@ -1158,6 +1184,11 @@ pub fn decode_grib2(raw: &[u8]) -> anyhow::Result<MrmsField> {
         lat_south: lat0.min(lat1),
         time,
     })
+}
+
+fn checked_grid_cells((ny, nx): (usize, usize)) -> anyhow::Result<usize> {
+    nx.checked_mul(ny).filter(|cells| *cells > 0 && *cells <= MAX_GRID_CELLS)
+        .ok_or_else(|| anyhow::anyhow!("GRIB grid dimensions exceed limit: {nx} × {ny}"))
 }
 
 /// Wrap a 0..360 longitude into −180..180.
@@ -1485,6 +1516,52 @@ mod tests {
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         gz.write_all(b"not a GRIB message").unwrap();
         assert!(decode_gz(REFLECTIVITY, &gz.finish().unwrap(), Some(2)).is_err());
+    }
+
+    #[test]
+    fn radar_resource_limits_preserve_supported_grids_and_reject_expansion() {
+        use std::io::Write;
+        assert_eq!(checked_grid_cells((7000, 14000)).unwrap(), 98_000_000);
+        assert!(checked_grid_cells((0, 7000)).is_err());
+        assert!(checked_grid_cells((usize::MAX, 2)).is_err());
+        assert!(checked_grid_cells((100_001, 1000)).is_err());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&[42; 64]).unwrap();
+        let bytes = gz.finish().unwrap();
+        assert_eq!(gunzip(&bytes, 64).unwrap(), [42; 64]);
+        assert!(gunzip(&bytes, 63).is_err(), "compressed size cannot bypass the expanded bound");
+    }
+
+    #[test]
+    fn decoder_rejects_inconsistent_point_counts_before_unpacking() {
+        let fixture = include_bytes!("../tests/data/rap-shear-pair.grib2");
+        let length = u64::from_be_bytes(fixture[8..16].try_into().unwrap()) as usize;
+        let raw = &fixture[..length];
+        let original = decode_grib2(raw).expect("unchanged real GRIB remains decodable");
+        let cells = u32::try_from(original.nx * original.ny).unwrap();
+        let mut grid_count = None;
+        let mut packed_count = None;
+        let mut offset = 16;
+        while &raw[offset..offset + 4] != b"7777" {
+            let section_length = u32::from_be_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
+            match raw[offset + 4] {
+                3 if grid_count.is_none() => grid_count = Some(offset + 6),
+                5 if packed_count.is_none() => packed_count = Some(offset + 5),
+                _ => {}
+            }
+            offset += section_length;
+        }
+        for (position, expected) in [
+            (grid_count.unwrap(), "GRIB point count disagrees with grid dimensions"),
+            (packed_count.unwrap(), "GRIB packed point count exceeds grid dimensions"),
+        ] {
+            let mut malformed = raw.to_vec();
+            // A small disagreement exercises the same pre-allocation rejection without risking
+            // an enormous allocation if this regression is accidentally reintroduced.
+            malformed[position..position + 4].copy_from_slice(&(cells + 1).to_be_bytes());
+            let error = decode_grib2(&malformed).err().expect("inconsistent point count accepted");
+            assert_eq!(error.to_string(), expected);
+        }
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -22,6 +22,7 @@ use wxdata::level2::{self, BinnedSweep, Moment, Scan};
 /// velocity actually asks for. The browser keeps half that: its heap is 32-bit and it is already
 /// holding the volumes themselves.
 const BINNED_CACHE: usize = if cfg!(target_arch = "wasm32") { 16 } else { 32 };
+type ObservationKey = (Moment, usize, Option<i64>);
 
 /// Whether `new` is `old` with tilts only added on the end, so every existing tilt index still
 /// points at the same elevation.
@@ -89,6 +90,7 @@ pub struct Volume {
     /// the complete archived volume of the same name.
     live: bool,
     pub live_status: Option<wxdata::live::ScanStatus>,
+    observation_times: std::cell::RefCell<Vec<(ObservationKey, Option<level2::ObservationTime>)>>,
 }
 
 impl Volume {
@@ -122,6 +124,7 @@ impl Volume {
             pending_display: LruCache::new(NonZeroUsize::new(8).unwrap()),
             live: false,
             live_status: None,
+            observation_times: Default::default(),
         }
     }
 
@@ -145,6 +148,7 @@ impl Volume {
             return;
         }
         self.pending_display.clear(); // Late results belong to the previous scan revision.
+        self.observation_times.borrow_mut().clear();
         self.scan = scan;
         if !tilts_only_grew(&self.elevations, &new_elev) {
             self.binned.clear(); // tilt indices may have shifted
@@ -176,6 +180,16 @@ impl Volume {
         if let Some(status) = &mut self.live_status {
             status.stream_active = false;
         }
+    }
+
+    fn observation_time(&self, moment: Moment, tilt: usize, cut: Option<i64>) -> Option<level2::ObservationTime> {
+        let key = (moment, tilt, cut);
+        let mut cache = self.observation_times.borrow_mut();
+        if let Some((_, time)) = cache.iter().find(|(cached, _)| *cached == key) { return *time; }
+        let time = level2::observation_time_at(&self.scan, moment, tilt, cut);
+        if cache.len() == BINNED_CACHE { cache.remove(0); }
+        cache.push((key, time));
+        time
     }
 
     /// Bin (and cache) the sweep for `moment` at tilt index `tilt`.
@@ -240,11 +254,13 @@ impl Volume {
         if let Some(sweep) = self.binned.get(&key) { return Ok(Some(sweep.clone())); }
         if !self.pending_display.contains(&key) {
             let scan = self.scan.clone();
+            let object = self.live_status.as_ref().and_then(|status| status.chunk_key.clone())
+                .unwrap_or_else(|| self.name.clone());
             let ctx = ctx.clone();
             let (tx, result) = std::sync::mpsc::channel();
             let abort = spawner.spawn_abortable(async move {
                 let (moment, tilt, dealias, cut_end_ms, precision) = key;
-                let prepared = level2::prepare_display(scan, moment, tilt, dealias, cut_end_ms, precision).await;
+                let prepared = level2::prepare_display(scan, moment, tilt, dealias, cut_end_ms, precision, object).await;
                 let _ = tx.send(prepared);
                 ctx.request_repaint();
             });
@@ -325,6 +341,7 @@ impl FeedRecovery {
         self.failures = 0;
     }
 
+    /// Both input times are newest radial acquisition times, not volume-start identifiers.
     /// Two failed polls or ten-minute-old observations allow one alternate probe per five minutes.
     pub fn observe(
         &mut self,
@@ -404,8 +421,12 @@ pub struct MapView {
     pub skipped_frames: u64,
     pub last_skipped_at: Option<wxdata::clock::Instant>,
     pub volume: Option<Volume>,
+    /// Latest mutable scan while the playhead shows history; never enters the archive LRU.
+    pub live_head: Option<wxdata::live::Update>,
     pending_presentation: Option<(u64, DateTime<Utc>)>,
     presented_at: Option<DateTime<Utc>>,
+    pending_frame_details: Option<serde_json::Value>,
+    presented_frame_details: Option<serde_json::Value>,
     /// Volumes the playhead has moved off, with their binned sweeps intact. See
     /// [`RECENT_VOLUMES`]; use [`MapView::show_volume`] rather than touching this.
     recent: LruCache<String, Volume>,
@@ -486,6 +507,7 @@ impl MapView {
             "thresholds": self.thresholds,
             "threshold_enabled": self.threshold_enabled,
             "volume_time": self.volume.as_ref().map(|volume| volume.time),
+            "paint_recorded_frame": self.painted_frame_details(),
             "archive_date": self.timeline.date,
             "playhead": self.timeline.playhead,
             "frame_count": self.timeline.frames.len(),
@@ -505,6 +527,7 @@ impl MapView {
     /// Resident display gate buffers, including this pane's recent-volume cache.
     pub fn retained_scans(&self) -> impl Iterator<Item = &Arc<Scan>> {
         self.volume.iter().chain(self.recent.iter().map(|(_, volume)| volume)).map(|volume| &volume.scan)
+            .chain(self.live_head.iter().map(|head| &head.scan))
     }
 
     pub fn binned_cache_bytes(&self) -> usize {
@@ -540,45 +563,86 @@ impl MapView {
 
     pub fn displayed_time(&self) -> Option<DateTime<Utc>> {
         let volume = self.volume.as_ref()?;
-        if let Some(selected) = self.selected_cut_ms().and_then(chrono::DateTime::from_timestamp_millis) {
-            return Some(selected);
-        }
-        // Dublin's low-level velocity comes from a separate 15-minute PVOL while reflectivity
-        // refreshes every five minutes. Each is a distinct cut in the same displayed scan; the
-        // volume head time is only the reflectivity clock.
-        if volume.name.starts_with("IEDUB-") && self.custom_product.is_none() {
-            if let Some(&angle) = volume.elevations.get(self.tilt) {
-                if let Some(end) = volume.cuts.iter()
-                    .filter(|cut| (cut.elevation_deg - angle).abs() < 0.15
-                        && level2::cut_has_moment(&volume.scan, **cut, self.moment))
-                    .map(|cut| cut.ended_at_ms).max() {
-                    return chrono::DateTime::from_timestamp_millis(end).or(Some(volume.time));
-                }
+        if self.custom_product.is_none() {
+            if let Some(time) = volume.observation_time(self.moment, self.tilt, self.selected_cut_ms()) {
+                return DateTime::from_timestamp_millis(time.newest_radial_ms);
             }
         }
         Some(volume.time)
     }
 
-    /// The clock for the radar image actually painted, not a newly decoded pending scan.
+    pub fn time_basis(&self) -> &'static str {
+        if self.custom_product.is_some() { return "Volume reference time; derived product"; }
+        if self.volume.as_ref().and_then(|volume| volume.observation_time(self.moment, self.tilt, self.selected_cut_ms())).is_none() {
+            return "Volume reference time; selected sweep acquisition unavailable";
+        }
+        if self.displayed_station().is_some_and(wxdata::tdwr::is_tdwr) {
+            return "Product generation time; beam acquisition unavailable";
+        }
+        if self.displayed_station().is_some_and(wxdata::sites::is_nexrad) {
+            return "Selected sweep's newest radial; sectors can have different ages";
+        }
+        "Source scan time; individual radial acquisition unavailable"
+    }
+
+    fn frame_details(&self, token: u64) -> serde_json::Value {
+        let volume = self.volume.as_ref();
+        let site = self.displayed_station().filter(|site| wxdata::sites::site_by_id(site).is_some());
+        let observation = volume.filter(|_| self.custom_product.is_none())
+            .and_then(|volume| volume.observation_time(self.moment, self.tilt, self.selected_cut_ms()));
+        let status = volume.and_then(|volume| volume.live_status.as_ref());
+        serde_json::json!({
+            "token": token, "site": site, "source": self.decoded_radar_source_label(),
+            // Imported paths and custom product names are deliberately excluded.
+            "object": volume.filter(|volume| site.is_some_and(|site| volume.name.starts_with(site))
+                && !volume.name.contains(['/', '\\', '?'])).map(|volume| &volume.name),
+            "moment": self.moment, "derived_product": self.custom_product.is_some(),
+            "tilt_index": self.tilt, "elevation_deg": volume.and_then(|volume| volume.elevations.get(self.tilt)),
+            "elevation_number": observation.map(|time| time.elevation_number),
+            "oldest_radial_ms": observation.map(|time| time.oldest_radial_ms),
+            "newest_radial_ms": observation.map(|time| time.newest_radial_ms),
+            "selected_cut_end_ms": self.selected_cut_ms(), "display_time": self.displayed_time(),
+            "time_basis": self.time_basis(), "volume_reference_time": volume.map(|volume| volume.time),
+            "chunk_key": status.map(|status| &status.chunk_key),
+            "chunk_last_modified_ms": status.and_then(|status| status.chunk_last_modified_ms),
+            "stream_active": status.is_some_and(|status| status.stream_active),
+            "threshold": self.active_threshold(), "appearance_revision": self.appearance.fingerprint(self.moment),
+        })
+    }
+
+    /// The clock of the sweep recorded by the map paint callback. OS/compositor presentation
+    /// is not observable through eframe's callback API and is not claimed by this acknowledgement.
     pub fn presented_time(&self) -> Option<DateTime<Utc>> {
         self.presented_at.filter(|_| self.show_radar)
     }
 
+    pub fn painted_frame_details(&self) -> Option<&serde_json::Value> {
+        self.presented_frame_details.as_ref().filter(|_| self.show_radar)
+    }
+
     pub fn stage_presentation(&mut self, token: u64) {
         self.pending_presentation = self.displayed_time().filter(|_| token != 0).map(|time| (token, time));
+        self.pending_frame_details = self.pending_presentation.map(|_| self.frame_details(token));
+        if let Some(details) = &self.pending_frame_details {
+            let object = details["object"].as_str().or_else(|| details["chunk_key"].as_str()).unwrap_or("");
+            wxdata::stats::radar_event("upload_requested", object, details.clone());
+        }
     }
 
     pub fn acknowledge_presentation(&mut self, painted: u64) {
         if let Some((token, time)) = self.pending_presentation.filter(|(token, _)| *token == painted) {
             debug_assert_ne!(token, 0);
             self.presented_at = Some(time);
+            self.presented_frame_details = self.pending_frame_details.take();
             self.pending_presentation = None;
         }
     }
 
     pub fn clear_presentation(&mut self) {
         self.pending_presentation = None;
+        self.pending_frame_details = None;
         self.presented_at = None;
+        self.presented_frame_details = None;
     }
 
     pub fn product_unavailable(&self) -> bool {
@@ -597,7 +661,7 @@ impl MapView {
             return self.displayed_time();
         }
         if let Some(source) = self.timeline.current() {
-            if self.volume.as_ref().is_some_and(|volume| volume.name == source.name()) {
+            if self.displays_frame(source) {
                 if let Some(time) = self.displayed_time() { return Some(time); }
             }
             if let Some(time) = source.date_time() { return Some(time); }
@@ -654,8 +718,11 @@ impl MapView {
             skipped_frames: 0,
             last_skipped_at: None,
             volume: None,
+            live_head: None,
             pending_presentation: None,
             presented_at: None,
+            pending_frame_details: None,
+            presented_frame_details: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
             loaded_site: None,
             retained_station: None,
@@ -752,7 +819,71 @@ impl MapView {
     }
 
     pub fn has_decoded_frame(&self, name: &str) -> bool {
-        self.volume.as_ref().is_some_and(|volume| volume.name == name) || self.recent.contains(&name.to_owned())
+        self.live_head_id().as_ref().is_some_and(|id| id.name() == name)
+            || self.volume.as_ref().is_some_and(|volume| volume.name == name) || self.recent.contains(&name.to_owned())
+    }
+
+    /// A live timeline slot refers to the currently buffered revision, not an archive filename.
+    pub fn displays_frame(&self, frame: &level2::Identifier) -> bool {
+        self.volume.as_ref().is_some_and(|volume| volume.name == frame.name()
+            || (self.live_head_id().as_ref() == Some(frame)
+                && self.live_head.as_ref().is_some_and(|head| Arc::ptr_eq(&volume.scan, &head.scan))))
+    }
+
+    pub fn live_head_id(&self) -> Option<level2::Identifier> {
+        let start = chrono::DateTime::from_timestamp_millis(self.live_head.as_ref()?.status.volume_start_ms?)?;
+        Some(level2::Identifier::new(format!("{}{}_LIVE", self.site.as_deref()?, start.format("%Y%m%d_%H%M%S"))))
+    }
+
+    /// Accept ingestion independently of playback; the latest snapshot alone bounds retention.
+    pub fn receive_live(&mut self, mut update: wxdata::live::Update) -> bool {
+        let Some(start) = update.status.volume_start_ms.and_then(chrono::DateTime::from_timestamp_millis) else { return false; };
+        let Some(site) = self.site.as_deref() else { return false; };
+        if self.live_head.as_ref().is_some_and(|head| head.time > update.time
+            || head.status.volume_start_ms > update.status.volume_start_ms) {
+            return false;
+        }
+        let id = level2::Identifier::new(format!("{site}{}_LIVE", start.format("%Y%m%d_%H%M%S")));
+        if !self.timeline.set_live_head(id) { return false; }
+        if let Some(previous) = &self.live_head {
+            if self.volume.as_ref().is_none_or(|volume| !Arc::ptr_eq(&volume.scan, &previous.scan)) {
+                update.changed.extend_from_slice(&previous.changed);
+                update.changed.sort_by(f32::total_cmp);
+                update.changed.dedup(); // include every skipped revision when reusing live display bins
+            }
+        }
+        self.live_head = Some(update);
+        true
+    }
+
+    /// The loop consumes its live slot normally; Return to Latest consumes it immediately.
+    pub fn show_live_head_if_selected(&mut self) -> bool {
+        if !self.timeline.following || (self.timeline.playing
+            && self.timeline.current().map(level2::Identifier::name) != self.live_head_id().as_ref().map(level2::Identifier::name)) {
+            return false;
+        }
+        let Some(head) = &self.live_head else { return false; };
+        if self.volume.as_ref().is_some_and(|volume| Arc::ptr_eq(&volume.scan, &head.scan)) { return false; }
+        let (scan, name, time, changed, status) = (head.scan.clone(), head.name.clone(), head.time, head.changed.clone(), head.status.clone());
+        let continuing = self.volume.as_ref().is_some_and(|volume| volume.live
+            && volume.live_status.as_ref().is_some_and(|old| old.volume_start_ms == status.volume_start_ms));
+        if continuing {
+            self.volume.as_mut().unwrap().apply_live(scan, name, time, &changed, status);
+        } else {
+            self.show_volume(scan, name, time);
+            let volume = self.volume.as_mut().unwrap();
+            volume.live = true;
+            volume.live_status = Some(status);
+        }
+        self.frame_request.cancel();
+        self.load_phase = None;
+        self.loading = false;
+        self.error = None;
+        self.fetch_failures = 0;
+        self.pin_low_cut();
+        self.clamp_tilt();
+        self.refresh_moments();
+        true
     }
 
     pub fn station_ready(&mut self) {
@@ -767,6 +898,8 @@ impl MapView {
     /// Retain at most one previous scan, with its original station identity. Never use that
     /// volume as a live-merge base for the new station or put it in the new station's recent LRU.
     pub fn begin_station_switch(&mut self) {
+        self.live_head = None;
+        self.timeline.clear_live_head();
         if self.site.is_none() {
             self.volume = None;
             self.retained_station = None;
@@ -811,7 +944,12 @@ impl MapView {
     }
 
     /// Report the provider of the displayed scan, even while an alternate feed is being checked.
-    pub fn radar_source_label(&self) -> &'static str {
+    pub fn radar_source_label(&self) -> &str {
+        self.painted_frame_details().and_then(|frame| frame["source"].as_str())
+            .unwrap_or_else(|| self.decoded_radar_source_label())
+    }
+
+    fn decoded_radar_source_label(&self) -> &'static str {
         let site = self.displayed_station();
         if !site.is_some_and(wxdata::sites::is_nexrad) { return "Radar feed"; }
         match self.volume.as_ref() {
@@ -823,6 +961,8 @@ impl MapView {
 
     /// Invalidate old feed replies and listings without removing the last valid image.
     pub fn recovered_provider(&mut self) {
+        self.live_head = None;
+        self.timeline.clear_live_head();
         self.list_request.cancel();
         self.frame_request.cancel();
         self.timeline.listing = false;
@@ -963,6 +1103,7 @@ impl MapView {
 
     pub fn live_stream_ended(&mut self) {
         self.last_poll = None;
+        if let Some(head) = &mut self.live_head { head.status.stream_active = false; }
         if let Some(volume) = &mut self.volume {
             volume.end_live();
         }
@@ -1071,6 +1212,8 @@ mod tests {
         wxdata::live::ScanStatus {
             provider: "test",
             volume_start_ms: Some(0),
+            chunk_key: None,
+            chunk_last_modified_ms: None,
             vcp: 212,
             cuts_received: 1,
             cuts_expected: 14,
@@ -1083,6 +1226,91 @@ mod tests {
             retries: 0,
             stream_active: true,
         }
+    }
+
+    fn streamed_update(start: DateTime<Utc>, seconds: i64) -> wxdata::live::Update {
+        let time = start + chrono::Duration::seconds(seconds);
+        let mut status = live_status();
+        status.volume_start_ms = Some(start.timestamp_millis());
+        wxdata::live::Update {
+            name: format!("{}-{seconds:03}-I", start.format("%Y%m%d-%H%M%S")),
+            time, scan: scan_at_millis(&[0.5], time.timestamp_millis()), changed: vec![0.5], status,
+        }
+    }
+
+    #[test]
+    fn live_loop_ingests_without_moving_history_and_uses_head_without_archiving_partial() {
+        let old = level2::Identifier::new("KTLX20130520_120000_V06".into());
+        let start = old.date_time().unwrap() + chrono::Duration::minutes(5);
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.timeline.set_frames(vec![old.clone()], ("KTLX".into(), old.date_time().unwrap().date_naive()));
+        view.timeline.playing = true;
+        view.show_volume(scan_at_millis(&[0.5], (start - chrono::Duration::minutes(5)).timestamp_millis()), old.name().into(), old.date_time().unwrap());
+        let history = view.volume.as_ref().unwrap().scan.clone();
+        assert!(view.receive_live(streamed_update(start, 10)));
+        assert!(!view.show_live_head_if_selected());
+        assert_eq!(view.timeline.current().unwrap().name(), old.name());
+        assert!(Arc::ptr_eq(&view.volume.as_ref().unwrap().scan, &history));
+        assert!(view.receive_live(streamed_update(start, 20)));
+        assert_eq!(view.timeline.frames.len(), 2, "chunk revisions share one live slot");
+        assert!(!view.receive_live(streamed_update(start, 15)), "late response rejected");
+        view.timeline.playhead = 1;
+        assert!(view.show_live_head_if_selected());
+        assert_eq!(view.volume.as_ref().unwrap().time, start + chrono::Duration::seconds(20));
+        assert!(view.volume.as_ref().unwrap().live);
+        view.show_volume(history, old.name().into(), old.date_time().unwrap());
+        assert!(view.recent.iter().all(|(_, volume)| !volume.live), "partial never retained as completed history");
+        view.timeline.go_head();
+        assert!(view.show_live_head_if_selected(), "Return Latest consumes already acquired head");
+        view.live_stream_ended();
+        assert!(!view.live_head.as_ref().unwrap().status.stream_active);
+        view.recovered_provider();
+        assert!(view.live_head.is_none());
+        assert!(view.timeline.frames.iter().all(|id| !id.name().ends_with("_LIVE")));
+    }
+
+    #[test]
+    fn historical_scrub_rejects_live_ingestion_and_station_switch_discards_buffer() {
+        let start = DateTime::from_timestamp(1_369_051_200, 0).unwrap();
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.timeline.following = false;
+        assert!(!view.receive_live(streamed_update(start, 10)));
+        assert!(view.live_head.is_none());
+        view.timeline.following = true;
+        assert!(view.receive_live(streamed_update(start, 20)));
+        view.site = Some("KDMX".into());
+        view.begin_station_switch();
+        assert!(view.live_head.is_none());
+        assert!(view.timeline.frames.iter().all(|id| !id.name().ends_with("_LIVE")));
+    }
+
+    #[test]
+    fn returning_to_live_invalidates_all_skipped_revisions_while_history_is_loading() {
+        let old = level2::Identifier::new("KTLX20130520_120000_V06".into());
+        let start = old.date_time().unwrap() + chrono::Duration::minutes(5);
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.timeline.frames = vec![old];
+        let mut initial = streamed_update(start, 10);
+        initial.scan = scan_at_millis(&[0.5, 1.5], initial.time.timestamp_millis());
+        assert!(view.receive_live(initial));
+        assert!(view.show_live_head_if_selected());
+        let before = view.volume.as_mut().unwrap().shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+        view.timeline.playing = true;
+        view.timeline.playhead = 0;
+        view.loading = true; // the previous live volume stays visible while history downloads
+        let mut low = streamed_update(start, 20);
+        low.scan = scan_at_millis(&[0.5, 1.5], low.time.timestamp_millis());
+        assert!(view.receive_live(low));
+        assert!(!view.show_live_head_if_selected());
+        let mut high = streamed_update(start, 30);
+        high.scan = scan_at_millis(&[0.5, 1.5], high.time.timestamp_millis());
+        high.changed = vec![1.5];
+        assert!(view.receive_live(high));
+        view.timeline.go_head();
+        assert!(view.show_live_head_if_selected());
+        let after = view.volume.as_mut().unwrap().shared_binned_display_at(Moment::Reflectivity, 0, None, false).unwrap();
+        assert!(!Arc::ptr_eq(&before, &after), "skipped low-tilt revision must invalidate old pixels");
+        assert!(!view.loading);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1149,13 +1377,17 @@ mod tests {
 
     /// A scan with one radial per given elevation, carrying reflectivity only.
     fn scan_at(elevations: &[f32]) -> Arc<Scan> {
+        scan_at_millis(elevations, 1_000)
+    }
+
+    fn scan_at_millis(elevations: &[f32], first_ms: i64) -> Arc<Scan> {
         let sweeps: Vec<Sweep> = elevations
             .iter()
             .enumerate()
             .map(|(i, e)| {
                 let data = MomentData::from_fixed_point(1, 2125, 250, 8, 2.0, 66.0, vec![106u8]);
                 let radial = Radial::new(
-                    (i as i64 + 1) * 1_000,
+                    first_ms + i as i64 * 1_000,
                     0,
                     0.0,
                     0.5,
@@ -1242,13 +1474,13 @@ mod tests {
         let target = chrono::DateTime::from_timestamp_millis(600_000).unwrap();
         view.timeline.alignment_target = Some(target);
         assert!(!view.alignment_acceptable(Some(120)));
-        view.volume = Some(Volume::new(scan_at(&[0.5]), "old".into(), target - chrono::Duration::seconds(180)));
+        view.volume = Some(Volume::new(scan_at_millis(&[0.5], (target - chrono::Duration::seconds(180)).timestamp_millis()), "old".into(), target));
         assert_eq!(view.displayed_time(), Some(target - chrono::Duration::seconds(180)));
         assert_eq!(view.alignment_offset_seconds(), Some(-180));
         assert!(!view.alignment_acceptable(Some(120)));
-        view.volume.as_mut().unwrap().time = target - chrono::Duration::seconds(120);
+        view.volume = Some(Volume::new(scan_at_millis(&[0.5], (target - chrono::Duration::seconds(120)).timestamp_millis()), "new".into(), target));
         assert!(view.alignment_acceptable(Some(120)));
-        view.volume.as_mut().unwrap().time -= chrono::Duration::milliseconds(1);
+        view.volume = Some(Volume::new(scan_at_millis(&[0.5], (target - chrono::Duration::milliseconds(120_001)).timestamp_millis()), "outside".into(), target));
         assert_eq!(view.alignment_offset_milliseconds(), Some(-120_001));
         assert!(!view.alignment_acceptable(Some(120)), "a fractional second beyond the limit is outside the window");
         view.timeline.alignment_target = None;
@@ -1264,7 +1496,7 @@ mod tests {
         let next_time = next.date_time().unwrap();
         view.timeline.frames = vec![old, next];
         view.timeline.playhead = 1;
-        view.volume = Some(Volume::new(scan_at(&[0.5]), view.timeline.frames[0].name().into(), old_time));
+        view.volume = Some(Volume::new(scan_at_millis(&[0.5], old_time.timestamp_millis()), view.timeline.frames[0].name().into(), old_time));
         assert_eq!(view.displayed_time(), Some(old_time));
         assert_eq!(view.linked_requested_time(), Some(next_time));
         let tomorrow = next_time + chrono::Duration::days(1);
@@ -1284,7 +1516,7 @@ mod tests {
         let live_time = listed_time + chrono::Duration::minutes(13);
         view.timeline.frames = vec![completed];
         view.timeline.following = true;
-        view.volume = Some(Volume::new(scan_at(&[0.5]), "live-chunks".into(), live_time));
+        view.volume = Some(Volume::new(scan_at_millis(&[0.5], live_time.timestamp_millis()), "live-chunks".into(), live_time));
         view.volume.as_mut().unwrap().live_status = Some(live_status());
         assert_eq!(view.linked_requested_time(), Some(live_time));
         view.retained_station = Some("KTLX".into());
@@ -1548,8 +1780,37 @@ mod tests {
     }
 
     #[test]
+    fn displayed_clock_uses_selected_radials_and_preserves_painted_identity() {
+        let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        let volume_time = DateTime::from_timestamp(999, 0).unwrap();
+        view.show_volume(scan_at(&[0.5, 1.5]), "KTLX-fixture".into(), volume_time);
+        assert_eq!(view.displayed_time().unwrap().timestamp_millis(), 1_000);
+        view.stage_presentation(701);
+        view.acknowledge_presentation(701);
+        view.tilt = 1;
+        assert_eq!(view.displayed_time().unwrap().timestamp_millis(), 2_000);
+        assert_eq!(view.presented_time().unwrap().timestamp_millis(), 1_000);
+        assert_eq!(view.painted_frame_details().unwrap()["tilt_index"], 0);
+        view.stage_presentation(702);
+        view.acknowledge_presentation(701);
+        assert_eq!(view.painted_frame_details().unwrap()["tilt_index"], 0);
+        view.acknowledge_presentation(702);
+        assert_eq!(view.painted_frame_details().unwrap()["tilt_index"], 1);
+        let mut status = live_status();
+        status.chunk_key = Some("KTLX/999/20261118-120000-003-I".into());
+        view.volume.as_mut().unwrap().apply_live(scan_at(&[0.5]), "20261118-120000-003-I".into(), volume_time, &[0.5], status);
+        view.tilt = 0;
+        assert_eq!(view.displayed_time().unwrap().timestamp_millis(), 1_000);
+        assert_eq!(view.volume.as_ref().unwrap().observation_times.borrow().len(), 1);
+        view.stage_presentation(703);
+        assert!(wxdata::stats::radar_events().iter().any(|event| event.stage == "upload_requested"
+            && event.details["token"] == 703 && event.object == "KTLX/999/20261118-120000-003-I"));
+    }
+
+    #[test]
     fn displayed_clock_waits_for_paint_and_clears_with_the_image() {
         let mut view = MapView::new(Some("KTLX".into()), Camera::at_lonlat(-97.0, 35.0, 8.0));
+        view.custom_product = Some("fixture".into());
         let first = DateTime::from_timestamp(1_000, 0).unwrap();
         let second = DateTime::from_timestamp(1_300, 0).unwrap();
         view.show_volume(scan_at(&[0.5]), "first".into(), first);

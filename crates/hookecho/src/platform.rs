@@ -68,6 +68,26 @@ pub mod activity {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+let radarNetworkRecovered = false;
+if (typeof window !== 'undefined') {
+    window.addEventListener('online', () => { radarNetworkRecovered = true; });
+}
+export function takeRadarNetworkRecovery() {
+    const recovered = radarNetworkRecovered;
+    radarNetworkRecovered = false;
+    return recovered;
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = takeRadarNetworkRecovery)]
+    pub fn network_recovered() -> bool;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn network_recovered() -> bool { false }
+
 /// Feed system-bar insets into egui's safe-area input (no-op off-Android).
 #[cfg(not(target_os = "android"))]
 pub fn apply_safe_area(_ctx: &egui::Context, _raw_input: &mut egui::RawInput) {}

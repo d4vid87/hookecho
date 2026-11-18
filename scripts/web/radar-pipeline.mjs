@@ -3,9 +3,11 @@
 import puppeteer from 'puppeteer';
 import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {fixtureRadar} from './fixtures/radar.mjs';
 
 const output = process.env.HOOKECHO_PIPELINE_OUTPUT ?? 'outputs/radar-pipeline';
+const base = process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8766/';
 await fs.mkdir(output, {recursive: true});
 const browser = await puppeteer.launch({headless: true,
   executablePath: process.env.CHROME_BIN ?? puppeteer.executablePath(),
@@ -16,7 +18,10 @@ try {
   const page = await browser.newPage();
   await page.setViewport({width: 1200, height: 900});
   await page.setBypassServiceWorker(true);
-  await fixtureRadar(page, {vector: true});
+  await fixtureRadar(page, {vector: true, emptyOverlays: true, vectorResponse: async () => ({
+    status: 200, contentType: 'application/json', headers: {'Access-Control-Allow-Origin': '*'},
+    body: JSON.stringify({tiles: [`${new URL(base).origin}/vector-fixture/{z}/{x}/{y}.pbf`]}),
+  })});
   page.on('pageerror', error => report.errors.push(error.message));
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'gpu', {value: undefined});
@@ -35,17 +40,18 @@ try {
       configurable: true, get: () => bridge,
       set: value => {
         globalThis.__pipelineBridge = value;
-        bridge = async (bytes, op) => {
+        bridge = (bytes, op, context) => {
           if (op === 'bin') globalThis.__binInput ??= bytes.slice();
-          if (op === 'bin' && globalThis.__pipelineNoBinWorker) throw Error('worker unavailable');
-          const result = await value(bytes, op);
-          if (op === 'bin') globalThis.__binResult ??= result.slice();
-          return result;
+          if (op === 'bin' && globalThis.__pipelineNoBinWorker) return Promise.reject(Error('worker unavailable'));
+          const promise = value(bytes, op, context);
+          promise.then(result => { if (op === 'bin') globalThis.__binResult ??= result.slice(); }, () => {});
+          return promise; // Preserve Rust's cancellation hook and optional exact frame context.
         };
+        bridge.timings = value.timings;
       },
     });
   });
-  await page.goto(process.env.HOOKECHO_BASE_URL ?? 'http://127.0.0.1:8766/', {waitUntil: 'domcontentloaded'});
+  await page.goto(base, {waitUntil: 'domcontentloaded'});
   await page.waitForFunction(() => globalThis.__binResult && globalThis.__hookechoMapTrace?.frames.length > 0, {timeout: 90000});
   const bin = await page.evaluate(async () => {
     const glue = performance.getEntriesByType('resource').find(e => /\/dist\/hookecho-[a-f0-9]+\.js/.test(e.name)).name;
@@ -75,7 +81,8 @@ try {
     const product = Buffer.from('CONUS/MergedReflectivityQCComposite_00.50');
     const gzip = await fs.readFile(process.env.HOOKECHO_MRMS_FIXTURE);
     const request = Buffer.concat([varint(product.length), product, varint(gzip.length), gzip, Buffer.from([1]), varint(512)]);
-    report.mrmsFixture = 'supplied MRMS gzip GRIB2';
+    report.mrmsFixture = {format: 'MRMS gzip GRIB2', inputBytes: gzip.length,
+      inputSha256: createHash('sha256').update(gzip).digest('hex')};
     report.jobs = await page.evaluate(async base64 => {
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
       const glue = performance.getEntriesByType('resource').find(e => /\/dist\/hookecho-[a-f0-9]+\.js/.test(e.name)).name;
@@ -92,7 +99,9 @@ try {
         const elapsedMs = performance.now() - start;
         if (expected && (result.length !== expected.length || !result.every((v, i) => v === expected[i]))) throw Error('MRMS native/display worker output changed');
         expected = result;
-        results.push({mode, elapsedMs, timerTicksDuringJob: ticks, outputBytes: result.length});
+        const outputSha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', result))]
+          .map(byte => byte.toString(16).padStart(2, '0')).join('');
+        results.push({mode, elapsedMs, timerTicksDuringJob: ticks, outputBytes: result.length, outputSha256});
       }
       return results;
     }, request.toString('base64'));
@@ -110,11 +119,11 @@ try {
   await wait(500); await page.keyboard.type('Save diagnostics', {delay: 30});
   await wait(500); await page.keyboard.press('Enter');
   await page.waitForFunction(() => globalThis.__pipelineReports.length > 0, {timeout: 15000});
-  report.checks.inlineFallbackDraws = await page.evaluate(() => {
+  report.checks.inlineFallbackUploads = await page.evaluate(() => {
     const panes = globalThis.__pipelineReports.at(-1).render_metrics.panes;
     return panes.length > 0 && panes.every(p => p.radar_upload_requested > 0 && p.radar_upload_requested === p.radar_upload_prepared);
   });
-  assert(report.checks.inlineFallbackDraws, 'unavailable workers must still produce uploaded radar');
+  assert(report.checks.inlineFallbackUploads, 'unavailable workers must still produce uploaded radar');
   assert.deepEqual(report.errors, []);
   await wait(100);
   await page.screenshot({path: `${output}/radar.png`});

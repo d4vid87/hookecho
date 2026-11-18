@@ -1631,11 +1631,14 @@ const ARCHIVE_BUCKET: &str = "unidata-nexrad-level2.s3.amazonaws.com";
 /// two are kept in step by `cache_ttls_match_the_edge_worker` below, because a client that gets
 /// one answer from the Pages deployment and a different one from `--serve` is a bug that only
 /// shows up as a loop that will not advance.
-fn cache_seconds(host: &str, query: &str) -> u64 {
+fn cache_seconds(host: &str, query: &str, path: &str) -> u64 {
     if host == "www.jma.go.jp" || host == "cwaopendata.s3.ap-northeast-1.amazonaws.com" { return 60; }
     // Caltrans still URLs stay fixed while the image changes; match the open-card refresh cycle.
     if host == "cwwp2.dot.ca.gov" {
         return 60;
+    }
+    if host == "tgftp.nws.noaa.gov" && path.ends_with("/sn.last") {
+        return 15;
     }
     // A bucket listing is how the app finds the newest volume — cache that like a live feed or
     // the loop stops advancing.
@@ -1647,8 +1650,7 @@ fn cache_seconds(host: &str, query: &str) -> u64 {
     if host == "maps.dwd.de" || host == "geo.weather.gc.ca" {
         return if query.contains("TIME=") { 300 } else { 15 };
     }
-    // An hour, not forever: the newest archive object is re-uploaded while the radar is still
-    // writing it, so a long TTL can pin a truncated volume.
+    // Completed archive objects retain efficient caching; live discovery uses the listing rule.
     if host == ARCHIVE_BUCKET {
         return 3600;
     }
@@ -1662,11 +1664,19 @@ fn cache_seconds(host: &str, query: &str) -> u64 {
 /// One proxied response, kept for its TTL.
 struct ProxyHit {
     at: Instant,
+    upstream_age: u64,
     ctype: &'static str,
     /// Shared so the cache holds one copy however many requests are reading it.
     body: std::sync::Arc<Vec<u8>>,
     /// Hashed once at insert, so a client that already holds these bytes can be told so.
     etag: String,
+}
+
+impl ProxyHit {
+    fn age(&self) -> u64 { self.upstream_age.saturating_add(self.at.elapsed().as_secs()) }
+    fn fresh(&self, ttl: u64) -> bool {
+        self.at.elapsed() < Duration::from_secs(ttl.saturating_sub(self.upstream_age))
+    }
 }
 
 /// A cheap content hash. Not a checksum anyone trusts — an ETag only has to change when the bytes
@@ -1832,16 +1842,16 @@ fn regional_radar(server: &Server, path: &str, query: &str, if_none_match: Optio
     let cache_key = format!("regional:{}:{path}?{query}", configured.is_some());
     if ttl > 0 {
         let hit = server.proxy_cache.lock().unwrap().get(&cache_key)
-            .filter(|hit| hit.at.elapsed() < Duration::from_secs(ttl))
-            .map(|hit| (hit.ctype, hit.body.clone(), hit.etag.clone()));
-        if let Some((ctype, body, etag)) = hit { return proxy_reply(ctype, body, etag, ttl, if_none_match); }
+            .filter(|hit| hit.fresh(ttl))
+            .map(|hit| (hit.ctype, hit.body.clone(), hit.etag.clone(), hit.age()));
+        if let Some((ctype, body, etag, age)) = hit { return proxy_reply(ctype, body, etag, ttl, age, if_none_match); }
     }
     let limit = match request { RegionalRadarRequest::Status => 1024, RegionalRadarRequest::Catalog(_) => 1024 * 1024, RegionalRadarRequest::Grid(_) => wxdata::world_radar::KMA_MAX_BYTES };
     let fetched = server.rt.block_on(async {
         tokio::time::timeout(wxdata::net::FEED_TIMEOUT, fetch_capped(&server.proxy_http, &url, limit)).await?
     });
     // Do not log `url` or the reqwest error: both can contain the server-side authKey.
-    let (_, mut body) = match fetched {
+    let (_, mut body, upstream_age) = match fetched {
         Ok(response) => response,
         Err(error) => return proxy_error_reply(&error, "503 Service Unavailable"),
     };
@@ -1873,10 +1883,10 @@ fn regional_radar(server: &Server, path: &str, query: &str, if_none_match: Optio
     let etag = etag_of(&body);
     let ctype = "text/plain; charset=utf-8";
     let mut cache = server.proxy_cache.lock().unwrap();
-    cache.put(cache_key, ProxyHit { at: Instant::now(), ctype, body: body.clone(), etag: etag.clone() });
+    cache.put(cache_key, ProxyHit { at: Instant::now(), upstream_age, ctype, body: body.clone(), etag: etag.clone() });
     while cache.iter().map(|(_, hit)| hit.body.len()).sum::<usize>() > PROXY_CACHE_BYTES && cache.len() > 1 { cache.pop_lru(); }
     drop(cache);
-    proxy_reply(ctype, body, etag, ttl, if_none_match)
+    proxy_reply(ctype, body, etag, ttl, upstream_age, if_none_match)
 }
 
 /// `GET /proxy/{host}/{rest}` → `https://{host}/{rest}`, for the browser build.
@@ -1927,25 +1937,24 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
         format!("https://{host}/{rest}?{query}")
     };
 
-    let ttl = cache_seconds(host, query);
-    let fresh = |h: &ProxyHit| h.at.elapsed() < Duration::from_secs(ttl);
+    let ttl = cache_seconds(host, query, rest);
     // Cloned out from under the lock: an upstream fetch must not be holding the cache shut, and
     // the clone is an `Arc` bump, not the body.
     let hit = {
         let mut cache = server.proxy_cache.lock().unwrap();
         cache
             .get(&url)
-            .filter(|h| fresh(h))
-            .map(|h| (h.ctype, h.body.clone(), h.etag.clone()))
+            .filter(|h| h.fresh(ttl))
+            .map(|h| (h.ctype, h.body.clone(), h.etag.clone(), h.age()))
     };
-    if let Some((ctype, body, etag)) = hit {
+    if let Some((ctype, body, etag, age)) = hit {
         PROXY_HITS.fetch_add(1, Ordering::Relaxed);
-        return proxy_reply(ctype, body, etag, ttl, if_none_match);
+        return proxy_reply(ctype, body, etag, ttl, age, if_none_match);
     }
 
     PROXY_MISSES.fetch_add(1, Ordering::Relaxed);
     match server.rt.block_on(fetch_capped(&server.proxy_http, &url, proxy_max_bytes(host))) {
-        Ok((ctype, body)) => {
+        Ok((ctype, body, upstream_age)) => {
             let body = std::sync::Arc::new(body);
             let etag = etag_of(&body);
             let mut cache = server.proxy_cache.lock().unwrap();
@@ -1953,6 +1962,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
                 url,
                 ProxyHit {
                     at: Instant::now(),
+                    upstream_age,
                     ctype,
                     body: body.clone(),
                     etag: etag.clone(),
@@ -1966,7 +1976,7 @@ fn proxy(server: &Server, path: &str, query: &str, if_none_match: Option<&str>, 
                 cache.pop_lru();
             }
             drop(cache);
-            proxy_reply(ctype, body, etag, ttl, if_none_match)
+            proxy_reply(ctype, body, etag, ttl, upstream_age, if_none_match)
         }
         Err(e) => {
             log::warn!("proxy fetch of {url} failed: {e}");
@@ -2107,10 +2117,12 @@ fn proxy_reply(
     body: std::sync::Arc<Vec<u8>>,
     etag: String,
     ttl: u64,
+    age: u64,
     if_none_match: Option<&str>,
 ) -> Reply {
     let headers = vec![
         ("Cache-Control", format!("public, max-age={ttl}")),
+        ("Age", age.to_string()),
         ("ETag", etag.clone()),
     ];
     if if_none_match.is_some_and(|t| t.split(',').any(|t| t.trim() == etag)) {
@@ -2130,12 +2142,24 @@ fn proxy_reply(
     }
 }
 
+// Cache metadata describes HTTP reuse only, never the weather observation's age.
+fn upstream_cache_age(headers: &reqwest::header::HeaderMap, now: chrono::DateTime<chrono::Utc>, transfer: Duration) -> u64 {
+    let age = headers.get(reqwest::header::AGE).and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .map(|value| value.parse::<u64>().unwrap_or(u64::MAX)).unwrap_or(0);
+    let apparent = headers.get(reqwest::header::DATE).and_then(|value| value.to_str().ok())
+        .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
+        .map(|date| now.signed_duration_since(date).num_seconds().max(0) as u64).unwrap_or(0);
+    age.saturating_add(transfer.as_secs()).max(apparent)
+}
+
 /// One upstream GET, no inherited headers, stopped at the host's byte cap mid-stream.
 async fn fetch_capped(
     http: &reqwest::Client,
     url: &str,
     limit: usize,
-) -> anyhow::Result<(&'static str, Vec<u8>)> {
+) -> anyhow::Result<(&'static str, Vec<u8>, u64)> {
+    let requested = Instant::now();
     let mut req = http
         .get(url)
         .header(reqwest::header::USER_AGENT, wxdata::alerts::USER_AGENT);
@@ -2146,6 +2170,7 @@ async fn fetch_capped(
     }
     let mut resp = req.send().await?;
     check_proxy_status(&resp)?;
+    anyhow::ensure!(resp.status() == reqwest::StatusCode::OK, "upstream returned an incomplete object");
     let ctype = proxy_content_type(
         resp.headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -2159,7 +2184,8 @@ async fn fetch_capped(
         }
         body.extend_from_slice(&chunk);
     }
-    Ok((ctype, body))
+    let age = upstream_cache_age(resp.headers(), chrono::Utc::now(), requested.elapsed());
+    Ok((ctype, body, age))
 }
 
 /// An upstream `Content-Type` mapped onto one of ours. The upstream header is remote text going
@@ -2406,6 +2432,32 @@ mod tests {
             .unwrap();
         assert!(runtime.block_on(fetch_capped(&proxy_client(), &url, 1024)).is_err());
         assert!(!upstream.join().unwrap(), "proxy followed the redirect");
+    }
+
+    #[test]
+    fn proxy_rejects_unsolicited_partial_objects_but_preserves_requested_ranges() {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut connection, _) = listener.accept().unwrap();
+                let mut request = [0; 1024];
+                assert!(connection.read(&mut request).unwrap() > 0);
+                write!(connection, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/100\r\nContent-Length: 4\r\nConnection: close\r\n\r\nGRIB").unwrap();
+            }
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let http = proxy_client();
+        let error = runtime.block_on(fetch_capped(&http, &url, 1024)).unwrap_err();
+        assert!(error.to_string().contains("incomplete object"));
+        let reply = proxy_error_reply(&error, "502 Bad Gateway");
+        assert_eq!(reply.status, "502 Bad Gateway");
+        assert!(reply.headers.contains(&("Cache-Control", "no-store".to_owned())));
+        let (_, body, range) = runtime.block_on(fetch_capped_range(&http, &url, "bytes=0-3")).unwrap();
+        assert_eq!(body, b"GRIB");
+        assert_eq!(range, "bytes 0-3/100");
+        upstream.join().unwrap();
     }
 
     #[test]
@@ -2674,17 +2726,19 @@ mod tests {
 
     #[test]
     fn cache_ttls_match_the_edge_worker() {
-        assert_eq!(cache_seconds(ARCHIVE_BUCKET, ""), 3600);
-        assert_eq!(cache_seconds(ARCHIVE_BUCKET, "list-type=2"), 15);
-        assert_eq!(cache_seconds("maps.dwd.de", "LAYERS=rv&TIME=2026"), 300);
-        assert_eq!(cache_seconds("maps.dwd.de", "LAYERS=rv"), 15);
-        assert_eq!(cache_seconds("geo.weather.gc.ca", "SERVICE=WFS"), 15);
-        assert_eq!(cache_seconds("api.weather.gov", ""), 15);
-        assert_eq!(cache_seconds("opendata.dwd.de", ""), 15);
-        assert_eq!(cache_seconds("mesonet-nexrad.agron.iastate.edu", ""), 15);
-        assert_eq!(cache_seconds("tgftp.nws.noaa.gov", ""), 300);
-        assert_eq!(cache_seconds("cwwp2.dot.ca.gov", ""), 60);
-        assert_eq!(cache_seconds("basemaps.cartocdn.com", ""), 300);
+        assert_eq!(cache_seconds(ARCHIVE_BUCKET, "", ""), 3600);
+        assert_eq!(cache_seconds(ARCHIVE_BUCKET, "list-type=2", ""), 15);
+        assert_eq!(cache_seconds("maps.dwd.de", "LAYERS=rv&TIME=2026", ""), 300);
+        assert_eq!(cache_seconds("maps.dwd.de", "LAYERS=rv", ""), 15);
+        assert_eq!(cache_seconds("geo.weather.gc.ca", "SERVICE=WFS", ""), 15);
+        assert_eq!(cache_seconds("api.weather.gov", "", ""), 15);
+        assert_eq!(cache_seconds("opendata.dwd.de", "", ""), 15);
+        assert_eq!(cache_seconds("mesonet-nexrad.agron.iastate.edu", "", ""), 15);
+        assert_eq!(cache_seconds("tgftp.nws.noaa.gov", "", ""), 300);
+        assert_eq!(cache_seconds("tgftp.nws.noaa.gov", "", "SL.us008001/DF.of/DC.radar/DS.p59hi/SI.ktlx/sn.last"), 15);
+        assert_eq!(cache_seconds("tgftp.nws.noaa.gov", "", "SL.us008001/DF.of/DC.radar/DS.p59hi/SI.ktlx/sn.0001"), 300);
+        assert_eq!(cache_seconds("cwwp2.dot.ca.gov", "", ""), 60);
+        assert_eq!(cache_seconds("basemaps.cartocdn.com", "", ""), 300);
     }
 
     #[test]
@@ -2719,6 +2773,7 @@ mod tests {
                 format!("https://example.invalid/{i}"),
                 ProxyHit {
                     at: Instant::now(),
+                    upstream_age: 0,
                     ctype: "application/octet-stream",
                     body: std::sync::Arc::new(vec![0u8; 64 * 1024 * 1024]),
                     etag: String::new(),
@@ -2739,17 +2794,41 @@ mod tests {
     fn a_matching_etag_is_answered_304() {
         let body = std::sync::Arc::new(b"hello".to_vec());
         let etag = etag_of(&body);
-        let hit = proxy_reply("text/plain", body.clone(), etag.clone(), 15, Some(&etag));
+        let hit = proxy_reply("text/plain", body.clone(), etag.clone(), 15, 14, Some(&etag));
         assert_eq!(hit.status, "304 Not Modified");
         assert!(hit.body.is_empty());
         assert!(hit
             .headers
             .contains(&("Cache-Control", "public, max-age=15".to_string())));
-        let miss = proxy_reply("text/plain", body, etag, 15, Some("\"stale\""));
+        assert!(hit.headers.contains(&("Age", "14".to_string())));
+        let miss = proxy_reply("text/plain", body, etag, 15, 14, Some("\"stale\""));
         assert_eq!(miss.status, "200 OK");
         assert_eq!(miss.body, b"hello");
+        assert!(miss.headers.contains(&("Age", "14".to_string())));
         // Different bytes, different tag — an ETag that never moves is worse than none.
         assert_ne!(etag_of(b"hello"), etag_of(b"hellp"));
+    }
+
+    #[test]
+    fn proxy_freshness_includes_upstream_age_date_and_transfer_time() {
+        use reqwest::header::{HeaderMap, HeaderValue, AGE, DATE};
+        let now = "2026-11-18T12:00:30Z".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(AGE, HeaderValue::from_static("14"));
+        assert_eq!(upstream_cache_age(&headers, now, Duration::from_secs(2)), 16);
+        headers.insert(DATE, HeaderValue::from_static("Wed, 18 Nov 2026 12:00:00 GMT"));
+        assert_eq!(upstream_cache_age(&headers, now, Duration::from_secs(2)), 30);
+        headers.insert(DATE, HeaderValue::from_static("invalid"));
+        headers.insert(AGE, HeaderValue::from_static("-4"));
+        assert_eq!(upstream_cache_age(&headers, now, Duration::ZERO), 0);
+        headers.insert(AGE, HeaderValue::from_static("99999999999999999999999999"));
+        assert_eq!(upstream_cache_age(&headers, now, Duration::from_secs(2)), u64::MAX);
+
+        let hit = ProxyHit { at: Instant::now() - Duration::from_secs(2), upstream_age: 14,
+            ctype: "text/plain", body: Arc::new(Vec::new()), etag: String::new() };
+        assert!(!hit.fresh(15), "upstream age must shorten local freshness");
+        assert!(hit.age() >= 16);
+        assert!(hit.fresh(3600), "immutable history keeps its longer cache budget");
     }
 
     #[test]

@@ -34,6 +34,88 @@ pub fn read_message<'a>(data: &'a [u8], offset: usize) -> Option<Message<'a>> {
     Message::from_data(data, offset)
 }
 
+#[cfg(test)]
+mod data_length_tests {
+    use super::*;
+
+    fn simple(cells: u32, packed: u32, bitmap: Option<u8>, bits: u8, payload: &[u8]) -> Vec<u8> {
+        let mut message = vec![0; 16];
+        message[..4].copy_from_slice(b"GRIB");
+        message[7] = 2;
+        let mut section = |number: u8, body: &[u8]| {
+            message.extend_from_slice(&((body.len() + 5) as u32).to_be_bytes());
+            message.push(number);
+            message.extend_from_slice(body);
+        };
+        let mut grid = vec![0];
+        grid.extend_from_slice(&cells.to_be_bytes());
+        section(3, &grid);
+        let mut packing = vec![0u8; 16];
+        packing[..4].copy_from_slice(&packed.to_be_bytes());
+        if bits == 0 {
+            packing[6..10].copy_from_slice(&250f32.to_be_bytes());
+            packing[12..14].copy_from_slice(&1u16.to_be_bytes());
+        }
+        packing[14] = bits;
+        section(5, &packing);
+        section(6, &bitmap.map_or_else(|| vec![255], |bits| vec![0, bits]));
+        section(7, payload);
+        message.extend_from_slice(b"7777");
+        let length = message.len() as u64;
+        message[8..16].copy_from_slice(&length.to_be_bytes());
+        message
+    }
+
+    #[test]
+    fn zero_bit_constants_keep_reference_and_bitmap_missing_values() {
+        for template in [0u16, 40, 41, 42] {
+            if template == 40 && !cfg!(feature = "jpeg") { continue; }
+            if template == 41 && !cfg!(feature = "png") { continue; }
+            let mut raw = simple(3, 3, None, 0, &[]);
+            let section5 = 16 + u32::from_be_bytes(raw[16..20].try_into().unwrap()) as usize;
+            raw[section5 + 9..section5 + 11].copy_from_slice(&template.to_be_bytes());
+            assert_eq!(read_message(&raw, 0).unwrap().data().unwrap(), [250.0; 3]);
+        }
+        let raw = simple(3, 2, Some(0b1010_0000), 0, &[]);
+        let data = read_message(&raw, 0).unwrap().data().unwrap();
+        assert_eq!((data[0], data[2]), (250.0, 250.0));
+        assert!(data[1].is_nan());
+        let raw = simple(3, 0, Some(0), 0, &[]);
+        assert!(read_message(&raw, 0).unwrap().data().unwrap().iter().all(|value| value.is_nan()));
+    }
+
+    #[test]
+    fn short_data_and_inconsistent_bitmap_counts_are_not_zero_padded() {
+        for raw in [simple(3, 3, None, 8, &[1, 2]), simple(3, 2, None, 8, &[1, 2]),
+            simple(3, 1, Some(0b1010_0000), 0, &[]), simple(3, 2, Some(0b1000_0001), 0, &[])] {
+            assert!(read_message(&raw, 0).unwrap().data().is_err());
+        }
+        let raw = simple(3, 3, None, 2, &[0b0110_1100]);
+        assert_eq!(read_message(&raw, 0).unwrap().data().unwrap(), [1.0, 2.0, 3.0]);
+    }
+
+    #[cfg(feature = "jpeg")]
+    #[test]
+    fn jpeg_fixture_rejects_header_count_disagreement_before_pixel_decode() {
+        let fixture = include_bytes!("../../../crates/wxdata/tests/data/rap-shear-pair.grib2");
+        let length = u64::from_be_bytes(fixture[8..16].try_into().unwrap()) as usize;
+        let mut raw = fixture[..length].to_vec();
+        let expected = read_message(&raw, 0).unwrap().data().unwrap();
+        assert!(!expected.is_empty());
+        let mut offset = 16;
+        while &raw[offset..offset + 4] != b"7777" {
+            let size = u32::from_be_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
+            let field = match raw[offset + 4] { 3 => Some(offset + 6), 5 => Some(offset + 5), _ => None };
+            if let Some(field) = field {
+                raw[field..field + 4].copy_from_slice(&((expected.len() + 1) as u32).to_be_bytes());
+            }
+            offset += size;
+        }
+        let error = read_message(&raw, 0).unwrap().data().unwrap_err();
+        assert!(error.to_string().contains("JPEG dimensions disagree"));
+    }
+}
+
 pub struct MessageIterator<'a> {
     data: &'a [u8],
     offset: usize,
@@ -918,8 +1000,6 @@ impl<'a> Message<'a> {
                     )
                 );
 
-                let scaled_unpacked_data = data_representation_template.unpack(raw_packed_data)?;
-
                 let bitmap_section = unwrap_or_return!(
                     self.sections().find_map(|s| match s {
                         Section::Bitmap(bitmap_section) => Some(bitmap_section),
@@ -929,12 +1009,6 @@ impl<'a> Message<'a> {
                         "Bitmap section not found when reading message data".into()
                     )
                 );
-
-                let mut data = if bitmap_section.has_bitmap() {
-                    bitmap_section.map_data(scaled_unpacked_data)
-                } else {
-                    scaled_unpacked_data
-                };
 
                 let count = unwrap_or_return!(
                     self.sections().find_map(|s| match s {
@@ -947,7 +1021,33 @@ impl<'a> Message<'a> {
                         "Grid definition section not found when reading message data".into()
                     )
                 );
-                data.resize(count, 0.0);
+                // Local patch: validate packed/bitmap cardinality before expansion, then reject
+                // short decoded streams instead of silently manufacturing zero-valued weather.
+                let expected = data_representation_section.data_point_count();
+                if bitmap_section.has_bitmap() {
+                    let bitmap = bitmap_section.raw_bitmap_data();
+                    let padding = (8 - count % 8) % 8;
+                    if bitmap.len() != count.div_ceil(8)
+                        || bitmap.iter().map(|byte| byte.count_ones() as usize).sum::<usize>() != expected
+                        || (padding > 0 && bitmap.last().is_some_and(|byte| byte & ((1 << padding) - 1) != 0)) {
+                        return Err(GribberishError::MessageError("Bitmap disagrees with packed point count".into()));
+                    }
+                } else if expected != count {
+                    return Err(GribberishError::MessageError("Packed point count disagrees with grid".into()));
+                }
+                let scaled_unpacked_data = match data_representation_section.constant_value() {
+                    Some(value) => vec![value; expected],
+                    None => data_representation_template.unpack(raw_packed_data)?,
+                };
+                if scaled_unpacked_data.len() != expected {
+                    return Err(GribberishError::MessageError("Decoded data length disagrees with packed point count".into()));
+                }
+                let mut data = if bitmap_section.has_bitmap() {
+                    bitmap_section.map_data(scaled_unpacked_data)
+                } else {
+                    scaled_unpacked_data
+                };
+                data.truncate(count); // discard only unused bitmap padding bits
                 Ok(data)
             }
         }

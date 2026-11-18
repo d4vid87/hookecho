@@ -77,12 +77,22 @@ impl DataRepresentationTemplate<f64> for PNGDataRepresentationTemplate {
         let bytes: Vec<u8> = bits.to_bitvec().into();
 
         let decoder = Decoder::new(bytes.as_slice());
-        let mut reader = decoder.read_info().unwrap();
+        let decode_error = |error| GribberishError::DataRepresentationTemplateError(format!("PNG decode: {error}"));
+        let mut reader = decoder.read_info().map_err(decode_error)?;
+
+        // PNG's internal limits exclude this caller-owned buffer. Its dimensions must agree
+        // with the packed GRIB count (which excludes points omitted by a bitmap).
+        let expected = crate::utils::read_u32_from_bytes(&self.data, 5).unwrap_or(0) as usize;
+        let bytes_per_datapoint = (self.bit_count_per_datapoint() / 8).max(1);
+        let info = reader.info();
+        if (info.width as usize).checked_mul(info.height as usize) != Some(expected)
+            || expected.checked_mul(bytes_per_datapoint) != Some(reader.output_buffer_size()) {
+            return Err(GribberishError::DataRepresentationTemplateError(
+                "PNG dimensions disagree with packed point count".into()));
+        }
 
         let mut image_data: Vec<u8> = vec![0; reader.output_buffer_size()];
-        let _ = reader.next_frame(&mut image_data).unwrap();
-
-        let bytes_per_datapoint = (self.bit_count_per_datapoint() / 8).max(1);
+        reader.next_frame(&mut image_data).map_err(decode_error)?;
 
         // Read each datapoint at its true width. The upstream 1.5.0 code always read a u16, which
         // overruns (and mis-decodes) 8-bit PNG grids like MRMS rotation-track / AzShear.
@@ -100,5 +110,34 @@ impl DataRepresentationTemplate<f64> for PNGDataRepresentationTemplate {
             .collect();
 
         Ok(values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn png_pixels_must_match_packed_count_before_buffer_allocation() {
+        let mut image = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut image, 2, 1);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.write_header().unwrap().write_image_data(&[5, 17]).unwrap();
+        }
+        let mut section = vec![0u8; 21];
+        section[5..9].copy_from_slice(&2u32.to_be_bytes());
+        section[19] = 8;
+        assert_eq!(PNGDataRepresentationTemplate::new(section.clone())
+            .unpack(image.view_bits::<Msb0>()).unwrap(), [5.0, 17.0]);
+        for count in [1u32, 3] {
+            section[5..9].copy_from_slice(&count.to_be_bytes());
+            assert!(PNGDataRepresentationTemplate::new(section.clone())
+                .unpack(image.view_bits::<Msb0>()).is_err());
+        }
+        let truncated = &image[..16];
+        assert!(PNGDataRepresentationTemplate::new(section)
+            .unpack(truncated.view_bits::<Msb0>()).is_err());
     }
 }

@@ -1326,6 +1326,10 @@ fn radar_defaults(ui: &mut egui::Ui, settings: &mut Settings) {
             ui.label("Poll interval (s)");
             ui.add(egui::DragValue::new(&mut settings.poll_interval_secs).range(10..=600));
             ui.end_row();
+            ui.label("Effective radar check");
+            ui.label(format!("{} s", settings.effective_poll_interval_secs(crate::platform::is_metered())))
+                .on_hover_text("Battery saver and metered data each double volume polling. Live chunks update independently when available. Faster checks cannot make the radar scan faster.");
+            ui.end_row();
 
             ui.label("Radar feed");
             egui::ComboBox::from_id_salt("radar_feed")

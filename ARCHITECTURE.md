@@ -31,7 +31,7 @@ All four platforms build the same `HookEchoApp`; only the launch differs
 
 - **Desktop** — `main.rs` dispatches any `--headless-*` verifier or `--serve`, then `run_desktop()`.
 - **Android** — `android_main()` takes the `AndroidApp` handle, points `paths` at the app-private dir, stashes the handle in `platform` for insets.
-- **Web** — `start(canvas_id)` from `web/index.html`. No filesystem, no live chunk stream, only feeds that allow cross-origin.
+- **Web/PWA** — `start(canvas_id)` from `web/index.html`. Rust/WASM runs egui on WebGPU or WebGL; transferable jobs run in a second WASM instance in a Web Worker. Live chunks run here too. IndexedDB holds optional offline objects; the same-origin feed proxy supplies CORS for allowlisted sources.
 - **Headless** — `headless.rs` drives the real pipelines to a PNG with no window. These are the smoke tests.
 
 ## The frame loop
@@ -80,4 +80,23 @@ pass:
 - **The Android field-name contract.** `AlertService.kt` parses `settings.json` by hand in another language. The test `kotlin_alert_service_field_names_survive` is the only compiler that sees both sides.
 - **`cfg` fences are load-bearing.** Web has no filesystem or process spawning; Android has neither `serve` nor ffmpeg. Check `lib.rs` — the module list documents which is which.
 - **`// ponytail:` comments** are the ledger of deliberate ceilings. `grep -rn "ponytail:" crates/` is where [ROADMAP.md](ROADMAP.md) gets restocked.
-- **No telemetry, no accounts, no server of ours.** The app talks to NOAA and the NWS directly. A change that adds a hosted dependency is a change to the product, not just the code.
+- **No telemetry or accounts.** Native data requests generally go directly to the public source. The browser uses `net::fetch_url`, `web/feed-fetch.js` and the allowlisted Cloudflare worker in `web/_worker.js`; local `--serve` has a matching proxy in `serve.rs`. New hosted infrastructure still changes the product and requires an explicit operating decision.
+
+## Radar timing and delivery evidence
+
+`wxdata::stats::radar_event` retains at most 512 local events; Save diagnostics
+exports them and the browser test export `radar_trace()` reads the same buffer.
+UTC milliseconds identify cross-system instants; process-monotonic milliseconds
+measure local intervals. Public object keys correlate discovery, request, decode
+and receipt. Upload tokens correlate the selected sweep identity with GPU
+preparation and the map paint callback. A worker round trip includes decode and
+transfer: never add overlapping durations.
+
+The paint callback records draw commands; eframe does not expose the compositor's
+actual presentation time. Diagnostics explicitly leave that timestamp unknown.
+A decoded object or GPU upload alone never advances the displayed clock. Selected
+Level II sweep clocks come from moment-bearing radial acquisition bounds, cached
+per volume revision. Level III product generation, volume scan start and message
+transmission clocks remain distinct; TDWR has no individual beam acquisition
+clock. Source monitoring and browser/GPU evidence are described in the
+[November freshness review](docs/radar-freshness-2026-11.md).

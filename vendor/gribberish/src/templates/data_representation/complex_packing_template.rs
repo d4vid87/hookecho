@@ -124,7 +124,25 @@ impl DataRepresentationTemplate<f64> for ComplexPackingDataRepresentationTemplat
     }
 
     fn unpack(&self, bits: &BitSlice<u8, Msb0>) -> Result<Vec<f64>, GribberishError> {
-        let ng = self.number_of_groups() as usize;
+        let declared_groups = self.number_of_groups() as usize;
+        let expected = read_u32_from_bytes(&self.data, 5).unwrap_or(0) as usize;
+        // ecCodes' zero-group convention represents a constant field directly.
+        if declared_groups == 0 { return Ok(vec![f64::from(self.reference_value()); expected]); }
+        if self.group_splitting_method() == GroupSplittingMethod::RowByRow {
+            return Err(GribberishError::DataRepresentationTemplateError(
+                "row-by-row complex packing requires grid/bitmap row geometry".into()));
+        }
+        // Empty groups with no encoded descriptors can be skipped without iterating billions.
+        let ng = if self.bit_count() == 0 && self.group_width_bits() == 0
+            && self.group_length_bits() == 0 && self.group_length_reference() == 0 {
+            1
+        } else { declared_groups };
+        for width in [self.bit_count(), self.group_width_bits(), self.group_length_bits()] {
+            if width > 32 || ng.checked_mul(usize::from(width)).is_none_or(|length| length > bits.len()) {
+                return Err(GribberishError::DataRepresentationTemplateError(
+                    "complex descriptors exceed available packed data".into()));
+            }
+        }
         let nbits = self.bit_count() as usize;
 
         let group_references = (0..ng).map(|ig| {
@@ -140,7 +158,7 @@ impl DataRepresentationTemplate<f64> for ComplexPackingDataRepresentationTemplat
         let n_width_bits = self.group_width_bits() as usize;
         let group_widths = (0..ng).map(|ig| {
             if n_width_bits == 0 {
-                0
+                u32::from(self.group_width_reference())
             } else {
                 let start = group_widths_start + ig * n_width_bits;
                 bits[start..start + n_width_bits].load_be::<u32>()
@@ -153,26 +171,34 @@ impl DataRepresentationTemplate<f64> for ComplexPackingDataRepresentationTemplat
         let n_length_bits = self.group_length_bits() as usize;
         let group_lengths = (0..ng.saturating_sub(1)).map(|ig| {
             if n_length_bits == 0 {
-                0
+                u64::from(self.group_length_reference())
             } else {
                 let start = group_lengths_start + ig * n_length_bits;
-                bits[start..start + n_length_bits].load_be::<u32>()
-                    * self.group_length_increment() as u32
-                    + self.group_length_reference()
+                u64::from(bits[start..start + n_length_bits].load_be::<u32>())
+                    * u64::from(self.group_length_increment())
+                    + u64::from(self.group_length_reference())
             }
-        }).chain(iter::once(self.group_last_length()));
+        }).chain(iter::once(u64::from(self.group_last_length())));
+
+        // Zero-width groups still emit every declared value; bound their expansion before collect.
+        if group_lengths.clone().try_fold(0usize, |total, length|
+            total.checked_add(usize::try_from(length).ok()?).filter(|total| *total <= expected)) != Some(expected) {
+            return Err(GribberishError::DataRepresentationTemplateError(
+                "complex group lengths disagree with packed point count".into()));
+        }
 
         let mut pos =
             group_lengths_start + (((n_length_bits * ng) as f32 / 8.0).ceil() as usize * 8);
         let values = izip!(group_references, group_widths, group_lengths)
             .flat_map(|(reference, width, length)| {
-                let n_bits = (width * length) as usize;
+                let length = length as usize; // validated against packed point count above
+                let n_bits = width as usize * length;
                 let group_values = (0..length).map(move |i| {
                     let value = if width == 0 {
                         0u32
                     } else {
-                        bits[pos + (i * width) as usize
-                            ..pos + (i * width) as usize + width as usize]
+                        bits[pos + i * width as usize
+                            ..pos + i * width as usize + width as usize]
                             .load_be::<u32>()
                     };
                     let raw = as_signed!(value, 32, i32);
@@ -191,5 +217,46 @@ impl DataRepresentationTemplate<f64> for ComplexPackingDataRepresentationTemplat
             .collect();
 
         Ok(values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_descriptor_bits_keep_nonzero_width_and_length_references() {
+        let mut section = vec![0u8; 47];
+        section[5..9].copy_from_slice(&4u32.to_be_bytes());
+        section[21] = 1;
+        section[31..35].copy_from_slice(&2u32.to_be_bytes());
+        section[35] = 8;
+        section[37..41].copy_from_slice(&2u32.to_be_bytes());
+        section[42..46].copy_from_slice(&2u32.to_be_bytes());
+        let payload = [1u8, 2, 3, 4];
+        assert_eq!(ComplexPackingDataRepresentationTemplate::new(section.clone())
+            .unpack(payload.view_bits::<Msb0>()).unwrap(), [1.0, 2.0, 3.0, 4.0]);
+        section[31..35].copy_from_slice(&0u32.to_be_bytes());
+        section[11..15].copy_from_slice(&7f32.to_be_bytes());
+        assert_eq!(ComplexPackingDataRepresentationTemplate::new(section)
+            .unpack([].view_bits::<Msb0>()).unwrap(), [7.0; 4]);
+    }
+
+    #[test]
+    fn zero_width_groups_cannot_expand_beyond_the_packed_count() {
+        let mut section = vec![0u8; 47];
+        section[5..9].copy_from_slice(&2u32.to_be_bytes());
+        section[21] = 1;
+        section[31..35].copy_from_slice(&1u32.to_be_bytes());
+        section[42..46].copy_from_slice(&2u32.to_be_bytes());
+        let bits = [].view_bits::<Msb0>();
+        assert_eq!(ComplexPackingDataRepresentationTemplate::new(section.clone()).unpack(bits).unwrap(), [0.0, 0.0]);
+        for length in [1u32, 3] {
+            section[42..46].copy_from_slice(&length.to_be_bytes());
+            assert!(ComplexPackingDataRepresentationTemplate::new(section.clone()).unpack(bits).is_err());
+        }
+        section[31..35].copy_from_slice(&3u32.to_be_bytes());
+        section[37..41].copy_from_slice(&1u32.to_be_bytes());
+        assert!(ComplexPackingDataRepresentationTemplate::new(section).unpack(bits).is_err());
     }
 }

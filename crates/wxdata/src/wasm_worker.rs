@@ -34,24 +34,24 @@ impl std::fmt::Display for Error {
 }
 
 /// Decode `bytes` in the worker, returning the postcard-encoded `Scan`.
-pub async fn decode_volume(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
-    call("decode", bytes).await
+pub async fn decode_volume(bytes: Vec<u8>, object: &str) -> Result<Vec<u8>, Error> {
+    call_named("decode", bytes, Some(object)).await
 }
 
 /// Assemble a framed live chunk window in the worker, returning the postcard-encoded partial
 /// `Scan`. Same bridge, same fallback: [`Error::Unavailable`] means "assemble it inline".
-pub async fn assemble_chunks(framed: Vec<u8>) -> Result<Vec<u8>, Error> {
-    call("assemble", framed).await
+pub async fn assemble_chunks(framed: Vec<u8>, object: &str) -> Result<Vec<u8>, Error> {
+    call_named("assemble", framed, Some(object)).await
 }
 
 /// Bin a selected cut without pausing map input.
-pub async fn bin_display(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
-    call("bin", payload).await
+pub async fn bin_display(payload: Vec<u8>, object: &str) -> Result<Vec<u8>, Error> {
+    call_named("bin", payload, Some(object)).await
 }
 
 /// Decode MRMS and prepare its display grid on the worker heap.
-pub async fn decode_mrms(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
-    call("mrms", payload).await
+pub async fn decode_mrms(payload: Vec<u8>, object: &str) -> Result<Vec<u8>, Error> {
+    call_named("mrms", payload, Some(object)).await
 }
 
 pub async fn decode_model(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
@@ -92,6 +92,10 @@ pub async fn project_abi(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
 
 /// Run one job on the worker. `op` names the export it should call.
 async fn call(op: &str, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
+    call_named(op, bytes, None).await
+}
+
+async fn call_named(op: &str, bytes: Vec<u8>, object: Option<&str>) -> Result<Vec<u8>, Error> {
     let global = js_sys::global();
     let f = js_sys::Reflect::get(&global, &"__decodeVolume".into())
         .ok()
@@ -101,8 +105,11 @@ async fn call(op: &str, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     // A JS-heap copy, deliberately: the worker takes ownership of the buffer (it is transferred),
     // and transferring a view of wasm memory detaches the entire wasm heap out from under the app.
     let arg = js_sys::Uint8Array::from(bytes.as_slice());
+    if let Some(object) = object {
+        crate::stats::radar_event("worker_queued", object, serde_json::json!({"op": op, "bytes": bytes.len()}));
+    }
     let promise: js_sys::Promise = f
-        .call2(&global, &arg, &op.into())
+        .call3(&global, &arg, &op.into(), &object.map_or(wasm_bindgen::JsValue::NULL, wasm_bindgen::JsValue::from_str))
         .map_err(|_| Error::Unavailable)?
         .dyn_into()
         .map_err(|_| Error::Unavailable)?;
@@ -118,6 +125,9 @@ async fn call(op: &str, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     let mut cancel = CancelOnDrop(js_sys::Reflect::get(&promise, &"cancel".into()).ok()
         .and_then(|value| value.dyn_into::<js_sys::Function>().ok()));
     let result = wasm_bindgen_futures::JsFuture::from(promise).await;
+    if let Some(object) = object {
+        crate::stats::radar_event("worker_received", object, serde_json::json!({"op": op, "ok": result.is_ok()}));
+    }
     cancel.0 = None;
     match result {
         Ok(v) => Ok(js_sys::Uint8Array::new(&v).to_vec()),

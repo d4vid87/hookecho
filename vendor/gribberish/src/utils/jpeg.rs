@@ -136,7 +136,7 @@ impl Drop for OpjImage {
     }
 }
 
-pub fn extract_jpeg_data(raw_data: &[u8]) -> Result<Vec<i32>, GribberishError> {
+pub fn extract_jpeg_data(raw_data: &[u8], expected: usize) -> Result<Vec<i32>, GribberishError> {
     let output_data: Vec<i32>;
 
     unsafe {
@@ -181,6 +181,15 @@ pub fn extract_jpeg_data(raw_data: &[u8]) -> Result<Vec<i32>, GribberishError> {
             return Err(GribberishError::JpegError(
                 "Failed to decode JPEG byte stream header".into(),
             ));
+        }
+
+        // Local patch: validate the embedded component before OpenJPEG allocates decoded pixels.
+        if image.0.is_null() || (*image.0).numcomps != 1 || (*image.0).comps.is_null() {
+            return Err(GribberishError::JpegError("JPEG component count is not a scalar field".into()));
+        }
+        let component = &*(*image.0).comps;
+        if (component.w as usize).checked_mul(component.h as usize) != Some(expected) {
+            return Err(GribberishError::JpegError("JPEG dimensions disagree with packed point count".into()));
         }
 
         if openjpeg_sys::opj_decode(codec.0, stream.0, image.0) != 1 {

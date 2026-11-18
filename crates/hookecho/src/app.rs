@@ -2857,8 +2857,15 @@ fn shared_head_source(views: &[MapView], idx: usize, poll_secs: u64) -> Option<u
         .map(|(i, _)| i)
 }
 
+/// Provider freshness compares acquisition with acquisition, never an archive's volume-start key.
+fn newest_radial_time(scan: &Scan) -> Option<DateTime<Utc>> {
+    scan.sweeps().iter().flat_map(|sweep| sweep.radials())
+        .map(|radial| radial.collection_timestamp()).max()
+        .and_then(DateTime::from_timestamp_millis)
+}
+
 enum DataMsg {
-    Head { view: usize, site: String, provider: level2::Level2Provider, time: Option<DateTime<Utc>>, result: Box<DataMsg> },
+    Head { view: usize, site: String, provider: level2::Level2Provider, observation_time: Option<DateTime<Utc>>, result: Box<DataMsg> },
     ListingFailed { view: usize, site: String, date: NaiveDate },
     Guarded { view: usize, site: String, generation: u64, head: bool, result: Box<DataMsg> },
     FramePhase { view: usize, site: String, name: String, generation: u64, phase: level2::LoadPhase },
@@ -3555,6 +3562,7 @@ mod mode_session_tests {
         source.show_volume(scan.clone(), "selected".into(), time);
         source.volume.as_mut().unwrap().live_status = Some(wxdata::live::ScanStatus {
             provider: "test", volume_start_ms: Some(time.timestamp_millis()), vcp: 212,
+            chunk_key: None, chunk_last_modified_ms: None,
             cuts_received: 2, cuts_expected: 14, radials_received: 2,
             current_elevation_deg: Some(0.5), latency: std::time::Duration::ZERO,
             oldest_radial_age: None, sails_cuts: 0, mrle_cuts: 0, retries: 0, stream_active: true,
@@ -5707,19 +5715,7 @@ impl HookEchoApp {
     /// volume every interval; halving that rate costs at most a couple of minutes of latency on
     /// the live head, which the chunk stream covers anyway when it is running.
     fn poll_interval_secs(&self) -> u64 {
-        let base = self.settings.poll_interval_secs;
-        let base = if crate::platform::is_metered() {
-            base * 2
-        } else {
-            base
-        };
-        // Battery saver stacks with metering: both are "spend less", and a chaser who has turned
-        // both on has said so twice.
-        if self.settings.battery_saver {
-            base * 2
-        } else {
-            base
-        }
+        self.settings.effective_poll_interval_secs(crate::platform::is_metered())
     }
 
     /// Largest edge a national field grid may keep. Bounded by what the GPU will accept, and
@@ -8924,13 +8920,13 @@ impl HookEchoApp {
 
     /// Save the active timeline's archived frames into an offline pack.
     ///
-    /// The live head is skipped on purpose: the newest object can still be uploading, and half a
-    /// volume kept forever is worse than one frame missing from a saved loop.
+    /// A transient live-chunk slot is not a completed downloadable archive object.
     #[cfg(target_arch = "wasm32")]
     fn save_offline_pack(&mut self, ctx: &egui::Context) {
         let Some(guard) = crate::webcache::begin_save() else { return };
         let tl = &self.views[self.active].timeline;
-        let ids: Vec<_> = tl.frames.iter().take(tl.playhead + 1).cloned().collect();
+        let ids: Vec<_> = tl.frames.iter().take(tl.playhead + 1)
+            .filter(|id| !id.name().ends_with("_LIVE")).cloned().collect();
         let site = self.views[self.active].site.clone().unwrap_or_default();
         let date = tl.date.format("%Y-%m-%d").to_string();
         let current_satellite: Vec<String> = self.views[self.active]
@@ -13019,6 +13015,9 @@ impl HookEchoApp {
         let generation = self.views[view_idx].head_request.start(site.clone());
         let request_site = site.clone();
         let current_tdwr_revision = self.views[view_idx].tdwr_revision.clone();
+        let current_observation_time = self.views[view_idx].volume.as_ref()
+            .filter(|volume| current_name.as_deref() == Some(volume.name.as_str()))
+            .and_then(|volume| newest_radial_time(&volume.scan));
         let automatic = self.settings.radar_feed == crate::settings::RadarFeed::Automatic
             && self.views[view_idx].timeline.following;
         let provider = if automatic { self.views[view_idx].feed_recovery.requested() }
@@ -13084,10 +13083,7 @@ impl HookEchoApp {
         }
         let handle = self.spawner.spawn_abortable(async move {
             let timeout_site = site.clone();
-            let current_time = current_name.as_ref().and_then(|name| Identifier::new(name.clone()).date_time());
-            // Ask for two: the newest volume is usually still uploading, and one caught before
-            // its metadata record lands can't be decoded at all. Falling back one volume shows
-            // ~5-minute-old data instead of nothing.
+            // Ask for two so a damaged or unavailable newest archive can fall back one volume.
             let msg = wxdata::task::timeout(VOLUME_TIMEOUT, async {
                 match level2::latest_identifiers_from(&site, 2, provider).await.map(|mut v| {
                 let first = v.remove(0);
@@ -13102,8 +13098,8 @@ impl HookEchoApp {
                         }
                     } else {
                         let time = id.date_time().unwrap_or_else(Utc::now);
-                        // No cache at the live head: the newest object can still be uploading, and a
-                        // half-written volume is not something to keep.
+                        // This fetch owns the response; display logic decides whether it advances
+                        // the buffered partial before admitting it as the completed head.
                         let fetched = match crate::volume::fetch(id, None).await {
                             Ok(scan) => Ok((name.clone(), time, scan)),
                             Err(e) => match prev {
@@ -13153,12 +13149,12 @@ impl HookEchoApp {
                 err: e.to_string(),
             });
             let msg = if automatic {
-                let time = match &msg {
-                    DataMsg::Volume { time, .. } => Some(*time),
-                    DataMsg::UpToDate { .. } => current_time,
+                let observation_time = match &msg {
+                    DataMsg::Volume { scan, .. } => newest_radial_time(scan),
+                    DataMsg::UpToDate { .. } => current_observation_time,
                     _ => None,
                 };
-                DataMsg::Head { view: view_idx, site: request_site.clone(), provider, time, result: Box::new(msg) }
+                DataMsg::Head { view: view_idx, site: request_site.clone(), provider, observation_time, result: Box::new(msg) }
             } else { msg };
             let _ = tx.send(DataMsg::Guarded { view: view_idx, site: request_site, generation, head: true, result: Box::new(msg) });
             ctx.request_repaint();
@@ -13256,15 +13252,16 @@ impl HookEchoApp {
                 continue; // view gone or its site changed since the fetch spawned
             }
             let msg = match msg {
-                DataMsg::Head { provider, time, result, .. } => {
+                DataMsg::Head { provider, observation_time, result, .. } => {
                     let pane = &mut self.views[idx];
                     if self.settings.radar_feed != crate::settings::RadarFeed::Automatic || !pane.timeline.following {
                         continue;
                     }
-                    let retained = pane.volume.as_ref().filter(|_| pane.retained_station.is_none()).map(|volume| volume.time);
+                    let retained = pane.volume.as_ref().filter(|_| pane.retained_station.is_none())
+                        .and_then(|volume| newest_radial_time(&volume.scan));
                     let success = matches!(*result, DataMsg::Volume { .. } | DataMsg::UpToDate { .. })
                         || matches!(result.as_ref(), DataMsg::Error { err, .. } if err.contains("missing coverage pattern"));
-                    let decision = pane.feed_recovery.observe(provider, success, time, retained, Utc::now(), Instant::now());
+                    let decision = pane.feed_recovery.observe(provider, success, observation_time, retained, Utc::now(), Instant::now());
                     if decision.retry { pane.last_poll = None; }
                     if decision.switched { pane.recovered_provider(); }
                     if success && decision.accept { pane.error = None; }
@@ -13303,6 +13300,20 @@ impl HookEchoApp {
                     let scan = Arc::new(scan);
                     self.scan_cache.put(name.clone(), Arc::clone(&scan));
                     let v = &mut self.views[view];
+                    if selected_frame.is_none() {
+                        if let Some(head) = &v.live_head {
+                            if head.status.volume_start_ms.is_some_and(|start| time.timestamp_millis() < start)
+                                || newest_radial_time(&scan).is_none_or(|at| at < head.time) {
+                                v.loading = false;
+                                v.load_phase = None;
+                                continue; // completed history can be cached, but cannot roll back the live head
+                            }
+                            if let Some(slot) = v.timeline.frames.iter_mut().find(|frame| frame.name().ends_with("_LIVE")) {
+                                *slot = Identifier::new(name.clone());
+                            }
+                            v.live_head = None;
+                        }
+                    }
                     if let Some(generation) = selected_frame {
                         if !v.frame_request.matches(&name, generation) || !frame_result_is_current(&v.timeline, &name) { continue; }
                     } else if !v.timeline.following && v.timeline.current().is_some() && !frame_result_is_current(&v.timeline, &name) {
@@ -13365,6 +13376,10 @@ impl HookEchoApp {
                     v.last_list_failure = None;
                     if v.timeline.date == date && v.site.as_deref() == Some(site.as_str()) {
                         v.timeline.set_frames(frames, (site, date));
+                        if v.live_head_id().is_some_and(|head| !v.timeline.frames.contains(&head)) {
+                            v.live_head = None;
+                            v.last_poll = None; // the completed archive replaced the transient slot
+                        }
                     }
                 }
                 DataMsg::Live {
@@ -13385,34 +13400,19 @@ impl HookEchoApp {
                         continue; // queued results from a replaced stream cannot overwrite the feed
                     }
                     let v = &mut self.views[view];
-                    if v.timeline.playing {
-                        continue; // looping pane owns its displayed frame (cf. Volume above)
+                    if !v.receive_live(live::Update { name, time, scan, changed, status }) { continue; }
+                    if let Some(head) = &v.live_head {
+                        wxdata::stats::radar_event("live_client_received", head.status.chunk_key.as_deref().unwrap_or(&head.name),
+                            serde_json::json!({"pane": view, "generation": gen, "newest_radial_ms": time.timestamp_millis()}));
                     }
-                    if v.retained_station.is_some() {
-                        v.volume = None;
-                        self.pane_shown.remove(&view);
-                    }
-                    v.station_ready();
-                    match &mut v.volume {
-                        Some(vol) => vol.apply_live(scan, name, time, &changed, status),
-                        None => {
-                            let mut volume = Volume::new(scan, name, time);
-                            volume.live_status = Some(status);
-                            v.volume = Some(volume);
-                        }
-                    }
-                    v.pin_low_cut();
                     v.feed_recovery.live_received(time);
-                    v.loading = false;
-                    v.error = None;
-                    v.fetch_failures = 0;
-                    v.clamp_tilt();
-                    v.refresh_moments();
                     // A healthy stream pushes the poll deadline forward — this line IS the
                     // fallback: if the stream dies, interval polling resumes on schedule.
                     v.last_poll = Some(Instant::now());
-                    self.pane_upload_tokens.insert(view, 0);
-                    self.scan_chime(view, time);
+                    if v.show_live_head_if_selected() {
+                        self.pane_upload_tokens.insert(view, 0);
+                        self.scan_chime(view, time);
+                    }
                 }
                 DataMsg::UpToDate { view, .. } => {
                     self.views[view].station_ready();
@@ -13468,13 +13468,10 @@ impl HookEchoApp {
         let idx = self.active;
         let (want, site, base) = {
             let v = &self.views[idx];
-            // Stream only while pinned to the live head; scrubbing pauses it. A live loop is
-            // suppressed too — the loop shows past frames, so interval polling (not the sweep
-            // stream) carries new-volume arrival. ponytail: stream resumes on pause / go_head.
+            // Following acquires live data even while playback shows history; scrubbing stops it.
             // Only WSR-88Ds have a Level 2 chunk stream to merge — asking for one downloads a
             // WSR-88D-shaped file that isn't there and decodes garbage.
             let want = v.timeline.following
-                && !v.timeline.playing
                 && self.settings.radar_feed == crate::settings::RadarFeed::Automatic
                 && v.feed_recovery.provider == level2::Level2Provider::S3
                 && v.feed_recovery.probe.is_none()
@@ -13487,13 +13484,15 @@ impl HookEchoApp {
                 // Shared with the pane: the streamer merges into a new Scan rather than mutating
                 // this one, so it only needs a refcount, not the tens of MB a deep copy cost on
                 // the UI thread at every stream start.
-                v.volume.as_ref().map(|vol| Arc::clone(&vol.scan)),
+                v.live_head.as_ref().map(|head| Arc::clone(&head.scan))
+                    .or_else(|| v.volume.as_ref().map(|vol| Arc::clone(&vol.scan))),
             )
         };
 
         // Abort an existing stream if it no longer matches the active view/site or isn't wanted.
         if let Some((sv, ss, _)) = &self.live_stream {
             if !want || *sv != idx || Some(ss.as_str()) != site.as_deref() {
+                self.views[*sv].live_stream_ended();
                 // ponytail: the cancelled stream notices within a second (its wait is sliced),
                 // so a fast site switch overlaps two streams for about that long and at most
                 // one in-flight chunk fetch. An abort channel if even that shows up.
@@ -13813,7 +13812,7 @@ impl HookEchoApp {
         // window as backfill lands; a missing middle frame must never make the playhead skip.
         let ready = if cfg!(target_arch = "wasm32") && self.views[idx].timeline.playing {
             cached_loop_tail(&self.views[idx].timeline.frames, wanted_window, |name| {
-                self.scan_cache.contains(&name.to_string())
+                self.views[idx].has_decoded_frame(name) || self.scan_cache.contains(&name.to_string())
             }).max(1)
         } else {
             wanted_window
@@ -13830,7 +13829,7 @@ impl HookEchoApp {
             let tl = &self.views[idx].timeline;
             if tl.following && !tl.playing {
                 let ready = cached_loop_tail(&tl.frames, wanted_window, |name| {
-                    self.scan_cache.contains(&name.to_string())
+                    self.views[idx].has_decoded_frame(name) || self.scan_cache.contains(&name.to_string())
                 });
                 if ready >= 2 {
                     log::info!("loop: playing {ready}/{wanted_window} frames");
@@ -13862,6 +13861,7 @@ impl HookEchoApp {
                     .map(|id| id.name().to_string())
                     .is_some_and(|n| {
                         !self.scan_cache.contains(&n)
+                            && !self.views[idx].has_decoded_frame(&n)
                             && book(&self.prefetching).get(&n).is_some_and(|job| {
                                 // Bounded: a fetch that never answers must not park the loop.
                                 job.started.elapsed() < std::time::Duration::from_secs(8)
@@ -13920,6 +13920,9 @@ impl HookEchoApp {
     fn sync_timeline(&mut self, idx: usize, ctx: &egui::Context, site_changed: bool) {
         if !crate::platform::activity::is_active() {
             return; // backgrounded: no listings, no head polls, no downloads
+        }
+        if self.views[idx].show_live_head_if_selected() {
+            self.pane_upload_tokens.insert(idx, 0);
         }
         // Cancel a listing whose day changed while it was in flight.
         let listing_identity = self.views[idx].site.as_ref().map(|site| format!("{site}:{}", self.views[idx].timeline.date));
@@ -14016,7 +14019,7 @@ impl HookEchoApp {
                 }
             }
         }
-        if !following || looping {
+        if !following || self.views[idx].timeline.playing {
             // Archive / loop: display the volume at the playhead (cache hit is synchronous).
             let target = self.views[idx].timeline.current().map(|id| {
                 (
@@ -14026,6 +14029,10 @@ impl HookEchoApp {
                 )
             });
             if let Some((name, time, id)) = target {
+                if name.ends_with("_LIVE") {
+                    self.prefetch_frames(idx, ctx);
+                    return; // mutable data resolves only through the bounded live-head buffer
+                }
                 let shown = self.views[idx].volume.as_ref().map(|v| v.name.clone());
                 if shown.as_deref() != Some(name.as_str()) {
                     if let Some(scan) = self.scan_cache.get(&name).map(Arc::clone) {
@@ -14122,7 +14129,7 @@ impl HookEchoApp {
     /// Start one frame download into the scan cache, unless it is already cached or in flight.
     fn spawn_prefetch(&mut self, idx: usize, id: Identifier, site: &str, ctx: &egui::Context) {
         let name = id.name().to_string();
-        if self.scan_cache.contains(&name) || book(&self.prefetching).contains_key(&name) {
+        if name.ends_with("_LIVE") || self.scan_cache.contains(&name) || book(&self.prefetching).contains_key(&name) {
             return;
         }
         let mut request = crate::frame_request::Request::default();
@@ -19503,34 +19510,7 @@ impl HookEchoApp {
         let panes = self
             .views
             .iter()
-            .map(|view| {
-                let selected_time = view
-                    .timeline
-                    .current()
-                    .and_then(|frame| frame.date_time())
-                    .or_else(|| view.volume.as_ref().map(|volume| volume.time));
-                let radar_objects = match view.timeline.replay {
-                    Some((from, to)) => view
-                        .timeline
-                        .frames
-                        .get(from..=to)
-                        .unwrap_or(&[])
-                        .iter()
-                        .take(2048)
-                        .map(|frame| frame.name().to_string())
-                        .collect(),
-                    None => view
-                        .timeline
-                        .current()
-                        .map(|frame| vec![frame.name().to_string()])
-                        .unwrap_or_default(),
-                };
-                crate::casefile::CasePane {
-                    site: view.site.clone().unwrap_or_default(),
-                    selected_time,
-                    radar_objects,
-                }
-            })
+            .map(crate::casefile::CasePane::capture)
             .collect();
         let annotations = self
             .strokes
@@ -20953,6 +20933,8 @@ impl HookEchoApp {
                 "storage_error": storage_error.map(|_| "storage unavailable"),
             },
             "performance_counters": counters,
+            "radar_pipeline_events": wxdata::stats::radar_events(),
+            "radar_pipeline_scope": "UTC compares systems; monotonic_ms compares local stages. Join upload/paint by token and pane. Paint records draw commands; actual compositor presentation, first byte and upstream publication are unavailable unless explicitly recorded. Overlapping durations must not be summed.",
             "render_metrics": {
                 "map_gpu_timestamps_supported":crate::gpu_metrics::supported(), "nominal_gpu_bytes":gpu_bytes, "cpu_upload_shadow_bytes":shadow_bytes, "encoded_scan_payload_bytes":encoded_scan_bytes, "panes":pane_metrics,
                 "radar_payload_budget_bytes":radar_payload_budget(&self.settings),
@@ -21137,7 +21119,8 @@ impl HookEchoApp {
                         }
                     }
                     for (view, pane) in self.views.iter_mut().zip(case.panes) {
-                        if !pane.radar_objects.is_empty() {
+                        let pinned_objects = !pane.radar_objects.is_empty();
+                        if pinned_objects {
                             let date = pane.selected_time.map(|time| time.date_naive()).unwrap_or(view.timeline.date);
                             view.restore_replay_frames(pane.site, date,
                                 pane.radar_objects.into_iter().map(Identifier::new).collect());
@@ -21155,7 +21138,8 @@ impl HookEchoApp {
                                 .min_by_key(|(_, distance)| *distance)
                                 .map(|(index, _)| index)
                                 .unwrap_or(0);
-                            view.timeline.seek_target = None;
+                            // Live snapshots reopen by time once a completed archive is listed.
+                            view.timeline.seek_target = (!pinned_objects).then_some(time);
                             view.timeline.following = false;
                         }
                     }
@@ -21229,10 +21213,11 @@ impl HookEchoApp {
         #[cfg(target_arch = "wasm32")]
         let _ = ext;
         let v = &mut self.views[self.active];
+        let available = v.timeline.frames.iter().filter(|id| !id.name().ends_with("_LIVE")).count();
         let slots = if v.timeline.following {
-            v.timeline.frames.len().min(v.timeline.live_window.max(1))
+            available.min(v.timeline.live_window.max(1))
         } else {
-            v.timeline.frames.len()
+            available
         };
         if slots == 0 {
             log::warn!("loop export: no timeline frames");
@@ -21252,7 +21237,7 @@ impl HookEchoApp {
             v.timeline.enable_cut_playback(false);
             v.cut_selection = None;
         }
-        let first = if v.timeline.following { v.timeline.frames.len() - slots } else { 0 };
+        let first = if v.timeline.following { available - slots } else { 0 };
         v.timeline.go_begin();
         v.timeline.playhead = first;
         self.loop_export = Some(LoopExport {
@@ -22144,7 +22129,7 @@ fn linked_pane_presented(
     if !view.show_radar || view.site.is_none() { return true; }
     let Some(requested) = view.timeline.current() else { return false; };
     let Some(volume) = &view.volume else { return false; };
-    volume.name == requested.name() && !volume.display_pending()
+    view.displays_frame(requested) && !volume.display_pending()
         && view.alignment_acceptable(limit)
         && shown.is_some_and(|shown| shown.0 == volume.name
             && shown.2 == view.tilt && shown.8 == view.selected_cut_ms())
@@ -23195,7 +23180,11 @@ impl eframe::App for HookEchoApp {
         #[cfg(debug_assertions)]
         self.frame_time_overlay(ctx);
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
-        if crate::platform::activity::mark_frame(focused) {
+        let resumed = crate::platform::activity::mark_frame(focused);
+        let reconnected = crate::platform::network_recovered();
+        if resumed || reconnected {
+            wxdata::stats::radar_event(if reconnected { "network_recovered" } else { "foreground_refresh" }, "", serde_json::Value::Null);
+            self.last_stream_attempt = None;
             self.overlay_last_fetch = None;
             for v in &mut self.views {
                 v.last_poll = None;
@@ -25384,9 +25373,7 @@ impl eframe::App for HookEchoApp {
                 let active = self.active.min(n - 1);
                 let leader = &self.views[active].timeline;
                 let source = leader.current().cloned();
-                let source_loaded = source.as_ref().is_some_and(|source| {
-                    self.views[active].volume.as_ref().is_some_and(|volume| volume.name == source.name())
-                });
+                let source_loaded = source.as_ref().is_some_and(|source| self.views[active].displays_frame(source));
                 let pending_seek = leader.seek_target.is_some();
                 let locked_source = source.as_ref().filter(|_| self.lock_source_frame && source_loaded && !pending_seek);
                 if let Some(time) = self.views[active].linked_requested_time() {
@@ -26668,8 +26655,48 @@ mod tests {
         view.tilt = 0;
         view.timeline.frames[0] = level2::Identifier::new("KDMX20261019_170600".into());
         assert!(!super::linked_pane_presented(&view, Some(&shown), 2, 2, Some(120)), "retained old frame cannot release the barrier");
+
+        view.timeline.frames.clear();
+        let status = wxdata::live::ScanStatus {
+            provider: "test", volume_start_ms: Some(time.timestamp_millis()), vcp: 212,
+            chunk_key: None, chunk_last_modified_ms: None, cuts_received: 1, cuts_expected: 14,
+            radials_received: 1, current_elevation_deg: Some(0.5), latency: std::time::Duration::ZERO,
+            oldest_radial_age: None, sails_cuts: 0, mrle_cuts: 0, retries: 0, stream_active: true,
+        };
+        let scan = view.volume.as_ref().unwrap().scan.clone();
+        assert!(view.receive_live(wxdata::live::Update { name: "20261019-170000-003-I".into(),
+            time: super::newest_radial_time(&scan).unwrap(), scan, changed: vec![0.5], status }));
+        // The live snapshot has the same scan here; install its chunk identity explicitly.
+        let head = view.live_head.as_ref().unwrap();
+        view.volume.as_mut().unwrap().name = head.name.clone();
+        let mut live_shown = shown.clone();
+        live_shown.0 = head.name.clone();
+        view.timeline.playing = true;
+        assert!(super::linked_pane_presented(&view, Some(&live_shown), 3, 3, Some(120)));
+        assert_eq!(view.linked_requested_time(), view.displayed_time(), "live slot uses the selected sweep clock");
+        let head = view.live_head.as_ref().unwrap();
+        let pending = wxdata::live::Update { name: head.name.clone(), time: head.time,
+            scan: Arc::new(head.scan.as_ref().clone()), changed: vec![0.5], status: head.status.clone() };
+        assert!(view.receive_live(pending));
+        assert!(!super::linked_pane_presented(&view, Some(&live_shown), 3, 3, Some(120)), "a newly buffered revision has not been painted");
         view.show_radar = false;
         assert!(super::linked_pane_presented(&view, None, 0, 0, Some(120)), "hidden radar does not block playback");
+    }
+
+    #[test]
+    fn completed_archive_advances_same_volume_after_live_stream_stops() {
+        let scan = level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap();
+        let completed = super::newest_radial_time(&scan).unwrap();
+        let volume_start = completed - chrono::Duration::minutes(5);
+        let partial = completed - chrono::Duration::minutes(2);
+        let mut recovery = crate::view::FeedRecovery::default();
+        recovery.live_received(partial);
+        assert!(volume_start < partial, "an archive key alone would be rejected after the partial");
+        let decision = recovery.observe(level2::Level2Provider::S3, true,
+            super::newest_radial_time(&scan), Some(partial), completed, Instant::now());
+        assert!(decision.accept && !decision.retry && !decision.switched);
+        assert!(!recovery.observe(level2::Level2Provider::S3, true, Some(partial),
+            Some(completed), completed, Instant::now()).accept, "older acquisition still cannot rewind the completed scan");
     }
 
     #[test]

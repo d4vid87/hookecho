@@ -133,14 +133,29 @@ impl Timeline {
     /// Install a fresh frame listing; keeps the playhead at the head while following, else
     /// clamps it into range (so appended live frames don't move a scrubbed view). A listing for
     /// a different site never keeps the old index.
-    pub fn set_frames(&mut self, frames: Vec<Identifier>, key: (String, NaiveDate)) {
+    pub fn set_frames(&mut self, mut frames: Vec<Identifier>, key: (String, NaiveDate)) {
         // A listing for a different site is a different axis: index N of one radar's day is not
         // the same moment as index N of another's. Carrying the playhead index across a site
         // switch is what drops a live loop hours into the archive — the loop window is a dozen
         // frames, a full day is hundreds, so index 8 lands just after 00Z instead of at the head.
         let forecast = self.forecast_hour();
         let switched_site = self.frames_key.as_ref().is_some_and(|(s, _)| *s != key.0);
+        let selected = self.current().cloned();
+        if self.following {
+            if let Some(head) = self.frames.last().filter(|id| id.name().ends_with("_LIVE")
+                && id.site() == Some(key.0.as_str())
+                && frames.last().and_then(Identifier::date_time) < id.date_time()) {
+                frames.push(head.clone());
+            }
+        }
         self.frames = frames;
+        if !switched_site && (!self.following || self.playing) {
+            if let Some(index) = selected.and_then(|selected| self.frames.iter().position(|frame| {
+                *frame == selected || (selected.name().ends_with("_LIVE") && frame.date_time() == selected.date_time())
+            })) {
+                self.playhead = index;
+            }
+        }
         self.frames_key = Some(key);
         self.listing = false;
         if !self.frames.is_empty() {
@@ -226,6 +241,37 @@ impl Timeline {
     /// playhead is left where it is; the window is relative to `frames.len()`.
     pub fn append_head(&mut self, id: Identifier) {
         self.frames.push(id);
+    }
+
+    /// A single transient live slot; its synthetic key is never an archive-download identifier.
+    pub fn set_live_head(&mut self, id: Identifier) -> bool {
+        let Some(time) = id.date_time() else { return false; };
+        if !self.following || !id.name().ends_with("_LIVE")
+            || self.frames.last().and_then(Identifier::date_time).is_some_and(|last| last > time)
+            || self.frames.iter().any(|frame| !frame.name().ends_with("_LIVE") && frame.date_time() == Some(time)) {
+            return false;
+        }
+        if self.frames.last() == Some(&id) { return true; }
+        let selected = self.current().cloned();
+        let replaced = self.frames.last().is_some_and(|frame| frame.name().ends_with("_LIVE"));
+        self.frames.retain(|frame| !frame.name().ends_with("_LIVE"));
+        self.frames.push(id);
+        if replaced || self.date != time.date_naive() {
+            self.frames_key = None; // reconcile the previous completed volume, including midnight
+        }
+        self.date = time.date_naive();
+        self.playhead = if self.playing {
+            selected.and_then(|selected| self.frames.iter().position(|frame| *frame == selected))
+                .unwrap_or_else(|| self.frames.len().saturating_sub(1))
+        } else {
+            self.frames.len().saturating_sub(1)
+        };
+        true
+    }
+
+    pub fn clear_live_head(&mut self) {
+        self.frames.retain(|frame| !frame.name().ends_with("_LIVE"));
+        self.playhead = self.playhead.min(self.frames.len().saturating_sub(1));
     }
 
     /// True when the play button is running a rolling live loop (pinned to head, playing, and the
@@ -889,6 +935,44 @@ mod tests {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn live_slot_survives_listings_and_completed_volume_replaces_it_once() {
+        let mut timeline = with_frames(3);
+        timeline.playing = true;
+        timeline.playhead = 1;
+        let selected = timeline.current().cloned().unwrap();
+        let live = Identifier::new("KTLX20130520_000300_LIVE".into());
+        assert!(timeline.set_live_head(live.clone()));
+        assert_eq!(timeline.current().unwrap().name(), selected.name());
+        let date = live.date_time().unwrap().date_naive();
+        let history = timeline.frames[..3].to_vec();
+        timeline.set_frames(history.clone(), ("KTLX".into(), date));
+        assert_eq!(timeline.frames.last().unwrap().name(), live.name());
+        assert_eq!(timeline.current().unwrap().name(), selected.name());
+        let mut completed = history;
+        completed.push(Identifier::new("KTLX20130520_000300_V06".into()));
+        timeline.playhead = timeline.frames.len() - 1;
+        timeline.set_frames(completed, ("KTLX".into(), date));
+        assert_eq!(timeline.frames.len(), 4);
+        assert!(timeline.current().unwrap().name().ends_with("_V06"));
+        assert!(!timeline.set_live_head(live), "completed volume never becomes partial again");
+    }
+
+    #[test]
+    fn live_rollover_preserves_selected_identity_and_rejects_late_days() {
+        let old = Identifier::new("KTLX20130520_235000_V06".into());
+        let mut timeline = Timeline { frames: vec![old.clone()], playing: true, ..Default::default() };
+        assert!(timeline.set_live_head(Identifier::new("KTLX20130520_235500_LIVE".into())));
+        assert!(timeline.set_live_head(Identifier::new("KTLX20130521_000100_LIVE".into())));
+        assert_eq!(timeline.current().unwrap().name(), old.name());
+        assert_eq!(timeline.frames.len(), 2, "only one mutable slot retained");
+        assert_eq!(timeline.date, chrono::NaiveDate::from_ymd_opt(2013, 5, 21).unwrap());
+        assert!(timeline.frames_key.is_none());
+        assert!(!timeline.set_live_head(Identifier::new("KTLX20130520_235500_LIVE".into())));
+        timeline.following = false;
+        assert!(!timeline.set_live_head(Identifier::new("KTLX20130521_000600_LIVE".into())));
     }
 
     #[test]

@@ -27,7 +27,7 @@ impl<'a> BitmapSection<'a> {
 
         let bitmask = self.raw_bitmap_data().view_bits::<Msb0>();
         let mut data = Vec::new();
-        data.resize(bitmask.len(), 0.0);
+        data.resize(bitmask.len(), f64::NAN);
         if unmapped_data.is_empty() {
             return data;
         }

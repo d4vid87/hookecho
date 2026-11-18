@@ -26,7 +26,7 @@ const ask = (path, headers = {}) =>
 
 const proxy = (request) =>
   handleProxy(request, {
-    extraHeaders: (host, search) => ({ "cache-control": `public, max-age=${cacheSeconds(host, search)}` }),
+    extraHeaders: (host, search, path) => ({ "cache-control": `public, max-age=${cacheSeconds(host, search, path)}` }),
   });
 
 test("a proxied response carries the edge TTL and the upstream validators", async () => {
@@ -45,6 +45,31 @@ test("a matching If-None-Match is answered 304, bodyless, still with the TTL", a
   assert.equal(res.status, 304);
   assert.equal(res.body, null);
   assert.equal(res.headers.get("cache-control"), "public, max-age=15");
+});
+
+test("cached upstream age is preserved on bodies and 304s instead of restarting freshness", async () => {
+  for (const conditional of [false, true]) {
+    stubFetch(upstream({ etag: '"abc"', age: "14", date: "Wed, 18 Nov 2026 12:00:00 GMT" }));
+    const res = await proxy(ask("api.weather.gov/alerts/active", conditional ? { "if-none-match": '"abc"' } : {}));
+    assert.equal(res.status, conditional ? 304 : 200);
+    assert.equal(res.headers.get("age"), "14");
+    assert.equal(res.headers.get("date"), "Wed, 18 Nov 2026 12:00:00 GMT");
+    assert.equal(res.headers.get("cache-control"), "public, max-age=15");
+  }
+});
+
+test("malformed cache clocks are not forwarded as valid HTTP headers", async () => {
+  stubFetch(upstream({ age: "-4", date: "invalid" }));
+  const res = await proxy(ask("api.weather.gov/alerts/active"));
+  assert.equal(res.headers.get("age"), null);
+  assert.equal(res.headers.get("date"), null);
+});
+
+test("unsolicited partial radar responses cannot become cached complete objects", async () => {
+  stubFetch(new Response("partial", { status: 206, headers: { "content-range": "bytes 0-6/100" } }));
+  const res = await proxy(ask("unidata-nexrad-level2.s3.amazonaws.com/volume"));
+  assert.equal(res.status, 502);
+  assert.equal(res.headers.get("cache-control"), "no-store");
 });
 
 test("the client's conditional headers are never forwarded upstream", async () => {
@@ -99,6 +124,14 @@ test("the TTL table is the one the app's cadences were chosen against", () => {
   assert.equal(cacheSeconds("maps.dwd.de", "?LAYERS=rv"), 15);
   assert.equal(cacheSeconds("tgftp.nws.noaa.gov", ""), 300);
   assert.equal(cacheSeconds("cwwp2.dot.ca.gov", ""), 60);
+});
+
+test("mutable Level III latest pointers refresh without shortening historical objects", async () => {
+  stubFetch(upstream({}, "new radar product"));
+  const response = await proxy(ask("tgftp.nws.noaa.gov/SL.us008001/DF.of/DC.radar/DS.p59hi/SI.ktlx/sn.last"));
+  assert.equal(response.headers.get("cache-control"), "public, max-age=15");
+  assert.equal(cacheSeconds("tgftp.nws.noaa.gov", "", "/SL.us008001/DF.of/DC.radar/DS.p59hi/SI.ktlx/sn.0001"), 300);
+  assert.equal(cacheSeconds("unidata-nexrad-level2.s3.amazonaws.com", "", "/2026/11/18/KTLX/KTLX20261118_120000_V06"), 3600);
 });
 
 test("the trust boundary is unchanged", async () => {

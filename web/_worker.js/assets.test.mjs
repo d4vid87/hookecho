@@ -31,7 +31,7 @@ test('provider errors are not cached upstream or downstream', async () => {
   };
   try {
     const result = await worker.fetch(new Request('https://app.hookecho.io/proxy/api.weather.gov/alerts'), {});
-    assert.equal(hints.cacheTtlByStatus['400-599'], -1);
+    assert.equal(hints.cacheTtlByStatus['201-599'], -1);
     assert.equal(result.status, 429);
     assert.equal(result.headers.get('cache-control'), 'no-store');
   } finally { globalThis.fetch = original; }

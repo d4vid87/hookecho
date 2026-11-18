@@ -411,7 +411,8 @@ where
             };
             // Elevation numbers must be unique per sweep; reflectivity and velocity at one tilt
             // stay separate sweeps, which the split-cut-aware binning already handles.
-            let timestamp = crate::level3::product_time(&p).or_else(|| key_time(&key))?;
+            // Packet 16 has no per-radial acquisition clock; this remains product generation time.
+            let timestamp = crate::level3::product_time(&p)?;
             sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"), timestamp.timestamp_millis())
         });
     }
@@ -623,6 +624,10 @@ mod tests {
         let p = Level3Product {
             modified_julian_date: 1,
             seconds_since_midnight: 0,
+            volume_scan_date: 1,
+            volume_scan_time: 0,
+            generation_date: 1,
+            generation_time: 0,
             code: 180,
             lat: 35.276,
             lon: -97.51,

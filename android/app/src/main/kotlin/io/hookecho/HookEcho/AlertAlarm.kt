@@ -10,13 +10,12 @@ import android.os.Build
 import android.os.PowerManager
 
 /**
- * The third leg under background alerting, and the only one the OS cannot defer.
+ * An additional recovery schedule for background alerting.
  *
- * [AlertService] is a foreground service, which Samsung's app-sleep and deep Doze both kill.
- * [AlertWorker] survives that, but WorkManager's periodic floor is 15 minutes and it is a floor,
- * not a promise — a tornado warning that arrives 15 minutes late is not a warning. An exact alarm
- * (`setExactAndAllowWhileIdle`) is the one schedule Doze honours, so a poll runs on time with the
- * app closed, the service dead and the screen off.
+ * [AlertService] can be stopped by the OS. [AlertWorker] provides a 15-minute periodic request,
+ * but that interval is a minimum, not a delivery promise. Allow-while-idle alarms can run during
+ * Doze, but Android limits them to at most one per nine minutes per app, including exact alarms.
+ * The requested five-minute interval therefore cannot guarantee five-minute polls in Doze.
  *
  * Exact alarms are permissioned from API 31. We ask for `SCHEDULE_EXACT_ALARM` (the
  * user-grantable one, prompted through its settings screen) rather than `USE_EXACT_ALARM` (the
@@ -82,8 +81,8 @@ class AlertAlarm : BroadcastReceiver() {
                 .isIgnoringBatteryOptimizations(context.packageName)
 
         /**
-         * Schedule the next poll. Exact where permitted, `setAndAllowWhileIdle` where not — both
-         * fire in Doze, only one fires on time.
+         * Request the next poll. Exact where permitted, `setAndAllowWhileIdle` where not.
+         * Both remain subject to idle-mode limits, so the stored time is a request, not a deadline.
          */
         @JvmStatic
         fun arm(context: Context) {
@@ -134,8 +133,8 @@ class AlertAlarm : BroadcastReceiver() {
         }
 
         /**
-         * Ask to be exempt from battery optimisation. This is the dialog that actually decides
-         * whether alerts arrive overnight on a Samsung.
+         * Ask to be exempt from battery optimisation. Exemption relaxes some idle restrictions;
+         * it does not guarantee overnight delivery on any device.
          *
          * `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` is Play-policy-sensitive — the store allows it
          * for apps whose core function needs it and rejects it otherwise. This build is sideloaded

@@ -2,6 +2,22 @@
 
 use nexrad_level3::decode;
 
+#[test]
+fn source_clocks_are_not_collapsed_into_message_transmission_time() {
+    // Real fixture bytes, ICD 2620001AD Figure 3-6 PDB halfwords 21-26.
+    for (bytes, day, scan, generated, transmitted) in [
+        (include_bytes!("data/nst_tlx.l3").as_slice(), 18353, 174, 390, 393),
+        (include_bytes!("data/tz0_okc.l3").as_slice(), 20667, 62833, 62902, 62903),
+        (include_bytes!("data/dvl_tlx.l3").as_slice(), 20655, 1772, 1980, 1983),
+        (include_bytes!("data/eet_tlx.l3").as_slice(), 20655, 1772, 1980, 1983),
+    ] {
+        let product = decode(bytes).unwrap();
+        assert_eq!((product.volume_scan_date, product.volume_scan_time), (day, scan));
+        assert_eq!((product.generation_date, product.generation_time), (day, generated));
+        assert_eq!((product.modified_julian_date, product.seconds_since_midnight), (day, transmitted));
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct GoldenCell {
     id: String,

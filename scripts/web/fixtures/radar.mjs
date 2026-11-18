@@ -9,9 +9,10 @@ export async function fixtureRadar(page, options = {}) {
  page.on('request',async request=>{
   const url = new URL(request.url());
   if(options.emptyOverlays && (url.href.includes('api.weather.gov/alerts/')
-    || url.href.includes('mapservices.weather.noaa.gov/') || url.href.includes('www.nhc.noaa.gov/CurrentStorms.json'))) {
+    || url.href.includes('mapservices.weather.noaa.gov/') || url.href.includes('www.nhc.noaa.gov/CurrentStorms.json')
+    || url.href.includes('ornl.opendatasoft.com/'))) {
    const body = url.href.includes('CurrentStorms.json') ? {activeStorms: []} : {type: 'FeatureCollection', features: []};
-   await request.respond({status: 200, contentType: 'application/json', body: JSON.stringify(body)}); return;
+   await request.respond({status: 200, contentType: 'application/json', headers: {'Access-Control-Allow-Origin': '*'}, body: JSON.stringify(body)}); return;
   }
   if(options.alertsResponse && url.pathname.startsWith('/proxy/api.weather.gov/')) {
    counts.alertsRequests.push(url.href);

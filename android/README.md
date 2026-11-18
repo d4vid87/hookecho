@@ -2,9 +2,9 @@
 
 The Android app is the **same Rust codebase** as the desktop build, compiled to a `cdylib`
 (`libhookecho.so`) and loaded by a `GameActivity` — `android_main` in
-[`crates/hookecho/src/lib.rs`](../crates/hookecho/src/lib.rs) is the entry point, and Rust draws
-every pixel. The Kotlin is deliberately thin: the activity itself (deep links + predictive back),
-the background alert service, and the home-screen widget.
+[`crates/hookecho/src/lib.rs`](../crates/hookecho/src/lib.rs) is the entry point. Rust draws the
+radar and shared UI; Kotlin hosts the Compose quick-action shelf, platform integrations,
+background alert service, and home-screen widgets.
 
 GameActivity rather than NativeActivity for one reason — GameTextInput is the real system IME.
 Its editor state is bridged into egui events by `platform::pump_ime`; nothing upstream does that
@@ -94,11 +94,24 @@ It also offers an optional 60-second tour. Both re-run from **Layers → App** a
 **Settings → General**.
 
 Background alerting is opt-in from Settings. When it is on, a foreground service polls
-`api.weather.gov` for your saved markers (60 s while something is warned, 5 min otherwise) and a
-15-minute WorkManager job (`AlertWorker`) runs the same poll as a safety net — it survives process
-death, and `BootReceiver` re-arms it after a reboot. Deep-Doze worst case is therefore ~15 minutes;
-the app does not ask for a battery-optimization exemption or exact alarms. ntfy.sh push (set a
-topic in Settings) still works and is the option that does not cost a permanent notification.
+`api.weather.gov` for your saved markers (60 s while something is warned, 5 min otherwise,
+15 min when battery saver is enabled and no warning is active). A 15-minute WorkManager job
+(`AlertWorker`) and an allow-while-idle alarm provide recovery paths; `BootReceiver` re-arms
+them after a reboot. The alarm requests 5 min normally or 15 min in battery saver, using an
+exact alarm when the user grants permission. Settings also offers a battery-optimization
+exemption. These are requested intervals, not delivery guarantees: Android defers WorkManager
+in Doze and limits even exact allow-while-idle alarms to at most one per nine minutes per app.
+See [Android's idle-mode guidance](https://developer.android.com/training/monitoring-device-state/doze-standby).
+
+On Android 15 and later, this app's `dataSync` foreground service has a background time allowance
+(six hours per 24 hours). It stops when Android calls `onTimeout`; the enabled preference and
+worker/alarm schedules remain intact. Neither those recovery paths nor an exemption bypasses
+all OS limits. See [foreground-service timeouts](https://developer.android.com/develop/background-work/services/fgs/timeout).
+ntfy.sh push (set a topic in Settings) remains an additional option.
+
+The radar widget shows a saved picture of the foreground view, refreshed about every 5 min
+(15 min in battery saver). Its caption labels the snapshot's save age; the radar inside the
+picture can be older. The widget does not fetch radar while the app is closed.
 
 ## Status
 

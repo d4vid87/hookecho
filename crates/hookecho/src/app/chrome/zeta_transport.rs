@@ -148,7 +148,7 @@ impl HookEchoApp {
         let effective_loop = loop_frames.clamp(1, max_loop);
         let listed_loop = effective_loop.min(v.timeline.frames.len());
         let cached_loop = cached_loop_tail(&v.timeline.frames, listed_loop, |name| {
-            self.scan_cache.contains(&name.to_string())
+            v.has_decoded_frame(name) || self.scan_cache.contains(&name.to_string())
         });
         let forecast_hour = v.timeline.forecast_hour();
         let forecast_valid = self.hrrr_valid.filter(|_| self.hrrr_fetched_hour == forecast_hour);
@@ -200,8 +200,9 @@ impl HookEchoApp {
         } else if radar_visible {
             loaded_time.map(|time| crate::timefmt::fmt_clock(time, tz, v.timeline.cut_playback))
         } else { field_time.map(|(time, _, _, _)| crate::timefmt::fmt_clock(time, tz, false)) };
-        let status_hint = format!("Source: {}\nDisplayed scan: {}\nRequested scan: {}\nNewest received cut: {}\n{}\n{}",
+        let status_hint = format!("Source: {}\nDisplayed scan: {}\nRequested scan: {}\nNewest received cut: {}\nClock: {}\n{}\n{}",
             v.radar_source_label(), scan_timestamp(loaded_time), scan_timestamp(requested_time), scan_timestamp(latest_cut),
+            v.painted_frame_details().and_then(|frame| frame["time_basis"].as_str()).unwrap_or_else(|| v.time_basis()),
             status, v.feed_recovery.notice.as_deref().unwrap_or_default());
         let mut action = None;
         let mut layout_choice = None;

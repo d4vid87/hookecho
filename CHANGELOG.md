@@ -8,6 +8,27 @@ Tested `main` builds publish as immutable main releases. Named entries below
 record major updates; versioned entries match GitHub tags. Older releases stay
 available for rollback.
 
+## Radar freshness and recovery - 2026-11-18 (rolling release)
+
+- Continue live Level II ingestion during live-loop playback, with one bounded
+  mutable head and an unchanged historical playhead. Keep partial scans out of
+  immutable archive caches, offline packs and pinned replay cases.
+- Reject late scan/VCP rollbacks and retain supplemental low-level acquisitions.
+  Use selected-sweep radial times instead of volume or upload times; distinguish
+  Level III generation, volume-start and message-transmission clocks.
+- Keep displayed time/source tied to the painted frame. Add bounded local pipeline
+  and worker timings with explicit unavailable publication/presentation stages.
+- Preserve queued radar jobs when a decode worker restarts. Preserve cache age,
+  shorten mutable Level III latest-pointer caching and reject unsolicited partial
+  proxy responses while retaining historical archive caching.
+- Reconcile browser radar promptly after network recovery or foreground return;
+  show the effective polling interval under battery saver and metered data.
+- Bound MRMS download/decompression/grid allocations and reject missing valid times.
+  Validate GRIB image and packed-data counts before expansion; reject truncated data
+  instead of inserting valid zeros, preserving constant fields and missing values.
+- Stop Android data-sync services promptly on OS timeout and label widget timestamps
+  as snapshot save times, which do not imply fresh weather observations.
+
 ## 0.12.0 - 2026-11-11
 
 - Remove beta version suffixes and Preview labels from shipped web, desktop,

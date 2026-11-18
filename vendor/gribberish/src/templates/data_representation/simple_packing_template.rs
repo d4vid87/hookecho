@@ -79,8 +79,14 @@ impl DataRepresentationTemplate<f64> for SimplePackingDataRepresentationTemplate
         if bits_per_val == 0 {
             return Ok(vec![]);
         }
+        // Local patch: only the declared points are data; the final octet may contain padding.
+        let expected = crate::utils::read_u32_from_bytes(&self.data, 5).unwrap_or(0) as usize;
+        let data_bits = expected.checked_mul(bits_per_val).filter(|count|
+            bits_per_val <= 32 && *count <= bits.len() && bits.len() - *count < 8)
+            .ok_or_else(|| GribberishError::DataRepresentationTemplateError(
+                "simple packed data length disagrees with point count".into()))?;
 
-        let values = (0..bits.len())
+        let values = (0..data_bits)
             .step_by(bits_per_val)
             .filter_map(|i| {
                 let mut i_end_index = i + bits_per_val;

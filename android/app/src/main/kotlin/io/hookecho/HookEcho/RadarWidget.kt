@@ -15,9 +15,9 @@ import java.io.File
  *
  * The widget does no network and no rendering: it cannot host the Rust renderer, and a widget that
  * fetched and decoded a volume on the home screen would be a second radar client running on
- * someone's battery. Instead the app writes a small PNG whenever a scan lands
- * ([SNAPSHOT] in its files dir) and this reads whatever is there, captioned with the age — a
- * picture with no timestamp is worse than no picture, because it looks current.
+ * someone's battery. Instead the foreground app periodically saves its current view as a small
+ * PNG ([SNAPSHOT] in its files dir). Its file timestamp describes when the picture was saved,
+ * not when the displayed radar was observed.
  */
 class RadarWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
@@ -57,22 +57,24 @@ class RadarWidget : AppWidgetProvider() {
         val storm = runCatching {
             File(context.filesDir, CAPTION).takeIf { it.exists() }?.readText()?.trim()
         }.getOrNull()
-        val age = age(modified)
+        val age = snapshotAge(modified)
         return if (storm.isNullOrEmpty()) age else "$storm\n$age"
     }
 
-    /** "4 min ago", and blunt about it once the picture is old enough to mislead. */
-    private fun age(modified: Long): String {
-        val mins = (System.currentTimeMillis() - modified) / 60_000
-        return when {
-            mins < 1 -> "just now"
-            mins < 60 -> "$mins min ago"
-            mins < 60 * 24 -> "${mins / 60} h ago — stale"
-            else -> "old — open the app"
-        }
-    }
-
     companion object {
+        /** A saved picture can contain old radar, including while the app is offline. */
+        internal fun snapshotAge(modified: Long, now: Long = System.currentTimeMillis()): String {
+            if (modified <= 0 || modified > now) return "Snapshot save time unknown — open the app"
+            val mins = (now - modified) / 60_000
+            val saved = when {
+                mins < 1 -> "Snapshot saved just now"
+                mins < 60 -> "Snapshot saved $mins min ago"
+                mins < 60 * 24 -> "Snapshot saved ${mins / 60} h ago — stale"
+                else -> "Old snapshot — open the app"
+            }
+            return "$saved\nRadar may be older"
+        }
+
         /** Where the Rust side writes the picture, relative to `filesDir`. */
         const val SNAPSHOT = "widget-radar.png"
 

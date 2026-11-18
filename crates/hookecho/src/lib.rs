@@ -213,6 +213,13 @@ pub fn decode_archive2(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue>
     wxdata::level2::decode_and_encode(bytes).map_err(|e| e.to_string().into())
 }
 
+/// Local diagnostics for test harnesses; no network or persistent storage is involved.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn radar_trace() -> String {
+    serde_json::json!(wxdata::stats::radar_events()).to_string()
+}
+
 /// Assemble a live chunk window, returning the partial `Scan` as postcard bytes.
 ///
 /// The live stream's version of [`decode_archive2`], and the reason it exists: assembling the

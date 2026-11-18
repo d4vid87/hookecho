@@ -33,14 +33,14 @@ export default {
       return response;
     }
     return handleProxy(request, {
-      fetchInit: (host, search, range) => ({ cf: range
+      fetchInit: (host, search, range, path) => ({ cf: range
         ? { cacheTtl: 0, cacheEverything: false }
-        : { cacheTtl: cacheSeconds(host, search), cacheEverything: true,
-            cacheTtlByStatus: { "400-599": -1 } } }),
+        : { cacheTtl: cacheSeconds(host, search, path), cacheEverything: true,
+            cacheTtlByStatus: { "201-599": -1 } } }),
       // The browser gets the same TTL the edge is holding the bytes for — one policy, stated
       // once in `cacheSeconds`, so a proxied response can be reused without asking us again.
-      extraHeaders: (host, search) => ({
-        "cache-control": `public, max-age=${cacheSeconds(host, search)}`,
+      extraHeaders: (host, search, path) => ({
+        "cache-control": `public, max-age=${cacheSeconds(host, search, path)}`,
       }),
     });
   },

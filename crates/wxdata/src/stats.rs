@@ -130,6 +130,38 @@ pub fn net(bytes: usize) {
     add(Counter::NetBytes, bytes as u64);
 }
 
+/// Bounded, local-only radar evidence. UTC timestamps compare systems; monotonic timestamps
+/// compare stages in this process. Missing stages stay missing, never inferred from receipt.
+#[derive(Clone, serde::Serialize)]
+pub struct RadarEvent {
+    pub stage: &'static str,
+    pub object: String,
+    pub utc_ms: i64,
+    pub monotonic_ms: f64,
+    pub details: serde_json::Value,
+}
+
+static RADAR_EVENTS: std::sync::Mutex<std::collections::VecDeque<RadarEvent>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+static RADAR_EPOCH: std::sync::OnceLock<crate::clock::Instant> = std::sync::OnceLock::new();
+const RADAR_EVENT_LIMIT: usize = 512;
+
+/// `object` must be a public feed identity, never a credential-bearing URL or local path.
+pub fn radar_event(stage: &'static str, object: &str, details: serde_json::Value) {
+    let event = RadarEvent {
+        stage, object: object.to_owned(), utc_ms: chrono::Utc::now().timestamp_millis(),
+        monotonic_ms: RADAR_EPOCH.get_or_init(crate::clock::Instant::now).elapsed().as_secs_f64() * 1000.0,
+        details,
+    };
+    let mut events = RADAR_EVENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if events.len() == RADAR_EVENT_LIMIT { events.pop_front(); }
+    events.push_back(event);
+}
+
+pub fn radar_events() -> Vec<RadarEvent> {
+    RADAR_EVENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().cloned().collect()
+}
+
 /// Every counter's current value, paired with its label, in [`Counter::LABELS`] order.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn snapshot() -> Vec<(&'static str, u64)> {
@@ -148,6 +180,19 @@ pub fn snapshot() -> Vec<(&'static str, u64)> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn radar_trace_is_bounded_and_keeps_clock_semantics_explicit() {
+        for sequence in 0..=RADAR_EVENT_LIMIT {
+            radar_event("trace_test", "public-fixture", serde_json::json!({"sequence":sequence}));
+        }
+        let events = radar_events();
+        assert!(events.len() <= RADAR_EVENT_LIMIT);
+        let last = events.iter().rev().find(|event| event.stage == "trace_test").unwrap();
+        assert_eq!(last.details["sequence"], RADAR_EVENT_LIMIT);
+        assert!(last.utc_ms > 0 && last.monotonic_ms >= 0.0);
+        assert!(last.details.get("actual_presentation_utc_ms").is_none(), "absent measurements are not invented");
+    }
 
     /// A label per counter, and a count that lands on the right one — an off-by-one here would
     /// silently report every wave's before/after against the wrong number.

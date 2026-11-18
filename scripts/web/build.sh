@@ -220,7 +220,10 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # Sync/notification reliability and GPU precision fixes measure 4,910,220 gzip bytes (+0.2%).
 # Keep a small main-bundle margin; Lite and startup limits stay unchanged.
 # Bounded tile decoding and worker GIF export: measured 4,916,469 bytes after deduplication.
-budget="${HOOKECHO_WASM_BUDGET:-4920000}"
+# Live-loop acquisition, selected-sweep clocks, timing diagnostics and GRIB guards measure
+# 4,932,449 bytes (+0.33%). Keep this correctness cost explicit, with 12,551 bytes of
+# headroom; Lite/startup budgets stay unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-4945000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

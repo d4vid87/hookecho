@@ -135,6 +135,25 @@ impl DataRepresentationTemplate<f64> for ComplexSpatialPackingDataRepresentation
     }
 
     fn unpack(&self, bits: &BitSlice<u8, Msb0>) -> Result<Vec<f64>, GribberishError> {
+        let declared_groups = self.number_of_groups() as usize;
+        let expected = read_u32_from_bytes(&self.data, 5).unwrap_or(0) as usize;
+        // ecCodes' zero-group convention represents a constant field directly.
+        if declared_groups == 0 { return Ok(vec![f64::from(self.reference_value()); expected]); }
+        if self.group_splitting_method() == GroupSplittingMethod::RowByRow {
+            return Err(GribberishError::DataRepresentationTemplateError(
+                "row-by-row complex packing requires grid/bitmap row geometry".into()));
+        }
+        // Empty groups with no encoded descriptors can be skipped without iterating billions.
+        let ng = if self.bit_count() == 0 && self.group_width_bits() == 0
+            && self.group_length_bits() == 0 && self.group_length_reference() == 0 {
+            1
+        } else { declared_groups };
+        for width in [self.bit_count(), self.group_width_bits(), self.group_length_bits()] {
+            if width > 32 || ng.checked_mul(usize::from(width)).is_none_or(|length| length > bits.len()) {
+                return Err(GribberishError::DataRepresentationTemplateError(
+                    "complex descriptors exceed available packed data".into()));
+            }
+        }
         let bits_for_differencing = self.number_of_octets_for_differencing() as usize * 8;
         let mut idx = 0;
         let d1: u32 = bits[idx..idx + bits_for_differencing].load_be();
@@ -155,7 +174,6 @@ impl DataRepresentationTemplate<f64> for ComplexSpatialPackingDataRepresentation
         idx += bits_for_differencing;
 
         let group_reference_start = idx;
-        let ng = self.number_of_groups() as usize;
         let n_reference_bits = self.bit_count() as usize;
         let group_references = (0..ng).map(|ig| {
             if n_reference_bits == 0 {
@@ -172,7 +190,7 @@ impl DataRepresentationTemplate<f64> for ComplexSpatialPackingDataRepresentation
 
         let group_widths = (0..ng).map(|ig| {
             if n_width_bits == 0 {
-                0
+                u32::from(self.group_width_reference())
             } else {
                 let start = group_widths_start + ig * n_width_bits;
                 let value = bits[start..start + n_width_bits].load_be::<u32>();
@@ -186,14 +204,21 @@ impl DataRepresentationTemplate<f64> for ComplexSpatialPackingDataRepresentation
         let group_lengths = (0..ng - 1)
             .map(|ig| {
                 if n_length_bits == 0 {
-                    0
+                    u64::from(self.group_length_reference())
                 } else {
                     let start = group_lengths_start + ig * n_length_bits;
                     let value = bits[start..start + n_length_bits].load_be::<u32>();
-                    value * self.group_length_increment() as u32 + self.group_length_reference()
+                    u64::from(value) * u64::from(self.group_length_increment()) + u64::from(self.group_length_reference())
                 }
             })
-            .chain(iter::once(self.group_last_length()));
+            .chain(iter::once(u64::from(self.group_last_length())));
+
+        // Bound expansion before reconstruction, including groups that consume no payload bits.
+        if group_lengths.clone().try_fold(0usize, |total, length|
+            total.checked_add(usize::try_from(length).ok()?).filter(|total| *total <= expected)) != Some(expected) {
+            return Err(GribberishError::DataRepresentationTemplateError(
+                "complex group lengths disagree with packed point count".into()));
+        }
 
         let mut pos =
             group_lengths_start + (((ng * n_length_bits) as f32 / 8.0).ceil() as usize * 8);
@@ -246,12 +271,13 @@ impl DataRepresentationTemplate<f64> for ComplexSpatialPackingDataRepresentation
         let mut n_defined = 0usize;
 
         for (reference, width, length) in izip!(group_references, group_widths, group_lengths) {
-            let n_bits = (width * length) as usize;
+            let length = length as usize; // validated against packed point count above
+            let n_bits = width as usize * length;
             for i in 0..length {
                 let raw = if width == 0 {
                     reference
                 } else {
-                    bits[pos + (i * width) as usize..pos + (i * width) as usize + width as usize]
+                    bits[pos + i * width as usize..pos + i * width as usize + width as usize]
                         .load_be::<u32>()
                 };
 
@@ -291,5 +317,47 @@ impl DataRepresentationTemplate<f64> for ComplexSpatialPackingDataRepresentation
         }
 
         Ok(values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spatial_groups_keep_zero_bit_length_reference() {
+        let mut section = vec![0u8; 49];
+        section[5..9].copy_from_slice(&4u32.to_be_bytes());
+        section[21] = 1;
+        section[31..35].copy_from_slice(&2u32.to_be_bytes());
+        section[37..41].copy_from_slice(&2u32.to_be_bytes());
+        section[42..46].copy_from_slice(&2u32.to_be_bytes());
+        section[47] = 1;
+        section[48] = 1;
+        assert_eq!(ComplexSpatialPackingDataRepresentationTemplate::new(section)
+            .unpack([7u8, 0].view_bits::<Msb0>()).unwrap(), [7.0; 4]);
+    }
+
+    #[test]
+    fn spatial_zero_width_groups_validate_count_before_reconstruction() {
+        let mut section = vec![0u8; 49];
+        section[5..9].copy_from_slice(&2u32.to_be_bytes());
+        section[21] = 1;
+        section[31..35].copy_from_slice(&1u32.to_be_bytes());
+        section[42..46].copy_from_slice(&2u32.to_be_bytes());
+        section[47] = 1; // first-order differencing
+        section[48] = 1; // one octet each for initial value and minimum difference
+        let payload = [7u8, 0];
+        assert_eq!(ComplexSpatialPackingDataRepresentationTemplate::new(section.clone())
+            .unpack(payload.view_bits::<Msb0>()).unwrap(), [7.0, 7.0]);
+        for length in [1u32, 3] {
+            section[42..46].copy_from_slice(&length.to_be_bytes());
+            assert!(ComplexSpatialPackingDataRepresentationTemplate::new(section.clone())
+                .unpack(payload.view_bits::<Msb0>()).is_err());
+        }
+        section[31..35].copy_from_slice(&0u32.to_be_bytes());
+        section[11..15].copy_from_slice(&7f32.to_be_bytes());
+        assert_eq!(ComplexSpatialPackingDataRepresentationTemplate::new(section)
+            .unpack([].view_bits::<Msb0>()).unwrap(), [7.0, 7.0]);
     }
 }

@@ -16,7 +16,7 @@
 //   in   { module, glue }        boot: compiled module + the URL of the wasm-bindgen glue
 //   in   { id, op, bytes }       run a job (bytes' buffer is transferred in). `op` is
 //                                "bin", "mrms", "model", "opera", "cwa", "kma", "assemble", "vector", "abi", "abi-project", "abi-rgb", or "decode".
-//   out  { id, ok: ArrayBuffer } postcard-encoded Scan (transferred out)
+//   out  { id, ok: ArrayBuffer, timing } postcard-encoded Scan (transferred out)
 //   out  { id, err, fatal }      the job failed; `fatal` means a trap poisoned this heap
 //   in   { id, op: "gif", frames, width, height, delayMs } transferable RGBA images
 //   out  { id, progress }        completed GIF frames (followed by the normal result)
@@ -43,12 +43,20 @@ self.onmessage = async (e) => {
   }
 
   const { id, bytes, op } = msg;
+  let started = null;
+  const timing = () => {
+    if (started === null) return null;
+    const ended = performance.now();
+    return { workerStartAtUtcMs: performance.timeOrigin + started,
+      workerEndAtUtcMs: performance.timeOrigin + ended, decodeMs: ended - started };
+  };
   try {
     const wasm = await ready;
+    started = performance.now();
     if (op === "gif") {
       const out = wasm.encode_gif_worker(msg.frames, msg.width, msg.height, msg.delayMs,
         progress => self.postMessage({ id, progress }));
-      self.postMessage({ id, ok: out.buffer }, [out.buffer]);
+      self.postMessage({ id, ok: out.buffer, timing: timing() }, [out.buffer]);
       return;
     }
     const run = op === "vector" ? wasm.tessellate_vector_tile
@@ -64,11 +72,11 @@ self.onmessage = async (e) => {
       : op === "abi-project" ? wasm.project_goes_abi : wasm.decode_archive2;
     const out = run(new Uint8Array(bytes));
     // Transfer rather than copy: a decoded volume is tens of MB and the worker is done with it.
-    self.postMessage({ id, ok: out.buffer }, [out.buffer]);
+    self.postMessage({ id, ok: out.buffer, timing: timing() }, [out.buffer]);
   } catch (err) {
     // A trap is not a bad volume: it has poisoned this instance's heap, and every later job here
     // would fail too. Say which it was so the page can decide whether to rebuild the worker.
     const fatal = err instanceof WebAssembly.RuntimeError;
-    self.postMessage({ id, err: String((err && err.message) || err), fatal });
+    self.postMessage({ id, err: String((err && err.message) || err), fatal, timing: timing() });
   }
 };

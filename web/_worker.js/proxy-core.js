@@ -136,11 +136,12 @@ export const LIVE_HOSTS = new Set([
 // hour and one per visitor.
 const ARCHIVE_BUCKET = "unidata-nexrad-level2.s3.amazonaws.com";
 
-export const cacheSeconds = (host, search = "") => {
+export const cacheSeconds = (host, search = "", path = "") => {
   if (host === "www.jma.go.jp" || host === "cwaopendata.s3.ap-northeast-1.amazonaws.com") return 60;
   // Caltrans still URLs are stable while the JPEG changes. Keep the proxy's cached copy no older
   // than the open camera card's one-minute refresh interval.
   if (host === "cwwp2.dot.ca.gov") return 60;
+  if (host === "tgftp.nws.noaa.gov" && path.endsWith("/sn.last")) return 15;
   // A bucket listing is how the app finds the newest volume — cache that like a live feed or the
   // loop stops advancing.
   if (search.includes("list-type=")) return 15;
@@ -152,9 +153,7 @@ export const cacheSeconds = (host, search = "") => {
   if (host === "maps.dwd.de" || host === "geo.weather.gc.ca") {
     return search.includes("TIME=") ? 300 : 15;
   }
-  // ponytail: an hour, not forever. The newest archive object is re-uploaded while the radar is
-  // still writing it, so a long TTL can pin a truncated volume at the edge; an hour bounds how
-  // long that can last. Drop it to 600 if it is ever seen to bite.
+  // Completed archive objects retain efficient caching; live discovery uses the listing rule.
   if (host === ARCHIVE_BUCKET) return 3600;
   return LIVE_HOSTS.has(host) ? 15 : 300;
 };
@@ -225,7 +224,7 @@ const refused = (why) =>
 const badGateway = () =>
   new Response(JSON.stringify({ error: "upstream fetch failed" }), {
     status: 502,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 
 // Stop a hostile or broken upstream mid-stream rather than after buffering it.
@@ -242,8 +241,8 @@ function capped(body, limit) {
   );
 }
 
-/// Handle one `/proxy/{host}/{path}` request. `fetchInit(host)` lets a platform add its own cache
-/// hints to the upstream call, `extraHeaders(host, search)` the same for the response we send back.
+/// Handle one `/proxy/{host}/{path}` request. `fetchInit(host, search, range, path)` adds platform
+/// cache hints; `extraHeaders(host, search, path)` adds headers to the response we send back.
 export async function handleProxy(request, { fetchInit = () => ({}), extraHeaders = () => ({}), timeoutMs = UPSTREAM_TIMEOUT_MS } = {}) {
   const url = new URL(request.url);
   const rest = url.pathname.slice("/proxy/".length);
@@ -255,7 +254,8 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   const range = modelRange(request, host);
   if (range === false) return refused("invalid model byte range");
 
-  const target = `https://${host}/${rest.slice(slash + 1)}${url.search}`;
+  const path = `/${rest.slice(slash + 1)}`;
+  const target = `https://${host}${path}${url.search}`;
   let upstream;
   try {
     // Only a validated model byte range is forwarded; all other client headers stay private.
@@ -267,7 +267,7 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
         ...(host === "weathercams.faa.gov" ? { referer: "https://weathercams.faa.gov/" } : {}),
         ...(range ? { range } : {}),
       },
-      ...fetchInit(host, url.search, !!range),
+      ...fetchInit(host, url.search, !!range, path),
       // An allowed upstream must not redirect this proxy to a host outside the allowlist.
       redirect: "manual",
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]),
@@ -289,7 +289,7 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
     }
     return badGateway();
   }
-  if (range && upstream.status !== 206) {
+  if (range ? upstream.status !== 206 : upstream.status !== 200) {
     upstream.body?.cancel().catch(() => {});
     return badGateway();
   }
@@ -302,12 +302,17 @@ export async function handleProxy(request, { fetchInit = () => ({}), extraHeader
   }
 
   const validators = validatorsOf(upstream);
+  const age = upstream.headers.get("age");
+  const date = Date.parse(upstream.headers.get("date") ?? "");
   const headers = {
     "content-type": contentType(upstream.headers.get("content-type") || ""),
     ...(validators.etag ? { etag: validators.etag } : {}),
     ...(validators.lastModified ? { "last-modified": validators.lastModified } : {}),
+    // Do not give bytes already resident in the edge cache a fresh browser TTL.
+    ...(age && /^\d+$/.test(age) ? { age } : {}),
+    ...(Number.isFinite(date) ? { date: new Date(date).toUTCString() } : {}),
     ...(range && upstream.headers.get("content-range") ? { "content-range": upstream.headers.get("content-range") } : {}),
-    ...extraHeaders(host, url.search),
+    ...extraHeaders(host, url.search, path),
   };
 
   // Answered at the edge: the upstream fetch above was served from `cf.cacheTtl` in the common

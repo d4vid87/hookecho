@@ -25,9 +25,8 @@ import android.os.PowerManager
  * [AlertWorker] is the safety net underneath it, not a replacement — both run the same
  * [pollOnce].
  *
- * [AlertAlarm] is the third leg: an exact alarm is the one schedule Doze honours on time, so a
- * poll still lands when this service has been killed and WorkManager's 15-minute floor is too
- * slow to be a warning.
+ * [AlertAlarm] is an additional recovery path when this service is stopped. Android can defer
+ * both alarms and WorkManager in idle modes; neither promises a warning-delivery deadline.
  */
 class AlertService : Service() {
     @Volatile private var running = false
@@ -48,6 +47,14 @@ class AlertService : Service() {
         super.onDestroy()
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // Android 15 limits dataSync foreground-service time while the app is backgrounded.
+        // Stop promptly when its allowance expires; leaving the service alive crashes the app.
+        // The user's enabled setting and the worker/alarm recovery schedules remain intact.
+        running = false
+        stopSelf()
+    }
+
     private fun pollLoop() {
         val seen = loadSeen(this)
         while (running) {
@@ -57,10 +64,11 @@ class AlertService : Service() {
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hookecho:alerts")
             val result = try {
                 wl.acquire(60_000L)
-                pollOnce(this, seen)
+                pollOnce(this, seen) { running }
             } finally {
                 if (wl.isHeld) wl.release()
             }
+            if (!running) break
             // The widget's own 30-minute clock is a floor; while the service runs it stays as
             // fresh as the poll it just did.
             AlertWidget.refresh(this)
@@ -139,7 +147,11 @@ class AlertService : Service() {
          * Shared by the service and [AlertWorker] so there is exactly one poll path.
          */
         @JvmStatic
-        fun pollOnce(context: Context, seen: LinkedHashSet<String>): PollResult {
+        fun pollOnce(
+            context: Context,
+            seen: LinkedHashSet<String>,
+            shouldContinue: () -> Boolean = { true },
+        ): PollResult {
             var hot = false
             var successful = 0
             var failed = 0
@@ -150,17 +162,20 @@ class AlertService : Service() {
                 context.filesDir,
                 java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
             )
-            for (m in runCatching { Nws.watched(context.filesDir) }.getOrDefault(emptyList())) {
+            watching@ for (m in runCatching { Nws.watched(context.filesDir) }.getOrDefault(emptyList())) {
+                if (!shouldContinue()) break
                 if (m.home) {
                     val response = Nws.alertsWithin(m.lat, m.lon, 30.0)
                     if (response.successful) successful++ else failed++
                     for (a in response.alerts) {
+                        if (!shouldContinue()) break@watching
                         if (a.tier >= Nws.TIER_WARNING) hot = true
                         val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
                         if (seen.add(a.id) && loud) notify(context, m, a, true)
                     }
                 }
                 for (p in m.samples) {
+                    if (!shouldContinue()) break@watching
                     val response = Nws.alertsAt(p[0], p[1])
                     if (!response.successful) {
                         failed++
@@ -168,6 +183,7 @@ class AlertService : Service() {
                     }
                     successful++
                     for (a in response.alerts) {
+                        if (!shouldContinue()) break@watching
                         if (a.tier >= Nws.TIER_WARNING) hot = true
                         val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
                         if (seen.add(a.id) && loud) notify(context, m, a, Nws.speaksAt(m, p))

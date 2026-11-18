@@ -27,6 +27,24 @@ pub struct CasePane {
     pub radar_objects: Vec<String>,
 }
 
+impl CasePane {
+    pub fn capture(view: &crate::view::MapView) -> Self {
+        let selected_time = view.timeline.current().and_then(|frame| frame.date_time())
+            .or_else(|| view.volume.as_ref().map(|volume| volume.time));
+        let frames = match view.timeline.replay {
+            Some((from, to)) => view.timeline.frames.get(from..=to).unwrap_or(&[]),
+            None => view.timeline.current().map(std::slice::from_ref).unwrap_or(&[]),
+        };
+        Self {
+            site: view.site.clone().unwrap_or_default(),
+            selected_time,
+            // A partial stream snapshot has no immutable archive object. Reopen it by time.
+            radar_objects: frames.iter().filter(|frame| !frame.name().ends_with("_LIVE"))
+                .take(MAX_OBJECTS_PER_PANE).map(|frame| frame.name().to_string()).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CaseStroke {
     pub points: Vec<[f64; 2]>,
@@ -153,6 +171,7 @@ impl CaseManifest {
                 let object = wxdata::level2::Identifier::new(name.clone());
                 anyhow::ensure!(
                     name.len() <= 128
+                        && !name.ends_with("_LIVE")
                         && object.site() == Some(pane.site.as_str())
                         && object.date_time().is_some(),
                     "case contains an invalid radar object"
@@ -166,6 +185,29 @@ impl CaseManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_case_round_trip_saves_time_without_pinning_a_transient_archive() {
+        let mut view = crate::view::MapView::new(Some("KTLX".into()),
+            crate::render::mercator::Camera::at_lonlat(-97.0, 35.0, 7.0));
+        view.timeline.frames = ["KTLX20240526_013000_V06", "KTLX20240526_013500_LIVE"]
+            .map(|name| wxdata::level2::Identifier::new(name.into())).into();
+        view.timeline.playhead = 1;
+        let pane = CasePane::capture(&view);
+        assert!(pane.radar_objects.is_empty(), "a live snapshot must reopen by time");
+        assert_eq!(pane.selected_time, view.timeline.current().and_then(|frame| frame.date_time()));
+        let workspace = crate::workspace::starters().remove(0);
+        let manifest = CaseManifest::new("Live case".into(), workspace.clone(),
+            vec![pane; workspace.panes.len()], Vec::new(), Vec::new()).unwrap();
+        let restored = CaseManifest::from_json(&manifest.to_json().unwrap()).unwrap();
+        assert_eq!(restored, manifest);
+        view.timeline.replay = Some((0, 1));
+        assert_eq!(CasePane::capture(&view).radar_objects, ["KTLX20240526_013000_V06"]);
+
+        let mut invalid = serde_json::to_value(&manifest).unwrap();
+        invalid["panes"][0]["radar_objects"] = serde_json::json!(["KTLX20240526_013500_LIVE"]);
+        assert!(CaseManifest::from_json(&invalid.to_string()).is_err(), "import cannot pin an undownloadable transient slot");
+    }
 
     #[test]
     fn manifest_round_trips_and_rejects_mismatched_panes() {

@@ -44,6 +44,11 @@ function worker(fetch) {
   vm.runInContext(source, context);
   return {
     context, caches, stores,
+    intercepts: url => {
+      let intercepted = false;
+      listeners.fetch({ request: { url, method: 'GET' }, respondWith: () => { intercepted = true; } });
+      return intercepted;
+    },
     install: () => new Promise((resolve, reject) => listeners.install({waitUntil: task => task.then(resolve, reject)})),
     navigate: () => new Promise(resolve => listeners.fetch({
       request: {url: 'https://app.test/', method: 'GET', mode: 'navigate'}, respondWith: task => resolve(task),
@@ -53,6 +58,19 @@ function worker(fetch) {
     })),
   };
 }
+
+test('radar listings, live chunks, completed volumes and mutable latest products bypass the service worker', () => {
+  const w = worker(() => { throw new Error('service worker must not fetch radar'); });
+  for (const path of [
+    '/proxy/unidata-nexrad-level2.s3.amazonaws.com/?list-type=2&prefix=2026/11/18/KTLX/',
+    '/proxy/unidata-nexrad-level2.s3.amazonaws.com/2026/11/18/KTLX/KTLX20261118_120000_V06',
+    '/proxy/unidata-nexrad-level2-chunks.s3.amazonaws.com/KTLX/42/20261118-120000-001-S',
+    '/proxy/tgftp.nws.noaa.gov/SL.us008001/DF.of/DC.radar/DS.p59hi/SI.ktlx/sn.last',
+    '/proxy/maps.dwd.de/geoserver/dwd/wms?SERVICE=WMS&REQUEST=GetMap&LAYERS=rv',
+    '/proxy/noaa-mrms-pds.s3.amazonaws.com/CONUS/MergedReflectivityQCComposite_00.50/20261118/file.grib2.gz',
+  ]) assert.equal(w.intercepts(`https://app.test${path}`), false, path);
+  assert.equal(w.stores.size, 0);
+});
 
 test('503 and network failures preserve the installed offline app', async () => {
   const w = worker(async () => page());

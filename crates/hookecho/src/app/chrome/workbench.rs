@@ -57,6 +57,15 @@ impl HookEchoApp {
         }
         let view = &mut self.views[self.active];
         ui.label(format!("Radar source: {}", view.radar_source_label()));
+        if let Some(frame) = view.painted_frame_details() {
+            ui.weak(frame["time_basis"].as_str().unwrap_or("Time provenance unavailable"));
+            if let Some((oldest, newest)) = frame["oldest_radial_ms"].as_i64().zip(frame["newest_radial_ms"].as_i64()) {
+                if let Some((oldest, newest)) = chrono::DateTime::from_timestamp_millis(oldest)
+                    .zip(chrono::DateTime::from_timestamp_millis(newest)) {
+                    ui.label(format!("Selected sweep: {}–{} UTC", oldest.format("%H:%M:%S"), newest.format("%H:%M:%S")));
+                }
+            }
+        }
         if view.timeline.following {
             if let Some(notice) = &view.feed_recovery.notice { ui.weak(notice); }
         }

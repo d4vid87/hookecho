@@ -2,8 +2,8 @@
 //
 //   node scripts/web/measure.mjs https://hookecho.pages.dev/
 //
-// smoke.mjs answers "does it boot"; this answers "how long until there is radar on screen", which
-// is the number the web work is actually judged on. Every run gets a fresh profile and an
+// smoke.mjs answers "does it boot"; this measures download, boot and worker decode completion.
+// It does not observe presentation of the corresponding radar frame. Every run gets a fresh profile and an
 // explicitly disabled HTTP cache, so each one is a first-time visitor.
 //
 // Firefox needs puppeteer's own build (the system one speaks a different protocol version):
@@ -31,8 +31,7 @@ async function once(product) {
   const page = await browser.newPage();
   await page.setCacheEnabled(false);
 
-  // The closest thing to "first radar paint" observable from outside the app: the page's decode
-  // bridge resolving for the first time (radar is drawn the frame after). Installed as a setter so
+  // The page's first radar decode completion, not a paint or presentation timestamp. A setter
   // it wraps index.html's own assignment whenever that happens.
   await page.evaluateOnNewDocument(() => {
     let real = null;
@@ -134,7 +133,7 @@ for (const [name, product] of [
   console.log(`  geo.json           ${med("geoEnd")}`);
   console.log(`  app booted         ${med("boot")}`);
   console.log(`  first volume in    ${med("firstVolume")}`);
-  console.log(`  first radar drawn  ${med("firstDecode")}`);
+  console.log(`  first radar decoded ${med("firstDecode")}`);
   console.log(`  loop playing       ${med("loop")}`);
   console.log(`  loop, every run:   ${rows.map((r) => fmt(r.loop).trim()).join(", ")}`);
 }

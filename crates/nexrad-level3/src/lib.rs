@@ -88,10 +88,16 @@ pub struct RadialArray {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Level3Product {
-    /// NEXRAD modified Julian day (days since 1970-01-01, with that day numbered 1).
+    /// Message transmission day (days since 1970-01-01, with that day numbered 1).
     pub modified_julian_date: u16,
-    /// Product time in seconds after midnight UTC.
+    /// Message transmission time in seconds after midnight UTC; not observation time.
     pub seconds_since_midnight: u32,
+    /// PDB scan start day. For SAILS products this can identify the supplemental elevation.
+    pub volume_scan_date: u16,
+    pub volume_scan_time: u32,
+    /// PDB generation day/time; products 134/135 instead carry volume end (ICD Note 4).
+    pub generation_date: u16,
+    pub generation_time: u32,
     /// Product code (58 = Storm Tracking, 59 = Hail Index, 141 = Mesocyclone, …).
     pub code: i16,
     /// Radar latitude / longitude (degrees) and height (feet), from the PDB.
@@ -145,6 +151,12 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
     let lon = r.i32("lon")? as f32 / 1000.0;
     let height_ft = r.i16("height")?;
     let code = r.i16("prod_code")?;
+    // ICD 2620001AD Figure 3-6: preserve scan/generation clocks independently of transmission.
+    r.pos = pdb_start + 22;
+    let volume_scan_date = r.u16("volume scan date")?;
+    let volume_scan_time = r.u32("volume scan time")?;
+    let generation_date = r.u16("product generation date")?;
+    let generation_time = r.u32("product generation time")?;
     // Elevation angle (tenths of a degree) sits in the product-dependent halfword immediately
     // ahead of the threshold table; 0 means "not an elevation product".
     r.pos = pdb_start + 40;
@@ -220,6 +232,10 @@ pub fn decode(raw: &[u8]) -> Result<Level3Product> {
     Ok(Level3Product {
         modified_julian_date,
         seconds_since_midnight,
+        volume_scan_date,
+        volume_scan_time,
+        generation_date,
+        generation_time,
         code,
         lat,
         lon,

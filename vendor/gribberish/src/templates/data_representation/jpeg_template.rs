@@ -90,7 +90,8 @@ impl DataRepresentationTemplate<f64> for JPEGDataRepresentationTemplate {
 
         let bytes: Vec<u8> = bits.to_bitvec().into();
 
-        let output_value: Vec<f64> = extract_jpeg_data(&bytes)?
+        let expected = crate::utils::read_u32_from_bytes(&self.data, 5).unwrap_or(0) as usize;
+        let output_value: Vec<f64> = extract_jpeg_data(&bytes, expected)?
             .into_iter()
             .scale_value_by(
                 self.binary_scale_factor(),

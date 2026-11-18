@@ -1,28 +1,33 @@
 # Where the data comes from
 
-Every feed HookEcho decodes, what it costs you, and how fresh it is. All of
-it is public; nothing is proxied through a server of ours, because there isn't
-one — the app talks to NOAA, the NWS and the rest directly from your machine.
+Public data sources, their delivery paths and timestamp meanings. Native clients
+generally read upstream directly. Browser/PWA clients use the allowlisted
+same-origin feed proxy where required; `--serve` provides the local equivalent.
+Optional provider keys belong to the user.
 
-"Latency" is how old the newest thing you can see already is when it arrives.
-Cadence is how often a new one appears. Both are the services' numbers, not
-ours, and both move around during busy weather.
+Observation age is time since acquisition, not time since download. Publication,
+first-seen, receipt and product-generation clocks are different. Cadence depends
+on scan strategy and upstream conditions; the values below are descriptive, not
+latency guarantees. See the [checked primary sources](radar-freshness-research-2026-11.md)
+and [measurement report](radar-freshness-2026-11.md).
 
 ## Radar
 
-| Feed | Source | Cadence | Latency | Key |
-| --- | --- | --- | --- | --- |
-| Level 2 archive | NEXRAD Archive II on AWS (`noaa-nexrad-level2`) | one volume, ~4–6 min | minutes after the volume closes | no |
-| Level 2 live chunks | `unidata-nexrad-level2-chunks` on AWS | sweep by sweep, seconds | ~30 s behind the beam | no |
-| Level 3 products (NST, NMD, DVL, EET, HHC) | Unidata S3 bucket | per volume | ~1–2 min | no |
-| Level 3 storm structure / hail (SS, HI) | NWS `tgftp` (`sn.last`) | per volume | ~1–2 min | no |
-| N0B mosaic (multi-radar stitch) | Unidata S3, six nearest sites | per volume, per site | ~1–2 min; sites disagree by a scan | no |
-| TDWR (44 airport radars) | Unidata S3 Level 3 tilts (TZ0–2, TV0–2) | ~1 min | ~1–2 min | no |
-| MRMS national mosaic and fields | NOAA MRMS on AWS | ~2 min | ~2–4 min | no |
-| ODIM_H5 (European radars) | decode only — open a file; no open live source | — | — | no |
+| Feed | Source | Delivery / timing meaning | Key |
+| --- | --- | --- | --- |
+| Level II archive | `unidata-nexrad-level2` on AWS | Completed volumes; selected moment/tilt time comes from radial acquisition. The old `noaa-nexrad-level2` bucket retired September 1, 2025. | no |
+| Level II live chunks | `unidata-nexrad-level2-chunks` | Incremental sweeps, including supplemental low-level revisits. Acquisition bounds, chunk Last-Modified and receipt are tracked separately. Missing or retained sectors are not new observations. | no |
+| Level II alternate | Iowa Environmental Mesonet recent volumes | Alternate delivery of the selected station's observations; “Iowa State” identifies the provider, not the radar's location. | no |
+| Level III products | Unidata S3 and NWS `tgftp` `sn.last` | PDB generation/volume clocks are distinct from message transmission. DVL/EET generation fields carry volume-end time per the ICD. `sn.last` is mutable and revalidated on a short cache policy. | no |
+| TDWR | Unidata S3 Level III tilts TZ0–2 / TV0–2 | Product generation time is available; individual beam acquisition times are unavailable. Separate product/tilt clocks can differ. | no |
+| N0B multi-radar mosaic | Unidata S3, nearby sites | Independently timed single-site products; constituent sites can disagree in age. | no |
+| MRMS national mosaic and fields | NOAA MRMS on AWS | Product valid time from GRIB metadata; cadence varies by product. A mosaic's valid time does not prove every contributing observation has that age. | no |
+| Regional and worldwide radar | National providers, EUMETNET OPERA/ODIM, regional composites and RainViewer fallback | Capability, attribution, source time and geographic availability differ. This is not worldwide equivalent-resolution single-site Level II coverage. See `world_radar.rs`, `opera.rs`, `dwd.rs`, `eccc.rs` and regional adapters. | depends on provider |
 
-Archive coverage runs back to **June 1991** for Level 2, and every WSR-88D plus
-the 44 TDWRs are addressable.
+Immutable archive objects remain cacheable. Day listings, live chunk discovery
+and mutable latest pointers have bounded freshness; the service worker does not
+cache radar/proxy responses. User-requested offline packs remain a separate
+feature. Upstream Last-Modified is HTTP object metadata, not observation time.
 
 ## Warnings, outlooks and reports
 

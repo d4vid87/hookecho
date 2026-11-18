@@ -780,6 +780,10 @@ pub struct Settings {
 }
 
 impl Settings {
+    pub fn effective_poll_interval_secs(&self, metered: bool) -> u64 {
+        self.poll_interval_secs.saturating_mul(if metered { 2 } else { 1 })
+            .saturating_mul(if self.battery_saver { 2 } else { 1 })
+    }
     pub fn beam_height_label(&self, above_radar_ft: f64, antenna_msl_m: Option<f64>) -> String {
         let mut meters = above_radar_ft / 3280.84 * 1000.0;
         let reference = if self.beam_height_msl {
@@ -1977,6 +1981,17 @@ pub(crate) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn effective_poll_interval_reports_stacked_resource_tradeoffs() {
+        let mut settings = super::Settings { poll_interval_secs: 30, ..Default::default() };
+        assert_eq!(settings.effective_poll_interval_secs(false), 30);
+        assert_eq!(settings.effective_poll_interval_secs(true), 60);
+        settings.battery_saver = true;
+        assert_eq!(settings.effective_poll_interval_secs(false), 60);
+        assert_eq!(settings.effective_poll_interval_secs(true), 120);
+        settings.poll_interval_secs = u64::MAX;
+        assert_eq!(settings.effective_poll_interval_secs(true), u64::MAX);
+    }
     use super::{Bookmark, Settings, StartView};
 
     #[test]

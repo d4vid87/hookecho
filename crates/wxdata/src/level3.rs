@@ -755,9 +755,7 @@ pub async fn fetch_vwp(http: &reqwest::Client, site: &str) -> Vec<VwpLevel> {
 // --- Fetch helpers ----------------------------------------------------------------------------
 
 /// List the latest object for `SITE_PRODUCT` today (with a yesterday fallback) and decode it.
-/// The newest S3 object for `site`/`product`, decoded, with the scan time parsed out of the key
-/// (the decoded product carries no timestamp, and a mosaic has to be able to say how old each
-/// contributing scan is).
+/// Return the source key's time separately from the decoded product's scan/generation clocks.
 async fn fetch_latest(
     http: &reqwest::Client,
     site: &str,
@@ -881,18 +879,19 @@ fn radial_to_field_at_resolution(
         lon_east,
         lat_north,
         lat_south,
-        time: product_time(p).unwrap_or_else(chrono::Utc::now),
+        time: product_time(p)?,
     })
 }
 
 pub(crate) fn product_time(p: &Level3Product) -> Option<chrono::DateTime<chrono::Utc>> {
-    if p.seconds_since_midnight >= 86_400 {
+    // PDB generation time (volume end for 134/135), not the later message-transmission clock.
+    if p.generation_time >= 86_400 {
         return None;
     }
-    let days = i64::from(p.modified_julian_date.checked_sub(1)?);
+    let days = i64::from(p.generation_date.checked_sub(1)?);
     (chrono::DateTime::UNIX_EPOCH
         + chrono::Duration::days(days)
-        + chrono::Duration::seconds(i64::from(p.seconds_since_midnight)))
+        + chrono::Duration::seconds(i64::from(p.generation_time)))
     .into()
 }
 
@@ -1108,6 +1107,22 @@ mod tests {
     }
 
     #[test]
+    fn product_time_uses_generation_and_rejects_missing_time_instead_of_now() {
+        let mut product = nexrad_level3::decode(include_bytes!("../../nexrad-level3/tests/data/tz0_okc.l3")).unwrap();
+        let expected = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(20_666)
+            + chrono::Duration::seconds(62_902);
+        assert_eq!(product_time(&product), Some(expected));
+        product.seconds_since_midnight += 300;
+        assert_eq!(product_time(&product), Some(expected), "retransmission cannot freshen the product");
+        product.generation_date = 0;
+        assert!(product_time(&product).is_none());
+        assert!(radial_to_field(&product, 0.15, |level, _| Some(f32::from(level))).is_none());
+        product.generation_date = 20_667;
+        product.generation_time = 86_400;
+        assert!(product_time(&product).is_none());
+    }
+
+    #[test]
     fn site_id_strips_k() {
         assert_eq!(l3_site("KTLX"), "TLX");
         assert_eq!(l3_site("PACG"), "PACG");
@@ -1131,6 +1146,10 @@ mod tests {
         let p = Level3Product {
             modified_julian_date: 1,
             seconds_since_midnight: 0,
+            volume_scan_date: 1,
+            volume_scan_time: 0,
+            generation_date: 1,
+            generation_time: 0,
             code: 134,
             lat: 35.0,
             lon: -97.0,

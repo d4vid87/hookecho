@@ -17,7 +17,15 @@ pub fn memory() -> (u64, u64) {
 }
 static UPLOADS: Mutex<[u64; 4]> = Mutex::new([0; 4]);
 /// Tokens identify radar data actually prepared, not merely queued by the UI.
-pub fn set_uploads(tokens: [u64; 4]) { *UPLOADS.lock().unwrap() = tokens; }
+pub fn set_uploads(tokens: [u64; 4]) {
+    let mut uploads = UPLOADS.lock().unwrap();
+    for (pane, (&old, &token)) in uploads.iter().zip(&tokens).enumerate() {
+        if token != 0 && token != old {
+            wxdata::stats::radar_event("gpu_prepared", "", serde_json::json!({"pane":pane, "token":token}));
+        }
+    }
+    *uploads = tokens;
+}
 pub fn uploads() -> [u64; 4] { *UPLOADS.lock().unwrap() }
 pub fn upload_acknowledged(pane: usize, token: u64) -> bool {
     token != 0 && uploads().get(pane) == Some(&token)
@@ -26,7 +34,13 @@ pub fn upload_acknowledged(pane: usize, token: u64) -> bool {
 static PAINTED: Mutex<[u64; 4]> = Mutex::new([0; 4]);
 /// A map callback recorded this sweep into a render pass (not merely uploaded it).
 pub fn mark_painted(pane: usize, token: u64) {
-    if let Some(slot) = PAINTED.lock().unwrap().get_mut(pane) { *slot = token; }
+    if let Some(slot) = PAINTED.lock().unwrap().get_mut(pane) {
+        if token != 0 && *slot != token {
+            wxdata::stats::radar_event("paint_recorded", "", serde_json::json!({"pane":pane, "token":token,
+                "actual_presentation_utc_ms":null, "scope":"draw recorded; compositor presentation not observable"}));
+        }
+        *slot = token;
+    }
 }
 pub fn painted_tokens() -> [u64; 4] { *PAINTED.lock().unwrap() }
 pub fn next_upload_token() -> u64 {

@@ -552,9 +552,8 @@ pub async fn latest_identifier(site: &str) -> anyhow::Result<Identifier> {
 
 /// The newest `n` volumes for `site`, newest first.
 ///
-/// Callers want more than one because the newest volume on S3 is usually still being uploaded —
-/// the radar writes it as it scans. A volume caught early enough can be missing the metadata
-/// record that carries its scan strategy, and the only cure is to fall back a volume.
+/// Callers can fall back when the newest response is unusable. The AWS archive normally publishes
+/// completed volumes; incremental acquisition uses the separate live-chunk feed.
 pub async fn latest_identifiers(site: &str, n: usize) -> anyhow::Result<Vec<Identifier>> {
     latest_identifiers_from(site, n, Level2Provider::S3).await
 }
@@ -578,6 +577,7 @@ pub async fn latest_identifiers_from(site: &str, n: usize, provider: Level2Provi
     if out.is_empty() {
         anyhow::bail!("no volumes for {site} today or yesterday");
     }
+    crate::stats::radar_event("discovered", out[0].name(), serde_json::json!({"site": site, "provider": provider}));
     Ok(out)
 }
 
@@ -715,8 +715,7 @@ pub fn decode_volume(data: Vec<u8>) -> anyhow::Result<Scan> {
 fn decode_file(file: &nexrad_data::volume::File) -> anyhow::Result<Scan> {
     // Anything shorter than the 24-byte Archive II volume header is not a volume. The decoder
     // slices past the header unconditionally and panics on a short buffer (found by
-    // fuzz/fuzz_targets/level2_decode.rs), and the live head really does serve half-written
-    // objects — so this is a guard on real input, not a fuzz-only nicety.
+    // fuzz/fuzz_targets/level2_decode.rs); reject truncated responses before reaching it.
     const VOLUME_HEADER_LEN: usize = 24;
     if file.data().len() < VOLUME_HEADER_LEN {
         anyhow::bail!("volume is {} bytes, too short to be one", file.data().len());
@@ -734,17 +733,23 @@ fn decode_file(file: &nexrad_data::volume::File) -> anyhow::Result<Scan> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn decode_file_native(file: nexrad_data::volume::File, cache_file: Option<PathBuf>) -> anyhow::Result<Scan> {
+async fn decode_file_native(file: nexrad_data::volume::File, cache_file: Option<PathBuf>, name: String) -> anyhow::Result<Scan> {
     // Cancelled prefetches still finish CPU work; bound their decompressed volumes as well.
     static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(
         if cfg!(target_os = "android") { 1 } else { 2 },
     );
+    crate::stats::radar_event("decode_queued", &name, serde_json::json!({"bytes": file.data().len()}));
     crate::task::blocking_limited(&SLOTS, move || {
-        let scan = decode_file(&file)?;
+        crate::stats::radar_event("decode_start", &name, serde_json::json!({}));
+        let decoded = decode_file(&file);
+        crate::stats::radar_event("decode_complete", &name, serde_json::json!({"ok": decoded.is_ok()}));
+        let scan = decoded?;
         if let Some(path) = cache_file {
             use std::io::Write;
             if let Err(error) = crate::object_cache::write_atomic(&path, |out| out.write_all(file.data())) {
                 log::warn!("Radar cache write failed: {error}");
+            } else {
+                crate::stats::radar_event("disk_cache_insert", &name, serde_json::json!({}));
             }
         }
         Ok(scan)
@@ -771,6 +776,8 @@ pub fn scan_from_wire(bytes: &[u8]) -> anyhow::Result<Scan> {
 pub async fn volume_bytes(id: Identifier) -> anyhow::Result<Vec<u8>> {
     let key = format!("volume:{}", id.name());
     let bytes = crate::shared_read::bytes(key, async move {
+        let name = id.name().to_owned();
+        crate::stats::radar_event("request_start", &name, serde_json::json!({"stage": "archive_object"}));
         let bytes = if let Some(url) = iem_volume_url(id.name())? {
             reqwest::Client::new().get(crate::net::fetch_url(&url))
                 .timeout(crate::net::FEED_TIMEOUT).send().await?.error_for_status()?.bytes().await?.to_vec()
@@ -778,6 +785,7 @@ pub async fn volume_bytes(id: Identifier) -> anyhow::Result<Vec<u8>> {
             nexrad_data::aws::archive::download_file(id).await
                 .map_err(|e| anyhow::anyhow!("download_file: {e}"))?.data().to_vec()
         };
+        crate::stats::radar_event("download_complete", &name, serde_json::json!({"bytes": bytes.len()}));
         crate::stats::net(bytes.len());
         Ok(bytes)
     }).await?;
@@ -790,9 +798,9 @@ pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Resul
     let _decode_timer = crate::stats::DecodeTimer::default();
     let file = nexrad_data::volume::File::new(bytes);
     #[cfg(not(target_arch = "wasm32"))]
-    let scan = decode_file_native(file, None).await?;
+    let scan = decode_file_native(file, None, name.to_owned()).await?;
     #[cfg(target_arch = "wasm32")]
-    let scan = match crate::wasm_worker::decode_volume(file.data().to_vec()).await {
+    let scan = match crate::wasm_worker::decode_volume(file.data().to_vec(), name).await {
         Ok(wire) => scan_from_wire(&wire)?,
         Err(crate::wasm_worker::Error::Unavailable) => decode_file(&file)?,
         Err(e) => anyhow::bail!("{e}"),
@@ -809,7 +817,7 @@ pub async fn scan_from_volume_bytes(name: &str, bytes: Vec<u8>) -> anyhow::Resul
 /// them: an archived volume never changes, so a scrub back through yesterday's outbreak is a file
 /// read instead of a download. Raw bytes rather than a decoded scan because they're smaller, need
 /// no serialization of their own, and go back through the same decode path either way. Pass `None`
-/// at the live head, where the newest object may still be mid-write.
+/// to require a fresh response without consulting or inserting the disk cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadPhase { Downloading, Decoding }
 
@@ -832,7 +840,10 @@ async fn load_scan(
     if let Some(bytes) = cache_file.as_ref().and_then(|path| std::fs::read(path).ok()) {
         progress(LoadPhase::Decoding);
         match scan_from_volume_bytes(name, bytes).await {
-            Ok(scan) => return Ok(scan),
+            Ok(scan) => {
+                crate::stats::radar_event("disk_cache_hit", name, serde_json::json!({}));
+                return Ok(scan);
+            }
             Err(error) => log::warn!("Invalid cached radar volume {name}; downloading again: {error}"),
         }
     }
@@ -841,12 +852,12 @@ async fn load_scan(
     progress(LoadPhase::Decoding);
     let _decode_timer = crate::stats::DecodeTimer::default();
     #[cfg(not(target_arch = "wasm32"))]
-    let scan = decode_file_native(file, cache_file).await?;
+    let scan = decode_file_native(file, cache_file, name.to_owned()).await?;
     // In the browser that "async worker" is the thread drawing the map, so try the Web Worker
     // first. ponytail: no worker (old browser, `file://`, a worker that already trapped) means
     // inline decode, jank and all — a frozen map still beats no radar.
     #[cfg(target_arch = "wasm32")]
-    let scan = match crate::wasm_worker::decode_volume(file.data().to_vec()).await {
+    let scan = match crate::wasm_worker::decode_volume(file.data().to_vec(), name).await {
         Ok(wire) => scan_from_wire(&wire)?,
         Err(crate::wasm_worker::Error::Unavailable) => decode_file(&file)?,
         Err(e) => anyhow::bail!("{e}"),
@@ -956,6 +967,32 @@ pub fn cut_has_moment(scan: &Scan, cut: CutTime, moment: Moment) -> bool {
 /// moments. SAILS/MRLE repeats share one tilt button but have distinct collection times.
 fn selected_sweep(scan: &Scan, moment: Moment, tilt: usize) -> Option<&Sweep> {
     selected_sweep_at(scan, moment, tilt, None)
+}
+
+/// Acquisition bounds of the moment-bearing radials in the sweep actually selected for display.
+/// Retained sectors keep their original times; these bounds are not publication or volume times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObservationTime {
+    pub elevation_number: u8,
+    pub oldest_radial_ms: i64,
+    pub newest_radial_ms: i64,
+}
+
+pub fn observation_time_at(
+    scan: &Scan,
+    moment: Moment,
+    tilt: usize,
+    cut_end_ms: Option<i64>,
+) -> Option<ObservationTime> {
+    let sweep = selected_sweep_at(scan, moment, tilt, cut_end_ms)?;
+    let mut times = sweep.radials().iter()
+        .filter(|radial| moment.select(radial).is_some())
+        .map(|radial| radial.collection_timestamp());
+    let first = times.next()?;
+    let (oldest_radial_ms, newest_radial_ms) = times.fold((first, first), |(oldest, newest), time| {
+        (oldest.min(time), newest.max(time))
+    });
+    Some(ObservationTime { elevation_number: sweep.elevation_number(), oldest_radial_ms, newest_radial_ms })
 }
 
 /// A single supported instrument Nyquist limit for the velocity-bearing radials in a sweep.
@@ -1133,6 +1170,24 @@ pub fn bin_scan_display_at(scan: &Scan, moment: Moment, tilt: usize, dealias: bo
     bin_sweep_display(sweep, moment, lat, lon, dealias, precision)
 }
 
+/// Diagnostics accept public archive names or the exact structured live chunk key, never paths.
+fn public_display_object(object: &str) -> bool {
+    if !object.is_ascii() || object.len() > 128 || object.contains(['\\', '?', ':']) { return false; }
+    if let Some((site, rest)) = object.split_once('/') {
+        let Some((volume, chunk)) = rest.split_once('/') else { return false; };
+        valid_iem_site(site) && !volume.is_empty() && volume.len() <= 3
+            && volume.bytes().all(|byte| byte.is_ascii_digit())
+            && volume.parse::<u16>().is_ok_and(|number| (1..=999).contains(&number))
+            && chunk.len() == 21 && chunk.as_bytes()[15] == b'-' && chunk.as_bytes()[19] == b'-'
+            && chunk[16..19].bytes().all(|byte| byte.is_ascii_digit())
+            && matches!(chunk.as_bytes()[20], b'S' | b'I' | b'E')
+            && chrono::NaiveDateTime::parse_from_str(&chunk[..15], "%Y%m%d-%H%M%S").is_ok()
+    } else {
+        object.len() >= 19 && valid_iem_site(&object[..4])
+            && Identifier::new(object.to_owned()).date_time().is_some()
+    }
+}
+
 /// Prepare the selected display field without occupying the thread drawing the map.
 pub async fn prepare_display(
     scan: std::sync::Arc<Scan>,
@@ -1141,10 +1196,19 @@ pub async fn prepare_display(
     dealias: bool,
     cut_end_ms: Option<i64>,
     precision: bool,
+    object: String,
 ) -> anyhow::Result<BinnedSweep> {
+    // Only public source names enter diagnostics; an imported file may carry a private path.
+    let object = if public_display_object(&object) { object } else { String::new() };
+    crate::stats::radar_event("bin_queued", &object, serde_json::json!({"moment":moment, "tilt":tilt, "cut_end_ms":cut_end_ms}));
     #[cfg(not(target_arch = "wasm32"))]
     {
-        crate::task::blocking(move || bin_scan_display_at(&scan, moment, tilt, dealias, cut_end_ms, precision)).await?
+        crate::task::blocking(move || {
+            crate::stats::radar_event("bin_start", &object, serde_json::json!({"moment":moment, "tilt":tilt, "cut_end_ms":cut_end_ms}));
+            let result = bin_scan_display_at(&scan, moment, tilt, dealias, cut_end_ms, precision);
+            crate::stats::radar_event("bin_complete", &object, serde_json::json!({"ok":result.is_ok()}));
+            result
+        }).await?
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -1153,7 +1217,7 @@ pub async fn prepare_display(
         let site = scan.site().ok_or_else(|| anyhow::anyhow!("scan has no site metadata"))?;
         // Send only the selected cut, not the other moments/tilts in the entire volume.
         let payload = postcard::to_allocvec(&(sweep, moment, site.latitude(), site.longitude(), dealias, precision))?;
-        match crate::wasm_worker::bin_display(payload).await {
+        match crate::wasm_worker::bin_display(payload, &object).await {
             Ok(wire) => {
                 let binned = postcard::from_bytes(&wire)?;
                 crate::stats::bump(crate::stats::Counter::SweepsBinned);
@@ -1454,6 +1518,22 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bin_trace_identity_preserves_public_archives_and_live_chunks_only() {
+        for object in ["KDMX20261118_120000_V06", "KDMX20261118_120000_IEM.bz2",
+            "KDMX/999/20261118-120000-003-I", "KTLX/1/20261118-000000-001-S",
+            "KTLX/1/20261118-000000-053-E"] {
+            assert!(public_display_object(object), "public radar identity rejected: {object}");
+        }
+        for private in ["/home/user/private.bin", "C:\\private\\scan.bin", "../KDMX20261118_120000_V06",
+            "https://bucket/KDMX/999/20261118-120000-003-I", "KDMX/999/20261118-120000-003-I?secret=1",
+            "KDMX/999/private.txt", "KDMX/1000/20261118-120000-003-I",
+            "KDMX/999/20261118-120000-003-I/private", "KDMX/999/20269999-120000-003-I",
+            "KDMX/999/20261118-120000-003-X", "éééé/path", "20261118-120000-003-I"] {
+            assert!(!public_display_object(private), "non-public identity accepted: {private}");
+        }
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
@@ -1866,9 +1946,8 @@ mod tests {
         assert_eq!(names, ["b1", "b2"]);
     }
 
-    /// The live head serves half-written objects, and anything shorter than the 24-byte volume
-    /// header used to panic inside the decoder rather than come back as an error (found by
-    /// fuzzing).
+    /// A truncated download shorter than the 24-byte volume header must return an error rather
+    /// than panic inside the decoder (found by fuzzing).
     #[test]
     fn a_volume_too_short_to_be_one_is_an_error_not_a_panic() {
         assert!(decode_volume(Vec::new()).is_err());
@@ -2135,6 +2214,26 @@ mod tests {
         assert_eq!(display_extent_km(&scan, Moment::Reflectivity, 0, Some(1_000)), Some(2.375));
         assert_eq!(display_extent_km(&scan, Moment::Velocity, 0, Some(1_000)), None);
         assert_eq!(display_extent_km(&scan, Moment::Velocity, 0, Some(2_000)), Some(2.375));
+    }
+
+    #[test]
+    fn observation_time_matches_selected_moment_cut_and_retained_sectors() {
+        let old = Sweep::new(1, vec![radial_with_at(Moment::Reflectivity, 0.48, 1_000)]);
+        let velocity = Sweep::new(2, vec![radial_with_at_az(Moment::Velocity, 0.50, 2_000, 0, 2)]);
+        let revisit = Sweep::new(3, vec![
+            radial_with_at(Moment::Reflectivity, 0.48, 1_000),
+            radial_with_at_az(Moment::Reflectivity, 0.52, 3_000, 1, 3),
+        ]);
+        let scan = Scan::new(minimal_vcp(), vec![old, velocity, revisit]);
+        assert_eq!(observation_time_at(&scan, Moment::Reflectivity, 0, None), Some(ObservationTime {
+            elevation_number: 3, oldest_radial_ms: 1_000, newest_radial_ms: 3_000,
+        }));
+        assert_eq!(observation_time_at(&scan, Moment::Velocity, 0, None), Some(ObservationTime {
+            elevation_number: 2, oldest_radial_ms: 2_000, newest_radial_ms: 2_000,
+        }));
+        assert_eq!(observation_time_at(&scan, Moment::Reflectivity, 0, Some(1_000)).unwrap().newest_radial_ms, 1_000);
+        assert!(observation_time_at(&scan, Moment::Velocity, 0, Some(1_000)).is_none());
+        assert!(observation_time_at(&scan, Moment::Reflectivity, 1, None).is_none());
     }
 
     #[test]
