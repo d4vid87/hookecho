@@ -6,6 +6,12 @@ The AppImage includes these voice/audio components:
 - Piper phonemize 1.2.0 (MIT): https://github.com/rhasspy/piper-phonemize/tree/2023.11.14-2
 - eSpeak NG (GPL-3.0-or-later): https://github.com/rhasspy/espeak-ng
 - ONNX Runtime 1.14.1 (MIT): https://github.com/microsoft/onnxruntime/tree/v1.14.1
+  The local license copy comes verbatim from onnxruntime/LICENSE in the official
+  PyPI 1.14.1 Linux wheel, matching the bundled libonnxruntime.so.1.14.1.
+  Metadata: https://pypi.org/pypi/onnxruntime/1.14.1/json
+  Wheel: onnxruntime-1.14.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+  Wheel SHA-256: 24bf0401c5f92be7230ac660ff07ba06f7c175e99e225d5d48ff09062a3b76e9
+  License SHA-256: 2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c
 - Amy medium voice (CC-BY-SA-4.0): https://github.com/MycroftAI/mimic3-voices
   Voice model revision and checksums: packaging/piper/assets.json in the HookEcho source.
   Piper, eSpeak and ONNX license texts accompany the voice files in usr/lib/hookecho/piper.
