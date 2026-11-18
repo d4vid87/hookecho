@@ -60,8 +60,7 @@ pub(crate) fn show(
         ui.separator();
         let n = settings.placefiles.len();
         let mut swap: Option<(usize, usize)> = None;
-        for i in 0..n {
-            let cfg = &mut settings.placefiles[i];
+        for (i, cfg) in settings.placefiles.iter_mut().enumerate() {
             ui.horizontal(|ui| {
                 changed |= ui.checkbox(&mut cfg.enabled, "").changed();
                 // The URL's file name is the readable part; the full URL is the tooltip.
