@@ -95,6 +95,9 @@ try {
     await page.setViewport({width, height}); await wait(800);
     await search('TFLL');
     await click('Favorite TFLL');
+    await page.waitForFunction(expected =>
+      JSON.parse(localStorage.getItem('hookecho-settings')).presets.includes('TFLL') === expected,
+    {timeout: 10000}, width !== 390);
     await page.screenshot({path: `${output}/phone-${width}.png`});
     assert.equal((await settings()).presets.includes('TFLL'), width !== 390);
     await click('Close');
