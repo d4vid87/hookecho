@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -94,6 +95,7 @@ class AlertService : Service() {
             .build()
 
     companion object {
+        internal const val REQUEST_NOTIFICATION_PERMISSION = 1
         private const val FOREGROUND_ID = 1
         private const val CH_STATUS = "status"
         private const val CH_WATCH = "watch"
@@ -151,7 +153,8 @@ class AlertService : Service() {
                 context.filesDir,
                 java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
             )
-            val key = "$enabled:$quiet:" + Nws.coverageKey(watched)
+            val canNotify = enabled && canPostNotifications(context)
+            val key = "$enabled:$quiet:$canNotify:" + Nws.coverageKey(watched)
             val result = poller.run(key, shouldContinue) {
                 // Loading, notification decisions and persistence are one coordinated pass.
                 val seen = loadSeen(context)
@@ -160,9 +163,16 @@ class AlertService : Service() {
                     AlertPoller.collect(
                         watched, System.nanoTime() + AlertPoller.BUDGET_NANOS, shouldContinue,
                         onAlert = { watch, alert, speak ->
-                            if (enabled && isEnabled(context) && shouldContinue()) {
-                                val loud = !quiet || alert.tier >= Nws.TIER_EMERGENCY
-                                if (seen.add(alert.id) && loud) notify(context, watch, alert, speak)
+                            if (canNotify && isEnabled(context) && shouldContinue()) {
+                                val delivered = AlertPoller.deliverIfNew(seen, alert, quiet) {
+                                    postNotification(context, watch, alert)
+                                }
+                                if (delivered && speak && !MainActivity.foreground &&
+                                    Nws.speechEnabled(context.filesDir)
+                                ) {
+                                    PiperVoice.enqueue(context,
+                                        "${alert.event} for ${watch.name}. ${alert.headline}", alert.tier)
+                                }
                             }
                         },
                     )
@@ -176,7 +186,22 @@ class AlertService : Service() {
             return result
         }
 
-        private fun notify(context: Context, m: Nws.Watch, a: Nws.Alert, speak: Boolean) {
+        private fun canPostNotifications(context: Context) =
+            (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED) && manager(context).areNotificationsEnabled()
+
+        private fun postNotification(context: Context, m: Nws.Watch, a: Nws.Alert): Boolean {
+            if (!canPostNotifications(context)) return false
+            val channel = when (a.tier) {
+                Nws.TIER_EMERGENCY -> CH_EMERGENCY
+                Nws.TIER_WARNING -> CH_WARNING
+                else -> CH_WATCH
+            }
+            val manager = manager(context)
+            val channelSettings = manager.getNotificationChannel(channel) ?: return false
+            if (channelSettings.importance == NotificationManager.IMPORTANCE_NONE) return false
+
             // Deep-link back to the watched point. The site field is left empty: the app keeps
             // whichever radar it was on and just flies the camera there.
             val goto = Nws.gotoPoint(m.lon, m.lat)
@@ -187,11 +212,6 @@ class AlertService : Service() {
                 context, a.id.hashCode(), intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val channel = when (a.tier) {
-                Nws.TIER_EMERGENCY -> CH_EMERGENCY
-                Nws.TIER_WARNING -> CH_WARNING
-                else -> CH_WATCH
-            }
             val n = Notification.Builder(context, channel)
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setContentTitle("${a.event} — ${m.name}")
@@ -200,13 +220,12 @@ class AlertService : Service() {
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .build()
-            manager(context).notify(a.id.hashCode(), n)
-            if (speak && !MainActivity.foreground && Nws.speechEnabled(context.filesDir)) {
-                PiperVoice.enqueue(
-                    context,
-                    "${a.event} for ${m.name}. ${a.headline}",
-                    a.tier,
-                )
+            return try {
+                manager.notify(a.id.hashCode(), n)
+                true
+            } catch (_: SecurityException) {
+                // Permission may have changed since the check above.
+                false
             }
         }
 
@@ -264,11 +283,16 @@ class AlertService : Service() {
                 // flips the switch is the only moment the prompt makes sense.
                 if (Build.VERSION.SDK_INT >= 33 && context is android.app.Activity &&
                     context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                    PackageManager.PERMISSION_GRANTED
                 ) {
-                    context.requestPermissions(
-                        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1
-                    )
+                    context.runOnUiThread {
+                        if (isEnabled(context) && !context.isFinishing && !context.isDestroyed) {
+                            context.requestPermissions(
+                                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                                REQUEST_NOTIFICATION_PERMISSION,
+                            )
+                        }
+                    }
                 }
                 context.startForegroundService(intent)
                 AlertWorker.enqueue(context)

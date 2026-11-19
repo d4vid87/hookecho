@@ -121,6 +121,20 @@ impl HookEchoApp {
         } else {
             Vec::new()
         };
+        let alert_feed = alerts_tab.then(|| {
+            let health = self.request_health(RequestLane::Feed("Weather alerts"));
+            let saved_places_covered = self.settings.markers.iter().all(|marker| {
+                self.alert_coverage.covers((marker.lon, marker.lat, marker.lon, marker.lat))
+            });
+            ui::alert_panel::FeedStatus {
+                archived: self.arch_warn_shown.is_some(),
+                view_covered: self.alert_coverage.covers(bounds),
+                saved_places_covered,
+                last_success: health.last_success,
+                freshness_window: health.freshness_window,
+                failed: health.error.is_some(),
+            }
+        });
         let mut muted = self.settings.mute_alerts;
         let mut alert_hit = None;
         let mut export_alerts = false;
@@ -454,6 +468,7 @@ impl HookEchoApp {
                         &feats,
                         bounds,
                         &self.settings.markers,
+                        alert_feed.as_ref().expect("alerts tab has feed status"),
                         &mut muted,
                         &mut export_alerts,
                     );

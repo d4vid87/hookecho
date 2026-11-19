@@ -125,4 +125,24 @@ class NwsTest {
             assertFalse(Nws.inQuietHours(dir, 7))
         } finally { dir.deleteRecursively() }
     }
+
+    @Test fun destructiveAndEmergencyWarningsBypassQuietHours() {
+        fun tier(event: String, json: String = "{}") = Nws.tierOf(JSONObject(json), event)
+
+        assertEquals(Nws.TIER_EMERGENCY, tier("Severe Thunderstorm Warning",
+            """{"parameters":{"thunderstormDamageThreat":["DESTRUCTIVE"]}}"""))
+        assertEquals(Nws.TIER_EMERGENCY, tier("Flash Flood Warning",
+            """{"description":"...FLASH FLOOD\nEMERGENCY FOR THE CITY..."}"""))
+        assertEquals(Nws.TIER_EMERGENCY, tier("Flash Flood Warning",
+            """{"parameters":{"flashFloodDamageThreat":["CATASTROPHIC"]}}"""))
+        assertEquals(Nws.TIER_EMERGENCY, tier("Tornado Warning",
+            """{"parameters":{"tornadoDamageThreat":["CONSIDERABLE"]}}"""))
+        assertEquals(Nws.TIER_EMERGENCY, tier("Tornado Warning",
+            """{"description":"This is a PARTICULARLY DANGEROUS SITUATION."}"""))
+        assertEquals(Nws.TIER_WARNING, tier("Severe Thunderstorm Warning",
+            """{"parameters":{"thunderstormDamageThreat":["CONSIDERABLE"]}}"""))
+        assertEquals(Nws.TIER_WARNING, tier("Flash Flood Warning"))
+        assertEquals(Nws.TIER_WATCH, tier("Tornado Watch",
+            """{"description":"Consult local news if a tornado emergency is issued."}"""))
+    }
 }

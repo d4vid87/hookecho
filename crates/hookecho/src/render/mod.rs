@@ -2368,9 +2368,9 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         let res: &RenderResources = resources.get().unwrap();
         if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.begin(pass); }
         res.record_pane(self.pane, pass);
-        if let Some(pane) = res.panes.get(&self.pane).filter(|pane| pane.frame_draw_radar) {
-            crate::gpu_metrics::mark_painted(self.pane as usize, pane.upload_token);
-        }
+        let token = res.panes.get(&self.pane).filter(|pane| pane.frame_draw_radar)
+            .map_or(0, |pane| pane.upload_token);
+        crate::gpu_metrics::mark_painted(self.pane as usize, token);
         if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.end(pass); }
     }
 }

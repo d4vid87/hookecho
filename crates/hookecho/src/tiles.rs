@@ -781,6 +781,11 @@ impl BasemapStyle {
         }
     }
 
+    pub(crate) fn offline_raster_max_zoom(self) -> Option<u8> {
+        matches!(self, Self::Satellite | Self::UsgsTopo | Self::UsgsImageryTopo)
+            .then(|| self.max_raster_z())
+    }
+
     /// Whether this source serves a true double-resolution tile at the same grid position (the
     /// `@2x` suffix). Worth more than the retina zoom bias it replaces: same tile count, twice the
     /// pixels, and the labels are drawn for the higher density instead of being magnified.
@@ -1144,7 +1149,8 @@ pub fn tile_cover(
     max_z: u8,
     zoom_bias: f64,
 ) -> Vec<VisibleTile> {
-    let z = (cam.zoom + zoom_bias).round().clamp(2.0, max_z as f64) as u8;
+    let min_z = max_z.min(2);
+    let z = (cam.zoom + zoom_bias).round().clamp(f64::from(min_z), f64::from(max_z)) as u8;
     tile_cover_at_level(cam, viewport_px, z)
 }
 
@@ -1154,10 +1160,11 @@ pub fn tile_cover(
 pub struct DetailLevel { level: Option<u8> }
 impl DetailLevel {
     pub fn cover(&mut self, cam: &Camera, viewport: (f32, f32), max: u8, bias: f64) -> Vec<VisibleTile> {
-        let q = (cam.zoom + bias).clamp(2.0, max as f64);
-        let mut z = self.level.unwrap_or(q.round() as u8).clamp(2, max);
+        let min = max.min(2);
+        let q = (cam.zoom + bias).clamp(f64::from(min), f64::from(max));
+        let mut z = self.level.unwrap_or(q.round() as u8).clamp(min, max);
         while z < max && q > z as f64 + 0.65 { z += 1; }
-        while z > 2 && q < z as f64 - 0.65 { z -= 1; }
+        while z > min && q < z as f64 - 0.65 { z -= 1; }
         self.level = Some(z);
         tile_cover_at_level(cam, viewport, z)
     }
@@ -1997,7 +2004,7 @@ impl TileManager {
     /// time-tagged layer). Takes the style explicitly so it doesn't depend on which pane the
     /// tile manager last rendered.
     pub fn packable(&self, style: BasemapStyle) -> bool {
-        matches!(style, BasemapStyle::Satellite | BasemapStyle::UsgsTopo | BasemapStyle::UsgsImageryTopo)
+        style.offline_raster_max_zoom().is_some()
             && style
                 .url(
                     0,
@@ -2614,7 +2621,9 @@ pub fn pack_tile_count(
         let tx1 = (wxmax * nf).ceil() as i64;
         let ty0 = ((wymin * nf).floor() as i64).max(0);
         let ty1 = ((wymax * nf).ceil() as i64).min(n as i64);
-        count += (tx1 - tx0).max(0) as u64 * (ty1 - ty0).max(0) as u64;
+        let width = tx1.saturating_sub(tx0).max(0) as u64;
+        let height = (ty1 - ty0).max(0) as u64;
+        count = count.saturating_add(width.saturating_mul(height));
     }
     count
 }
@@ -3072,6 +3081,18 @@ mod tests {
     }
 
     #[test]
+    fn zoom_one_provider_works_with_both_tile_selectors() {
+        let camera = Camera::at_lonlat(-97.3, 35.3, 8.0);
+        let viewport = (800.0, 600.0);
+        let fixed = tile_cover(&camera, viewport, 1, 1.0);
+        let mut detail = DetailLevel::default();
+        assert!(detail.cover(&camera, viewport, 18, 1.0)[0].id.0 > 1);
+        let switched = detail.cover(&camera, viewport, 1, 1.0);
+        assert!(!fixed.is_empty() && fixed.iter().all(|tile| tile.id.0 == 1));
+        assert_eq!(fixed, switched);
+    }
+
+    #[test]
     fn pack_tile_count_covers_expected() {
         // The whole world at z0 is a single tile.
         assert_eq!(pack_tile_count(-179.9, -85.0, 179.9, 85.0, 0, 0), 1);
@@ -3081,6 +3102,8 @@ mod tests {
         let a = pack_tile_count(-97.52, 35.30, -97.50, 35.32, 5, 5);
         let b = pack_tile_count(-97.52, 35.30, -97.50, 35.32, 6, 6);
         assert_eq!(pack_tile_count(-97.52, 35.30, -97.50, 35.32, 5, 6), a + b);
+        // The estimate must reject extreme spans without overflowing before the budget check.
+        assert_eq!(pack_tile_count(-1e200, -80.0, 1e200, 80.0, 16, 16), u64::MAX);
         // id list length matches the count.
         assert_eq!(
             pack_tile_ids(-99.0, 34.0, -96.0, 36.0, 7, 9).len() as u64,

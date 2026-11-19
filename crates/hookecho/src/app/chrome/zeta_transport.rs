@@ -182,13 +182,15 @@ impl HookEchoApp {
             forecast_valid.map_or_else(|| format!("HRRR F+{hour}h · awaiting forecast"),
                 |valid| format!("HRRR F+{hour}h · valid {}", crate::timefmt::fmt_date_clock(valid, tz)))
         } else if product_unavailable {
-            format!("{} unavailable in selected scan{}", crate::products::info(v.moment).short,
+            format!("{} {}{}", crate::products::info(v.moment).short,
+                if v.tdwr_archive_retry.is_some() { "unavailable · retrying" } else { "unavailable in selected scan" },
                 if loaded_time.is_some() { " · showing previous scan" } else { "" })
         } else if let Some(previous) = &retained {
             format!("Showing {previous} · {site} {}", if error.is_some() { "unavailable" } else { "loading" })
         } else if let Some(error) = &error { format!("{site}: {error}") }
         else if v.feed_recovery.probe.is_some() { v.feed_recovery.notice.clone().unwrap_or_default() }
         else if preparing { "Preparing selected radar scan…".into() }
+        else if let Some(notice) = v.tdwr_archive_notice() { notice.into() }
         else if buffering { format!("Buffering · {cached_loop}/{listed_loop} frames ready") }
         else if loading { load_label.into() }
         else if skipped { "Skipped unavailable radar frame".into() }

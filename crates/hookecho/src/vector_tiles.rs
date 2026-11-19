@@ -1338,6 +1338,17 @@ impl VectorTileManager {
             .collect()
     }
 
+    /// A pane stopped using vector tiles. Keep resident tiles for a later switch back, but
+    /// discard queued tessellations without uploading them or blocking a future request.
+    pub fn discard_pending(&mut self) {
+        while let Some((generation, result)) = self.deferred_ready.take().or_else(|| self.rx.try_recv().ok()) {
+            if generation != self.render_generation { continue; }
+            let id = match result { Ok(tile) => tile.id, Err(id) => id };
+            self.requested.remove(&id);
+            if self.speculative == Some(id) { self.speculative = None; }
+        }
+    }
+
     /// Drain finished tessellations into upload-ready tiles (each returned once).
     pub fn drain_ready(&mut self) -> Vec<PendingVectorTile> {
         self.drain_ready_budget(&mut crate::map_work::UploadBudget::legacy_batch())
@@ -2145,6 +2156,23 @@ mod tests {
         manager.tx.send((manager.render_generation, Ok(FetchedVector { id, vertices: vec![], indices: vec![],
             foreground_vertices: vec![], foreground_indices: vec![], labels: vec![] }))).unwrap();
         assert_eq!(manager.drain_ready().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn switching_vector_tiles_off_discards_completions_without_uploading() {
+        let mut manager = test_manager();
+        let id = (6, 14, 24);
+        manager.requested.insert(id);
+        manager.speculative = Some(id);
+        manager.tx.send((manager.render_generation, Ok(FetchedVector {
+            id, vertices: vec![], indices: vec![], foreground_vertices: vec![],
+            foreground_indices: vec![], labels: vec![],
+        }))).unwrap();
+        manager.discard_pending();
+        assert!(manager.drain_ready().is_empty());
+        assert!(!manager.requested.contains(&id));
+        assert!(!manager.uploaded.contains(&id));
+        assert!(manager.speculative.is_none());
     }
 
     #[tokio::test]

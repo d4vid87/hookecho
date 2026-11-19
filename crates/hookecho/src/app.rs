@@ -38,9 +38,6 @@ use wxdata::level3::{self, Cell, CellKind};
 use wxdata::live;
 use wxdata::overlay::{self, GeoFeature};
 
-/// Frames to let a stepped archive volume load before grabbing it for the loop GIF.
-const LOOP_SETTLE_FRAMES: u8 = 12;
-
 /// How long with no input at all before the idle heartbeat slows to [`IDLE_QUIET_MS`]. Long
 /// enough that it never fires between two deliberate actions — reading a detail window and then
 /// reaching for the mouse is not "idle" — and short enough that a window left alone stops costing
@@ -65,6 +62,7 @@ const OVERLAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
 /// Again longer than the request's own 90 s deadline in the vendored S3 client, so the abort
 /// happens before we stop listening for it.
 const VOLUME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(100);
+const TDWR_ARCHIVE_RETRY: Duration = Duration::from_secs(10);
 
 /// A live scan may temporarily lose CC or velocity while radials arrive. Remember nearby
 /// alerted signatures for ten minutes so their return is not announced as a new tornado.
@@ -413,7 +411,7 @@ struct ChaserVideoCheck {
 /// Background overlay fetch results.
 enum OverlayMsg {
     ChaserVideo { url: String, requested: Instant, result: Result<wxdata::youtube::Status, String> },
-    Alerts(Vec<GeoFeature>),
+    Alerts(Vec<GeoFeature>, AlertCoverage),
     /// Last run's alert overlay, read from disk off the launch path. Applied only if no live
     /// fetch has landed yet; it seeds the known-warning ids either way, so a restart mid-event
     /// doesn't re-banner and re-speak warnings already on the map.
@@ -802,6 +800,29 @@ impl SourceHealth {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct AlertCoverage {
+    nws_zones: bool,
+    canada: bool,
+}
+
+impl AlertCoverage {
+    fn covers(self, bounds: (f64, f64, f64, f64)) -> bool {
+        let (west, south, east, north) = bounds;
+        let touches_nws = [
+            (-125., 24., -66., 50.), (-180., 51., -130., 72.),
+            (-161., 18., -154., 23.), (-69., 17., -64., 19.),
+            (144., 13., 147., 21.), (-172., -15., -168., -10.),
+        ].into_iter().any(|(x0, y0, x1, y1)| west <= x1 && east >= x0 && south <= y1 && north >= y0);
+        let touches_canada = wxdata::eccc::in_view(bounds);
+        // Keyless MeteoAlarm omits some countries and bulletins without inline polygons.
+        (touches_nws || touches_canada)
+            && (!touches_nws || self.nws_zones)
+            && (!touches_canada || self.canada)
+            && wxdata::meteoalarm::countries_in_view(bounds).is_empty()
+    }
+}
+
 /// A background result plus the identity of the request that produced it.
 enum OverlayDelivery {
     /// Work that is inline or already carries enough identity to reject itself at the receiver.
@@ -920,7 +941,8 @@ impl OverlaySource {
             OverlaySource::Alerts(points, bounds, enabled_optional) => {
                 let excluded: Vec<_> = alerts::OPTIONAL_EVENTS.into_iter()
                     .filter(|event| !alerts::event_enabled(event, &enabled_optional)).collect();
-                let mut feats = alerts::fetch_active_excluding(http, &points, &excluded).await?;
+                let (mut feats, nws_zones) = alerts::fetch_active_with_coverage(http, &points, &excluded).await?;
+                let mut coverage = AlertCoverage { nws_zones, canada: false };
                 // Europe's warnings come from a different publisher on a different continent, so
                 // they are only asked for when the view is actually over one of the countries
                 // that publishes them — otherwise this is a no-op with no request at all.
@@ -935,11 +957,14 @@ impl OverlaySource {
                 // failure, so an outage there costs neither the US nor the European alerts.
                 if wxdata::eccc::in_view(bounds) {
                     match wxdata::eccc::fetch_in_view(http, bounds).await {
-                        Ok(ca) => feats.extend(ca),
+                        Ok(ca) => {
+                            feats.extend(ca);
+                            coverage.canada = true;
+                        }
                         Err(e) => log::warn!("eccc alerts fetch failed ({e})"),
                     }
                 }
-                OverlayMsg::Alerts(feats)
+                OverlayMsg::Alerts(feats, coverage)
             }
             OverlaySource::Mds => {
                 OverlayMsg::Mds(wxdata::spc::fetch_mesoscale_discussions(http).await?)
@@ -2701,11 +2726,20 @@ enum ShotDest {
     #[cfg(target_arch = "wasm32")]
     Download,
     Clipboard,
-    Loop,
+    Loop { source: String, token: u64, request: egui::UserData },
     /// Pushed to the user's ntfy topic as an attachment, captioned with this title.
     Push(String),
     /// Written silently for the Android home-screen widget to pick up.
     Widget(std::path::PathBuf),
+}
+
+impl ShotDest {
+    fn capture_data(&self) -> egui::UserData {
+        match self {
+            Self::Loop { request, .. } => request.clone(),
+            _ => egui::UserData::default(),
+        }
+    }
 }
 
 /// In-progress loop export (GIF or MP4): steps the active timeline, grabbing one screenshot per
@@ -2722,8 +2756,6 @@ struct LoopExport {
     /// Slots still to capture (counts down as frames are grabbed).
     remaining: usize,
     requested_count: usize,
-    /// Frames to let the newly-stepped radar settle/load before grabbing.
-    settle: u8,
     wait_started: wxdata::clock::Instant,
     /// A screenshot has been requested; waiting for its event.
     capturing: bool,
@@ -2862,6 +2894,7 @@ enum DataMsg {
         time: DateTime<Utc>,
         scan: Scan,
         tdwr_revision: Option<String>,
+        missing_tdwr_products: u8,
     },
     /// A live radial-block update (merged full volume) from the chunk streamer.
     Live {
@@ -2888,6 +2921,7 @@ enum DataMsg {
         site: String,
         date: NaiveDate,
         frames: Vec<Identifier>,
+        missing_tdwr_hours: Option<u32>,
     },
     UpToDate {
         view: usize,
@@ -3817,6 +3851,7 @@ pub struct HookEchoApp {
     overlay_requests: std::sync::Mutex<RequestBook>,
     filters: OverlayFilters,
     alert_features: Vec<GeoFeature>,
+    alert_coverage: AlertCoverage,
     /// Archived storm-based warnings (feature W) keyed by 5-min UTC bucket (ts/300); shown while
     /// the active pane is scrubbed off-live.
     arch_warns: LruCache<i64, Vec<GeoFeature>>,
@@ -4267,6 +4302,10 @@ pub struct HookEchoApp {
     persistence: crate::persistence::Writer,
     #[cfg(not(target_arch = "wasm32"))]
     queued_settings: Option<Arc<Settings>>,
+    #[cfg(target_arch = "wasm32")]
+    browser_gis_pending: Option<std::sync::mpsc::Receiver<Result<crate::webcache::GisWrites, String>>>,
+    #[cfg(target_arch = "wasm32")]
+    browser_settings_retry: Option<Instant>,
     #[cfg(not(target_arch = "wasm32"))]
     queued_recovery: Option<Arc<String>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -4659,7 +4698,12 @@ fn advance_scan_chime(
 }
 
 impl HookEchoApp {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::with_settings(cc, Settings::load())
+    }
+
+    pub(crate) fn with_settings(cc: &eframe::CreationContext<'_>, mut settings: Settings) -> Self {
         // Inter in front, Phosphor's icon glyphs behind it (the mobile chrome draws line icons
         // egui's default face has none of), and on native egui's own faces behind both as the
         // fallback for anything Inter's subset dropped. The browser build starts without those
@@ -4755,7 +4799,6 @@ impl HookEchoApp {
         // so it overlaps the rest of construction instead of sitting in front of the first frame.
         let (tray_rx_init, tray_present_init) = crate::tray::spawn();
 
-        let mut settings = Settings::load();
         // Three arrangements worth having before you have built any of your own. Once only: the
         // flag is what makes deleting them stick.
         if settings.workspaces.is_empty() && !settings.seeded_workspaces {
@@ -4999,6 +5042,7 @@ impl HookEchoApp {
             // Seeded from the last run so a restart mid-outbreak draws the warnings that are
             // already on the ground, and doesn't re-banner them as new (see `alert_snapshot`).
             alert_features: seeded_alerts,
+            alert_coverage: AlertCoverage::default(),
             arch_warns: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_warn_inflight: None,
             arch_warn_shown: None,
@@ -5283,6 +5327,10 @@ impl HookEchoApp {
             persistence: crate::persistence::Writer::new(cc.egui_ctx.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             queued_settings: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_gis_pending: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_settings_retry: None,
             #[cfg(not(target_arch = "wasm32"))]
             queued_recovery: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -6124,8 +6172,11 @@ impl HookEchoApp {
                     let imported = cfg
                         .url
                         .strip_prefix("gis:")
-                        .and_then(|_| self.settings.web_files.get(&cfg.url))
-                        .map(|text| stored_gis(&cfg.url[4..], text, Some(cfg)));
+                        .map(|name| {
+                            let text = self.settings.stored_web_file(&cfg.url)
+                                .ok_or_else(|| anyhow::anyhow!("GIS source unavailable; import the file again"))?;
+                            stored_gis(name, text, Some(cfg))
+                        });
                     self.placefiles.push(LoadedPlacefile {
                         url: cfg.url.clone(),
                         enabled: cfg.enabled,
@@ -8166,9 +8217,12 @@ impl HookEchoApp {
             self.persistence.flush();
             self.drain_persistence();
         }
-        settings.save_checked()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            settings.save_checked()?;
+            self.saved = settings.clone();
+        }
         self.settings = settings;
-        self.saved = self.settings.clone();
         self.settings_save_error = None;
         self.restore_overlay_settings();
         self.palettes.reload(&self.settings.palette_paths());
@@ -8919,16 +8973,15 @@ impl HookEchoApp {
             .settings
             .placefiles
             .iter()
-            .filter(|config| self.settings.web_files.contains_key(&config.url))
+            .filter(|config| self.settings.stored_web_file(&config.url).is_some())
             .cloned()
             .collect();
         let overlays = placefiles
             .iter()
             .filter_map(|config| {
                 self.settings
-                    .web_files
-                    .get(&config.url)
-                    .map(|text| (config.url.clone(), text.clone()))
+                    .stored_web_file(&config.url)
+                    .map(|text| (config.url.clone(), text.to_owned()))
             })
             .collect();
         let mut satellite_bands = std::collections::BTreeSet::new();
@@ -9019,7 +9072,12 @@ impl HookEchoApp {
         view.restore_replay_frames(pack.site.clone(), date,
             pack.volumes.iter().map(|name| Identifier::new(name.clone())).collect());
         self.settings.remember_radar_site(&pack.site);
-        self.settings.web_files.extend(pack.overlays.clone());
+        for (name, text) in &pack.overlays {
+            if self.settings.stored_web_file(name) != Some(text.as_str()) {
+                self.settings.web_files.insert(name.clone(), text.clone());
+                self.placefiles.retain(|layer| layer.url != *name);
+            }
+        }
         for config in &pack.placefiles {
             if !self.settings.placefiles.iter().any(|old| old.url == config.url) {
                 self.settings.placefiles.push(config.clone());
@@ -10970,7 +11028,8 @@ impl HookEchoApp {
                         self.alert_features = f;
                     }
                 }
-                OverlayMsg::Alerts(mut f) => {
+                OverlayMsg::Alerts(mut f, coverage) => {
+                    self.alert_coverage = coverage;
                     f.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
                     self.detect_new_warnings(&f);
                     crate::alert_snapshot::save(&f);
@@ -13038,6 +13097,7 @@ impl HookEchoApp {
                         time,
                         scan,
                         tdwr_revision,
+                        missing_tdwr_products: 0,
                     },
                     Err(e) => DataMsg::Error {
                         view: view_idx,
@@ -13098,6 +13158,7 @@ impl HookEchoApp {
                                 time,
                                 scan,
                                 tdwr_revision: None,
+                                missing_tdwr_products: 0,
                             },
                             Err(e) => DataMsg::Error {
                                 view: view_idx,
@@ -13250,6 +13311,17 @@ impl HookEchoApp {
                 }
                 DataMsg::FrameError { view, name, generation, err, .. } => {
                     if self.views[view].frame_request.matches(&name, generation) && frame_result_is_current(&self.views[view].timeline, &name) {
+                        let pane = &mut self.views[view];
+                        if pane.volume.as_ref().is_some_and(|volume| volume.name == name) {
+                            if let Some((_, retry_at)) = &mut pane.tdwr_archive_retry {
+                                // A timed-out retry leaves the already visible sweeps usable.
+                                *retry_at = Instant::now() + TDWR_ARCHIVE_RETRY;
+                                pane.loading = false;
+                                pane.load_phase = None;
+                                pane.frame_request.cancel();
+                                continue;
+                            }
+                        }
                         self.views[view].loading = false;
                         self.views[view].load_phase = None;
                         self.views[view].frame_request.cancel();
@@ -13264,11 +13336,14 @@ impl HookEchoApp {
                     time,
                     scan,
                     tdwr_revision,
+                    missing_tdwr_products,
                     selected_frame,
                     ..
                 } => {
                     let scan = Arc::new(scan);
-                    self.scan_cache.put(name.clone(), Arc::clone(&scan));
+                    if missing_tdwr_products == 0 {
+                        self.scan_cache.put(name.clone(), Arc::clone(&scan));
+                    }
                     let v = &mut self.views[view];
                     if selected_frame.is_none() {
                         if let Some(head) = &v.live_head {
@@ -13294,34 +13369,31 @@ impl HookEchoApp {
                         v.forget_recent_frame(&name);
                     }
                     let looping = v.timeline.live_looping();
-                    // A newly-arrived live head (following): roll the day at UTC midnight, or grow
-                    // the frame list so the loop window slides forward. A frame-fetch result for a
-                    // scrubbed/loop-display frame is older than the head and isn't a new head.
-                    let _new_head = v.timeline.following
+                    // Append before painting so linked panes can request this scan immediately,
+                    // including the first complete scan after UTC midnight.
+                    if selected_frame.is_none() && v.timeline.following
                         && v.site.as_deref().is_some_and(|site| wxdata::sites::site_by_id(site).is_some())
-                        && {
-                            let last_time = v.timeline.frames.last().and_then(|id| id.date_time());
-                            if time.date_naive() != v.timeline.date {
-                                v.timeline.date = time.date_naive(); // re-list fires via frames_key
-                                true
-                            } else if last_time.is_none_or(|t| time > t)
-                                && v.timeline.frames.last().map(|id| id.name())
-                                    != Some(name.as_str())
-                            {
-                                v.timeline.append_head(Identifier::new(name.clone()));
-                                true
-                            } else {
-                                false
-                            }
-                        };
+                        && v.timeline.frames.last().is_none_or(|last| last.name() != name
+                            && last.date_time().is_none_or(|last_time| time > last_time))
+                    {
+                        v.timeline.append_head(Identifier::new(name.clone()));
+                    }
                     // While looping, the playhead frame owns the display. A live head update,
                     // including a same-name TDWR revision, belongs in the cache until playback
                     // reaches that frame.
                     if !(looping && selected_frame.is_none()) {
-                        if v.retained_station.is_some() { self.pane_shown.remove(&view); }
-                        v.show_volume(scan, name, time);
-                        // Invalidate the upload, not the visible image, while the next sweep is prepared.
-                        self.pane_upload_tokens.insert(view, 0);
+                        let same_partial_scan = v.volume.as_ref().is_some_and(|volume| volume.name == name)
+                            && v.tdwr_archive_retry.is_some_and(|(missing, _)| missing == missing_tdwr_products);
+                        if same_partial_scan {
+                            v.frame_request.cancel();
+                        } else {
+                            if v.retained_station.is_some() { self.pane_shown.remove(&view); }
+                            v.show_volume(scan, name, time);
+                            // Invalidate the upload while the next sweep is prepared.
+                            self.pane_upload_tokens.insert(view, 0);
+                        }
+                        v.tdwr_archive_retry = (missing_tdwr_products != 0)
+                            .then(|| (missing_tdwr_products, Instant::now() + TDWR_ARCHIVE_RETRY));
                     }
                     v.loading = false;
                     v.error = None;
@@ -13340,12 +13412,17 @@ impl HookEchoApp {
                     site,
                     date,
                     frames,
+                    missing_tdwr_hours,
                 } => {
                     let v = &mut self.views[view];
                     v.timeline.listing = false;
-                    v.last_list_failure = None;
                     if v.timeline.date == date && v.site.as_deref() == Some(site.as_str()) {
-                        v.timeline.set_frames(frames, (site, date));
+                        v.last_list_failure = missing_tdwr_hours.filter(|hours| *hours != 0).map(|_| Instant::now());
+                        if let Some(hours) = missing_tdwr_hours {
+                            v.timeline.set_tdwr_frames(frames, (site, date), hours);
+                        } else {
+                            v.timeline.set_frames(frames, (site, date));
+                        }
                         if v.live_head_id().is_some_and(|head| !v.timeline.frames.contains(&head)) {
                             v.live_head = None;
                             v.last_poll = None; // the completed archive replaced the transient slot
@@ -13907,8 +13984,7 @@ impl HookEchoApp {
             let key = v.site.clone().map(|s| (s, v.timeline.date));
             // European listings expose the provider's rolling cache, not a long-term archive.
             let need = v.site.as_deref().is_some_and(|site| wxdata::sites::site_by_id(site).is_some())
-                && v.timeline.frames_key != key
-                && v.last_list_failure.is_none_or(|at| at.elapsed().as_secs() >= 10);
+                && (v.timeline.frames_key != key || v.timeline.missing_tdwr_hours != 0);
             (
                 v.site.clone(),
                 v.timeline.date,
@@ -13919,8 +13995,15 @@ impl HookEchoApp {
         };
         if let Some(s) = &site {
             if need_list && !listing {
-                self.views[idx].timeline.listing = true;
-                self.spawn_list_frames(idx, s.clone(), date, ctx.clone());
+                let pane = &mut self.views[idx];
+                let retry_in = pane.last_list_failure.map_or(Duration::ZERO,
+                    |at| TDWR_ARCHIVE_RETRY.saturating_sub(at.elapsed()));
+                if retry_in.is_zero() {
+                    pane.timeline.listing = true;
+                    self.spawn_list_frames(idx, s.clone(), date, ctx.clone());
+                } else {
+                    ctx.request_repaint_after(retry_in);
+                }
             }
         }
 
@@ -13962,10 +14045,10 @@ impl HookEchoApp {
                         view.refresh_moments();
                         self.pane_upload_tokens.insert(idx, 0);
                     }
-                    if time.date_naive() != view.timeline.date {
-                        view.timeline.date = time.date_naive();
-                    } else if view.timeline.frames.last().and_then(|id| id.date_time()).is_none_or(|last| time > last) {
-                        view.timeline.append_head(Identifier::new(view.volume.as_ref().expect("shared head displayed").name.clone()));
+                    let head = view.volume.as_ref().expect("shared head displayed");
+                    if view.timeline.frames.last().is_none_or(|last| last.name() != head.name
+                        && last.date_time().is_none_or(|last_time| time > last_time)) {
+                        view.timeline.append_head(Identifier::new(head.name.clone()));
                     }
                     view.last_poll = polled;
                     view.feed_recovery = recovery;
@@ -14020,6 +14103,16 @@ impl HookEchoApp {
                         let s = self.views[idx].site.clone().unwrap_or_default();
                         self.views[idx].loading = true;
                         self.spawn_frame_fetch(idx, s, id, ctx.clone());
+                    }
+                } else if let Some((_, retry_at)) = self.views[idx].tdwr_archive_retry {
+                    if self.views[idx].frame_request.pending_name() != Some(name.as_str()) {
+                        let now = Instant::now();
+                        if now >= retry_at {
+                            let s = self.views[idx].site.clone().unwrap_or_default();
+                            self.spawn_frame_fetch(idx, s, id, ctx.clone());
+                        } else {
+                            ctx.request_repaint_after(retry_at.duration_since(now));
+                        }
                     }
                 }
                 // Pull neighbouring frames in behind the playhead, on their own in-flight book so
@@ -14189,6 +14282,10 @@ impl HookEchoApp {
 
     /// Download a specific archive volume (a scrubbed timeline frame), routed to `view_idx`.
     fn spawn_frame_fetch(&mut self, view_idx: usize, site: String, id: Identifier, ctx: egui::Context) {
+        let pane = &self.views[view_idx];
+        let tdwr_retry = pane.volume.as_ref().filter(|volume| volume.name == id.name())
+            .zip(pane.tdwr_archive_retry)
+            .map(|(volume, (missing, _))| (Arc::clone(&volume.scan), missing));
         let generation = self.views[view_idx].frame_request.start(id.name().to_string());
         self.views[view_idx].load_phase = None;
         let tx = self.msg_tx.clone();
@@ -14201,19 +14298,23 @@ impl HookEchoApp {
             // stops polling for the rest of the session.
             let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
                 match wxdata::sites::network(&site) {
-                    wxdata::sites::Network::Tdwr => wxdata::tdwr::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
-                    wxdata::sites::Network::Dwd => wxdata::dwd::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
-                    wxdata::sites::Network::Opera => wxdata::opera::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| scan),
+                    wxdata::sites::Network::Tdwr => {
+                        let retry = tdwr_retry.as_ref().map(|(scan, missing)| (scan.as_ref(), *missing));
+                        wxdata::tdwr::fetch_archive_volume(&http, &id, retry).await
+                            .map(|(_, _, scan, missing)| (scan, missing))
+                    }
+                    wxdata::sites::Network::Dwd => wxdata::dwd::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| (scan, 0)),
+                    wxdata::sites::Network::Opera => wxdata::opera::fetch_volume_at(&http, &id).await.map(|(_, _, scan)| (scan, 0)),
                     wxdata::sites::Network::Nexrad => crate::volume::fetch_with_progress(id, crate::paths::cache_dir(), |phase| {
                         let _ = tx.send(DataMsg::FramePhase { view: view_idx, site: site.clone(), name: name.clone(), generation, phase });
                         ctx.request_repaint();
-                    }).await,
+                    }).await.map(|scan| (scan, 0)),
                 }
             })
             .await
             .unwrap_or_else(Err);
             let msg = match fetched {
-                Ok(scan) => DataMsg::Volume {
+                Ok((scan, missing_tdwr_products)) => DataMsg::Volume {
                         selected_frame: Some(generation),
                     view: view_idx,
                     site,
@@ -14221,6 +14322,7 @@ impl HookEchoApp {
                     time,
                     scan,
                     tdwr_revision: None,
+                    missing_tdwr_products,
                 },
                 Err(e) => DataMsg::FrameError {
                     name,
@@ -14247,20 +14349,28 @@ impl HookEchoApp {
         } else {
             self.settings.radar_feed.provider()
         };
-        let generation = self.views[view_idx].list_request.start(identity.clone());
+        let pane = &mut self.views[view_idx];
+        let hours = if pane.timeline.missing_tdwr_hours != 0
+            && pane.timeline.frames_key.as_ref().is_some_and(|(station, day)| station == &site && *day == date) {
+            pane.timeline.missing_tdwr_hours
+        } else {
+            wxdata::tdwr::ALL_ARCHIVE_HOURS
+        };
+        let generation = pane.list_request.start(identity.clone());
         let tx = self.msg_tx.clone();
         let http = self.http.clone();
         let handle = self.spawner.spawn_abortable(async move {
             let fetched = wxdata::task::timeout(VOLUME_TIMEOUT, async {
                 match wxdata::sites::network(&site) {
-                    wxdata::sites::Network::Tdwr => wxdata::tdwr::list_volumes(&http, &site, date).await,
-                    wxdata::sites::Network::Dwd => wxdata::dwd::list_volumes(&http, &site, date).await,
-                    wxdata::sites::Network::Opera => wxdata::opera::list_volumes(&http, &site, date).await,
-                    wxdata::sites::Network::Nexrad => level2::list_volumes_from(&site, date, provider).await,
+                    wxdata::sites::Network::Tdwr => wxdata::tdwr::list_archive_hours(&http, &site, date, hours).await
+                        .map(|listing| (listing.frames, Some(listing.missing_hours))),
+                    wxdata::sites::Network::Dwd => wxdata::dwd::list_volumes(&http, &site, date).await.map(|frames| (frames, None)),
+                    wxdata::sites::Network::Opera => wxdata::opera::list_volumes(&http, &site, date).await.map(|frames| (frames, None)),
+                    wxdata::sites::Network::Nexrad => level2::list_volumes_from(&site, date, provider).await.map(|frames| (frames, None)),
                 }
             }).await.unwrap_or_else(Err);
             let result = match fetched {
-                Ok(frames) => DataMsg::Frames { view: view_idx, site, date, frames },
+                Ok((frames, missing_tdwr_hours)) => DataMsg::Frames { view: view_idx, site, date, frames, missing_tdwr_hours },
                 Err(error) => {
                     note_feed_error("Archive frame list", format!("{site} {date}: {error}"));
                     DataMsg::ListingFailed { view: view_idx, site, date }
@@ -15901,9 +16011,10 @@ impl HookEchoApp {
             } else { format!("{} · frame unavailable", pane_style.label()) };
             Some(status)
         } else { None };
-        // Raster maps still use vector-tile city/town labels where baked-in labels are faint.
-        // Blank White deliberately skips both the requests and the geographic labels.
-        let (visible_vector, vlabels, visible_vector_tiles) = if pane_style == BasemapStyle::BlankWhite {
+        // Raster maps use vector tiles only for city and road labels. Blank White skips both.
+        let uses_vector_tiles = pane_style != BasemapStyle::BlankWhite
+            && (is_vector || map_details.show_city_roads);
+        let (visible_vector, vlabels, visible_vector_tiles) = if !uses_vector_tiles {
             self.vlabel_cache[idx] = None;
             let labels: std::sync::Arc<[crate::vector_tiles::PlaceLabel]> = Vec::new().into();
             (Vec::new(), labels, Vec::new())
@@ -15942,12 +16053,17 @@ impl HookEchoApp {
             Vec::new()
         };
         let drop_vector_tiles = {
-            self.pane_vtiles[idx].touch_visible(&visible_vector_tiles);
+            if uses_vector_tiles {
+                self.pane_vtiles[idx].touch_visible(&visible_vector_tiles);
+            }
             self.pane_vtiles[idx].take_evicted()
         };
         let upload_turn = !self.gesture_live || chrome::compact(ctx)
             || idx == self.frame_nr as usize % self.views.len();
-        let new_vector_tiles = if upload_turn {
+        let new_vector_tiles = if !uses_vector_tiles {
+            self.pane_vtiles[idx].discard_pending();
+            Vec::new()
+        } else if upload_turn {
             self.pane_vtiles[idx].drain_ready_for_view(&mut self.map_upload_budget, &visible_vector_tiles)
         } else { Vec::new() };
         if !new_tiles.is_empty() || !new_vector_tiles.is_empty() { ctx.request_repaint(); }
@@ -19685,6 +19801,38 @@ impl HookEchoApp {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn save_browser_settings(&mut self, ctx: &egui::Context) -> Result<bool, String> {
+        if let Some(pending) = self.browser_gis_pending.take() {
+            match pending.try_recv() {
+                Ok(result) => self.settings.install_browser_gis(result?),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.browser_gis_pending = Some(pending);
+                    return Ok(false);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err("Browser GIS save was interrupted".into());
+                }
+            }
+        }
+        let sources: std::collections::BTreeMap<_, _> = self.settings.pending_browser_gis()
+            .map(|(name, content)| (name.clone(), content.clone())).collect();
+        if !sources.is_empty() {
+            let (send, pending) = std::sync::mpsc::sync_channel(1);
+            self.browser_gis_pending = Some(pending);
+            let ctx = ctx.clone();
+            self.spawner.spawn(async move {
+                let result = crate::webcache::write_gis_sources(sources).await
+                    .map_err(|error| error.to_string());
+                let _ = send.send(result);
+                ctx.request_repaint();
+            });
+            return Ok(false);
+        }
+        self.settings.save_checked()?;
+        Ok(true)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn drain_persistence(&mut self) {
         while let Some((snapshot, result)) = self.persistence.completed() {
@@ -21062,13 +21210,26 @@ impl HookEchoApp {
                 self.chase_replay.load(track, name);
                 self.toast(ToastKind::Info, format!("Loaded {n} track points"));
             }
-            Prepared::Gis { content, layer } => {
+            Prepared::Gis {
+                content, layer,
+                #[cfg(target_arch = "wasm32")]
+                stored_reference,
+            } => {
                 if !layer.matches_config(self.settings.placefiles.iter().find(|cfg| cfg.url == layer.key)) {
                     self.toast(ToastKind::Error, "The GIS layer changed during import. Import it again to use its current style.");
                     return;
                 }
                 let items = layer.file.items.len();
+                #[cfg(not(target_arch = "wasm32"))]
                 self.settings.web_files.insert(layer.key.clone(), content);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let Some(reference) = stored_reference else {
+                        self.toast(ToastKind::Error, "The GIS source was not saved");
+                        return;
+                    };
+                    self.settings.insert_browser_gis(layer.key.clone(), reference, content);
+                }
                 if !self.settings.placefiles.iter().any(|cfg| cfg.url == layer.key) {
                     self.settings.placefiles.push(crate::settings::PlacefileConfig {
                         url: layer.key.clone(), enabled: true, opacity: 1.0,
@@ -21189,6 +21350,10 @@ impl HookEchoApp {
     /// Start a loop export (GIF or MP4): rewind the active timeline and capture every frame.
     fn start_loop_export(&mut self, format: crate::loopexport::LoopFormat) {
         if self.loop_export.is_some() || self.loop_encoding.is_some() { return; }
+        if !self.views[self.active].show_radar {
+            self.toast(ToastKind::Info, "Turn on radar to export a radar loop");
+            return;
+        }
         use crate::loopexport::LoopFormat;
         let (name, ext) = match format {
             LoopFormat::Gif => ("hookecho-loop.gif", "gif"),
@@ -21239,7 +21404,6 @@ impl HookEchoApp {
             capture_dimensions: None,
             remaining: slots,
             requested_count: slots,
-            settle: LOOP_SETTLE_FRAMES,
             wait_started: wxdata::clock::Instant::now(),
             capturing: false,
             fps: speed,
@@ -21258,63 +21422,75 @@ impl HookEchoApp {
 
     /// Advance the loop export: wait for the stepped radar to settle, then request a screenshot.
     fn drive_loop_export(&mut self, ctx: &egui::Context) {
-        if self.loop_export.as_ref().is_some_and(|le| le.view_index != self.active) {
+        if self.loop_export.as_ref().is_some_and(|le| {
+            let view = &self.views[self.active];
+            le.view_index != self.active || !view.show_radar || le.site != view.site
+                || le.product != view.custom_product.as_deref().unwrap_or_else(|| view.moment.short_name())
+        }) {
             self.cancel_loop_export();
             return;
         }
         let Some(le) = &mut self.loop_export else {
             return;
         };
+        let wait = std::time::Duration::from_millis(50);
+        let expired = le.wait_started.elapsed() >= std::time::Duration::from_secs(30);
         if le.capturing {
-            return; // waiting for the screenshot event
-        }
-        let view = &self.views[self.active];
-        let requested = view.timeline.current().map(|frame| frame.name());
-        let ready = requested.is_some_and(|name| {
-            view.volume.as_ref().is_some_and(|volume| volume.name == name)
-        });
-        if !ready {
-            let unavailable = requested.is_some_and(|name| view.failed_frame.as_deref() == Some(name));
-            if unavailable || le.wait_started.elapsed() > std::time::Duration::from_secs(30) {
-                log::warn!("loop export skipped unavailable radar frame: {}", requested.unwrap_or("unknown"));
-                le.remaining -= 1;
-                if le.remaining > 0 {
-                    self.views[self.active].timeline.step(1);
-                    le.settle = LOOP_SETTLE_FRAMES;
-                    le.wait_started = wxdata::clock::Instant::now();
-                    ctx.request_repaint();
-                } else {
-                    self.finish_loop_export(ctx);
-                }
+            if expired {
+                self.cancel_loop_export();
+                self.toast(ToastKind::Error, "Loop capture timed out");
             } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                ctx.request_repaint_after(wait);
             }
             return;
         }
-        if le.settle > 0 {
-            le.settle -= 1;
-            ctx.request_repaint();
+        let view = &self.views[self.active];
+        let requested = view.timeline.current().map(|frame| frame.name());
+        let token = self.pane_upload_tokens.get(&self.active).copied().unwrap_or(0);
+        let painted = crate::gpu_metrics::painted_tokens().get(self.active).copied().unwrap_or(0);
+        if !expired && self.screenshot_pending.is_none() && self.share_card.is_none()
+            && radar_frame_painted(view, self.pane_shown.get(&self.active), token, painted)
+        {
+            let source = requested.expect("painted timeline frame has an identifier").to_string();
+            le.capturing = true;
+            self.request_capture(ctx, ShotDest::Loop { source, token, request: egui::UserData::new(()) });
             return;
         }
-        le.capturing = true;
-        self.request_capture(ctx, ShotDest::Loop);
+        if expired || requested.is_some_and(|name| view.failed_frame.as_deref() == Some(name)) {
+            log::warn!("loop export skipped unpainted radar frame: {}", requested.unwrap_or("unknown"));
+            le.remaining -= 1;
+            if le.remaining == 0 {
+                self.finish_loop_export(ctx);
+                return;
+            }
+            self.views[self.active].timeline.step(1);
+            le.wait_started = wxdata::clock::Instant::now();
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(wait);
+        }
     }
 
     /// Record one captured loop frame; step to the next, or finish + encode the GIF.
-    fn record_loop_frame(&mut self, ctx: &egui::Context, image: &egui::ColorImage) {
+    fn record_loop_frame(&mut self, ctx: &egui::Context, image: &egui::ColorImage, source: String, token: u64) {
         // Screenshot events arrive before drive_loop_export runs. If the user switched
         // panes while a capture was in flight, do not append that pane's image to this clip.
         if self.loop_export.as_ref().is_some_and(|le| le.view_index != self.active) {
             self.cancel_loop_export();
             return;
         }
-        let source = self.views[self.active]
-            .timeline
-            .current()
-            .map(|frame| frame.name().to_string());
-        let Some(le) = &mut self.loop_export else {
+        let Some(le) = &mut self.loop_export else { return; };
+        le.capturing = false;
+        // The backend returns the screenshot on the next update. Reject a different sweep
+        // painted during capture, including while the share caption was being laid out.
+        let view = &self.views[self.active];
+        if !frame_result_is_current(&view.timeline, &source)
+            || self.pane_upload_tokens.get(&self.active) != Some(&token)
+            || crate::gpu_metrics::painted_tokens().get(self.active) != Some(&token)
+        {
+            ctx.request_repaint();
             return;
-        };
+        }
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         let dimensions = match le.capture_dimensions {
             Some((original, dimensions)) if original == (w, h) => Ok(dimensions),
@@ -21341,13 +21517,11 @@ impl HookEchoApp {
             image::Rgba([px.r(), px.g(), px.b(), px.a()])
         });
         le.frames.push(img);
-        if let Some(source) = source { le.sources.push(source); }
-        le.capturing = false;
+        le.sources.push(source);
         le.remaining -= 1;
         if le.remaining > 0 {
             self.views[self.active].timeline.step(1);
             if let Some(le) = &mut self.loop_export {
-                le.settle = LOOP_SETTLE_FRAMES;
                 le.wait_started = wxdata::clock::Instant::now();
             }
         } else {
@@ -21428,10 +21602,10 @@ impl HookEchoApp {
         }
         let Some(le) = self.loop_export.take() else { return; };
         self.restore_loop_timeline(&le);
-        if matches!(self.screenshot_pending.as_ref(), Some(ShotDest::Loop)) {
+        if matches!(self.screenshot_pending.as_ref(), Some(ShotDest::Loop { .. })) {
             self.screenshot_pending = None;
         }
-        if matches!(self.share_card.as_ref(), Some((ShotDest::Loop, _))) {
+        if matches!(self.share_card.as_ref(), Some((ShotDest::Loop { .. }, _))) {
             self.share_card = None;
             self.share_card_capture_frames = 0;
         }
@@ -21659,8 +21833,8 @@ impl HookEchoApp {
             self.share_card = Some((dest, 2));
             ctx.request_repaint();
         } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(dest.capture_data()));
             self.screenshot_pending = Some(dest);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
     }
 
@@ -21692,8 +21866,8 @@ impl HookEchoApp {
             // Keep drawing the footer until the backend returns the captured frame.
             let (dest, _) = self.share_card.take().expect("checked above");
             self.share_card_capture_frames = 5;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(dest.capture_data()));
             self.screenshot_pending = Some(dest);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
         ctx.request_repaint();
     }
@@ -21821,12 +21995,11 @@ impl HookEchoApp {
 
     /// If a screenshot was requested, save the delivered image event to the pending path.
     fn save_pending_screenshot(&mut self, ctx: &egui::Context) {
-        if self.screenshot_pending.is_none() {
-            return;
-        }
+        let Some(dest) = &self.screenshot_pending else { return; };
+        let request = dest.capture_data();
         let image = ctx.input(|i| {
             i.events.iter().find_map(|e| match e {
-                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                egui::Event::Screenshot { user_data, image, .. } if *user_data == request => Some(image.clone()),
                 _ => None,
             })
         });
@@ -21880,7 +22053,7 @@ impl HookEchoApp {
                     log::info!("view copied to clipboard");
                     self.toast(ToastKind::Success, "View copied to clipboard");
                 }
-                ShotDest::Loop => self.record_loop_frame(ctx, &image),
+                ShotDest::Loop { source, token, .. } => self.record_loop_frame(ctx, &image, source, token),
                 ShotDest::Push(title) => self.push_snapshot(title, &image),
                 ShotDest::Widget(path) => self.save_widget_snapshot(&path, &image),
             }
@@ -22115,13 +22288,19 @@ fn linked_pane_presented(
     view: &MapView, shown: Option<&ShownKey>, token: u64, painted: u64, limit: Option<u32>,
 ) -> bool {
     if !view.show_radar || view.site.is_none() { return true; }
+    view.alignment_acceptable(limit) && radar_frame_painted(view, shown, token, painted)
+}
+
+fn radar_frame_painted(view: &MapView, shown: Option<&ShownKey>, token: u64, painted: u64) -> bool {
     let Some(requested) = view.timeline.current() else { return false; };
     let Some(volume) = &view.volume else { return false; };
-    view.displays_frame(requested) && !volume.display_pending()
-        && view.alignment_acceptable(limit)
-        && shown.is_some_and(|shown| shown.0 == volume.name
-            && shown.2 == view.tilt && shown.8 == view.selected_cut_ms())
+    view.show_radar && view.timeline.forecast_hour().is_none()
         && token != 0 && painted == token
+        && view.displays_frame(requested) && !volume.display_pending()
+        && shown.is_some_and(|shown| shown.0 == volume.name
+            && shown.2 == view.tilt && shown.8 == view.selected_cut_ms()
+            && (view.custom_product.is_some() && shown.9.is_some()
+                || view.custom_product.is_none() && shown.9.is_none() && shown.1 == view.moment))
 }
 
 /// A missing pane may delay a loop, but must never park it permanently.
@@ -22828,7 +23007,7 @@ fn cardinal(bearing_deg: f64) -> &'static str {
     POINTS[(((bearing_deg % 360.0 + 360.0) % 360.0) / 45.0).round() as usize % 8]
 }
 
-fn humanize(secs: i64) -> String {
+pub(crate) fn humanize(secs: i64) -> String {
     const DAY: i64 = 86_400;
     if secs < 60 {
         format!("{secs}s")
@@ -25538,17 +25717,24 @@ impl eframe::App for HookEchoApp {
         #[cfg(not(target_arch = "wasm32"))]
         if due { self.request_settings_save(); }
         #[cfg(target_arch = "wasm32")]
-        if due && self.settings != self.saved {
+        if due
+            && self.browser_settings_retry.is_none_or(|at| Instant::now() >= at)
+            && (self.settings != self.saved || self.browser_gis_pending.is_some()
+                || self.settings.pending_browser_gis().next().is_some())
+        {
             // A palette-map change reloads the color tables (bumps gen -> LUT re-bake).
             if self.settings.palettes != self.saved.palettes || self.settings.web_files != self.saved.web_files {
                 self.palettes.reload(&self.settings.palette_paths());
             }
-            match self.settings.save_checked() {
-                Ok(()) => {
+            match self.save_browser_settings(ctx) {
+                Ok(true) => {
                     self.saved = self.settings.clone();
                     self.settings_save_error = None;
+                    self.browser_settings_retry = None;
                 }
+                Ok(false) => {}
                 Err(e) => {
+                    self.browser_settings_retry = Some(Instant::now() + Duration::from_secs(15));
                     if self.settings_save_error.as_deref() != Some(e.as_str()) {
                         self.toast(ToastKind::Error, format!("Settings were not saved — {e}"));
                         self.settings_save_error = Some(e);
@@ -26702,6 +26888,9 @@ mod tests {
         view.tilt = 1;
         assert!(!super::linked_pane_presented(&view, Some(&shown), 2, 2, Some(120)));
         view.tilt = 0;
+        view.moment = Moment::Velocity;
+        assert!(!super::radar_frame_painted(&view, Some(&shown), 2, 2), "export waits for the requested moment");
+        view.moment = Moment::Reflectivity;
         view.timeline.frames[0] = level2::Identifier::new("KDMX20261019_170600".into());
         assert!(!super::linked_pane_presented(&view, Some(&shown), 2, 2, Some(120)), "retained old frame cannot release the barrier");
 

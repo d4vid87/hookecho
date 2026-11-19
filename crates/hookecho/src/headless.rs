@@ -2070,21 +2070,26 @@ pub fn run_gauges(site: &str) -> anyhow::Result<()> {
 pub fn run_chasepack(
     lat: f64, lon: f64, radius_km: f64, zmax: u8, style_slug: &str,
 ) -> anyhow::Result<()> {
-    use crate::tiles::{start_pack_download, BasemapStyle, TileManager};
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    use crate::tiles::{pack_tile_count, start_pack_download, BasemapStyle, TileManager};
     let style = BasemapStyle::from_slug(style_slug);
+    let provider_max = style.offline_raster_max_zoom()
+        .ok_or_else(|| anyhow::anyhow!("Choose a USGS raster basemap"))?;
     let dlat = radius_km / 111.0;
     let dlon = radius_km / (111.0 * lat.to_radians().cos().abs().max(0.01));
     let bounds = (lon - dlon, lat - dlat, lon + dlon, lat + dlat);
     let z_lo = zmax.saturating_sub(2).max(2);
+    let z_hi = zmax.min(provider_max);
+    let tiles = pack_tile_count(bounds.0, bounds.1, bounds.2, bounds.3, z_lo, z_hi);
+    anyhow::ensure!(crate::offline::within_budget(tiles, tiles.saturating_mul(25_000)),
+        "Offline area needs {tiles} tiles. Choose an area within the 3,000-tile and 50 MB limits");
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let spawner = crate::rt::Spawner::new(rt.handle().clone());
     let mgr = TileManager::new(spawner.clone());
-    let jobs = mgr.pack_jobs(style, bounds.0, bounds.1, bounds.2, bounds.3, z_lo, zmax);
+    let jobs = mgr.pack_jobs(style, bounds.0, bounds.1, bounds.2, bounds.3, z_lo, z_hi);
+    anyhow::ensure!(!jobs.is_empty(), "Offline tile cache is unavailable");
     let total = jobs.len() as u64;
-    anyhow::ensure!(crate::offline::within_budget(total, total.saturating_mul(25_000)),
-        "Choose a USGS raster basemap and an area below 3,000 tiles / 50 MB");
     let mut manifest = crate::offline::MapPack {
-        label: style.label().into(), bounds, zoom: (z_lo, zmax),
+        label: style.label().into(), bounds, zoom: (z_lo, z_hi),
         files: jobs.iter().map(|(url, path)| (url.clone(), path.to_string_lossy().into_owned())).collect(),
         completed: 0, bytes: 0, finished: false, error: None,
         saved_at: chrono::Utc::now().timestamp(), vector_template: None, verified: false,
@@ -2101,7 +2106,7 @@ pub fn run_chasepack(
     }
     manifest.finished = true;
     manifest.verified = true;
-    println!("{}/{} tiles (z{z_lo}-{zmax}, {style_slug}), {:.1} MB",
+    println!("{}/{} tiles (z{z_lo}-{z_hi}, {style_slug}), {:.1} MB",
         manifest.completed, total, manifest.bytes as f64 / 1e6);
     crate::offline::save(manifest.clone())?;
     anyhow::ensure!(manifest.ready(), "Offline area incomplete: {}", manifest.error.as_deref().unwrap_or("missing tiles"));
@@ -3231,6 +3236,12 @@ fn save_render_image(path: &str, rgba: &[u8], width: u32, height: u32) -> anyhow
 mod golden_tests {
     use super::*;
     use wxdata::level2::BinnedSweep;
+
+    #[test]
+    fn chasepack_rejects_large_area_using_the_provider_zoom_cap() {
+        let error = run_chasepack(35.3, -97.5, 250.0, 18, "usgs-topo").unwrap_err();
+        assert!(error.to_string().contains("1012036 tiles"));
+    }
 
     /// Small so the checked-in golden stays tens of KB.
     const GOLDEN_SIZE: u32 = 200;

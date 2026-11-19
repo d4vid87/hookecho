@@ -414,6 +414,8 @@ pub struct MapView {
     pub head_request: crate::frame_request::Request,
     pub list_request: crate::frame_request::Request,
     pub last_list_failure: Option<Instant>,
+    /// Unresolved products in the currently displayed TDWR archive volume and when to retry.
+    pub(crate) tdwr_archive_retry: Option<(u8, Instant)>,
     pub load_phase: Option<level2::LoadPhase>,
     pub buffering: bool,
     pub failed_frame: Option<String>,
@@ -650,6 +652,20 @@ impl MapView {
             && self.volume.as_ref().is_some_and(|volume| !volume.moments[self.moment.index()])
     }
 
+    pub(crate) fn tdwr_archive_notice(&self) -> Option<&'static str> {
+        if self.tdwr_archive_retry.is_some()
+            && self.timeline.current().is_some_and(|frame| self.displays_frame(frame)) {
+            Some("Retrying missing radar products")
+        } else if !self.timeline.following && self.timeline.missing_tdwr_hours != 0
+            && self.timeline.frames_key.as_ref().is_some_and(|(site, date)| {
+                self.site.as_ref() == Some(site) && self.timeline.date == *date
+            }) {
+            Some("Retrying missing archive hours")
+        } else {
+            None
+        }
+    }
+
     /// Time linked panes should request. A new playhead or archive seek takes priority over a
     /// retained scan; only a cut from the selected, already-loaded volume overrides its head.
     pub fn linked_requested_time(&self) -> Option<DateTime<Utc>> {
@@ -711,6 +727,7 @@ impl MapView {
             head_request: Default::default(),
             list_request: Default::default(),
             last_list_failure: None,
+            tdwr_archive_retry: None,
             load_phase: None,
             buffering: false,
             failed_frame: None,
@@ -909,6 +926,7 @@ impl MapView {
         self.loaded_site = self.site.clone();
         self.feed_recovery = FeedRecovery::default();
         self.tdwr_revision = None;
+        self.tdwr_archive_retry = None;
         self.head_request.cancel();
         self.list_request.cancel();
         self.timeline.listing = false;
@@ -993,6 +1011,7 @@ impl MapView {
     }
 
     pub fn show_volume(&mut self, scan: Arc<Scan>, name: String, time: DateTime<Utc>) {
+        self.tdwr_archive_retry = None;
         self.frame_history.retain(|(previous, _)| previous != &name);
         let was_retained = self.retained_station.is_some();
         self.station_ready();

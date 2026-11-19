@@ -74,6 +74,43 @@ class AlertPollerTest {
         assertEquals(3, poller.run("b", { true }) { AlertPoller.Result(successfulRequests = 3) }!!.successfulRequests)
     }
 
+    @Test fun deniedNotificationsCanBeDeliveredOncePermissionIsGranted() {
+        val warning = Nws.Alert("warning", "Tornado Warning", "warning", Nws.TIER_WARNING)
+        val seen = mutableSetOf<String>()
+        val poller = AlertPoller { 0L }
+        var attempts = 0
+
+        fun poll(canNotify: Boolean) = poller.run("home:$canNotify", { true }) {
+            if (canNotify) {
+                AlertPoller.deliverIfNew(seen, warning, quiet = false) {
+                    attempts++
+                    true
+                }
+            }
+            AlertPoller.Result(hot = true)
+        }
+
+        assertTrue(poll(false)!!.hot)
+        assertEquals(0, attempts)
+        assertTrue(seen.isEmpty())
+        assertFalse(AlertPoller.deliverIfNew(seen, warning, quiet = false) { false })
+        assertTrue(seen.isEmpty())
+
+        assertTrue(poll(true)!!.hot)
+        assertEquals(setOf(warning.id), seen)
+        assertEquals(1, attempts)
+        assertFalse(AlertPoller.deliverIfNew(seen, warning, quiet = false) { error("duplicate notification") })
+    }
+
+    @Test fun ordinaryWarningsStayUnseenDuringQuietHours() {
+        val warning = Nws.Alert("warning", "Flash Flood Warning", "warning", Nws.TIER_WARNING)
+        val seen = mutableSetOf<String>()
+        assertFalse(AlertPoller.deliverIfNew(seen, warning, quiet = true) { error("quiet hours") })
+        assertTrue(seen.isEmpty())
+        assertTrue(AlertPoller.deliverIfNew(seen, warning.copy(tier = Nws.TIER_EMERGENCY), quiet = true) { true })
+        assertEquals(setOf(warning.id), seen)
+    }
+
     @Test fun centresRunBeforeRimsAndCoverageStaysPartial() {
         val watches = (1..7).map { i -> Nws.Watch("Place $i", i.toDouble(), 0.0,
             listOf(doubleArrayOf(i.toDouble(), 0.0), doubleArrayOf(i.toDouble(), 1.0)), requestedSamples = 7) }

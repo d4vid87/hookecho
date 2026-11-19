@@ -57,11 +57,13 @@ class AlertWorker(context: Context, params: WorkerParameters) : Worker(context, 
     companion object {
         private const val NAME = "alert-poll"
         private const val NOW = "alert-poll-now"
+        private const val PERMISSION_GRANTED = "alert-poll-permission-granted"
 
         /** Receiver work is unique and returns immediately; concurrent service polls are shared. */
-        fun enqueueNow(context: Context) {
+        fun enqueueNow(context: Context, permissionGranted: Boolean = false) {
             WorkManager.getInstance(context).enqueueUniqueWork(
-                NOW, ExistingWorkPolicy.KEEP,
+                if (permissionGranted) PERMISSION_GRANTED else NOW,
+                if (permissionGranted) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<AlertWorker>()
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                     .build(),
@@ -84,6 +86,7 @@ class AlertWorker(context: Context, params: WorkerParameters) : Worker(context, 
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(NAME)
             WorkManager.getInstance(context).cancelUniqueWork(NOW)
+            WorkManager.getInstance(context).cancelUniqueWork(PERMISSION_GRANTED)
         }
     }
 }

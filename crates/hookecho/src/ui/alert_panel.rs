@@ -30,7 +30,20 @@ pub fn severity_rank(event: &str) -> u8 {
 
 #[cfg(test)]
 mod severity_tests {
-    use super::severity_rank;
+    use super::{feed_notice, severity_rank};
+    use std::time::Duration;
+
+    #[test]
+    fn an_empty_feed_only_means_clear_when_fresh_and_covering_the_area() {
+        let recently = Some(Duration::from_secs(10));
+        let freshness = Duration::from_secs(120);
+        assert_eq!(feed_notice(None, freshness, false, true).as_deref(), Some("Checking alerts…"));
+        assert_eq!(feed_notice(None, freshness, true, true).as_deref(), Some("Alert feed unavailable"));
+        assert!(feed_notice(recently, freshness, true, true).unwrap().contains("10s ago"));
+        assert!(feed_notice(recently, freshness, false, false).is_some());
+        assert!(feed_notice(Some(Duration::from_secs(121)), freshness, false, true).is_some());
+        assert!(feed_notice(recently, freshness, false, true).is_none());
+    }
 
     #[test]
     fn european_alerts_rank_by_colour() {
@@ -200,13 +213,42 @@ fn near_saved_places(feature: &GeoFeature, places: &[crate::settings::Marker]) -
     })
 }
 
+pub(crate) struct FeedStatus {
+    pub archived: bool,
+    pub view_covered: bool,
+    pub saved_places_covered: bool,
+    pub last_success: Option<std::time::Duration>,
+    pub freshness_window: std::time::Duration,
+    pub failed: bool,
+}
+
+fn feed_notice(
+    last_success: Option<std::time::Duration>,
+    freshness: std::time::Duration,
+    failed: bool,
+    covered: bool,
+) -> Option<String> {
+    match last_success {
+        None if failed => Some("Alert feed unavailable".into()),
+        None => Some("Checking alerts…".into()),
+        Some(age) if failed || age > freshness => Some(format!(
+            "Alert feed {} · last successful update {} ago",
+            if failed { "update unavailable" } else { "is stale" },
+            crate::app::humanize(age.as_secs() as i64),
+        )),
+        Some(_) if !covered => Some("Alert coverage is limited for this area".into()),
+        Some(_) => None,
+    }
+}
+
 /// Render the shared alerts list. Search and scope affect this list only; overlay visibility and
 /// notifications remain unchanged. Returns the clicked alert's `(id, center_lon, center_lat)`.
-pub fn body(
+pub(crate) fn body(
     ui: &mut egui::Ui,
     feats: &[GeoFeature],
     bounds: (f64, f64, f64, f64),
     saved_places: &[crate::settings::Marker],
+    feed: &FeedStatus,
     muted: &mut bool,
     export: &mut bool,
 ) -> Option<(String, f64, f64)> {
@@ -264,7 +306,9 @@ pub fn body(
     {
         {
             ui.horizontal(|ui| {
-                ui.weak(format!("{} matching alerts", rows.len()));
+                if !rows.is_empty() {
+                    ui.weak(format!("{} matching alerts", rows.len()));
+                }
                 // Silence switch, where you look when something is making noise at you.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let glyph = if *muted {
@@ -294,16 +338,38 @@ pub fn body(
                 });
             });
             ui.separator();
+            let notice = if feed.archived {
+                None
+            } else {
+                feed_notice(
+                    feed.last_success,
+                    feed.freshness_window,
+                    feed.failed,
+                    if filters.scope == AlertScope::SavedPlaces {
+                        feed.saved_places_covered
+                    } else {
+                        feed.view_covered
+                    },
+                )
+            };
+            if let Some(notice) = &notice {
+                ui.weak(notice);
+                if rows.is_empty() && !(filters.scope == AlertScope::SavedPlaces && saved_places.is_empty()) {
+                    return None;
+                }
+            }
             if rows.is_empty() {
                 ui.weak(
                     if filters.scope == AlertScope::SavedPlaces && saved_places.is_empty() {
                         "No saved places yet. Add one in Custom locations."
                     } else if !query.is_empty() || filters.category.is_some() {
                         "No alerts match these filters. Clear the search or choose All."
+                    } else if feed.archived {
+                        "No matching archived alerts loaded."
                     } else if filters.scope == AlertScope::SavedPlaces {
-                        "No alerts within your saved places’ alert radii."
+                        "No alerts near your saved places in the loaded feeds."
                     } else {
-                        "No alerts in view."
+                        "No matching alerts in this view from the loaded feeds."
                     },
                 );
                 return None;
@@ -489,6 +555,14 @@ mod tests {
                                 &feats,
                                 (-2.0, -2.0, 2.0, 2.0),
                                 &[],
+                                &FeedStatus {
+                                    archived: false,
+                                    view_covered: true,
+                                    saved_places_covered: true,
+                                    last_success: Some(std::time::Duration::ZERO),
+                                    freshness_window: std::time::Duration::from_secs(120),
+                                    failed: false,
+                                },
                                 &mut false,
                                 &mut false
                             )

@@ -310,6 +310,9 @@ pub struct Settings {
     /// the settings bundle. Empty everywhere else.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub web_files: BTreeMap<String, String>,
+    #[cfg(target_arch = "wasm32")]
+    #[serde(skip)]
+    browser_gis: BTreeMap<String, (String, std::sync::Arc<str>)>,
     /// Velocity/spectrum-width display unit (internal data stays m/s).
     pub velocity_unit: VelocityUnit,
     /// Temperature display unit for the surface station plots (internal data stays Celsius).
@@ -1420,6 +1423,8 @@ impl Default for Settings {
         Self {
             default_site: "KTLX".to_string(),
             web_files: BTreeMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            browser_gis: BTreeMap::new(),
             detectors: DetectorTuning::default(),
             alert_rules: Vec::new(),
             serve_token: String::new(),
@@ -1746,6 +1751,71 @@ impl Settings {
         loaded
     }
 
+    pub(crate) fn stored_web_file(&self, name: &str) -> Option<&str> {
+        let entry = self.web_files.get(name)?;
+        #[cfg(target_arch = "wasm32")]
+        if name.starts_with("gis:") && entry.starts_with(GIS_STORAGE_PREFIX) {
+            let (reference, content) = self.browser_gis.get(name)?;
+            return (reference == entry).then_some(content.as_ref());
+        }
+        Some(entry)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn pending_browser_gis(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.web_files.iter().filter(|(name, entry)| {
+            name.starts_with("gis:") && !entry.starts_with(GIS_STORAGE_PREFIX)
+        })
+    }
+
+    /// On success, replace only the sources that are still current.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn install_browser_gis(&mut self, writes: crate::webcache::GisWrites) {
+        for (name, (reference, content)) in writes {
+            let Some(entry) = self.web_files.get_mut(&name) else { continue; };
+            if *entry == content {
+                self.insert_browser_gis(name, reference, content);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn insert_browser_gis(&mut self, name: String, reference: String, content: String) {
+        self.web_files.insert(name.clone(), reference.clone());
+        self.browser_gis.insert(name, (reference, content.into()));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) async fn migrate_inline_browser_gis(&mut self) -> Result<bool, String> {
+        let pending: BTreeMap<_, _> = self.pending_browser_gis()
+            .map(|(name, text)| (name.clone(), text.clone())).collect();
+        if pending.is_empty() {
+            return Ok(false);
+        }
+        let writes = crate::webcache::write_gis_sources(pending).await
+            .map_err(|error| format!("Could not save browser GIS sources: {error}"))?;
+        self.install_browser_gis(writes);
+        Ok(true)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) async fn load_browser() -> Self {
+        let mut settings = Self::load();
+        let refs = settings.web_files.iter().filter(|(name, entry)| {
+            name.starts_with("gis:") && entry.starts_with(GIS_STORAGE_PREFIX)
+        });
+        match crate::webcache::read_gis_sources(refs).await {
+            Ok(sources) => settings.browser_gis = sources,
+            Err(error) => log::warn!("Could not read browser GIS sources: {error}"),
+        }
+        match settings.migrate_inline_browser_gis().await {
+            Ok(true) => settings.save(),
+            Ok(false) => {}
+            Err(error) => log::warn!("Could not migrate browser GIS sources: {error}"),
+        }
+        settings
+    }
+
     /// Record actual station changes rather than every opening of the selector.
     pub(crate) fn remember_radar_site(&mut self, id: &str) -> bool {
         let Some(site) = wxdata::sites::site_by_id(id) else { return false; };
@@ -1813,7 +1883,17 @@ impl Settings {
             if total > crate::cloud::MAX_SYNC_BYTES { return Err("palette bundle exceeds 8 MiB".into()); }
             palette_files.insert(moment.clone(), text);
         }
-        Ok(SettingsBundle { settings: self.clone(), palette_files })
+        #[allow(unused_mut)]
+        let mut settings = self.clone();
+        #[cfg(target_arch = "wasm32")]
+        for (name, entry) in &self.web_files {
+            if name.starts_with("gis:") && entry.starts_with(GIS_STORAGE_PREFIX) {
+                let content = self.stored_web_file(name)
+                    .ok_or_else(|| format!("GIS source unavailable: {name}"))?;
+                settings.web_files.insert(name.clone(), content.into());
+            }
+        }
+        Ok(SettingsBundle { settings, palette_files })
     }
 
     /// Cloud uses the same palette contents as exported bundles, encoded in the existing
@@ -1913,8 +1993,6 @@ impl Settings {
 
     /// Web: one `localStorage` key holding the same JSON. Quota/private-mode failures are logged.
     ///
-    // ponytail: settings only. Caches and palette files stay in memory on the web; IndexedDB is the
-    // upgrade path if offline-web ever becomes real.
     #[cfg(target_arch = "wasm32")]
     fn write_saved(json: &str) -> Result<(), String> {
         let Some(store) = local_storage() else {
@@ -1924,6 +2002,10 @@ impl Settings {
     }
 
     pub fn save_checked(&self) -> Result<(), String> {
+        #[cfg(target_arch = "wasm32")]
+        if self.pending_browser_gis().next().is_some() {
+            return Err("Waiting for GIS sources to be saved in browser storage".into());
+        }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         Self::write_saved(&json)
     }
@@ -1940,6 +2022,9 @@ impl Settings {
 /// `localStorage` key holding the serialized [`Settings`] on the web.
 #[cfg(target_arch = "wasm32")]
 const WEB_KEY: &str = "hookecho-settings";
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) const GIS_STORAGE_PREFIX: &str = "indexeddb:sha256:";
 
 /// The page's `localStorage`, or `None` where the browser denies it (private mode, no window).
 #[cfg(target_arch = "wasm32")]
@@ -2287,6 +2372,8 @@ mod tests {
         let s = Settings {
             hints_seen: Vec::new(),
             web_files: BTreeMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            browser_gis: BTreeMap::new(),
             reduce_motion: true,
             precip_tint: false,
             custom_tile_url: String::new(),

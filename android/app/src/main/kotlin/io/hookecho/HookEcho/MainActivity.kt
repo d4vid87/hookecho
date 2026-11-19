@@ -45,6 +45,20 @@ class MainActivity : GameActivity() {
 
     override fun onStart() { super.onStart(); foreground = true }
     override fun onStop() { foreground = false; super.onStop() }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AlertService.REQUEST_NOTIFICATION_PERMISSION &&
+            grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            AlertService.isEnabled(this)
+        ) {
+            // A worker already in flight may have started without permission.
+            AlertWorker.enqueueNow(this, permissionGranted = true)
+        }
+    }
+
     /**
      * Predictive back. The callback is *disabled* by default, which is the whole point: with
      * nothing open in the app, Android owns the gesture and can draw its live preview of the home

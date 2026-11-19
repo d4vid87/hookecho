@@ -563,12 +563,22 @@ pub async fn fetch_active_excluding(
     points: &[(f64, f64)],
     excluded: &[&str],
 ) -> anyhow::Result<Vec<GeoFeature>> {
+    fetch_active_with_coverage(client, points, excluded).await.map(|(features, _)| features)
+}
+
+/// Reports whether nationwide zone geometry loaded alongside the active bulletins.
+/// The local fallback cannot establish coverage away from the queried points.
+pub async fn fetch_active_with_coverage(
+    client: &reqwest::Client,
+    points: &[(f64, f64)],
+    excluded: &[&str],
+) -> anyhow::Result<(Vec<GeoFeature>, bool)> {
     let body = filter_events(&get_alerts(client, ALERTS_URL).await?, excluded)?;
     let mut feats = parse_alerts(&body)?;
     match fetch_zone_map(client, &body, excluded).await {
         Ok(zones) => {
             feats.extend(zones);
-            return Ok(feats);
+            return Ok((feats, true));
         }
         Err(e) => log::warn!("nationwide alert geometry failed ({e}); resolving local zones"),
     }
@@ -594,7 +604,7 @@ pub async fn fetch_active_excluding(
             }
         }
     }
-    Ok(feats)
+    Ok((feats, false))
 }
 
 #[cfg(test)]

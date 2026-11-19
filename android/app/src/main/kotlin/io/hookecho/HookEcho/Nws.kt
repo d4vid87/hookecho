@@ -313,18 +313,24 @@ object Nws {
         return inside
     }
 
-    /**
-     * Escalation tier from the alert's own words. `tornadoDamageThreat` is the field that
-     * separates a routine tornado warning from a PDS/emergency one, and it is only ever set on
-     * the alerts that matter.
-     */
-    private fun tierOf(p: JSONObject, event: String): Int {
-        val threat = p.optJSONObject("parameters")?.optJSONArray("tornadoDamageThreat")
-            ?.optString(0).orEmpty()
-        val text = (p.optString("description") + " " + p.optString("headline")).uppercase()
+    /** Notification tier used for quiet hours and channel selection. */
+    internal fun tierOf(p: JSONObject, event: String): Int {
+        val parameters = p.optJSONObject("parameters")
+        fun threat(name: String) = parameters?.optJSONArray(name)?.optString(0).orEmpty().uppercase()
+        val text = (p.optString("headline") + " " + p.optString("description"))
+            .uppercase().replace(Regex("\\s+"), " ")
+        val pds = text.contains("PARTICULARLY DANGEROUS SITUATION")
+        val escalated = when (event) {
+            "Tornado Warning" -> pds || text.contains("TORNADO EMERGENCY") ||
+                threat("tornadoDamageThreat") in setOf("CONSIDERABLE", "CATASTROPHIC")
+            "Severe Thunderstorm Warning" -> pds || threat("thunderstormDamageThreat") == "DESTRUCTIVE"
+            "Flash Flood Warning" -> pds || text.contains("FLASH FLOOD EMERGENCY") ||
+                threat("flashFloodDamageThreat") == "CATASTROPHIC"
+            "Tornado Emergency", "Flash Flood Emergency" -> true
+            else -> false
+        }
         return when {
-            threat == "CATASTROPHIC" || text.contains("TORNADO EMERGENCY") -> TIER_EMERGENCY
-            threat == "CONSIDERABLE" || event.contains("Flash Flood Emergency") -> TIER_EMERGENCY
+            escalated -> TIER_EMERGENCY
             event.endsWith("Warning") -> TIER_WARNING
             event.endsWith("Watch") -> TIER_WATCH
             else -> 0

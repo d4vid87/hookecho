@@ -343,11 +343,12 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
     }
     cap_texture_limit_to_adapter(&mut web_options.wgpu_options);
 
+    let settings = crate::settings::Settings::load_browser().await;
     eframe::WebRunner::new()
         .start(
             canvas,
             web_options,
-            Box::new(|cc| Ok(Box::new(HookEchoApp::new(cc)))),
+            Box::new(move |cc| Ok(Box::new(HookEchoApp::with_settings(cc, settings)))),
         )
         .await
 }

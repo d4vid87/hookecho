@@ -54,6 +54,16 @@ internal class AlertPoller(private val clock: () -> Long = System::nanoTime) {
     companion object {
         const val BUDGET_NANOS = 45_000_000_000L
 
+        fun deliverIfNew(
+            seen: MutableSet<String>,
+            alert: Nws.Alert,
+            quiet: Boolean,
+            post: () -> Boolean,
+        ): Boolean {
+            if (alert.id in seen || (quiet && alert.tier < Nws.TIER_EMERGENCY)) return false
+            return post() && seen.add(alert.id)
+        }
+
         fun collect(
             watched: List<Nws.Watch>,
             deadline: Long,

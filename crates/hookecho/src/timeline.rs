@@ -5,7 +5,7 @@
 //! selected UTC day. The app turns the current [`Timeline::current`] identifier into a decoded
 //! volume (via an LRU cache + background download); this type is pure playback bookkeeping.
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use wxdata::clock::Instant;
 use wxdata::level2::Identifier;
 
@@ -41,6 +41,8 @@ pub struct Timeline {
     pub live_window: usize,
     /// The (site, date) the current `frames` were listed for — detects a stale listing.
     pub frames_key: Option<(String, NaiveDate)>,
+    /// TDWR UTC archive hours still awaiting a successful listing for this key.
+    pub missing_tdwr_hours: u32,
     /// A frame listing is in flight.
     pub listing: bool,
     /// After the next listing lands, snap the playhead to the frame nearest this time (event
@@ -79,6 +81,7 @@ impl Default for Timeline {
             loop_enabled: true,
             live_window: 10,
             frames_key: None,
+            missing_tdwr_hours: 0,
             listing: false,
             seek_target: None,
             seek_forecast_hour: None,
@@ -157,6 +160,7 @@ impl Timeline {
             }
         }
         self.frames_key = Some(key);
+        self.missing_tdwr_hours = 0;
         self.listing = false;
         if !self.frames.is_empty() {
             if let Some((start, end)) = self.replay_time_range {
@@ -220,6 +224,31 @@ impl Timeline {
         self.pin_to_live_window();
     }
 
+    pub fn set_tdwr_frames(&mut self, mut frames: Vec<Identifier>, key: (String, NaiveDate), missing_hours: u32) {
+        if self.frames_key.as_ref() == Some(&key) && self.missing_tdwr_hours != 0 {
+            if let Some((from, to)) = self.replay {
+                if let Some(range) = self.frames.get(from).and_then(Identifier::date_time)
+                    .zip(self.frames.get(to).and_then(Identifier::date_time)) {
+                    self.replay_time_range = Some(range);
+                }
+            }
+            frames.extend(self.frames.iter().cloned());
+        } else if self.following {
+            // A concurrently polled head can already be newer than the first completed listing.
+            frames.extend(self.frames.last().filter(|frame| {
+                frame.site() == Some(key.0.as_str())
+                    && frame.date_time().is_some_and(|time| time.date_naive() == key.1)
+            }).cloned());
+        }
+        frames.sort_unstable_by(|a, b| a.name().cmp(b.name()));
+        frames.dedup();
+        let waiting_seek = self.seek_target.filter(|time| missing_hours & (1 << time.hour()) != 0);
+        if waiting_seek.is_some() { self.seek_target = None; }
+        self.set_frames(frames, key);
+        if waiting_seek.is_some() { self.seek_target = waiting_seek; }
+        self.missing_tdwr_hours = missing_hours;
+    }
+
     /// Pull the playhead back inside the live window when a fresh listing is installed.
     ///
     /// `following` means "showing live": the newest volume, or — while looping — one of the
@@ -237,9 +266,16 @@ impl Timeline {
         self.playhead = self.playhead.clamp(oldest_live, self.frames.len() - 1);
     }
 
-    /// Append a newly-arrived live head frame (keeps the loop window sliding forward). The
-    /// playhead is left where it is; the window is relative to `frames.len()`.
+    /// Append a live scan without interrupting active playback or an archive selection.
     pub fn append_head(&mut self, id: Identifier) {
+        if self.following {
+            if let Some(time) = id.date_time() {
+                self.date = time.date_naive();
+            }
+            if !self.playing {
+                self.playhead = self.frames.len();
+            }
+        }
         self.frames.push(id);
     }
 
@@ -740,6 +776,32 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_tdwr_listing_keeps_good_hours_and_defers_seek_in_a_failed_hour() {
+        let a = Identifier::new("TOKC20260801_082713_TDWR".into());
+        let b = Identifier::new("TOKC20260801_090000_TDWR".into());
+        let target = b.date_time().unwrap();
+        let date = target.date_naive();
+        let key = ("TOKC".into(), date);
+        let mut timeline = Timeline {
+            date,
+            following: false,
+            seek_target: Some(target),
+            ..Default::default()
+        };
+
+        timeline.set_tdwr_frames(vec![a.clone()], key.clone(), 1 << 9);
+        assert!(timeline.frames == vec![a.clone()]);
+        assert_eq!(timeline.seek_target, Some(target));
+        assert_eq!(timeline.missing_tdwr_hours, 1 << 9);
+
+        timeline.set_tdwr_frames(vec![b.clone()], key, 0);
+        assert!(timeline.current() == Some(&b));
+        assert!(timeline.frames == vec![a, b]);
+        assert_eq!(timeline.seek_target, None);
+        assert_eq!(timeline.missing_tdwr_hours, 0);
+    }
+
+    #[test]
     fn return_to_live_exits_archive_day_and_pending_seek() {
         let mut timeline = Timeline::default();
         timeline.date = timeline.date.pred_opt().unwrap();
@@ -1025,6 +1087,17 @@ mod tests {
             "playhead unmoved; window slides on next wrap"
         );
         assert!(t.live_looping());
+    }
+
+    #[test]
+    fn stopped_live_playhead_selects_the_appended_scan_even_at_midnight() {
+        let mut t = with_frames(12);
+        t.following = true;
+        t.playing = false;
+        let head = Identifier::new("KTLX20130521_000000".to_string());
+        t.append_head(head.clone());
+        assert_eq!(t.current().map(Identifier::name), Some(head.name()));
+        assert_eq!(t.date, head.date_time().unwrap().date_naive());
     }
 
     #[test]

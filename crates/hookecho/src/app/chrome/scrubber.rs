@@ -74,6 +74,7 @@ impl HookEchoApp {
         let tz = self.active_tz();
         let loaded_time = self.views[self.active].presented_time();
         let product_unavailable = self.views[self.active].product_unavailable();
+        let archive_notice = self.views[self.active].tdwr_archive_notice();
         let preparing = self.views[self.active].volume.is_some()
             && (self.views[self.active].displayed_time() != loaded_time
                 || self.views[self.active].volume.as_ref().is_some_and(Volume::display_pending));
@@ -289,10 +290,12 @@ impl HookEchoApp {
                             "The selected station is not ready. The map retains the explicitly identified previous station's scan.")
                     } else if product_unavailable {
                         (egui::Color32::from_rgb(255, 218, 140), "Product unavailable".to_string(),
-                            "This scan does not contain the selected measurement. Any retained image is from the previous scan of the same product.")
+                            archive_notice.unwrap_or("This scan does not contain the selected measurement. Any retained image is from the previous scan of the same product."))
                     } else if preparing {
                         (egui::Color32::from_rgb(255, 218, 140), "Preparing".to_string(),
                             "Preparing the selected radar scan. The clock still identifies the image on screen.")
+                    } else if let Some(notice) = archive_notice {
+                        (egui::Color32::from_rgb(255, 218, 140), "Partial archive".to_string(), notice)
                     } else if t.following && fresh {
                         (
                             mobile::ZETA_GREEN,
@@ -405,6 +408,7 @@ impl HookEchoApp {
                         format!("Showing {previous} · {} {site}", if station_failed { "unavailable" } else { "loading" })
                     } else if product_unavailable { "Selected product unavailable in this scan".to_owned() }
                         else if preparing { "Preparing selected radar scan…".to_owned() }
+                        else if let Some(notice) = archive_notice { notice.to_owned() }
                         else if buffering { "Buffering next radar frame…".to_owned() }
                         else if loading { load_label.to_owned() }
                         else if skipped_recently { "Skipped unavailable radar frame".to_owned() }
@@ -470,6 +474,7 @@ impl HookEchoApp {
         let tz = self.active_tz();
         let fresh = self.views[self.active].presented_time().is_some_and(|time| (Utc::now() - time).num_seconds() < 900);
         let product_unavailable = self.views[self.active].product_unavailable();
+        let archive_notice = self.views[self.active].tdwr_archive_notice();
         let preparing = self.views[self.active].volume.is_some()
             && self.views[self.active].displayed_time() != self.views[self.active].presented_time();
         let mut go_head = false;
@@ -588,6 +593,8 @@ impl HookEchoApp {
                                         "Product unavailable".into()
                                     } else if preparing {
                                         "Preparing radar".into()
+                                    } else if archive_notice.is_some() {
+                                        "Partial archive".into()
                                     } else if !t.following {
                                         "Archive radar".into()
                                     } else if fresh {

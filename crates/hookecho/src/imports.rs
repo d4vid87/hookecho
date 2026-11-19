@@ -42,6 +42,9 @@ pub enum Prepared {
     Gis {
         content: String,
         layer: Gis,
+        #[cfg(target_arch = "wasm32")]
+        #[serde(skip)]
+        stored_reference: Option<String>,
     },
     Case(crate::casefile::CaseManifest),
     Palette {
@@ -109,7 +112,24 @@ async fn prepare_browser(
                 "Import could not use the background worker: {e}. Retry after reloading the app."
             )
         })?;
-    decode_prepared(&bytes)
+    let mut prepared = decode_prepared(&bytes)?;
+    drop(bytes);
+    match &mut prepared {
+        Prepared::Gis { content, layer, stored_reference } => {
+            let pending = std::collections::BTreeMap::from([(layer.key.clone(), std::mem::take(content))]);
+            let mut writes = crate::webcache::write_gis_sources(pending).await
+                .map_err(|error| format!("Could not save browser GIS source: {error}"))?;
+            let (reference, saved_content) = writes.remove(&layer.key)
+                .ok_or_else(|| "Browser storage did not return the GIS source".to_string())?;
+            *content = saved_content;
+            *stored_reference = Some(reference);
+        }
+        Prepared::Settings { settings, .. } => {
+            settings.migrate_inline_browser_gis().await?;
+        }
+        _ => {}
+    }
+    Ok(prepared)
 }
 
 /// Called by the existing decode worker, never by the browser UI as an inline fallback.
@@ -231,6 +251,8 @@ fn prepare_with_options(
             validate_gis(&file, &mut (0, 0))?;
             Ok(Prepared::Gis {
                 content,
+                #[cfg(target_arch = "wasm32")]
+                stored_reference: None,
                 layer: Gis {
                     key: format!("gis:{name}"),
                     file,
@@ -396,7 +418,7 @@ mod tests {
     #[test]
     fn worker_roundtrip_preserves_normalized_gis_and_nested_properties() {
         let json = br#"{"type":"Feature","geometry":{"type":"LineString","coordinates":[[-97,32],[-98,33]]},"properties":{"label":"Route","nested":{"hazard":[true,4,null]}}}"#;
-        let Prepared::Gis { content, layer } =
+        let Prepared::Gis { content, layer, .. } =
             worker_roundtrip(ImportKind::Gis, "route.geojson", json.to_vec())
         else {
             panic!()

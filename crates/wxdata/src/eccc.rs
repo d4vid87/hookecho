@@ -60,7 +60,7 @@ pub async fn fetch_in_view(
         .error_for_status()?
         .text()
         .await?;
-    Ok(parse(&body))
+    parse(&body)
 }
 
 /// Colour, feature kind and escalation tag for one alert.
@@ -103,10 +103,10 @@ fn title_case(name: &str) -> String {
 }
 
 /// Parse the `Current-Alerts` GeoJSON into features. Anything malformed is skipped, never
-/// panicked on.
-pub fn parse(body: &str) -> Vec<GeoFeature> {
+/// panicked on. Invalid feed documents return an error.
+fn parse(body: &str) -> anyhow::Result<Vec<GeoFeature>> {
     let mut out = Vec::new();
-    let _ = for_each_feature(body, |geom, props| {
+    for_each_feature(body, |geom, props| {
         if out.len() >= MAX_ALERTS {
             return;
         }
@@ -168,8 +168,8 @@ pub fn parse(body: &str) -> Vec<GeoFeature> {
                 }),
             });
         }
-    });
-    out
+    })?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn parses_the_alerts_and_drops_the_degenerate_polygon() {
-        let feats = parse(FEED_JSON);
+        let feats = parse(FEED_JSON).unwrap();
         assert_eq!(feats.len(), 2, "the two-point ring must not render");
 
         let rain = &feats[0];
@@ -247,14 +247,15 @@ mod tests {
 
     #[test]
     fn malformed_feeds_are_skipped_not_fatal() {
-        assert!(parse("").is_empty());
-        assert!(parse("{").is_empty());
-        assert!(parse(r#"{"type":"FeatureCollection","features":[]}"#).is_empty());
+        assert!(parse("").is_err());
+        assert!(parse("{").is_err());
+        assert!(parse(r#"{"type":"FeatureCollection","features":[]}"#).unwrap().is_empty());
         // A feature with no event name has nothing to label a row with.
         assert!(parse(
             r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
             "geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#
         )
+        .unwrap()
         .is_empty());
     }
 }

@@ -29,6 +29,15 @@ const DB_NAME: &str = "hookecho-packs";
 const VOLUMES: &str = "volumes";
 #[cfg(target_arch = "wasm32")]
 const PACKS: &str = "packs";
+#[cfg(target_arch = "wasm32")]
+const GIS_DB: &str = "hookecho-gis";
+#[cfg(target_arch = "wasm32")]
+const GIS_SOURCES: &str = "sources";
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) type GisWrites = std::collections::BTreeMap<String, (String, String)>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type GisSources = std::collections::BTreeMap<String, (String, std::sync::Arc<str>)>;
 
 /// How much radar may sit in IndexedDB before saving a pack evicts the oldest one.
 ///
@@ -151,14 +160,21 @@ fn transaction_done(tx: &web_sys::IdbTransaction) -> js_sys::Promise {
     })
 }
 
-/// Open the database, creating the two stores on first use or version bump.
 #[cfg(target_arch = "wasm32")]
 async fn open() -> anyhow::Result<IdbDatabase> {
+    open_storage(DB_NAME, &[VOLUMES, PACKS]).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn open_storage(
+    name: &str,
+    stores: &'static [&'static str],
+) -> anyhow::Result<IdbDatabase> {
     let factory = web_sys::window()
         .and_then(|w| w.indexed_db().ok().flatten())
         .ok_or_else(|| anyhow!("no IndexedDB in this browser"))?;
     let req = factory
-        .open_with_u32(DB_NAME, 1)
+        .open_with_u32(name, 1)
         .map_err(|e| anyhow!("{e:?}"))?;
     let upgrade = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
         let Some(req) = ev.target().and_then(|t| t.dyn_into::<IdbRequest>().ok()) else {
@@ -167,15 +183,14 @@ async fn open() -> anyhow::Result<IdbDatabase> {
         let Ok(db) = req.result().and_then(|v| v.dyn_into::<IdbDatabase>()) else {
             return;
         };
-        let _ = db.create_object_store(VOLUMES);
-        let _ = db.create_object_store(PACKS);
+        for store in stores {
+            let _ = db.create_object_store(store);
+        }
     });
     req.set_onupgradeneeded(Some(upgrade.as_ref().unchecked_ref()));
-    let db = await_request(req.clone().unchecked_into()).await?;
-    // The closure has to outlive the open, and the database outlives everything: leaking one
-    // closure per open beats a lifetime dance for an object that lives as long as the page.
-    upgrade.forget();
-    db.dyn_into::<IdbDatabase>().map_err(|e| anyhow!("{e:?}"))
+    let db = await_request(req.clone().unchecked_into()).await;
+    req.set_onupgradeneeded(None);
+    db?.dyn_into::<IdbDatabase>().map_err(|e| anyhow!("{e:?}"))
 }
 
 /// The object store for `name`, in a transaction of `mode`.
@@ -184,6 +199,57 @@ fn store(db: &IdbDatabase, name: &str, mode: IdbTransactionMode) -> anyhow::Resu
     db.transaction_with_str_and_mode(name, mode)
         .and_then(|tx| tx.object_store(name))
         .map_err(|e| anyhow!("{e:?}"))
+}
+
+/// Imported sources are user data and never participate in radar cache eviction.
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn write_gis_sources(
+    sources: std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<GisWrites> {
+    use sha2::{Digest, Sha256};
+
+    let db = open_storage(GIS_DB, &[GIS_SOURCES]).await?;
+    let outcome = async {
+        let store = store(&db, GIS_SOURCES, IdbTransactionMode::Readwrite)?;
+        let tx = store.transaction();
+        let committed = transaction_done(&tx);
+        // A replacement must not overwrite a source still referenced by saved preferences.
+        let queued = sources.into_iter().map(|(name, content)| {
+            let reference = format!("{}{:x}", crate::settings::GIS_STORAGE_PREFIX, Sha256::digest(content.as_bytes()));
+            store.put_with_key(&content.as_str().into(), &reference.as_str().into())
+                .map_err(|error| anyhow!("{error:?}"))?;
+            Ok((name, (reference, content)))
+        }).collect::<anyhow::Result<_>>();
+        if queued.is_err() { let _ = tx.abort(); }
+        let result = JsFuture::from(committed).await.map_err(|error| anyhow!("{error:?}"));
+        let writes = queued?;
+        result?;
+        Ok(writes)
+    }.await;
+    db.close();
+    outcome
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn read_gis_sources<'a>(
+    refs: impl Iterator<Item = (&'a String, &'a String)>,
+) -> anyhow::Result<GisSources> {
+    let mut refs = refs.peekable();
+    if refs.peek().is_none() { return Ok(GisSources::new()); }
+    let db = open_storage(GIS_DB, &[GIS_SOURCES]).await?;
+    let outcome = async {
+        let mut sources = GisSources::new();
+        for (name, reference) in refs {
+            let request = store(&db, GIS_SOURCES, IdbTransactionMode::Readonly)?
+                .get(&reference.as_str().into()).map_err(|error| anyhow!("{error:?}"))?;
+            if let Some(content) = await_request(request).await?.as_string() {
+                sources.insert(name.clone(), (reference.clone(), content.into()));
+            }
+        }
+        Ok(sources)
+    }.await;
+    db.close();
+    outcome
 }
 
 /// Raw bytes of one volume, if a pack holds it.

@@ -16,7 +16,7 @@
 //! Deliberately not fetched: `TZL` (long-range reflectivity) is the same 0.5° tilt as `TZ0` at
 //! half the resolution, so it would collide with it in the tilt list for no gain.
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use nexrad_model::data::{
     MomentData, PulseWidth, Radial, RadialStatus, Scan, Sweep, VolumeCoveragePattern,
 };
@@ -25,6 +25,10 @@ use nexrad_model::meta::Site;
 use crate::level2::Identifier;
 
 const BUCKET: &str = "https://unidata-nexrad-level3.s3.amazonaws.com";
+// An archive product can need two listings and a download. Bound each request on web too,
+// leaving time to publish the products that did arrive before the pane's volume deadline.
+const ARCHIVE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+pub const ALL_ARCHIVE_HOURS: u32 = (1 << 24) - 1;
 
 /// Every TDWR the Unidata Level 3 bucket carries, as registry entries so they are
 /// interchangeable with WSR-88Ds everywhere the app looks a site up. Coordinates and heights are
@@ -197,27 +201,66 @@ fn archive_site_id(id: &str, date: NaiveDate) -> &str {
 /// List every low-tilt TDWR reflectivity scan on a UTC day for the shared archive timeline.
 /// One hour per request avoids S3's default pagination limit and admits midnight boundaries.
 pub async fn list_volumes(http: &reqwest::Client, id: &str, date: NaiveDate) -> anyhow::Result<Vec<Identifier>> {
+    let mut listing = list_archive_hours(http, id, date, ALL_ARCHIVE_HOURS).await?;
+    if listing.missing_hours != 0 {
+        let retry = list_archive_hours(http, id, date, listing.missing_hours).await?;
+        anyhow::ensure!(retry.missing_hours == 0, "TDWR hourly listings incomplete for {id} {date}");
+        listing.frames.extend(retry.frames);
+        listing.frames.sort_by(|a, b| a.name().cmp(b.name()));
+    }
+    Ok(listing.frames)
+}
+
+pub struct ArchiveListing {
+    pub frames: Vec<Identifier>,
+    /// UTC hours whose listing failed. A successful empty listing clears its bit.
+    pub missing_hours: u32,
+}
+
+pub async fn list_archive_hours(
+    http: &reqwest::Client,
+    id: &str,
+    date: NaiveDate,
+    hours: u32,
+) -> anyhow::Result<ArchiveListing> {
     let meta = site_by_id(id).ok_or_else(|| anyhow::anyhow!("{id} is not a TDWR"))?;
     let source = archive_site_id(meta.id, date);
     let short = &source[1..];
     let day = date.format("%Y_%m_%d").to_string();
-    let listings = futures_util::future::join_all((0..24).map(|hour| {
-        let http = http.clone();
+    Ok(collect_archive_hours(source, date, hours, |hour| {
         let prefix = format!("{short}_TZ0_{day}_{hour:02}");
-        async move { keys_for_prefix(&http, &prefix).await }
+        async move { crate::task::timeout(ARCHIVE_REQUEST_TIMEOUT, keys_for_prefix(http, &prefix)).await? }
+    }).await)
+}
+
+async fn collect_archive_hours<F>(
+    source: &str,
+    date: NaiveDate,
+    hours: u32,
+    list: impl Fn(u32) -> F,
+) -> ArchiveListing
+where
+    F: std::future::Future<Output = anyhow::Result<Vec<String>>>,
+{
+    let listings = futures_util::future::join_all((0..24).filter(|hour| hours & (1 << hour) != 0).map(|hour| {
+        let listing = list(hour);
+        async move { (hour, listing.await) }
     })).await;
-    let mut frames = Vec::new();
-    let mut successes = 0;
-    for keys in listings.into_iter().flatten() {
-        successes += 1;
-        frames.extend(keys.into_iter().filter_map(|key| key_time(&key))
-            .filter(|time| time.date_naive() == date)
-            .map(|time| Identifier::new(frame_name(source, time))));
+    let mut listing = ArchiveListing { frames: Vec::new(), missing_hours: 0 };
+    for (hour, keys) in listings {
+        match keys {
+            Ok(keys) => listing.frames.extend(keys.into_iter().filter_map(|key| key_time(&key))
+                .filter(|time| time.date_naive() == date && time.hour() == hour)
+                .map(|time| Identifier::new(frame_name(source, time)))),
+            Err(error) => {
+                log::debug!("TDWR listing {source} {date} {hour:02} UTC: {error}");
+                listing.missing_hours |= 1 << hour;
+            }
+        }
     }
-    anyhow::ensure!(successes > 0, "TDWR hourly listings unavailable for {id} {date}");
-    frames.sort_by(|a, b| a.name().cmp(b.name()));
-    frames.dedup_by(|a, b| a.name() == b.name());
-    Ok(frames)
+    listing.frames.sort_by(|a, b| a.name().cmp(b.name()));
+    listing.frames.dedup_by(|a, b| a.name() == b.name());
+    listing
 }
 
 /// Turn one decoded tilt product into a sweep of radials carrying `moment`.
@@ -339,35 +382,102 @@ pub async fn fetch_volume(
         crate::stats::bump(crate::stats::Counter::FetchSkipped);
         return Ok(None);
     }
-    assemble_volume(meta, meta.id, keys, anchor, true, |key| fetch_product(http, key)).await.map(Some)
+    assemble_volume(meta, meta.id, keys, anchor, |key| fetch_product(http, key)).await.map(Some)
 }
 
 /// Fetch the product set that was current at a listed low-tilt frame, for playback and scrubbing.
 pub async fn fetch_volume_at(http: &reqwest::Client, id: &Identifier) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    let (name, time, mut scan, missing) = fetch_archive_volume(http, id, None).await?;
+    if missing != 0 {
+        let (_, _, retried, remaining) = fetch_archive_volume(http, id, Some((&scan, missing))).await?;
+        anyhow::ensure!(remaining == 0, "TDWR archive products unavailable for {name}");
+        scan = retried;
+    }
+    Ok((name, time, scan))
+}
+
+/// Return the usable scan plus a bit for each product still unresolved. A retry receives the
+/// previous scan for this same identifier so only unresolved products need network requests.
+pub async fn fetch_archive_volume(
+    http: &reqwest::Client,
+    id: &Identifier,
+    retry: Option<(&Scan, u8)>,
+) -> anyhow::Result<(String, DateTime<Utc>, Scan, u8)> {
     let site = id.site().ok_or_else(|| anyhow::anyhow!("TDWR frame has no site"))?;
     let meta = site_by_id(site).ok_or_else(|| anyhow::anyhow!("{site} is not a TDWR"))?;
     let anchor = id.date_time().ok_or_else(|| anyhow::anyhow!("TDWR frame has no valid time"))?;
     anyhow::ensure!(id.name() == frame_name(site, anchor), "TDWR frame name malformed");
     let short = &site[1..];
-    // This frame name came from an actual TZ0 bucket key. Its key is deterministic, so do not
-    // re-list it for every playback fetch: concurrent long-loop backfill can otherwise turn a
-    // transient listing failure into a false "low tilt unavailable" error.
-    let low = format!("{short}_TZ0_{}", anchor.format("%Y_%m_%d_%H_%M_%S"));
-    let other = futures_util::future::join_all(PRODUCTS.iter().skip(1).map(|(product, _)| {
-        let (http, prefix) = (http.clone(), format!("{short}_{product}"));
+    let (scan, missing) = collect_archive_products(meta, retry, |index, product, gate_len| async move {
+        let key = if index == 0 {
+            // The frame name came from this exact low-tilt object. No listing is needed.
+            Some(format!("{short}_{product}_{}", anchor.format("%Y_%m_%d_%H_%M_%S")))
+        } else {
+            let prefix = format!("{short}_{product}");
+            archive_product_key(&prefix, anchor, |prefix| async move {
+                crate::task::timeout(ARCHIVE_REQUEST_TIMEOUT, keys_for_prefix(http, &prefix)).await?
+            }).await?
+        };
+        let Some(key) = key else { return Ok(None); };
+        let p = crate::task::timeout(ARCHIVE_REQUEST_TIMEOUT, fetch_product(http, key))
+            .await??;
+        let sweep = decode_sweep(&p, index, product, gate_len)
+            .ok_or_else(|| anyhow::anyhow!("TDWR {product} contained no usable sweep"))?;
+        Ok(Some(sweep))
+    }).await?;
+    Ok((id.name().to_owned(), anchor, scan, missing))
+}
+
+async fn archive_product_key<F>(
+    prefix: &str, anchor: DateTime<Utc>, list: impl Fn(String) -> F,
+) -> anyhow::Result<Option<String>>
+where
+    F: std::future::Future<Output = anyhow::Result<Vec<String>>>,
+{
+    let current = format!("{prefix}_{}", anchor.format("%Y_%m_%d_%H"));
+    let key = latest_key_at_or_before(list(current).await?, anchor);
+    // A previous-hour key can only be within the ten-minute window near the hour boundary.
+    if key.is_some() || anchor.minute() >= 10 {
+        return Ok(key);
+    }
+    let previous = format!("{prefix}_{}", (anchor - chrono::Duration::hours(1)).format("%Y_%m_%d_%H"));
+    Ok(latest_key_at_or_before(list(previous).await?, anchor))
+}
+
+async fn collect_archive_products<F>(
+    meta: &SiteEntry,
+    retry: Option<(&Scan, u8)>,
+    load: impl Fn(usize, &'static str, u16) -> F,
+) -> anyhow::Result<(Scan, u8)>
+where
+    F: std::future::Future<Output = anyhow::Result<Option<Sweep>>>,
+{
+    let jobs = PRODUCTS.iter().enumerate().map(|(index, &(product, gate_len))| {
+        let load = &load;
         async move {
-            let current = format!("{prefix}_{}", anchor.format("%Y_%m_%d_%H"));
-            if let Some(key) = latest_key_at_or_before(
-                keys_for_prefix(&http, &current).await.unwrap_or_default(), anchor
-            ) { return Some(key); }
-            let previous = format!("{prefix}_{}", (anchor - chrono::Duration::hours(1)).format("%Y_%m_%d_%H"));
-            latest_key_at_or_before(keys_for_prefix(&http, &previous).await.unwrap_or_default(), anchor)
+            if let Some((scan, missing)) = retry {
+                if missing & (1 << index) == 0 {
+                    return Ok(scan.sweeps().iter().find(|sweep| sweep.elevation_number() == index as u8 + 1).cloned());
+                }
+            }
+            load(index, product, gate_len).await
         }
-    })).await;
-    let keys = std::iter::once(Some(low)).chain(other).collect();
-    // Archive frames have no revision probe: never cache a failed advertised product as complete.
-    assemble_volume(meta, site, keys, anchor, false, |key| fetch_product(http, key))
-        .await.map(|(name, time, scan, _)| (name, time, scan))
+    });
+    let found = futures_util::future::join_all(jobs).await;
+    anyhow::ensure!(matches!(found.first(), Some(Ok(Some(_)))), "no usable TDWR low-tilt reflectivity for {}", meta.id);
+    let mut missing = 0;
+    let mut sweeps = Vec::new();
+    for (index, result) in found.into_iter().enumerate() {
+        match result {
+            Ok(Some(sweep)) => sweeps.push(sweep),
+            Ok(None) => {}
+            Err(error) => {
+                log::debug!("TDWR archive {} {}: {error}", meta.id, PRODUCTS[index].0);
+                missing |= 1 << index;
+            }
+        }
+    }
+    Ok((build_scan(meta, sweeps), missing))
 }
 
 async fn fetch_product(http: &reqwest::Client, key: String) -> anyhow::Result<nexrad_level3::Level3Product> {
@@ -388,7 +498,6 @@ async fn assemble_volume<F>(
     frame_site: &str,
     mut keys: Vec<Option<String>>,
     anchor: DateTime<Utc>,
-    allow_partial: bool,
     fetch: impl Fn(String) -> F,
 ) -> anyhow::Result<(String, DateTime<Utc>, Scan, String)>
 where
@@ -409,11 +518,7 @@ where
                     return None;
                 }
             };
-            // Elevation numbers must be unique per sweep; reflectivity and velocity at one tilt
-            // stay separate sweeps, which the split-cut-aware binning already handles.
-            // Packet 16 has no per-radial acquisition clock; this remains product generation time.
-            let timestamp = crate::level3::product_time(&p)?;
-            sweep_from(&p, n as u8 + 1, gate_len, product.starts_with("TV"), timestamp.timestamp_millis())
+            decode_sweep(&p, n, product, gate_len)
         });
     }
     // `join_all` and not a JoinSet: these are six round trips with a small decode each, so the
@@ -422,14 +527,22 @@ where
     anyhow::ensure!(found.first().is_some_and(Option::is_some), "no usable TDWR low-tilt reflectivity for {}", meta.id);
     for (key, sweep) in keys.iter_mut().zip(&found) {
         if sweep.is_none() {
-            anyhow::ensure!(allow_partial || key.is_none(), "TDWR product {} unavailable", key.as_deref().unwrap_or("-"));
             *key = None;
         }
     }
     let revision = product_revision(&keys);
     // join_all preserves product order, including the elevation numbers of missing sweeps.
-    let sweeps = found.into_iter().flatten().collect();
+    Ok((frame_name(frame_site, anchor), anchor, build_scan(meta, found.into_iter().flatten().collect()), revision))
+}
 
+fn decode_sweep(p: &nexrad_level3::Level3Product, index: usize, product: &str, gate_len: u16) -> Option<Sweep> {
+    // Reflectivity and velocity at one tilt need distinct sweep numbers for split-cut binning.
+    // Packet 16 has no per-radial acquisition clock, so this is the product generation time.
+    let timestamp = crate::level3::product_time(p)?;
+    sweep_from(p, index as u8 + 1, gate_len, product.starts_with("TV"), timestamp.timestamp_millis())
+}
+
+fn build_scan(meta: &SiteEntry, sweeps: Vec<Sweep>) -> Scan {
     // No separate tower height is published for these.
     let site: Site = meta.to_site();
     // TDWRs have no VCP number; 80 is what the products report as their scan strategy.
@@ -449,7 +562,7 @@ where
         false,
         Vec::new(),
     );
-    Ok((frame_name(frame_site, anchor), anchor, Scan::with_site(site, vcp, sweeps), revision))
+    Scan::with_site(site, vcp, sweeps)
 }
 
 #[cfg(test)]
@@ -506,6 +619,74 @@ mod tests {
         assert!(latest_key_at_or_before(vec!["OKC_TV0_2026_08_01_17_28_02".to_owned()], low_tilt).is_none());
     }
 
+    #[tokio::test]
+    async fn archive_hours_retry_only_failed_listings() {
+        let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        let partial = collect_archive_hours("TOKC", date, (1 << 8) | (1 << 9) | (1 << 10), |hour| {
+            std::future::ready(match hour {
+                8 => Ok(vec!["OKC_TZ0_2026_08_01_08_27_13".into()]),
+                9 => Err(anyhow::anyhow!("temporarily unavailable")),
+                10 => Ok(Vec::new()),
+                _ => unreachable!(),
+            })
+        }).await;
+        assert_eq!(partial.frames[0].name(), "TOKC20260801_082713_TDWR");
+        assert_eq!(partial.missing_hours, 1 << 9);
+
+        let retry = collect_archive_hours("TOKC", date, partial.missing_hours, |hour| {
+            assert_eq!(hour, 9);
+            std::future::ready(Ok(vec!["OKC_TZ0_2026_08_01_09_00_00".into()]))
+        }).await;
+        assert_eq!(retry.frames[0].name(), "TOKC20260801_090000_TDWR");
+        assert_eq!(retry.missing_hours, 0);
+    }
+
+    #[tokio::test]
+    async fn archive_product_lookup_distinguishes_an_empty_hour_from_an_error() {
+        let anchor = key_time("OKC_TZ0_2026_08_01_17_02_13").unwrap();
+        let missing = archive_product_key("OKC_TV0", anchor, |prefix| {
+            std::future::ready(if prefix.ends_with("_17") {
+                Ok(Vec::new())
+            } else {
+                Err(anyhow::anyhow!("previous hour unavailable"))
+            })
+        }).await;
+        assert!(missing.is_err());
+
+        let found = archive_product_key("OKC_TV0", anchor, |prefix| {
+            std::future::ready(Ok(if prefix.ends_with("_16") {
+                vec!["OKC_TV0_2026_08_01_16_59_50".into()]
+            } else {
+                Vec::new()
+            }))
+        }).await.unwrap();
+        assert_eq!(found.as_deref(), Some("OKC_TV0_2026_08_01_16_59_50"));
+    }
+
+    #[tokio::test]
+    async fn partial_archive_volume_keeps_reflectivity_and_retries_only_velocity() {
+        let meta = site_by_id("TOKC").unwrap();
+        let (partial, missing) = collect_archive_products(meta, None, |index, product, gate_len| {
+            std::future::ready(match index {
+                0 => fixture_product(product).map(|p| decode_sweep(&p, index, product, gate_len)),
+                3 => Err(anyhow::anyhow!("velocity listing unavailable")),
+                _ => Ok(None),
+            })
+        }).await.unwrap();
+        assert_eq!(missing, 1 << 3);
+        assert!(bin_scan_opts(&partial, Moment::Reflectivity, 0, false).is_ok());
+        assert!(bin_scan_opts(&partial, Moment::Velocity, 0, false).is_err());
+
+        let (full, missing) = collect_archive_products(meta, Some((&partial, missing)), |index, product, gate_len| {
+            assert_eq!(index, 3);
+            let key = format!("OKC_{product}_2026_08_01_17_27_13");
+            std::future::ready(fixture_product(&key).map(|p| decode_sweep(&p, index, product, gate_len)))
+        }).await.unwrap();
+        assert_eq!(missing, 0);
+        assert_eq!(full.sweeps()[0], partial.sweeps()[0]);
+        assert!(bin_scan_opts(&full, Moment::Velocity, 0, false).is_ok());
+    }
+
     fn advertised_products() -> Vec<Option<String>> {
         vec![
             Some("OKC_TZ0_2026_08_01_17_27_13".into()),
@@ -540,13 +721,13 @@ mod tests {
             std::future::ready(result)
         };
 
-        let (name, time, partial, revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, true, &fetch)
+        let (name, time, partial, revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, &fetch)
             .await.expect("live reflectivity remains usable");
         assert!(bin_scan_opts(&partial, Moment::Reflectivity, 0, false).is_ok());
         assert!(bin_scan_opts(&partial, Moment::Velocity, 0, false).is_err());
         assert_ne!(revision, product_revision(&keys), "the next poll must not skip the unchanged listing");
 
-        let (next_name, next_time, complete, next_revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, true, &fetch)
+        let (next_name, next_time, complete, next_revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, &fetch)
             .await.expect("retry succeeds with the same keys");
         assert_eq!((next_name, next_time), (name, time));
         assert_eq!(velocity_attempts.get(), 2);
@@ -559,51 +740,39 @@ mod tests {
         let keys = advertised_products();
         let anchor = key_time(keys[0].as_deref().unwrap()).unwrap();
         let meta = site_by_id("TOKC").unwrap();
-        for allow_partial in [true, false] {
-            for undecodable in [true, false] {
-                let fetch = |key: String| {
-                    let result = if key.contains("_TZ0_") && undecodable {
-                        Err(anyhow::anyhow!("low reflectivity download failed"))
-                    } else {
-                        fixture_product(&key).map(|mut product| {
-                            if key.contains("_TZ0_") { product.radial = None; }
-                            product
-                        })
-                    };
-                    std::future::ready(result)
+        for undecodable in [true, false] {
+            let fetch = |key: String| {
+                let result = if key.contains("_TZ0_") && undecodable {
+                    Err(anyhow::anyhow!("low reflectivity download failed"))
+                } else {
+                    fixture_product(&key).map(|mut product| {
+                        if key.contains("_TZ0_") { product.radial = None; }
+                        product
+                    })
                 };
-                let result = assemble_volume(meta, meta.id, keys.clone(), anchor, allow_partial, fetch).await;
-                assert!(result.unwrap_err().to_string().contains("low-tilt reflectivity"));
-            }
+                std::future::ready(result)
+            };
+            let result = assemble_volume(meta, meta.id, keys.clone(), anchor, fetch).await;
+            assert!(result.unwrap_err().to_string().contains("low-tilt reflectivity"));
         }
         let mut missing_anchor = keys;
         missing_anchor[0] = None;
-        assert!(assemble_volume(meta, meta.id, missing_anchor, anchor, true, |key| std::future::ready(fixture_product(&key)))
+        assert!(assemble_volume(meta, meta.id, missing_anchor, anchor, |key| std::future::ready(fixture_product(&key)))
             .await.is_err());
     }
 
     #[tokio::test]
-    async fn archive_retries_failed_advertised_products_but_allows_absent_ones() {
-        let keys = advertised_products();
-        let anchor = key_time(keys[0].as_deref().unwrap()).unwrap();
+    async fn archive_requires_usable_low_tilt_reflectivity() {
         let meta = site_by_id("TOKC").unwrap();
-        let velocity_attempts = std::cell::Cell::new(0);
-        let fetch = |key: String| {
-            let result = if key.contains("_TV0_") && velocity_attempts.replace(velocity_attempts.get() + 1) == 0 {
-                Err(anyhow::anyhow!("temporary velocity download failure"))
-            } else {
-                fixture_product(&key)
-            };
-            std::future::ready(result)
-        };
-        assert!(assemble_volume(meta, meta.id, keys.clone(), anchor, false, &fetch).await.is_err());
-        let (_, _, scan, revision) = assemble_volume(meta, meta.id, keys.clone(), anchor, false, &fetch)
-            .await.expect("retry succeeds although unadvertised upper tilts remain absent");
-        assert_eq!(velocity_attempts.get(), 2);
-        assert_eq!(revision, product_revision(&keys));
-        assert_eq!(scan.sweeps().len(), 2);
-        assert!(bin_scan_opts(&scan, Moment::Reflectivity, 0, false).is_ok());
-        assert!(bin_scan_opts(&scan, Moment::Velocity, 0, false).is_ok());
+        let result = collect_archive_products(meta, None, |index, product, gate_len| {
+            std::future::ready(match index {
+                0 => Err(anyhow::anyhow!("low reflectivity download failed")),
+                3 => fixture_product("OKC_TV0_2026_08_01_17_27_13")
+                    .map(|p| decode_sweep(&p, index, product, gate_len)),
+                _ => Ok(None),
+            })
+        }).await;
+        assert!(result.unwrap_err().to_string().contains("low-tilt reflectivity"));
     }
 
     /// A synthetic tilt product round-trips through the fixed-point packing back to its own dBZ.
