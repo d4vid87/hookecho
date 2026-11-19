@@ -197,10 +197,10 @@ impl HookEchoApp {
                     if remove {
                         self.settings.alert_polygons.remove(i);
                         self.zone_popup = None;
-                        self.settings.save();
+                        self.request_settings_save();
                     } else if !open {
                         self.zone_popup = None;
-                        self.settings.save();
+                        self.request_settings_save();
                     }
                 }
             }
@@ -239,7 +239,7 @@ impl HookEchoApp {
                     self.settings
                         .alert_polygons
                         .push(crate::settings::AlertPolygon { name, ring });
-                    self.settings.save();
+                    self.request_settings_save();
                 }
             } else if cancel {
                 self.zone_naming = None;

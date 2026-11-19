@@ -41,7 +41,7 @@ export function makeBridge({ spawnWorker, maxRespawns = 3, log = console.warn, c
     if (active !== null || !worker || !queued.length) return;
     // Keep radar work ahead of queued map refinement. Never interrupt an executing decode.
     const urgent = queued.findIndex(job => job.op === "bin" || job.op === "assemble");
-    const radar = queued.findIndex(job => job.op !== "vector");
+    const radar = queued.findIndex(job => job.op !== "vector" && job.op !== "import");
     const job = queued.splice(urgent >= 0 ? urgent : radar < 0 ? 0 : radar, 1)[0];
     active = job.id;
     pending.get(job.id)[2].dispatched = clock.now();

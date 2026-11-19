@@ -841,7 +841,7 @@ struct PaneGpu {
     // ponytail: the visible *count* rather than the list — camera plus generation already decide
     // which tiles are asked for; compare the ids if a case ever shows a stale quad.
     quads_key: Option<TileQuadsKey>,
-    frame_visible_vector: Vec<(TileId, i32)>,
+    vector_selection: VectorSelection<(TileId, i32)>,
     vector_copy_buf: wgpu::Buffer,
     vector_over_raster: bool,
     frame_draw_radar: bool,
@@ -1306,7 +1306,7 @@ impl RenderResources {
                 surface: None,
                 frame_visible: Vec::new(),
                 quads_key: None,
-                frame_visible_vector: Vec::new(),
+                vector_selection: VectorSelection::default(),
                 vector_copy_buf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("vector_world_copies"),
                     contents: bytemuck::cast_slice(&[0.0f32]),
@@ -1828,10 +1828,18 @@ impl RenderResources {
         );
         let quads = (self.panes.get(&cb.pane).map(|p| p.quads_key) != Some(Some(quads_key)))
             .then(|| self.tile_verts(cb));
-        let visible_vector = vector_draw_instances(&cb.visible_vector, self.vector_tiles.keys().filter_map(|(pane, id)| (*pane == cb.pane).then_some(*id)));
         let overlay_present = self.overlay.is_some();
 
-        let pane = self.pane_mut(device, cb.pane);
+        self.pane_mut(device, cb.pane);
+        let pane = self.panes.get_mut(&cb.pane).unwrap();
+        // Camera uniforms can move without changing the tile cover. Only a new cover or a
+        // residency change needs the ancestor/descendant search; other panes cannot affect it.
+        let vector_changed = pane.vector_selection.update(
+            cb.visible_vector.iter().map(|tile| (tile.id, tile.world_copy())),
+            cb.clear_vector || !cb.new_vector_tiles.is_empty() || !cb.drop_vector_tiles.is_empty(),
+            || vector_draw_instances(&cb.visible_vector, self.vector_tiles.keys()
+                .filter_map(|(id, tile)| (*id == cb.pane).then_some(*tile))),
+        );
         let (center, center_low) = mercator::split_world(cb.camera_center);
         queue.write_buffer(
             &pane.camera_buf,
@@ -1881,9 +1889,9 @@ impl RenderResources {
             pane.frame_visible = visible;
             pane.quads_key = Some(quads_key);
         }
-        if pane.frame_visible_vector != visible_vector {
+        if vector_changed {
             // Instance zero is reserved for geographic overlays, which already use world space.
-            let copies: Vec<f32> = std::iter::once(0.0).chain(visible_vector.iter().map(|(_, copy)| *copy as f32)).collect();
+            let copies: Vec<f32> = std::iter::once(0.0).chain(pane.vector_selection.selected().iter().map(|(_, copy)| *copy as f32)).collect();
             let bytes = bytemuck::cast_slice(&copies);
             if pane.vector_copy_buf.size() < bytes.len() as u64 {
                 pane.vector_copy_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1894,7 +1902,6 @@ impl RenderResources {
                 });
             }
             queue.write_buffer(&pane.vector_copy_buf, 0, bytes);
-            pane.frame_visible_vector = visible_vector;
         }
         pane.vector_over_raster = cb.vector_over_raster;
         pane.frame_draw_wind = cb.wind.is_some();
@@ -2170,13 +2177,13 @@ impl RenderResources {
         cam: &wgpu::BindGroup,
         pass: &mut wgpu::RenderPass<'_>,
     ) {
-        if pane.frame_visible_vector.is_empty() {
+        if pane.vector_selection.selected().is_empty() {
             return;
         }
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
         pass.set_vertex_buffer(1, pane.vector_copy_buf.slice(..));
-        for (instance, (tid, _)) in pane.frame_visible_vector.iter().enumerate() {
+        for (instance, (tid, _)) in pane.vector_selection.selected().iter().enumerate() {
             if let Some(t) = self.vector_tiles.get(&(pane.id, *tid)) {
                 pass.set_vertex_buffer(0, t.base.vbuf.slice(..));
                 pass.set_index_buffer(t.base.ibuf.slice(..), wgpu::IndexFormat::Uint32);
@@ -2194,7 +2201,7 @@ impl RenderResources {
         pass.set_pipeline(&self.overlay_pipeline);
         pass.set_bind_group(0, cam, &[]);
         pass.set_vertex_buffer(1, pane.vector_copy_buf.slice(..));
-        for (instance, (tid, _)) in pane.frame_visible_vector.iter().enumerate() {
+        for (instance, (tid, _)) in pane.vector_selection.selected().iter().enumerate() {
             let Some(t) = self.vector_tiles.get(&(pane.id, *tid)).and_then(|t| t.foreground.as_ref()) else {
                 continue;
             };
@@ -2423,6 +2430,32 @@ pub(crate) fn raster_tile_quads(
     kids
 }
 
+/// Retain fallback selection until the requested cover or resident tile set changes. The key
+/// iterator makes the unchanged-frame check allocation-free; the selection closure stays lazy.
+#[derive(Default)]
+pub(crate) struct VectorSelection<K> {
+    requested: Vec<K>,
+    selected: Vec<K>,
+}
+
+impl<K: Copy + PartialEq> VectorSelection<K> {
+    /// Returns whether the resulting draw list changed, independently of a cache rebuild.
+    pub(crate) fn update(&mut self, requested: impl Iterator<Item = K> + Clone,
+        resident_changed: bool, select: impl FnOnce() -> Vec<K>) -> bool {
+        if !resident_changed && self.requested.iter().copied().eq(requested.clone()) {
+            return false;
+        }
+        self.requested.clear();
+        self.requested.extend(requested);
+        let selected = select();
+        if self.selected == selected { return false; }
+        self.selected = selected;
+        true
+    }
+
+    pub(crate) fn selected(&self) -> &[K] { &self.selected }
+}
+
 /// Keep cached geography visible while a new zoom level loads. Coarse tiles draw first,
 /// then finer fallbacks, then the requested tiles so current detail always wins.
 fn vector_draw_instances(visible: &[VisibleTile], resident: impl Iterator<Item = TileId>) -> Vec<(TileId, i32)> {
@@ -2475,6 +2508,55 @@ pub(crate) fn vector_draw_tiles(visible: &[TileId], resident: impl Iterator<Item
 #[cfg(test)]
 mod vector_fallback_tests {
     use super::vector_draw_tiles;
+
+    #[test]
+    fn cached_selection_rebuilds_only_for_cover_or_residency_changes() {
+        let tile = |id: super::TileId, copy: i32| {
+            let n = (1u32 << id.0) as f32;
+            super::VisibleTile { id,
+                world_min: [id.1 as f32 / n + copy as f32, id.2 as f32 / n],
+                world_max: [(id.1 + 1) as f32 / n + copy as f32, (id.2 + 1) as f32 / n] }
+        };
+        let rebuilds = std::cell::Cell::new(0);
+        let mut selection = super::VectorSelection::default();
+        let refresh = |selection: &mut super::VectorSelection<_>, visible: &[super::VisibleTile],
+            resident: &[super::TileId], changed| {
+            selection.update(visible.iter().map(|tile| (tile.id, tile.world_copy())), changed, || {
+                rebuilds.set(rebuilds.get() + 1);
+                super::vector_draw_instances(visible, resident.iter().copied())
+            })
+        };
+        let parent = (4, 3, 5);
+        let child = (5, 6, 10);
+        let sibling = (5, 7, 10);
+        assert!(refresh(&mut selection, &[tile(child, 0)], &[parent], false));
+        for _ in 0..60 {
+            assert!(!refresh(&mut selection, &[tile(child, 0)], &[parent], false));
+        }
+        assert_eq!(rebuilds.get(), 1, "a radar loop on the same map reuses its selection");
+        assert_eq!(selection.selected(), &[(parent, 0)]);
+
+        // Different requested children can share a fallback. Still retain the new request key.
+        assert!(!refresh(&mut selection, &[tile(sibling, 0)], &[parent], false));
+        assert!(!refresh(&mut selection, &[tile(sibling, 0)], &[parent], false));
+        assert_eq!(rebuilds.get(), 2);
+        assert!(refresh(&mut selection, &[tile(sibling, 1)], &[parent], false));
+        assert_eq!(selection.selected(), &[(parent, 1)], "wrapped copies are distinct draws");
+
+        assert!(refresh(&mut selection, &[tile(sibling, 1)], &[parent, sibling], true));
+        assert_eq!(selection.selected(), &[(sibling, 1)], "an upload replaces its fallback");
+        assert!(refresh(&mut selection, &[tile(sibling, 1)], &[parent], true));
+        assert_eq!(selection.selected(), &[(parent, 1)], "eviction restores the parent");
+        assert!(refresh(&mut selection, &[tile(sibling, 1)], &[], true));
+        assert!(selection.selected().is_empty(), "clearing cannot retain stale geometry");
+        assert!(refresh(&mut selection, &[tile(parent, 0)], &[child, sibling], true));
+        assert_eq!(selection.selected(), &[(child, 0), (sibling, 0)], "zoom-out retains children");
+        assert_eq!(rebuilds.get(), 7);
+
+        let mut recreated_pane = super::VectorSelection::default();
+        assert!(refresh(&mut recreated_pane, &[tile(parent, 0)], &[child, sibling], false));
+        assert_eq!(recreated_pane.selected(), selection.selected());
+    }
 
     #[test]
     fn antimeridian_instances_keep_world_copies_for_exact_and_fallback_geometry() {

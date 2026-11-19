@@ -925,10 +925,10 @@ fn default_emergency_sound() -> AlertSound {
 /// A portable settings export: the full settings plus inlined `.pal` contents (by moment short
 /// name), so palette overrides survive moving to a machine where the original paths don't exist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SettingsBundle {
-    settings: Settings,
+pub(crate) struct SettingsBundle {
+    pub settings: Settings,
     #[serde(default)]
-    palette_files: BTreeMap<String, String>,
+    pub palette_files: BTreeMap<String, String>,
 }
 
 /// A remembered startup camera: which site to load and where the map sits (world coords).
@@ -1840,23 +1840,33 @@ impl Settings {
         Self::import_bundle_in(json, Self::colortables_dir().as_deref())
     }
 
-    fn import_bundle_in(json: &str, directory: Option<&std::path::Path>) -> Result<Settings, String> {
-        let bundle: SettingsBundle = serde_json::from_str(json).map_err(|e| e.to_string())?;
-        let mut settings = bundle.settings;
+    pub(crate) fn parse_import_bundle(json: &str) -> Result<SettingsBundle, String> {
+        let mut bundle: SettingsBundle = serde_json::from_str(json).map_err(|e| e.to_string())?;
         // A portable settings file is not permission to execute its author's commands.
-        for plugin in &mut settings.plugins {
-            plugin.enabled = false;
-        }
-        if !bundle.palette_files.is_empty() {
-            for moment in bundle.palette_files.keys() {
-                if moment.is_empty()
-                    || !moment
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                {
-                    return Err(format!("invalid palette name: {moment:?}"));
-                }
+        for plugin in &mut bundle.settings.plugins { plugin.enabled = false; }
+        for moment in bundle.palette_files.keys() {
+            if moment.is_empty()
+                || !moment
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return Err(format!("invalid palette name: {moment:?}"));
             }
+        }
+        Ok(bundle)
+    }
+
+    pub(crate) fn install_import_bundle(bundle: SettingsBundle) -> Result<Settings, String> {
+        Self::install_import_bundle_in(bundle, Self::colortables_dir().as_deref())
+    }
+
+    fn import_bundle_in(json: &str, directory: Option<&std::path::Path>) -> Result<Settings, String> {
+        Self::install_import_bundle_in(Self::parse_import_bundle(json)?, directory)
+    }
+
+    fn install_import_bundle_in(bundle: SettingsBundle, directory: Option<&std::path::Path>) -> Result<Settings, String> {
+        let mut settings = bundle.settings;
+        if !bundle.palette_files.is_empty() {
             let Some(dir) = directory else {
                 // Browsers persist these bytes with the settings, using the ordinary palette loader.
                 settings.inline_bundle_palettes(bundle.palette_files);

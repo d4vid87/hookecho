@@ -78,6 +78,10 @@ pub fn show(
                 .on_hover_text("Show 4/3-earth beam centers for every transmitted tilt");
         });
         ui.separator();
+        if changed {
+            ui.weak("Updating cross-section…");
+            return;
+        }
         // Draw the panel stretched to a readable size (distance wide, height tall).
         let avail = ui.available_size();
         let w = avail.x.max(200.0);

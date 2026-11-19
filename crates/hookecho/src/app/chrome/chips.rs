@@ -147,7 +147,7 @@ impl HookEchoApp {
             return;
         }
         self.settings.hints_seen.push(id.to_string());
-        self.settings.save();
+        self.request_settings_save();
         self.toast(ToastKind::Info, text);
     }
 
@@ -430,13 +430,13 @@ impl HookEchoApp {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new(format!("HookEcho {tag} is available"))
+                                egui::RichText::new(format!("{} is available", crate::ui::about_window::release_label(&tag)))
                                     .size(crate::ui::style::FONT_BASE)
                                     .color(accent),
                             );
                             ui.hyperlink_to(
                                 egui::RichText::new("Download").size(crate::ui::style::FONT_BASE),
-                                format!("{}/releases", crate::ui::about_window::REPO),
+                                format!("{}/releases/tag/{tag}", crate::ui::about_window::REPO),
                             );
                             if ui
                                 .small_button(egui_phosphor::regular::X)

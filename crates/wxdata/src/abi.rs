@@ -8,6 +8,23 @@ use crate::field::{
 };
 
 const J2000_UNIX: i64 = 946_728_000;
+const DISPLAY_MAX_DIM: usize = 1200;
+
+#[cfg(not(target_arch = "wasm32"))]
+static CPU_SLOTS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(if cfg!(target_os = "android") { 1 } else { 2 });
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn process<T: Send + 'static>(
+    work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    crate::task::blocking_limited(&CPU_SLOTS, work).await?
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn decode_for_display(bytes: Vec<u8>) -> anyhow::Result<Image> {
+    process(move || decode_with_max_dim(bytes, DISPLAY_MAX_DIM)).await
+}
 
 pub static C13_DESCRIPTOR: FieldDescriptor = FieldDescriptor {
     id: FieldId("satellite.goes.abi.c13"),
@@ -235,7 +252,7 @@ impl From<RgbWire> for RgbImage {
 /// Worker entry points use a bounded display grid and keep HDF5 decoding off the map thread.
 #[cfg(target_arch = "wasm32")]
 pub fn decode_worker(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    Ok(postcard::to_allocvec(&decode_with_max_dim(bytes, 1200)?)?)
+    Ok(postcard::to_allocvec(&decode_with_max_dim(bytes, DISPLAY_MAX_DIM)?)?)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -282,7 +299,7 @@ pub async fn fetch_rgb_at(
         return Ok(image.into());
     }
     #[cfg(not(target_arch = "wasm32"))]
-    compose_rgb(recipe, [&red, &green, &blue])
+    process(move || compose_rgb(recipe, [&red, &green, &blue])).await
 }
 
 pub fn compose_rgb(recipe: &'static RgbRecipe, channels: [&Image; 3]) -> anyhow::Result<RgbImage> {
@@ -487,7 +504,7 @@ pub async fn fetch_at(
         postcard::from_bytes(&encoded)?
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let mut image = decode(bytes)?;
+    let mut image = decode_for_display(bytes).await?;
     image.source_identity = key;
     image.received_time = Some(received_time);
     if image.band != band {
@@ -518,10 +535,11 @@ impl Projection {
         let b = -2.0 * h * cos_x * cos_y;
         let c = h.powi(2) - self.semi_major_m.powi(2);
         let discriminant = b * b - 4.0 * a * c;
-        if discriminant < 0.0 {
+        let rounding = 16.0 * f64::EPSILON * (b * b + (4.0 * a * c).abs());
+        if !discriminant.is_finite() || discriminant < -rounding {
             return None; // scan coordinate is off Earth
         }
-        let rs = (-b - discriminant.sqrt()) / (2.0 * a);
+        let rs = (-b - discriminant.max(0.0).sqrt()) / (2.0 * a);
         let sx = rs * cos_x * cos_y;
         let sy = -rs * sin_x;
         let sz = rs * cos_x * sin_y;
@@ -619,6 +637,12 @@ impl Image {
         self.into_frame_with_display(received_time, display)
     }
 
+    /// Project display pixels without occupying a native async-runtime thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn into_frame_async(self, received_time: DateTime<Utc>) -> anyhow::Result<FieldFrame> {
+        process(move || self.into_frame(received_time)).await
+    }
+
     pub fn into_frame_with_display(
         self,
         received_time: DateTime<Utc>,
@@ -647,20 +671,36 @@ impl Image {
     }
 
     fn bounds(&self) -> Option<(f64, f64, f64, f64)> {
-        let mut points = Vec::with_capacity((self.width + self.height) * 2);
-        for &x in &self.x {
-            points.extend([
-                self.projection.lon_lat(x, self.y[0]),
-                self.projection.lon_lat(x, *self.y.last()?),
-            ]);
+        let p = self.projection;
+        let h = p.perspective_height_m + p.semi_major_m;
+        if ![h, p.longitude_origin_deg, p.semi_major_m, p.semi_minor_m].into_iter().all(f64::is_finite)
+            || p.semi_minor_m <= 0.0 || p.semi_major_m < p.semi_minor_m || h <= p.semi_major_m
+            || !self.x.iter().chain(&self.y).all(|angle| angle.is_finite() && angle.abs() < std::f64::consts::FRAC_PI_2) {
+            return None;
         }
-        for &y in &self.y {
-            points.extend([
-                self.projection.lon_lat(self.x[0], y),
-                self.projection.lon_lat(*self.x.last()?, y),
-            ]);
+        let (xmin, xmax) = ((*self.x.first()?).min(*self.x.last()?), (*self.x.first()?).max(*self.x.last()?));
+        let (ymin, ymax) = ((*self.y.first()?).min(*self.y.last()?), (*self.y.first()?).max(*self.y.last()?));
+        let q = p.semi_major_m.powi(2) / (h * h - p.semi_major_m.powi(2));
+        let ratio = p.semi_major_m.powi(2) / p.semi_minor_m.powi(2);
+        let mut points = Vec::with_capacity(12);
+        // The full-disk rectangle extends into space. Clip its edges/axes to the Earth limb,
+        // whose ray discriminant is zero: tan²(x) = q cos²(y) - ratio sin²(y).
+        for x in [xmin, xmax, 0.0f64.clamp(xmin, xmax)] {
+            let sin2_y = (q - x.tan().powi(2)) / (q + ratio);
+            if sin2_y < 0.0 { continue; }
+            let limit = sin2_y.min(1.0).sqrt().asin();
+            let (south, north) = (ymin.max(-limit), ymax.min(limit));
+            if south <= north { points.extend([p.lon_lat(x, south), p.lon_lat(x, north)]); }
         }
-        let mut valid = points.into_iter().flatten();
+        for y in [ymin, ymax, 0.0f64.clamp(ymin, ymax)] {
+            let tan2_x = q * y.cos().powi(2) - ratio * y.sin().powi(2);
+            if tan2_x < 0.0 { continue; }
+            let limit = tan2_x.sqrt().atan();
+            let (west, east) = (xmin.max(-limit), xmax.min(limit));
+            if west <= east { points.extend([p.lon_lat(west, y), p.lon_lat(east, y)]); }
+        }
+        // Keep longitude continuous around the satellite meridian, including across ±180°.
+        let mut valid = points.into_iter().flatten().filter(|(lon, lat)| lon.is_finite() && lat.is_finite());
         let (mut west, mut south) = valid.next()?;
         let (mut east, mut north) = (west, south);
         for (lon, lat) in valid {
@@ -706,6 +746,10 @@ pub fn decode_with_max_dim(bytes: Vec<u8>, max_dim: usize) -> anyhow::Result<Ima
     let [height, width] = dims.as_slice() else {
         anyhow::bail!("ABI CMI: expected a two-dimensional image");
     };
+    anyhow::ensure!(
+        file.dataset("DQF").map_err(|e| anyhow::anyhow!("ABI DQF: {e}"))?.dims == dims,
+        "ABI: image and quality dimensions disagree"
+    );
     let (native_height, native_width) = (*height as usize, *width as usize);
     let stride = native_width.max(native_height).div_ceil(max_dim.max(1)).max(1);
     let (height, width) = (native_height.div_ceil(stride), native_width.div_ceil(stride));
@@ -783,6 +827,107 @@ pub fn decode_with_max_dim(bytes: Vec<u8>, max_dim: usize) -> anyhow::Result<Ima
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn full_resolution_disk_is_bounded_before_decode_and_keeps_quality_and_navigation() {
+        // A 21,696² C02 disk would require 3.77 GB for just the expanded f64 CMI array.
+        let bytes = include_bytes!("../tests/data/abi-full-disk-sparse.nc").to_vec();
+        assert!(decode(bytes.clone()).is_err(), "full decode should exceed the HDF5 safety ceiling");
+        let image = decode_for_display(bytes).await.unwrap();
+        assert_eq!((image.width, image.height, image.band), (1142, 1142, 2));
+        assert!(image.width <= DISPLAY_MAX_DIM && image.height <= DISPLAY_MAX_DIM);
+        assert_eq!(image.values.len(), image.width * image.height);
+        assert_eq!(image.quality.len(), image.values.len());
+        assert_eq!((image.x.len(), image.y.len()), (image.width, image.height));
+        assert_eq!(image.values[400 * image.width + 600], 0.5);
+        assert_eq!(image.quality[400 * image.width + 600], 0);
+        assert!(image.values[400 * image.width + 601].is_nan());
+        assert_eq!(image.quality[400 * image.width + 601], 2);
+        assert!(image.values[0].is_nan());
+        let x = -0.151844 + 0.303688 * (19 * 600) as f64 / 21695.0;
+        let y = 0.151844 - 0.303688 * (19 * 400) as f64 / 21695.0;
+        assert!((image.x[600] - x).abs() < 1e-12);
+        assert!((image.y[400] - y).abs() < 1e-12);
+        let (lon, lat) = image.projection.lon_lat(x, y).unwrap();
+        assert_eq!(image.sample_nearest(lon, lat), Some(0.5));
+        let valid_time = image.valid_time;
+        let frame = image.into_frame_async(Utc::now()).await.unwrap();
+        assert_eq!(frame.stamp.valid_time, valid_time);
+        assert_eq!((frame.field().nx, frame.field().ny), (700, 700));
+        assert_eq!(frame.sample(lon, lat).value, Some(0.5));
+        assert!(frame.field().lat_north > 80.0 && frame.field().lat_south < -80.0);
+        assert!(frame.field().lon_west < -180.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_abi_cpu_work_leaves_the_async_scheduler_responsive() {
+        let scheduler_thread = std::thread::current().id();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let work = tokio::spawn(process(move || {
+            assert_ne!(std::thread::current().id(), scheduler_thread);
+            started_tx.send(()).unwrap();
+            // The current-thread runtime must keep polling to release this worker.
+            finish_rx.recv_timeout(std::time::Duration::from_secs(5))?;
+            Ok(17)
+        }));
+        tokio::time::timeout(std::time::Duration::from_secs(5), started_rx).await.unwrap().unwrap();
+        tokio::task::yield_now().await;
+        finish_tx.send(()).unwrap();
+        assert_eq!(work.await.unwrap().unwrap(), 17);
+    }
+
+    #[test]
+    fn full_disk_bounds_include_the_limb_and_cross_the_antimeridian_continuously() {
+        let mut image = decode_with_max_dim(include_bytes!("../tests/data/g19-c13-meso.nc").to_vec(), 3).unwrap();
+        image.x = vec![-0.151844, 0.0, 0.151844];
+        image.y = vec![0.151844, 0.0, -0.151844];
+        image.values.fill(1.0);
+        image.quality.fill(0);
+        for meridian in [-75.0, -137.0, 140.0] {
+            image.projection.longitude_origin_deg = meridian;
+            let (west, east, south, north) = image.bounds().unwrap();
+            assert!(south < -80.0 && north > 80.0, "full disk lost high latitudes: {south}..{north}");
+            assert!(west < meridian - 80.0 && east > meridian + 80.0);
+            assert!(east - west < 180.0, "antimeridian crossing expanded the image into a world map");
+            let display = image.display_grid(65, 65).unwrap();
+            assert_eq!(display.sample_nearest(meridian, 60.0), Some(1.0));
+            assert_eq!(display.sample_nearest(meridian, -60.0), Some(1.0));
+            assert!(display.values[0].is_nan(), "off-Earth corners must stay transparent");
+        }
+    }
+
+    #[test]
+    fn clipped_scene_bounds_enclose_every_visible_sample() {
+        let mut image = decode_with_max_dim(include_bytes!("../tests/data/g19-c13-meso.nc").to_vec(), 3).unwrap();
+        for (xmin, xmax, ymin, ymax) in [
+            (-0.16, 0.16, -0.16, 0.16), (-0.1, 0.04, 0.01, 0.13),
+            (-0.06, -0.04, 0.09, 0.1), (-0.01, 0.01, 0.14, 0.16),
+            (-0.16, -0.14, -0.05, 0.05), (0.14, 0.16, 0.03, 0.08),
+        ] {
+            image.x = vec![xmin, (xmin + xmax) / 2.0, xmax];
+            image.y = vec![ymax, (ymin + ymax) / 2.0, ymin];
+            let (west, east, south, north) = image.bounds().unwrap();
+            for col in 0..=100 {
+                for row in 0..=100 {
+                    let x = xmin + (xmax - xmin) * col as f64 / 100.0;
+                    let y = ymin + (ymax - ymin) * row as f64 / 100.0;
+                    if let Some((lon, lat)) = image.projection.lon_lat(x, y) {
+                        assert!(lon >= west - 1e-6 && lon <= east + 1e-6 && lat >= south - 1e-6 && lat <= north + 1e-6,
+                            "sample {lon},{lat} outside {west},{east},{south},{north}");
+                    }
+                }
+            }
+        }
+        image.x = vec![0.2, 0.25, 0.3];
+        assert!(image.bounds().is_none());
+        image.x.clear();
+        assert!(image.bounds().is_none());
+        image.x = vec![f64::NAN];
+        assert!(image.bounds().is_none());
+    }
 
     #[test]
     fn decodes_real_goes19_c13_mesoscale_with_quality_and_navigation() {

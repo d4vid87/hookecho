@@ -797,7 +797,7 @@ impl HookEchoApp {
             }
             if changed { self.settings.compact_shortcuts = selected; }
         }).0.named("Customize toolbar shortcuts").on_hover_text("Pin your favorite products and tools");
-        if changed { self.settings.save(); }
+        if changed { self.request_settings_save(); }
         action
     }
 }

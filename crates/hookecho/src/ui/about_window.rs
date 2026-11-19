@@ -12,7 +12,7 @@ pub enum UpdateState {
     Checking,
     UpToDate,
     Newer(String),
-    /// The repo has no published versioned release to compare against. Distinct from `Failed`:
+    /// The repo has no complete published release to compare against. Distinct from `Failed`:
     /// the request worked, there was simply nothing tagged. A repo whose releases are all still
     /// drafts looks like this to everyone but its owner.
     NoRelease,
@@ -71,10 +71,10 @@ pub fn show(
             UpdateState::Newer(tag) => {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(format!("Version {tag} is available"))
+                        egui::RichText::new(format!("{} is available", release_label(tag)))
                             .color(style::ZETA_GREEN),
                     );
-                    ui.hyperlink_to("Download", format!("{REPO}/releases"));
+                    ui.hyperlink_to("Download", format!("{REPO}/releases/tag/{tag}"));
                 });
             }
             UpdateState::NoRelease => {
@@ -101,6 +101,86 @@ pub fn parse_version(tag: &str) -> Option<semver::Version> {
     semver::Version::parse(tag.trim().strip_prefix('v').unwrap_or(tag.trim())).ok()
 }
 
+pub fn release_label(tag: &str) -> String {
+    match build_revision(tag) {
+        Some(revision) => format!("HookEcho build {}", &revision[..7]),
+        None => format!("HookEcho {tag}"),
+    }
+}
+
+fn build_revision(tag: &str) -> Option<&str> {
+    let revision = tag.strip_prefix("build-")?;
+    (revision.len() == 40 && revision.bytes().all(|c| c.is_ascii_hexdigit()))
+        .then_some(revision)
+}
+
+fn stable_tag(json: &str) -> Option<String> {
+    let release: serde_json::Value = serde_json::from_str(json).ok()?;
+    if release.get("draft")?.as_bool()? || release.get("prerelease")?.as_bool()? {
+        return None;
+    }
+    let tag = release.get("tag_name")?.as_str()?;
+    if build_revision(tag).is_some() {
+        // Match the publisher's all-platform gate, including its checksum manifest.
+        let assets = release.get("assets")?.as_array()?;
+        for name in ["HookEcho-x86_64.AppImage", "HookEcho-amd64.deb",
+            "hookecho-windows-x86_64.zip", "HookEcho-x86_64.msi", "HookEcho-setup-x86_64.exe",
+            "HookEcho-macos.zip", "HookEcho-arm64-v8a.apk", "HookEcho-arm64-v8a.aab", "SHA256SUMS"] {
+            if !assets.iter().any(|asset| asset.get("name").and_then(|v| v.as_str()) == Some(name)
+                && asset.get("size").and_then(|v| v.as_u64()).is_some_and(|size| size > 0)) {
+                return None;
+            }
+        }
+    } else if !parse_version(tag)?.pre.is_empty() {
+        return None;
+    }
+    Some(tag.to_owned())
+}
+
+fn compare_build(tag: &str, comparison: &str) -> UpdateState {
+    let json = serde_json::from_str::<serde_json::Value>(comparison).ok();
+    match json.as_ref().and_then(|value| value.get("status")).and_then(|v| v.as_str()) {
+        Some("ahead") => UpdateState::Newer(tag.to_owned()),
+        Some("identical" | "behind") => UpdateState::UpToDate,
+        // Divergent/unknown local builds cannot safely be ordered by release publication date.
+        _ => UpdateState::Failed,
+    }
+}
+
+/// Stable builds follow GitHub's designated Latest release; prereleases keep SemVer ordering.
+pub async fn check(http: &reqwest::Client) -> UpdateState {
+    async fn request(http: &reqwest::Client) -> Result<UpdateState, reqwest::Error> {
+        let preview = parse_version(VERSION).is_some_and(|version| !version.pre.is_empty());
+        let base = "https://api.github.com/repos/d4vid87/hookecho";
+        let endpoint = if preview { "releases?per_page=30" } else { "releases/latest" };
+        let response = http.get(format!("{base}/{endpoint}"))
+            .timeout(wxdata::net::FEED_TIMEOUT)
+            .header("User-Agent", "hookecho").send().await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(UpdateState::NoRelease);
+        }
+        let body = response.error_for_status()?.text().await?;
+        if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+            return Ok(UpdateState::Failed);
+        }
+        let tag = if preview { pick_latest_tag(&body) } else { stable_tag(&body) };
+        let Some(tag) = tag else { return Ok(UpdateState::NoRelease) };
+        let Some(remote) = build_revision(&tag) else { return Ok(compare(&tag)) };
+        let local = crate::BUILD_REVISION;
+        if !(7..=40).contains(&local.len()) || !local.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(UpdateState::Failed);
+        }
+        if remote.starts_with(local) { return Ok(UpdateState::UpToDate); }
+        let comparison = http.get(format!("{base}/compare/{local}...{remote}"))
+            .timeout(wxdata::net::FEED_TIMEOUT)
+            .header("User-Agent", "hookecho").send().await?
+            .error_for_status()?.text().await?;
+        Ok(compare_build(&tag, &comparison))
+    }
+    wxdata::task::timeout(wxdata::net::FEED_TIMEOUT, request(http)).await
+        .ok().and_then(Result::ok).unwrap_or(UpdateState::Failed)
+}
+
 /// The state a fetched release tag implies for the running build.
 pub fn compare(tag: &str) -> UpdateState {
     compare_versions(tag, VERSION)
@@ -114,7 +194,7 @@ fn compare_versions(tag: &str, current: &str) -> UpdateState {
     }
 }
 
-/// Choose a published version on the installed channel; rolling tags are not releases.
+/// Choose a SemVer release for the prerelease channel; stable builds use GitHub's Latest.
 pub fn pick_latest_tag(json: &str) -> Option<String> {
     pick_latest_tag_for(json, VERSION)
 }
@@ -138,6 +218,47 @@ fn pick_latest_tag_for(json: &str, current: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stable_build_requires_a_complete_published_release() {
+        let tag = format!("build-{}", "a".repeat(40));
+        let mut release = serde_json::json!({"tag_name": tag, "draft": false, "prerelease": false,
+            "assets": (["HookEcho-x86_64.AppImage", "HookEcho-amd64.deb",
+                "hookecho-windows-x86_64.zip", "HookEcho-x86_64.msi", "HookEcho-setup-x86_64.exe",
+                "HookEcho-macos.zip", "HookEcho-arm64-v8a.apk", "HookEcho-arm64-v8a.aab", "SHA256SUMS"]
+                .map(|name| serde_json::json!({"name": name, "size": 100})))});
+        assert_eq!(stable_tag(&release.to_string()), Some(tag.clone()));
+        release["draft"] = true.into();
+        assert_eq!(stable_tag(&release.to_string()), None);
+        release["draft"] = false.into();
+        release["prerelease"] = true.into();
+        assert_eq!(stable_tag(&release.to_string()), None);
+        release["prerelease"] = false.into();
+        release["assets"][0]["size"] = 0.into();
+        assert_eq!(stable_tag(&release.to_string()), None);
+        release["assets"][0]["size"] = 100.into();
+        release["assets"].as_array_mut().unwrap().pop();
+        assert_eq!(stable_tag(&release.to_string()), None);
+        for bad in ["latest", "build-deadbeef", "build-../../compare", "v0.12.0-beta.1"] {
+            release["tag_name"] = bad.into();
+            assert_eq!(stable_tag(&release.to_string()), None);
+        }
+        release["tag_name"] = "v0.12.0".into();
+        assert_eq!(stable_tag(&release.to_string()).as_deref(), Some("v0.12.0"));
+    }
+
+    #[test]
+    fn commit_comparison_never_recommends_an_older_or_divergent_build() {
+        let tag = format!("build-{}", "b".repeat(40));
+        assert_eq!(compare_build(&tag, r#"{"status":"ahead"}"#), UpdateState::Newer(tag.clone()));
+        for status in ["identical", "behind"] {
+            assert_eq!(compare_build(&tag, &serde_json::json!({"status": status}).to_string()), UpdateState::UpToDate);
+        }
+        for body in [r#"{"status":"diverged"}"#, "{}", "not json"] {
+            assert_eq!(compare_build(&tag, body), UpdateState::Failed);
+        }
+        assert_eq!(release_label(&tag), "HookEcho build bbbbbbb");
+    }
 
     #[test]
     fn prereleases_and_final_releases_compare_in_semver_order() {

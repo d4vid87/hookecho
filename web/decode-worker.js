@@ -15,7 +15,7 @@
 // Protocol, both directions over postMessage:
 //   in   { module, glue }        boot: compiled module + the URL of the wasm-bindgen glue
 //   in   { id, op, bytes }       run a job (bytes' buffer is transferred in). `op` is
-//                                "bin", "mrms", "model", "opera", "cwa", "kma", "assemble", "vector", "abi", "abi-project", "abi-rgb", or "decode".
+//                                "bin", "mrms", "model", "opera", "cwa", "kma", "assemble", "vector", "abi", "abi-project", "abi-rgb", "import", or "decode".
 //   out  { id, ok: ArrayBuffer, timing } postcard-encoded Scan (transferred out)
 //   out  { id, err, fatal }      the job failed; `fatal` means a trap poisoned this heap
 //   in   { id, op: "gif", frames, width, height, delayMs } transferable RGBA images
@@ -69,7 +69,8 @@ self.onmessage = async (e) => {
       : op === "kma" ? wasm.decode_kma
       : op === "abi" ? wasm.decode_goes_abi
       : op === "abi-rgb" ? wasm.compose_goes_rgb
-      : op === "abi-project" ? wasm.project_goes_abi : wasm.decode_archive2;
+      : op === "abi-project" ? wasm.project_goes_abi
+      : op === "import" ? wasm.prepare_import_document : wasm.decode_archive2;
     const out = run(new Uint8Array(bytes));
     // Transfer rather than copy: a decoded volume is tens of MB and the worker is done with it.
     self.postMessage({ id, ok: out.buffer, timing: timing() }, [out.buffer]);

@@ -108,20 +108,27 @@ pub fn geojson(name: &str, text: &str) -> anyhow::Result<Placefile> {
         title: name.to_string(),
         ..Default::default()
     };
+    let mut labels = LabelBudget::default();
     match document {
-        GeoJson::Geometry(geometry) => append(&mut file.items, geometry.value, name),
+        GeoJson::Geometry(geometry) => {
+            labels.reserve(name, label_point_count(&geometry.value))?;
+            append(&mut file.items, geometry.value, checked_label(name)?)
+        }
         GeoJson::Feature(feature) => {
             let properties = feature.properties.unwrap_or_default();
-            let label = feature_label(Some(&properties)).unwrap_or(name).to_string();
+            let label = checked_label(feature_label(Some(&properties)).unwrap_or(name))?.to_string();
             if let Some(geometry) = feature.geometry {
+                labels.reserve(&label, label_point_count(&geometry.value))?;
                 append_properties(&mut file.items, geometry.value, &label, properties);
             }
         }
         GeoJson::FeatureCollection(collection) => {
             for feature in collection.features {
                 let properties = feature.properties.unwrap_or_default();
-                let label = feature_label(Some(&properties)).unwrap_or(name).to_string();
+                let label =
+                    checked_label(feature_label(Some(&properties)).unwrap_or(name))?.to_string();
                 if let Some(geometry) = feature.geometry {
+                    labels.reserve(&label, label_point_count(&geometry.value))?;
                     append_properties(&mut file.items, geometry.value, &label, properties);
                 }
             }
@@ -142,12 +149,15 @@ pub fn kml(name: &str, text: &str) -> anyhow::Result<Placefile> {
         title: name.to_string(),
         ..Default::default()
     };
+    let mut labels = LabelBudget::default();
     for placemark in xml_elements(text, "Placemark") {
         let label = xml_elements(placemark, "name")
             .first()
             .map(|value| xml_text(value))
             .unwrap_or_else(|| name.to_string());
-        for point in xml_elements(placemark, "Point") {
+        let points = xml_elements(placemark, "Point");
+        labels.reserve(&label, points.len())?;
+        for point in points {
             if let Some(pos) = xml_coordinates(point).first().copied() {
                 file.items.push(item(PlaceKind::Icon {
                     color: LINE,
@@ -250,6 +260,39 @@ fn feature_label(properties: Option<&serde_json::Map<String, serde_json::Value>>
     ["name", "title", "label"]
         .into_iter()
         .find_map(|key| properties.get(key)?.as_str())
+}
+
+fn checked_label(label: &str) -> anyhow::Result<&str> {
+    // A MultiPoint or KML MultiGeometry repeats the label for every rendered point.
+    // Bound that copied text before geometry expansion; original properties stay intact.
+    anyhow::ensure!(label.len() <= 4096, "GIS display label exceeds 4 KiB");
+    Ok(label)
+}
+
+#[derive(Default)]
+struct LabelBudget(usize);
+
+impl LabelBudget {
+    fn reserve(&mut self, label: &str, points: usize) -> anyhow::Result<()> {
+        checked_label(label)?;
+        self.0 = self.0.saturating_add(label.len().saturating_mul(points));
+        anyhow::ensure!(
+            self.0 <= 8 * 1024 * 1024,
+            "GIS expanded display labels exceed 8 MiB"
+        );
+        Ok(())
+    }
+}
+
+fn label_point_count(geometry: &GeometryValue) -> usize {
+    match geometry {
+        GeometryValue::Point { .. } => 1,
+        GeometryValue::MultiPoint { coordinates } => coordinates.len(),
+        GeometryValue::GeometryCollection { geometries } => geometries
+            .iter()
+            .fold(0usize, |sum, g| sum.saturating_add(label_point_count(&g.value))),
+        _ => 0,
+    }
 }
 
 fn item(kind: PlaceKind) -> PlaceItem {
@@ -788,10 +831,17 @@ fn zip_entries(bytes: &[u8]) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
         anyhow::ensure!(total <= MAX_UNPACKED, "GIS archive exceeds 64 MB unpacked");
         if !name.ends_with('/') {
             let content = match method {
-                0 => data.to_vec(),
+                0 => {
+                    anyhow::ensure!(data.len() == unpacked, "ZIP entry size mismatch");
+                    data.to_vec()
+                }
                 8 => {
-                    let mut decoded = Vec::with_capacity(unpacked);
-                    flate2::read::DeflateDecoder::new(data).read_to_end(&mut decoded)?;
+                    // The directory's size is untrusted. Read one excess byte to detect a lie
+                    // without first expanding an arbitrarily large compressed payload.
+                    let mut decoded = Vec::with_capacity(unpacked + 1);
+                    flate2::read::DeflateDecoder::new(data)
+                        .take(unpacked as u64 + 1)
+                        .read_to_end(&mut decoded)?;
                     decoded
                 }
                 _ => anyhow::bail!("unsupported ZIP compression method {method}"),
@@ -834,6 +884,7 @@ fn shapefile(
     };
     let mut offset = 100usize;
     let mut features = 0usize;
+    let mut labels = LabelBudget::default();
     while offset < bytes.len() {
         anyhow::ensure!(
             offset + 8 <= bytes.len(),
@@ -860,9 +911,10 @@ fn shapefile(
             let first = file.items.len();
             parse_shape(
                 &bytes[offset..end],
-                label.as_deref().unwrap_or(name),
+                checked_label(label.as_deref().unwrap_or(name))?,
                 crs,
                 &mut file.items,
+                &mut labels,
             )?;
             if let Some((table, style)) = dbf.zip(style) {
                 let properties = std::sync::Arc::new(table.properties(features));
@@ -909,8 +961,15 @@ fn parse_shape(
     label: &str,
     crs: &CrsTransform,
     items: &mut Vec<PlaceItem>,
+    labels: &mut LabelBudget,
 ) -> anyhow::Result<()> {
     let kind = le_u32(bytes, 0)?;
+    let points = match kind {
+        1 | 11 | 21 => 1,
+        8 | 18 | 28 => le_u32(bytes, 36)? as usize,
+        _ => 0,
+    };
+    labels.reserve(label, points)?;
     match kind {
         0 | 31 => {}
         1 | 11 | 21 => push_shp_point(items, shp_point(bytes, 4, crs)?, label),
@@ -1022,6 +1081,54 @@ fn le_f64(bytes: &[u8], offset: usize) -> anyhow::Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_display_labels_before_multipoint_and_kml_expansion() {
+        let feature = |label: &str, count: usize| {
+            serde_json::json!({
+                "type": "Feature", "properties": {"name": label, "source_id": 7},
+                "geometry": {"type": "MultiPoint", "coordinates": vec![[-97.0, 35.0]; count]}
+            })
+        };
+        let label = "é".repeat(2048); // the ceiling is bytes, without splitting UTF-8
+        let file = geojson("points.geojson", &feature(&label, 2).to_string()).unwrap();
+        assert_eq!(file.items.len(), 2);
+        assert_eq!(file.items[0].properties.as_ref().unwrap()["name"], label);
+        assert_eq!(file.items[0].properties.as_ref().unwrap()["source_id"], 7);
+        assert!(matches!(&file.items[0].kind, PlaceKind::Icon { hover, .. } if hover == &label));
+
+        let oversized = format!("{label}x");
+        assert!(geojson("points.geojson", &feature(&oversized, 2).to_string())
+            .unwrap_err()
+            .to_string()
+            .contains("display label exceeds 4 KiB"));
+        assert!(geojson("points.geojson", &feature(&label, 2049).to_string())
+            .unwrap_err()
+            .to_string()
+            .contains("expanded display labels exceed 8 MiB"));
+        let collection = serde_json::json!({
+            "type": "FeatureCollection", "features": [feature(&label, 1025), feature(&label, 1025)]
+        });
+        assert!(geojson("points.geojson", &collection.to_string())
+            .unwrap_err()
+            .to_string()
+            .contains("expanded display labels exceed 8 MiB"));
+
+        let point = "<Point><coordinates>-97,35</coordinates></Point>";
+        let xml = format!("<kml><Placemark><name>{oversized}</name>{point}</Placemark></kml>");
+        assert!(kml("points.kml", &xml)
+            .unwrap_err()
+            .to_string()
+            .contains("display label exceeds 4 KiB"));
+        let xml = format!(
+            "<kml><Placemark><name>{label}</name>{}</Placemark></kml>",
+            point.repeat(2049)
+        );
+        assert!(kml("points.kml", &xml)
+            .unwrap_err()
+            .to_string()
+            .contains("expanded display labels exceed 8 MiB"));
+    }
 
     #[test]
     fn exports_imported_vectors_with_holes_labels_and_wgs84_coordinates() {
@@ -1142,6 +1249,46 @@ mod tests {
         u32(&mut out, central_at);
         u16(&mut out, 0);
         out
+    }
+
+    #[test]
+    fn forged_zip_sizes_stop_before_expanding_or_copying_the_whole_entry() {
+        let forge = |content: &[u8], deflate| {
+            let mut bytes = test_zip(&[("doc.kml", content)], deflate);
+            let central = bytes
+                .windows(4)
+                .rposition(|part| part == b"PK\x01\x02")
+                .unwrap();
+            bytes[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
+            bytes
+        };
+        let large = vec![b'x'; 1024 * 1024];
+        for deflate in [false, true] {
+            assert!(zip_entries(&forge(&large, deflate))
+                .unwrap_err()
+                .to_string()
+                .contains("size mismatch"));
+        }
+
+        // A valid stored DEFLATE block larger than the decoder's internal sliding window,
+        // followed by an invalid block. A bounded read must stop before reaching that tail.
+        let mut stream = vec![0, 255, 255, 0, 0]; // non-final stored block, LEN=65535, NLEN=!LEN
+        stream.extend_from_slice(&large[..65535]);
+        stream.push(7); // reserved DEFLATE block type
+        let mut bytes = forge(&stream, false);
+        let central = bytes
+            .windows(4)
+            .rposition(|part| part == b"PK\x01\x02")
+            .unwrap();
+        bytes[8..10].copy_from_slice(&8u16.to_le_bytes());
+        bytes[central + 10..central + 12].copy_from_slice(&8u16.to_le_bytes());
+        assert!(
+            zip_entries(&bytes)
+                .unwrap_err()
+                .to_string()
+                .contains("size mismatch"),
+            "reject the declared-size breach before decoding the corrupt tail"
+        );
     }
 
     #[test]

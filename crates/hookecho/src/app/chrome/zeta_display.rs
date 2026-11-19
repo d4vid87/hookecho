@@ -254,7 +254,7 @@ impl HookEchoApp {
                     self.settings.full_coverage_radar,
                 )
         {
-            self.settings.save();
+            self.request_settings_save();
         }
         ctx.data_mut(|d| d.insert_temp(id, open));
     }

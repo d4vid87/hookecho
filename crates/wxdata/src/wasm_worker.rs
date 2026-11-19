@@ -90,6 +90,16 @@ pub async fn project_abi(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
     call("abi-project", payload).await
 }
 
+/// Prepare a bounded user document without blocking map input.
+pub async fn prepare_import(payload: Vec<u8>) -> Result<Vec<u8>, Error> {
+    use futures_util::future::{select, Either};
+    match select(Box::pin(call("import", payload)), Box::pin(gloo_timers::future::TimeoutFuture::new(60_000))).await {
+        Either::Left((result, _)) => result,
+        // Dropping the call invokes CancelOnDrop, removing its queued bridge job.
+        Either::Right(_) => Err(Error::Decode("import timed out; retry after reloading the app".into())),
+    }
+}
+
 /// Run one job on the worker. `op` names the export it should call.
 async fn call(op: &str, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     call_named(op, bytes, None).await

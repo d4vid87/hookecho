@@ -33,8 +33,11 @@ pub mod radar_appearance;
 pub mod radar_memory;
 pub mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
+mod persistence;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod crash;
 pub mod dialog;
+pub mod imports;
 pub mod detector_history;
 pub mod digest;
 /// Terrain heights (DEM) and the beam-vs-terrain blockage raster.
@@ -211,6 +214,12 @@ pub fn run_desktop() -> eframe::Result<()> {
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn decode_archive2(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
     wxdata::level2::decode_and_encode(bytes).map_err(|e| e.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn prepare_import_document(bytes: Vec<u8>) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    imports::worker_prepare(&bytes).map_err(Into::into)
 }
 
 /// Local diagnostics for test harnesses; no network or persistent storage is involved.

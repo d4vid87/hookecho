@@ -576,7 +576,7 @@ impl HookEchoApp {
                 if optional_action.is_some() { chosen = optional_action; }
                 self.settings.etop_dbz = etop_dbz;
                 if self.settings.layer_order != order_was {
-                    self.settings.save();
+                    self.request_settings_save();
                 }
                 // Place search folds in here rather than keeping a pill of its own: action
                 // matches rank first, and this row is the explicit "I meant a place" answer.
@@ -749,7 +749,7 @@ impl HookEchoApp {
             }
         }
         if spotter_options_was != (self.settings.spotter_range_km, self.settings.spotter_max_age_minutes) {
-            self.settings.save();
+            self.request_settings_save();
         }
         ctx.data_mut(|d| { d.insert_temp(settings_id, settings_page); d.insert_temp(all_id, all_controls); });
         self.panel_section = selected_card.unwrap_or(if home { PanelSection::Radar } else { section });

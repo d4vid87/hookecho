@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 /// A parsed placefile: metadata plus a flat list of drawable items.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Placefile {
     pub title: String,
     /// Seconds between refetches (0 = static).
@@ -26,7 +26,7 @@ pub struct Placefile {
 }
 
 /// An `IconFile:` declaration — one PNG holding a row/column grid of same-size icons.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IconSheet {
     /// Absolute URL of the sheet image (relative paths are resolved against the placefile's URL).
     pub url: String,
@@ -38,7 +38,7 @@ pub struct IconSheet {
 }
 
 /// One drawable, with the display gates that were in effect when it was declared.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlaceItem {
     /// View-range gate in nautical miles: shown only when the map range ≤ this (0 = always).
     pub threshold_nmi: f32,
@@ -55,7 +55,7 @@ pub struct PlaceItem {
 }
 
 /// The geometry/label variants a placefile can draw.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PlaceKind {
     /// Polyline in `[lon, lat]` with an RGBA color and pixel width.
     Line {

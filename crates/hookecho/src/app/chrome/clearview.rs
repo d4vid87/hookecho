@@ -232,7 +232,7 @@ impl HookEchoApp {
         if let Some(modes) = modes { self.mobile_occlusion.push(modes.response.rect); }
         if enable_zeta_layout {
             self.settings.radar_workspace = true;
-            self.settings.save();
+            self.request_settings_save();
         }
         if menu {
             self.panel_open = launch_home_open(self.panel_open, self.drawer.is_open(), home);

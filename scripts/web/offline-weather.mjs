@@ -197,13 +197,72 @@ try {
     await save('2026-05-26', ['newest']);
     check(Object.keys(await volumes()).join() === 'newest', 'budget eviction discarded the just-saved pack');
     await api.delete_pack('2026-05-26');
+
+    await api.seed_object('rewrite');
+    await api.pin_object('rewrite', true);
+    await api.seed_object('rewrite');
+    check((await metadata()).rewrite.pinned, 'rewriting weather bytes cleared an offline pin');
+    await api.pin_object('rewrite', false);
+
+    IDBObjectStore.prototype.put = function (...args) {
+      const result = originalPut.apply(this, args);
+      if (this.name === 'data' && args[1] === 'object-abort') {
+        const tx = this.transaction;
+        result.addEventListener('success', () => tx.abort(), {once: true});
+      }
+      return result;
+    };
+    try { await api.seed_object('object-abort'); }
+    finally { IDBObjectStore.prototype.put = originalPut; }
+    check(!('object-abort' in await records('hookecho-objects', 'data')),
+      'aborted object body was committed');
+    check(!('object-abort' in await metadata()), 'aborted object write left metadata without bytes');
+    check(await api.read_object('object-abort'), 'failed persistent write lost its memory fallback');
+
+    await api.seed_object('touch-race');
+    const objects = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('hookecho-objects');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    let pinCommitted;
+    IDBObjectStore.prototype.get = function (...args) {
+      const result = originalGet.apply(this, args);
+      if (this.name === 'meta' && args[0] === 'touch-race' && this.transaction.mode === 'readonly') {
+        result.addEventListener('success', () => {
+          // Queue a pin before the cache read's access-time update can create its write transaction.
+          pinCommitted = new Promise((resolve, reject) => {
+            const tx = objects.transaction('meta', 'readwrite');
+            const store = tx.objectStore('meta');
+            const request = originalGet.call(store, 'touch-race');
+            request.onsuccess = () => {
+              const item = JSON.parse(request.result);
+              item.pinned = true;
+              store.put(JSON.stringify(item), 'touch-race');
+            };
+            tx.oncomplete = resolve;
+            tx.onabort = () => reject(tx.error);
+          });
+        }, {once: true});
+      }
+      return result;
+    };
+    try {
+      check(await api.read_object('touch-race'), 'concurrent pin made cached bytes unreadable');
+      check(pinCommitted, 'pin/read interleaving was not exercised');
+      await pinCommitted;
+    } finally { IDBObjectStore.prototype.get = originalGet; objects.close(); }
+    check((await metadata())['touch-race'].pinned, 'access-time update overwrote a concurrent offline pin');
+    await api.pin_object('touch-race', false);
     return ['replacement/deletion preserve shared files and release unowned files, including legacy orphans',
       'aborted/cancelled save preserves old manifest/files and rolls back new pins',
       'manifest bookkeeping reads no existing weather blobs; readiness still verifies them',
       'concurrent browser contexts preserve committed and shared radar files',
-      'budget eviction preserves the just-saved pack despite stale timestamps'];
+      'budget eviction preserves the just-saved pack despite stale timestamps',
+      'object rewrites preserve pins and late transaction aborts leave no orphan metadata',
+      'access-time updates preserve concurrent offline pins'];
   });
-  assert.equal(checks.length, 5);
+  assert.equal(checks.length, 7);
   console.log(JSON.stringify({checks}, null, 2));
 } finally {
   await browser?.close();

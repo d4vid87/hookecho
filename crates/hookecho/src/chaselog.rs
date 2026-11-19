@@ -6,7 +6,7 @@
 //! every video overlay reads.
 
 /// One recorded fix.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fix {
     pub lon: f64,
     pub lat: f64,
@@ -22,7 +22,7 @@ const MIN_GAP_S: i64 = 120;
 /// bounds both the memory and the polyline the map draws.
 const MAX_POINTS: usize = 20_000;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Track {
     pub points: Vec<Fix>,
     /// Named marks the user dropped along the way (index into `points`, label).
@@ -133,6 +133,7 @@ pub fn from_gpx(xml: &str) -> Track {
         let rest = &tag[at + name.len()..];
         let rest = rest.trim_start().strip_prefix('=')?.trim_start();
         let quote = rest.chars().next()?;
+        if quote != '\'' && quote != '"' { return None; }
         let body = rest[1..].split(quote).next()?;
         body.trim().parse().ok()
     }

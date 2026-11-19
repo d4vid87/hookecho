@@ -56,7 +56,6 @@ class AlertService : Service() {
     }
 
     private fun pollLoop() {
-        val seen = loadSeen(this)
         while (running) {
             // Wake lock only around the network pass: holding it across the sleep would keep the
             // CPU up for five minutes to do a second of work.
@@ -64,14 +63,11 @@ class AlertService : Service() {
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hookecho:alerts")
             val result = try {
                 wl.acquire(60_000L)
-                pollOnce(this, seen) { running }
+                pollOnce(this) { running && isEnabled(this) }
             } finally {
                 if (wl.isHeld) wl.release()
             }
-            if (!running) break
-            // The widget's own 30-minute clock is a floor; while the service runs it stays as
-            // fresh as the poll it just did.
-            AlertWidget.refresh(this)
+            if (!running || result == null) break
             if (result.successfulRequests > 0) AlertAlarm.markPolled(this)
             // Tighten the cadence while something is actually warned at a watched point. Battery
             // saver stretches the calm case only: once a warning is up, the user has bigger
@@ -115,11 +111,7 @@ class AlertService : Service() {
         /** Newest-last, so trimming from the front drops the oldest IDs. */
         private const val SEEN_CAP = 200
 
-        data class PollResult(
-            val hot: Boolean,
-            val successfulRequests: Int,
-            val failedRequests: Int,
-        )
+        private val poller = AlertPoller()
 
         private fun prefs(context: Context) =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -132,7 +124,7 @@ class AlertService : Service() {
          * Already-notified alert IDs. Memory-only dedup re-notified everything the first time the
          * process was recreated, which for a long-lived warning is a duplicate every few minutes.
          */
-        fun loadSeen(context: Context): LinkedHashSet<String> =
+        private fun loadSeen(context: Context): LinkedHashSet<String> =
             LinkedHashSet(prefs(context).getString(KEY_SEEN, "").orEmpty().split("\n").filter { it.isNotEmpty() })
 
         private fun saveSeen(context: Context, seen: LinkedHashSet<String>) {
@@ -146,52 +138,42 @@ class AlertService : Service() {
          *
          * Shared by the service and [AlertWorker] so there is exactly one poll path.
          */
-        @JvmStatic
-        fun pollOnce(
+        internal fun pollOnce(
             context: Context,
-            seen: LinkedHashSet<String>,
             shouldContinue: () -> Boolean = { true },
-        ): PollResult {
-            var hot = false
-            var successful = 0
-            var failed = 0
-            val before = seen.size
-            // Quiet hours silences everything below the emergency tier. The alert is still
-            // recorded as seen, so it does not re-fire the moment the window ends.
+        ): AlertPoller.Result? {
+            val watched = runCatching { Nws.watched(context.filesDir) }.getOrElse {
+                return AlertPoller.Result(failedRequests = 1, error = "Couldn't read saved locations")
+                    .also { AlertWidget.render(context, it) }
+            }
+            val enabled = isEnabled(context)
             val quiet = Nws.inQuietHours(
                 context.filesDir,
                 java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
             )
-            watching@ for (m in runCatching { Nws.watched(context.filesDir) }.getOrDefault(emptyList())) {
-                if (!shouldContinue()) break
-                if (m.home) {
-                    val response = Nws.alertsWithin(m.lat, m.lon, 30.0)
-                    if (response.successful) successful++ else failed++
-                    for (a in response.alerts) {
-                        if (!shouldContinue()) break@watching
-                        if (a.tier >= Nws.TIER_WARNING) hot = true
-                        val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
-                        if (seen.add(a.id) && loud) notify(context, m, a, true)
-                    }
-                }
-                for (p in m.samples) {
-                    if (!shouldContinue()) break@watching
-                    val response = Nws.alertsAt(p[0], p[1])
-                    if (!response.successful) {
-                        failed++
-                        continue
-                    }
-                    successful++
-                    for (a in response.alerts) {
-                        if (!shouldContinue()) break@watching
-                        if (a.tier >= Nws.TIER_WARNING) hot = true
-                        val loud = !quiet || a.tier >= Nws.TIER_EMERGENCY
-                        if (seen.add(a.id) && loud) notify(context, m, a, Nws.speaksAt(m, p))
-                    }
+            val key = "$enabled:$quiet:" + Nws.coverageKey(watched)
+            val result = poller.run(key, shouldContinue) {
+                // Loading, notification decisions and persistence are one coordinated pass.
+                val seen = loadSeen(context)
+                val before = seen.size
+                try {
+                    AlertPoller.collect(
+                        watched, System.nanoTime() + AlertPoller.BUDGET_NANOS, shouldContinue,
+                        onAlert = { watch, alert, speak ->
+                            if (enabled && isEnabled(context) && shouldContinue()) {
+                                val loud = !quiet || alert.tier >= Nws.TIER_EMERGENCY
+                                if (seen.add(alert.id) && loud) notify(context, watch, alert, speak)
+                            }
+                        },
+                    )
+                } finally {
+                    if (seen.size != before) saveSeen(context, seen)
                 }
             }
-            if (seen.size != before) saveSeen(context, seen)
-            return PollResult(hot, successful, failed)
+            if (result != null && !result.cancelled) {
+                AlertWidget.render(context, result)
+            }
+            return result
         }
 
         private fun notify(context: Context, m: Nws.Watch, a: Nws.Alert, speak: Boolean) {

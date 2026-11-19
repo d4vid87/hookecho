@@ -8,6 +8,31 @@ Tested `main` builds publish as immutable main releases. Named entries below
 record major updates; versioned entries match GitHub tags. Older releases stay
 available for rollback.
 
+## Reliability and responsiveness - 2026-11-18 (rolling release)
+
+- Reserve Android alert checks for every saved location before sampling their
+  boundaries, and disclose incomplete coverage instead of reporting “All quiet.”
+- Share one bounded alert poll across Android service, worker and widget triggers;
+  coordinate notification history and keep network work out of receivers.
+- Clear unfinished cross-sections and stale product images without crashing when
+  a new transect has only one endpoint.
+- Commit browser weather-cache payloads and metadata atomically, preserve offline
+  pins during refreshes, and recheck pins before eviction.
+- Include the Earth limb in full-disk satellite bounds, preserving high-latitude
+  coverage and continuous longitude across the date line.
+- Recognize complete main releases in the update checker and compare their commit
+  ancestry so older or divergent builds are not advertised as upgrades.
+- Coalesce native settings and recovery saves on one background writer, retain
+  save-error reporting, and flush the latest snapshots on normal exit.
+- Bound native satellite display decoding before allocation and move decode,
+  projection and RGB composition to a limited background CPU pool.
+- Check import sizes before reading, prepare documents and native marker icons
+  off the UI thread, and use the browser decode worker for document imports.
+  Bound ZIP expansion, copied labels and aggregate GIS geometry; validate imported settings
+  before writing palette files and reject results for changed import targets.
+- Reuse vector fallback selections across unchanged frames in both rendering and
+  cache protection, invalidating them when coverage or resident tiles change.
+
 ## Radar freshness and recovery - 2026-11-18 (rolling release)
 
 - Continue live Level II ingestion during live-loop playback, with one bounded

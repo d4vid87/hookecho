@@ -103,6 +103,14 @@ exemption. These are requested intervals, not delivery guarantees: Android defer
 in Doze and limits even exact allow-while-idle alarms to at most one per nine minutes per app.
 See [Android's idle-mode guidance](https://developer.android.com/training/monitoring-device-state/doze-standby).
 
+Alarm and widget receivers enqueue unique WorkManager work and return without waiting on the
+network. The service and workers share one in-process poll, including notification history;
+widgets display that result instead of fetching the same alerts again. Each pass has a
+45-second network budget and honors cancellation between requests and while reading bodies.
+The 40-point request budget reserves saved-location centres before perimeter samples.
+Unchecked or partly sampled locations are named as partial coverage and never reported as
+an "All quiet" complete check.
+
 On Android 15 and later, this app's `dataSync` foreground service has a background time allowance
 (six hours per 24 hours). It stops when Android calls `onTimeout`; the enabled preference and
 worker/alarm schedules remain intact. Neither those recovery paths nor an exemption bypasses

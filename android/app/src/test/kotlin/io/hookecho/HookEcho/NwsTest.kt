@@ -4,8 +4,85 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.nio.file.Files
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 
 class NwsTest {
+    @Test fun requestBudgetKeepsEveryCentreAndDisclosesOmittedCoverage() {
+        val dir = Files.createTempDirectory("hookecho-coverage-test").toFile()
+        try {
+            val settings = dir.resolve("config/settings.json")
+            settings.parentFile!!.mkdirs()
+            fun writePlaces(count: Int, radius: Double) {
+                val markers = JSONArray()
+                repeat(count) { i -> markers.put(JSONObject().put("name", "Place ${i + 1}")
+                    .put("lat", 32.0 + i / 100.0).put("lon", -97.0).put("alert_radius_mi", radius)) }
+                settings.writeText(JSONObject().put("markers", markers).toString())
+            }
+            writePlaces(7, 20.0)
+            val seven = Nws.watched(dir)
+            assertEquals(7, seven.size)
+            assertEquals(40, seven.sumOf { it.samples.size })
+            assertTrue(seven.all { it.samples.isNotEmpty() })
+            assertTrue(seven.all { it.requestedSamples == 7 })
+            for (watch in seven) assertArrayEquals(doubleArrayOf(watch.lat, watch.lon), watch.samples.first(), 0.0)
+
+            writePlaces(42, 0.0)
+            val many = Nws.watched(dir)
+            assertEquals(42, many.size)
+            assertEquals(40, many.sumOf { it.samples.size })
+            val omitted = many.filter { it.samples.size < it.requestedSamples }.map { it.name }
+            assertEquals(listOf("Place 41", "Place 42"), omitted)
+            val summary = Nws.checkSummary(true, emptyList(), 40, 0, 0, omitted)
+            assertTrue(summary.contains("Place 41"))
+            assertTrue(summary.contains("Place 42"))
+            assertFalse(summary.contains("All quiet"))
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun tricklingNetworkBodiesCannotExtendThePassDeadline() {
+        serve({ body ->
+            body.write("HTTP/1.1 200 OK\r\nContent-Length: 50\r\nConnection: close\r\n\r\n".toByteArray())
+            repeat(50) { body.write(' '.code); body.flush(); Thread.sleep(20) }
+        }) { url ->
+            val start = System.nanoTime()
+            val result = runCatching { Nws.fetchFeatures(url, start + 400_000_000L) { true } }
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().lowercase().contains("timed out"))
+            assertTrue("A trickling response extended the deadline", System.nanoTime() - start < 2_000_000_000L)
+        }
+    }
+
+    @Test fun cancelledRequestsAndMalformedSuccessesCannotBecomeAllQuiet() {
+        val cancelled = runCatching { Nws.fetchFeatures(java.net.URL("http://127.0.0.1:1/"),
+            System.nanoTime() + 1_000_000_000L) { false } }
+        assertEquals("Alert check cancelled", cancelled.exceptionOrNull()?.message)
+        serve({ body ->
+            body.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".toByteArray())
+        }) { url ->
+            val malformed = runCatching { Nws.fetchFeatures(url, System.nanoTime() + 2_000_000_000L) { true } }
+            assertEquals("NWS response has no alert list", malformed.exceptionOrNull()?.message)
+        }
+    }
+
+    private fun serve(response: (java.io.OutputStream) -> Unit, check: (java.net.URL) -> Unit) {
+        java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { server ->
+            server.soTimeout = 2_000
+            val thread = Thread {
+                runCatching {
+                    server.accept().use { client ->
+                        client.soTimeout = 2_000
+                        val input = client.getInputStream().bufferedReader()
+                        while (!input.readLine().isNullOrEmpty()) { /* Consume request headers. */ }
+                        response(client.getOutputStream())
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+            try { check(java.net.URL("http://127.0.0.1:${server.localPort}/")) }
+            finally { server.close(); thread.join(2_000) }
+        }
+    }
+
     @Test fun coordinatesAndNotificationNavigationIgnorePhoneLocale() {
         val original = Locale.getDefault()
         try {

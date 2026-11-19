@@ -483,7 +483,7 @@ pub fn show(
         } else {
             settings.presets.push(id);
         }
-        settings.save();
+        // The app persists this edit through its shared dirty-diff writer.
     }
     if clear {
         view.site = None;

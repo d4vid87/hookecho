@@ -232,7 +232,7 @@ impl HookEchoApp {
             }
         }
         if before != self.settings.source_animation_speeds {
-            self.settings.save();
+            self.request_settings_save();
         }
         ctx.data_mut(|d| d.insert_temp(key, current));
     }
@@ -683,12 +683,12 @@ impl HookEchoApp {
                                             let mut limited = self.settings.linked_time_limit_seconds.is_some();
                                             if ui.checkbox(&mut limited, "Limit linked radar time difference").changed() {
                                                 self.settings.linked_time_limit_seconds = limited.then_some(120);
-                                                self.settings.save();
+                                                self.request_settings_save();
                                             }
                                             if let Some(seconds) = &mut self.settings.linked_time_limit_seconds {
                                                 ui.label("Maximum difference (seconds)");
                                                 if ui.add_sized([ui.available_width().min(216.0), 22.0], egui::Slider::new(seconds, 0..=1800)).changed() {
-                                                    self.settings.save();
+                                                    self.request_settings_save();
                                                 }
                                             }
                                         }
@@ -824,7 +824,7 @@ impl HookEchoApp {
         }
         if use_standard_layout {
             self.settings.radar_workspace = false;
-            self.settings.save();
+            self.request_settings_save();
         }
         if worldwide {
             menu_open = false;
@@ -889,7 +889,7 @@ impl HookEchoApp {
             }
             self.sync_zeta_animation_speed(ctx);
             if speeds_before != self.settings.source_animation_speeds {
-                self.settings.save();
+                self.request_settings_save();
             }
             self.panel_open = false;
             self.show_alert_panel = false;

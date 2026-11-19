@@ -32,6 +32,7 @@ object Nws {
         val lon: Double,
         val samples: List<DoubleArray>,
         val home: Boolean = false,
+        val requestedSamples: Int = samples.size,
     )
 
     data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
@@ -130,14 +131,20 @@ object Nws {
             out.add(Watch(z.optString("name", "Watch zone"), lat, lon, samples))
         }
 
-        // Trim from the back so early markers keep their rim rather than every place losing it.
+        // Cover every centre before spending requests on rims; retain unchecked places so the
+        // result can disclose incomplete coverage instead of silently calling it all quiet.
+        val ordered = out.sortedByDescending { it.home }
+        val counts = IntArray(ordered.size)
         var budget = SAMPLE_CAP
-        return out.sortedByDescending { it.home }.mapNotNull { w ->
-            if (budget <= 0) return@mapNotNull null
-            val take = w.samples.take(minOf(w.samples.size, budget))
-            budget -= take.size
-            w.copy(samples = take)
+        for (sample in 0 until (ordered.maxOfOrNull { it.samples.size } ?: 0)) {
+            for ((index, watch) in ordered.withIndex()) {
+                if (budget > 0 && sample < watch.samples.size) {
+                    counts[index]++
+                    budget--
+                }
+            }
         }
+        return ordered.mapIndexed { index, watch -> watch.copy(samples = watch.samples.take(counts[index])) }
     }
 
     fun speaksAt(watch: Watch, sample: DoubleArray): Boolean {
@@ -171,35 +178,34 @@ object Nws {
     fun gotoPoint(lon: Double, lat: Double): String =
         ",%.4f,%.4f,9".format(Locale.ROOT, lon, lat)
 
-    fun checkSummary(hasPlaces: Boolean, lines: List<String>, successful: Int, failed: Int, lastCompleteCheck: Long): String {
+    internal fun coverageKey(watched: List<Watch>): String = org.json.JSONArray(watched.map { watch ->
+        JSONObject().put("name", watch.name).put("lat", watch.lat).put("lon", watch.lon)
+            .put("home", watch.home).put("requested", watch.requestedSamples)
+            .put("samples", org.json.JSONArray(watch.samples.map { org.json.JSONArray(it.toList()) }))
+    }).toString()
+
+    fun checkSummary(
+        hasPlaces: Boolean, lines: List<String>, successful: Int, failed: Int, lastCompleteCheck: Long,
+        incomplete: List<String> = emptyList(),
+    ): String {
         if (!hasPlaces) return "No saved locations yet"
         val alerts = lines.distinct().take(4).joinToString("\n")
-        if (failed == 0 && successful > 0) return alerts.ifEmpty { "All quiet" }
+        if (failed == 0 && successful > 0 && incomplete.isEmpty()) return alerts.ifEmpty { "All quiet" }
         val status = if (successful > 0) "Some locations couldn't be checked" else "Couldn't check alerts"
+        val coverage = if (incomplete.isEmpty()) "" else {
+            "\nPartial coverage: " + incomplete.distinct().take(3).joinToString(", ") +
+                if (incomplete.distinct().size > 3) " and ${incomplete.distinct().size - 3} more" else ""
+        }
         val previous = if (lastCompleteCheck > 0) {
             "\nLast complete check: " + java.text.DateFormat.getDateTimeInstance(
                 java.text.DateFormat.SHORT, java.text.DateFormat.SHORT
             ).format(java.util.Date(lastCompleteCheck))
         } else ""
-        return listOf(alerts, status + previous).filter { it.isNotEmpty() }.joinToString("\n")
+        return listOf(alerts, status + coverage + previous).filter { it.isNotEmpty() }.joinToString("\n")
     }
 
-    fun alertsAt(lat: Double, lon: Double): AlertResponse = runCatching {
-        val url = URL(pointUrl(lat, lon))
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            setRequestProperty("User-Agent", USER_AGENT)
-            setRequestProperty("Accept", "application/geo+json")
-            connectTimeout = 15_000
-            readTimeout = 15_000
-        }
-        val body = try {
-            if (conn.responseCode != 200) error("NWS HTTP ${conn.responseCode}")
-            conn.inputStream.bufferedReader().readText()
-        } finally {
-            conn.disconnect()
-        }
-        val features = JSONObject(body).optJSONArray("features")
-            ?: return@runCatching AlertResponse(emptyList())
+    fun alertsAt(lat: Double, lon: Double, deadline: Long, shouldContinue: () -> Boolean): AlertResponse = runCatching {
+        val features = fetchFeatures(URL(pointUrl(lat, lon)), deadline, shouldContinue)
         AlertResponse((0 until features.length()).mapNotNull { i ->
             val p = features.optJSONObject(i)?.optJSONObject("properties") ?: return@mapNotNull null
             val event = p.optString("event")
@@ -209,21 +215,8 @@ object Nws {
     }.getOrElse { AlertResponse(emptyList(), it.message ?: it.javaClass.simpleName) }
 
     /** Geometry-backed alerts touching a radius. Point lookup remains the zone-only fallback. */
-    fun alertsWithin(lat: Double, lon: Double, radiusMi: Double): AlertResponse = runCatching {
-        val conn = (URL("https://api.weather.gov/alerts/active").openConnection() as HttpURLConnection).apply {
-            setRequestProperty("User-Agent", USER_AGENT)
-            setRequestProperty("Accept", "application/geo+json")
-            connectTimeout = 15_000
-            readTimeout = 15_000
-        }
-        val body = try {
-            if (conn.responseCode != 200) error("NWS HTTP ${conn.responseCode}")
-            conn.inputStream.bufferedReader().readText()
-        } finally {
-            conn.disconnect()
-        }
-        val features = JSONObject(body).optJSONArray("features")
-            ?: return@runCatching AlertResponse(emptyList())
+    fun alertsWithin(lat: Double, lon: Double, radiusMi: Double, deadline: Long, shouldContinue: () -> Boolean): AlertResponse = runCatching {
+        val features = fetchFeatures(URL("https://api.weather.gov/alerts/active"), deadline, shouldContinue)
         AlertResponse((0 until features.length()).mapNotNull { i ->
             val feature = features.optJSONObject(i) ?: return@mapNotNull null
             if (!geometryTouches(feature.optJSONObject("geometry"), lat, lon, radiusMi)) {
@@ -235,6 +228,49 @@ object Nws {
             Alert(id, event, p.optString("headline", event), tierOf(p, event))
         }.filter { it.tier > 0 })
     }.getOrElse { AlertResponse(emptyList(), it.message ?: it.javaClass.simpleName) }
+
+    /** The pass deadline also bounds trickling bodies; per-read timeouts alone do not. */
+    internal fun fetchFeatures(url: URL, deadline: Long, shouldContinue: () -> Boolean): org.json.JSONArray {
+        fun remaining(): Int {
+            check(shouldContinue()) { "Alert check cancelled" }
+            val millis = (deadline - System.nanoTime()) / 1_000_000
+            check(millis > 0) { "Alert check timed out" }
+            return millis.coerceAtMost(5_000).toInt()
+        }
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("Accept", "application/geo+json")
+            instanceFollowRedirects = false
+            // responseCode may both connect and read headers before control returns.
+            val timeout = (remaining() / 2).coerceAtLeast(1)
+            connectTimeout = timeout
+            readTimeout = timeout
+        }
+        val body = try {
+            if (conn.responseCode != 200) error("NWS HTTP ${conn.responseCode}")
+            check(conn.contentLengthLong <= MAX_RESPONSE_BYTES) { "NWS response too large" }
+            val output = java.io.ByteArrayOutputStream()
+            conn.inputStream.use { input ->
+                val buffer = ByteArray(8192)
+                while (true) {
+                    conn.readTimeout = remaining()
+                    val count = input.read(buffer)
+                    remaining()
+                    if (count < 0) break
+                    check(output.size() + count <= MAX_RESPONSE_BYTES) { "NWS response too large" }
+                    output.write(buffer, 0, count)
+                }
+            }
+            output.toString(Charsets.UTF_8.name())
+        } finally {
+            conn.disconnect()
+        }
+        val features = JSONObject(body).optJSONArray("features") ?: error("NWS response has no alert list")
+        remaining()
+        return features
+    }
+
+    private const val MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
     private fun geometryTouches(geometry: JSONObject?, lat: Double, lon: Double, radiusMi: Double): Boolean {
         geometry ?: return false

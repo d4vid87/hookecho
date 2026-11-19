@@ -2566,6 +2566,7 @@ dependencies = [
  "base64",
  "bytemuck",
  "chrono",
+ "ciborium",
  "console_error_panic_hook",
  "console_log",
  "directories",

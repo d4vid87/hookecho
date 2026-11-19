@@ -187,6 +187,7 @@ mod browser {
         received_at: chrono::DateTime<chrono::Utc>,
     ) {
         let Ok(mut cache) = MEMORY.lock() else { return };
+        let pinned = cache.iter().any(|(meta, _)| meta.family == family && meta.key == key && meta.pinned);
         cache.retain(|(meta, _)| meta.key != key);
         cache.push((
             Meta {
@@ -196,7 +197,7 @@ mod browser {
                 checksum: checksum(bytes),
                 received_at: received_at.timestamp(),
                 accessed_at: chrono::Utc::now().timestamp(),
-                pinned: false,
+                pinned,
             },
             bytes.to_vec(),
         ));
@@ -272,34 +273,61 @@ mod browser {
             .map_err(|error| anyhow!("{error:?}"))
     }
 
-    async fn put_meta(db: &IdbDatabase, meta: &Meta) -> anyhow::Result<()> {
-        let json = serde_json::to_string(meta)?;
-        let store = store(db, META, IdbTransactionMode::Readwrite)?;
-        let tx = store.transaction();
+    fn transaction_done(tx: &web_sys::IdbTransaction) -> js_sys::Promise {
         // A successful request can still be rolled back when the transaction hits storage quota.
-        let committed = js_sys::Promise::new(&mut |resolve, reject| {
+        js_sys::Promise::new(&mut |resolve, reject| {
             let ok = Closure::once_into_js(move |_: JsValue| { let _ = resolve.call0(&JsValue::NULL); });
             tx.set_oncomplete(Some(ok.unchecked_ref()));
             let failed = Closure::once_into_js(move |_: JsValue| {
-                let _ = reject.call1(&JsValue::NULL, &"Object metadata write aborted".into());
+                let _ = reject.call1(&JsValue::NULL, &"Weather cache write aborted".into());
             });
             tx.set_onabort(Some(failed.unchecked_ref()));
-        });
-        let queued = store.put_with_key(&json.into(), &meta.key.as_str().into());
+        })
+    }
+
+    async fn read_meta(store: &IdbObjectStore, key: &str) -> anyhow::Result<Option<Meta>> {
+        let request = store.get(&key.into()).map_err(|error| anyhow!("{error:?}"))?;
+        let value = await_request(request).await?;
+        Ok(value.as_string().and_then(|json| serde_json::from_str(&json).ok()))
+    }
+
+    async fn update_meta(db: &IdbDatabase, family: &str, key: &str, edit: impl FnOnce(&mut Meta)) -> anyhow::Result<()> {
+        let store = store(db, META, IdbTransactionMode::Readwrite)?;
+        let tx = store.transaction();
+        let committed = transaction_done(&tx);
+        let queued = async {
+            let mut meta = read_meta(&store, key).await?.filter(|meta| meta.family == family)
+                .ok_or_else(|| anyhow!("cached object not found"))?;
+            edit(&mut meta);
+            store.put_with_key(&serde_json::to_string(&meta)?.into(), &key.into())
+                .map_err(|error| anyhow!("{error:?}"))?;
+            Ok::<_, anyhow::Error>(())
+        }.await;
         if queued.is_err() { let _ = tx.abort(); }
         let result = JsFuture::from(committed).await.map_err(|error| anyhow!("{error:?}"));
-        queued.map_err(|error| anyhow!("{error:?}"))?;
+        queued?;
         result.map(|_| ())
     }
 
-    async fn delete(db: &IdbDatabase, key: &str) {
-        for name in [DATA, META] {
-            if let Ok(store) = store(db, name, IdbTransactionMode::Readwrite) {
-                if let Ok(request) = store.delete(&key.into()) {
-                    let _ = await_request(request).await;
-                }
+    async fn delete(db: &IdbDatabase, key: &str) -> anyhow::Result<()> {
+        let stores = js_sys::Array::of2(&DATA.into(), &META.into());
+        let tx = db.transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readwrite)
+            .map_err(|error| anyhow!("{error:?}"))?;
+        let committed = transaction_done(&tx);
+        let queued = async {
+            let meta = tx.object_store(META).map_err(|error| anyhow!("{error:?}"))?;
+            // A pack may have pinned this object after eviction took its metadata snapshot.
+            if read_meta(&meta, key).await?.is_some_and(|meta| meta.pinned) { return Ok(()); }
+            for name in [DATA, META] {
+                tx.object_store(name).and_then(|store| store.delete(&key.into()))
+                    .map_err(|error| anyhow!("{error:?}"))?;
             }
-        }
+            Ok::<_, anyhow::Error>(())
+        }.await;
+        if queued.is_err() { let _ = tx.abort(); }
+        let result = JsFuture::from(committed).await.map_err(|error| anyhow!("{error:?}"));
+        queued?;
+        result.map(|_| ())
     }
 
     async fn metadata(db: &IdbDatabase) -> Vec<Meta> {
@@ -321,33 +349,21 @@ mod browser {
 
     async fn persistent_get(family: &str, key: &str) -> Option<CachedObject> {
         let db = open().await.ok()?;
-        let value = await_request(
-            store(&db, DATA, IdbTransactionMode::Readonly)
-                .ok()?
-                .get(&key.into())
-                .ok()?,
-        )
-        .await
-        .ok()?;
+        let stores = js_sys::Array::of2(&DATA.into(), &META.into());
+        let tx = db.transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readonly).ok()?;
+        let data = tx.object_store(DATA).ok()?.get(&key.into()).ok()?;
+        let meta_store = tx.object_store(META).ok()?;
+        let (value, meta) = futures_util::try_join!(await_request(data), read_meta(&meta_store, key)).ok()?;
         if value.is_null() || value.is_undefined() {
             return None;
         }
         let bytes = value.dyn_into::<js_sys::Uint8Array>().ok()?.to_vec();
-        let meta_value = await_request(
-            store(&db, META, IdbTransactionMode::Readonly)
-                .ok()?
-                .get(&key.into())
-                .ok()?,
-        )
-        .await
-        .ok()?;
-        let mut meta: Meta = serde_json::from_str(&meta_value.as_string()?).ok()?;
+        let meta = meta?;
         if meta.family != family || meta.bytes != bytes.len() || meta.checksum != checksum(&bytes) {
-            delete(&db, key).await;
+            // A refetch replaces invalid bytes while preserving a saved pack's pin.
             return None;
         }
-        meta.accessed_at = chrono::Utc::now().timestamp();
-        let _ = put_meta(&db, &meta).await;
+        let _ = update_meta(&db, family, key, |meta| meta.accessed_at = chrono::Utc::now().timestamp()).await;
         Some(CachedObject {
             bytes,
             received_at: chrono::DateTime::from_timestamp(meta.received_at, 0)?,
@@ -362,30 +378,39 @@ mod browser {
     ) -> anyhow::Result<()> {
         let db = open().await?;
         let array = js_sys::Uint8Array::from(bytes);
-        let request = store(&db, DATA, IdbTransactionMode::Readwrite)?
-            .put_with_key(&array, &key.into())
+        let stores = js_sys::Array::of2(&DATA.into(), &META.into());
+        let tx = db.transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readwrite)
             .map_err(|error| anyhow!("{error:?}"))?;
-        await_request(request).await?;
-        put_meta(
-            &db,
-            &Meta {
+        let committed = transaction_done(&tx);
+        let queued = async {
+            let metadata = tx.object_store(META).map_err(|error| anyhow!("{error:?}"))?;
+            let pinned = read_meta(&metadata, key).await?.is_some_and(|meta| meta.family == family && meta.pinned);
+            let meta = Meta {
                 key: key.to_string(),
                 family: family.to_string(),
                 bytes: bytes.len(),
                 checksum: checksum(bytes),
                 received_at: received_at.timestamp(),
                 accessed_at: chrono::Utc::now().timestamp(),
-                pinned: false,
-            },
-        )
-        .await?;
+                pinned,
+            };
+            tx.object_store(DATA).and_then(|store| store.put_with_key(&array, &key.into()))
+                .map_err(|error| anyhow!("{error:?}"))?;
+            metadata.put_with_key(&serde_json::to_string(&meta)?.into(), &key.into())
+                .map_err(|error| anyhow!("{error:?}"))?;
+            Ok::<_, anyhow::Error>(())
+        }.await;
+        if queued.is_err() { let _ = tx.abort(); }
+        let result = JsFuture::from(committed).await.map_err(|error| anyhow!("{error:?}"));
+        queued?;
+        result?;
         let family_entries: Vec<_> = metadata(&db)
             .await
             .into_iter()
             .filter(|entry| entry.family == family)
             .collect();
         for old in eviction_keys(family_entries, family_cap(family)) {
-            delete(&db, &old).await;
+            delete(&db, &old).await?;
         }
         refresh().await;
         Ok(())
@@ -468,7 +493,7 @@ mod browser {
             .into_iter()
             .filter(|entry| entry.family == family && !entry.pinned)
         {
-            delete(&db, &entry.key).await;
+            delete(&db, &entry.key).await?;
         }
         Ok(())
     }
@@ -483,15 +508,7 @@ mod browser {
             }
         }
         let db = open().await?;
-        let Some(mut meta) = metadata(&db)
-            .await
-            .into_iter()
-            .find(|entry| entry.family == family && entry.key == key)
-        else {
-            anyhow::bail!("cached object not found");
-        };
-        meta.pinned = pinned;
-        put_meta(&db, &meta).await
+        update_meta(&db, family, key, |meta| meta.pinned = pinned).await
     }
 
     static STATE: std::sync::Mutex<(Vec<CacheStats>, bool, bool, Option<String>)> =

@@ -17,6 +17,16 @@ test("radar goes ahead of queued vector work", async () => {
   assert.deepEqual(spawned[0].jobs.map(job => job.op), ["vector", "assemble", "vector"]);
 });
 
+test("radar decode goes ahead of a queued document import", async () => {
+  const { bridge, spawned } = harness([[]]);
+  await Promise.all([
+    bridge(new Uint8Array([1]), "vector"),
+    bridge(new Uint8Array([2]), "import"),
+    bridge(new Uint8Array([3]), "decode"),
+  ]);
+  assert.deepEqual(spawned[0].jobs.map(job => job.op), ["vector", "decode", "import"]);
+});
+
 /// A worker that answers every job the way the script says, in order, and remembers whether it
 /// was terminated. `reply` is `{ ok }`, `{ err }` or `{ err, fatal }`.
 function stubWorker(replies) {

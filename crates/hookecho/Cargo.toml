@@ -32,6 +32,8 @@ profiling = ["dep:puffin", "dep:puffin_http"]
 
 [dependencies]
 postcard = { version = "1", features = ["alloc"] }
+# Already in the lockfile; imports need a self-describing worker format for settings/GeoJSON.
+ciborium = "0.2.2"
 wxdata = { path = "../wxdata" }
 puffin = { version = "0.20", optional = true }
 puffin_http = { version = "0.17", optional = true }

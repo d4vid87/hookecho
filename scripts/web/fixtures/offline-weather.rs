@@ -19,6 +19,15 @@ pub async fn seed_object(key: String) -> Result<(), JsValue> {
         .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 #[wasm_bindgen]
+pub async fn read_object(key: String) -> bool {
+    wxdata::object_cache::get("satellite", &key).await.is_some()
+}
+#[wasm_bindgen]
+pub async fn pin_object(key: String, pinned: bool) -> Result<(), JsValue> {
+    wxdata::object_cache::set_pinned("satellite", &key, pinned).await
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+#[wasm_bindgen]
 pub async fn ready() -> String {
     serde_json::to_string(&hookecho::webcache::packs().await.iter().map(|pack| pack.available).collect::<Vec<_>>()).unwrap()
 }

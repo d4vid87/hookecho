@@ -152,6 +152,14 @@ fn radar_payload_budget(settings: &Settings) -> usize {
     else { NATIVE_RADAR_PAYLOAD_BUDGET }
 }
 
+fn build_xsection_for_points(
+    volume: Option<&mut Volume>, points: &[[f64; 2]], moment: Moment,
+) -> Option<wxdata::xsection::CrossSection> {
+    let [a, b] = points else { return None };
+    let sweeps = volume?.moment_tilts(moment);
+    wxdata::xsection::build(&sweeps, (a[0], a[1]), (b[0], b[1]), 300, 120, 18.0)
+}
+
 #[cfg(test)]
 mod derived_input_tests {
     use super::*;
@@ -1028,7 +1036,7 @@ impl OverlaySource {
                     image.into_frame_with_display(received, display)?
                 };
                 #[cfg(not(target_arch = "wasm32"))]
-                let frame = image.into_frame(received)?;
+                let frame = image.into_frame_async(received).await?;
                 let mut frame = frame;
                 frame.stamp.received_time = Utc::now();
                 OverlayMsg::PaneField(pane, layer, frame, None)
@@ -2757,31 +2765,7 @@ struct LoadedPlacefile {
     attributes: Vec<String>,
 }
 
-fn stored_gis(
-    name: &str,
-    content: &str,
-    cfg: Option<&crate::settings::PlacefileConfig>,
-) -> anyhow::Result<(wxdata::placefile::Placefile, Vec<String>)> {
-    if name.to_ascii_lowercase().ends_with(".kmz") || name.to_ascii_lowercase().ends_with(".zip") {
-        use base64::Engine as _;
-        let encoded = content
-            .strip_prefix("base64:")
-            .ok_or_else(|| anyhow::anyhow!("saved GIS archive is corrupt"))?;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
-        wxdata::gis::archive_with_options(
-            name,
-            &bytes,
-            wxdata::gis::GisImportOptions {
-                label_field: cfg.and_then(|cfg| cfg.gis_label_field.as_deref()),
-                color_field: cfg.and_then(|cfg| cfg.gis_color_field.as_deref()),
-                valid_start_field: cfg.and_then(|cfg| cfg.gis_valid_start_field.as_deref()),
-                valid_end_field: cfg.and_then(|cfg| cfg.gis_valid_end_field.as_deref()),
-            },
-        )
-    } else {
-        Ok((wxdata::gis::parse(name, content)?, Vec::new()))
-    }
-}
+use crate::imports::stored_gis;
 
 /// A background fetch result routed back to a specific view.
 /// Loop frames a phone keeps decoded at once. Each volume is tens of MB; a longer loop than this
@@ -4105,6 +4089,7 @@ pub struct HookEchoApp {
     share_card_capture_frames: u8,
     loop_export: Option<LoopExport>,
     loop_encoding: Option<LoopEncoding>,
+    import_pending: Option<Receiver<Result<crate::imports::Prepared, String>>>,
     loop_encode_tx: Sender<Result<String, String>>,
     loop_encode_rx: Receiver<Result<String, String>>,
     /// When true, all panes share the active pane's camera.
@@ -4278,6 +4263,14 @@ pub struct HookEchoApp {
     analyst_session: Option<ModeSession>,
     workspace_return_session: Option<ModeSession>,
     recovery_json: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    persistence: crate::persistence::Writer,
+    #[cfg(not(target_arch = "wasm32"))]
+    queued_settings: Option<Arc<Settings>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    queued_recovery: Option<Arc<String>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    persistence_focused: bool,
     undo_history: std::collections::VecDeque<(UndoEntry, usize)>,
     undo_suspended: bool,
     interaction_history: std::collections::VecDeque<serde_json::Value>,
@@ -5164,6 +5157,7 @@ impl HookEchoApp {
             share_card_capture_frames: 0,
             loop_export: None,
             loop_encoding: None,
+            import_pending: None,
             loop_encode_tx,
             loop_encode_rx,
             link_cameras: false,
@@ -5285,6 +5279,14 @@ impl HookEchoApp {
             analyst_session: None,
             workspace_return_session: None,
             recovery_json: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            persistence: crate::persistence::Writer::new(cc.egui_ctx.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            queued_settings: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            queued_recovery: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            persistence_focused: true,
             undo_history: Default::default(),
             undo_suspended: false,
             interaction_history: Default::default(),
@@ -6238,11 +6240,7 @@ impl HookEchoApp {
         Some((dir, (u * u + v * v).sqrt()))
     }
 
-    /// Ask GitHub for the newest tagged release, once per session.
-    ///
-    /// The list endpoint, not `/releases/latest` — see [`ui::about_window::pick_latest_tag`] for
-    /// why. Thirty is more releases than this project has, and one page keeps it to one request
-    /// against the 60/hour unauthenticated budget.
+    /// Check the installed release channel once per session.
     fn check_for_update(&mut self, ctx: &egui::Context) {
         if self.update_state != ui::about_window::UpdateState::Idle {
             return;
@@ -6252,33 +6250,7 @@ impl HookEchoApp {
         let tx = self.update_tx.clone();
         let ctx2 = ctx.clone();
         self.spawner.spawn(async move {
-            let url = "https://api.github.com/repos/d4vid87/hookecho/releases?per_page=30";
-            // GitHub rejects requests without a User-Agent.
-            let body = async {
-                let text = http
-                    .get(url)
-                    .header("User-Agent", "hookecho")
-                    .send()
-                    .await
-                    .ok()?
-                    .error_for_status()
-                    .ok()?
-                    .text()
-                    .await
-                    .ok()?;
-                Some(text)
-            }
-            .await;
-            // `None` means the request itself failed; a body with no version tag in it is a
-            // different answer, and the two must not collapse into one message.
-            let state = match body {
-                Some(body) => match ui::about_window::pick_latest_tag(&body) {
-                    Some(tag) => ui::about_window::compare(&tag),
-                    None => ui::about_window::UpdateState::NoRelease,
-                },
-                None => ui::about_window::UpdateState::Failed,
-            };
-            let _ = tx.send(state);
+            let _ = tx.send(ui::about_window::check(&http).await);
             ctx2.request_repaint();
         });
     }
@@ -7369,24 +7341,15 @@ impl HookEchoApp {
     }
 
     fn build_xsection(&mut self, idx: usize, ctx: &egui::Context) {
-        let (a, b) = (self.xsection_pts[0], self.xsection_pts[1]);
-        let Some(vol) = self.views[idx].volume.as_mut() else {
-            return;
-        };
         let moment = self.xsection_moment;
-        let sweeps = vol.moment_tilts(moment); // owned → the &mut vol borrow ends here
-        if sweeps.is_empty() {
-            return;
-        }
-        let Some(xs) = wxdata::xsection::build(&sweeps, (a[0], a[1]), (b[0], b[1]), 300, 120, 18.0)
-        else {
-            return;
-        };
-        let hc_table =
-            crate::colormap::effective_table(&self.palettes, moment, self.settings.theme);
-        let img = ui::xsection_window::to_image(&xs, &hc_table);
-        self.xsection_tex = Some(ctx.load_texture("xsection", img, egui::TextureOptions::LINEAR));
-        self.xsection = Some(xs);
+        self.xsection = build_xsection_for_points(
+            self.views[idx].volume.as_mut(), &self.xsection_pts, moment,
+        );
+        self.xsection_tex = self.xsection.as_ref().map(|xs| {
+            let hc_table = crate::colormap::effective_table(&self.palettes, moment, self.settings.theme);
+            let img = ui::xsection_window::to_image(xs, &hc_table);
+            ctx.load_texture("xsection", img, egui::TextureOptions::LINEAR)
+        });
     }
 
     /// Detail card for a tapped Spotter Network beacon.
@@ -7811,7 +7774,7 @@ impl HookEchoApp {
                             )
                             .changed()
                         {
-                            self.settings.save();
+                            self.request_settings_save();
                         }
                     });
                 });
@@ -8198,8 +8161,15 @@ impl HookEchoApp {
         let local = serde_json::to_value(&self.settings).map_err(|e| e.to_string())?;
         let merged = crate::cloud::merge_in(&local, body)?;
         let settings: crate::settings::Settings = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.persistence.flush();
+            self.drain_persistence();
+        }
         settings.save_checked()?;
         self.settings = settings;
+        self.saved = self.settings.clone();
+        self.settings_save_error = None;
         self.restore_overlay_settings();
         self.palettes.reload(&self.settings.palette_paths());
         self.sync_placefiles(ctx);
@@ -9852,17 +9822,17 @@ impl HookEchoApp {
         let mut limited = self.settings.linked_time_limit_seconds.is_some();
         if ui.checkbox(&mut limited, "Limit linked radar time difference").changed() {
             self.settings.linked_time_limit_seconds = limited.then_some(120);
-            self.settings.save();
+            self.request_settings_save();
         }
         if let Some(seconds) = &mut self.settings.linked_time_limit_seconds {
-            if ui.add(egui::Slider::new(seconds, 0..=1800).text("Maximum difference (seconds)")).changed() { self.settings.save(); }
+            if ui.add(egui::Slider::new(seconds, 0..=1800).text("Maximum difference (seconds)")).changed() { self.request_settings_save(); }
         }
         let mut name = ui.ctx().data_mut(|d| d.get_temp::<String>(egui::Id::new("appearance_preset_name")).unwrap_or_default());
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut name).hint_text("Preset name").desired_width(150.0));
             if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save preset")).clicked() {
                 self.settings.appearance_presets.insert(name.trim().to_string(), preset.clone());
-                self.settings.save();
+                self.request_settings_save();
             }
         });
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("appearance_preset_name"), name));
@@ -9878,7 +9848,7 @@ impl HookEchoApp {
             if self.settings.appearance_presets.is_empty() { ui.label("Save an appearance above to reuse it."); }
         });
         if let Some(saved) = load { saved.apply(&mut self.views[self.active]); }
-        if let Some(name) = remove { self.settings.appearance_presets.remove(&name); self.settings.save(); }
+        if let Some(name) = remove { self.settings.appearance_presets.remove(&name); self.request_settings_save(); }
         ui.menu_button("Copy appearance to pane", |ui| {
             for (i, view) in self.views.iter_mut().enumerate() {
                 if i != self.active && ui.button(format!("Pane {}", i + 1)).clicked() {
@@ -10337,11 +10307,11 @@ impl HookEchoApp {
         }
         if self.settings.precip_tint != precip_tint {
             self.settings.precip_tint = precip_tint;
-            self.settings.save();
+            self.request_settings_save();
         }
         if self.settings.full_coverage_radar != full_coverage {
             self.settings.full_coverage_radar = full_coverage;
-            self.settings.save();
+            self.request_settings_save();
         }
         if dealias != self.views[self.active].effective_dealias(self.settings.dealias_velocity) {
             self.views[self.active].dealias_override = Some(dealias);
@@ -10645,17 +10615,17 @@ impl HookEchoApp {
                 let on = self.views[self.active].fields_on.contains(&layer);
                 if !on && layer.descriptor().is_some() {
                     self.settings.record_recent_field(layer.stable_id());
-                    self.settings.save();
+                    self.request_settings_save();
                 }
                 self.set_field(layer, !on);
             }
             PaletteAction::ToggleRadarFavorite(moment, relative) => {
                 self.settings.toggle_favorite_field(&radar_favorite_id(moment, relative));
-                self.settings.save();
+                self.request_settings_save();
             }
             PaletteAction::ToggleFavorite(layer) => {
                 self.settings.toggle_favorite_field(layer.stable_id());
-                self.settings.save();
+                self.request_settings_save();
             }
             PaletteAction::ToggleOverlay(t) => {
                 let f = self.overlay_flag(t);
@@ -10799,7 +10769,7 @@ impl HookEchoApp {
                 let ws = self.capture_workspace();
                 let name = ws.name.clone();
                 self.settings.workspaces.push(ws);
-                self.settings.save();
+                self.request_settings_save();
                 // ponytail: auto-named, renamed in Settings. A naming dialog mid-storm is the
                 // last thing anyone wants.
                 self.toast(
@@ -13745,7 +13715,7 @@ impl HookEchoApp {
             self.record_interaction("switch_station");
             if idx == self.active {
                 if let Some(site) = self.views[idx].site.as_deref() {
-                    if self.settings.remember_radar_site(site) { self.settings.save(); }
+                    if self.settings.remember_radar_site(site) { self.request_settings_save(); }
                 }
             }
             if idx == self.active && self.analyst_open && self.link_cameras && self.views.len() == 4
@@ -15631,9 +15601,7 @@ impl HookEchoApp {
                             self.xsection_pts.clear();
                         }
                         self.xsection_pts.push([lon, lat]);
-                        if self.xsection_pts.len() == 2 {
-                            self.build_xsection(idx, ctx);
-                        }
+                        self.build_xsection(idx, ctx);
                     }
                     MapTool::Sounding => self.fetch_sounding(lon, lat),
                     MapTool::Forecast => self.fetch_point_forecast(ctx, lon, lat),
@@ -19702,10 +19670,63 @@ impl HookEchoApp {
         self.toast(ToastKind::Success, "Workspace action undone");
     }
 
+    /// Explicit edits enqueue immediately on native; browser writes stay on the one-second tick.
+    fn request_settings_save(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let previous = self.queued_settings.as_deref().unwrap_or(&self.saved);
+            if &self.settings == previous { return; }
+            if self.settings.palettes != previous.palettes || self.settings.web_files != previous.web_files {
+                self.palettes.reload(&self.settings.palette_paths());
+            }
+            let snapshot = Arc::new(self.settings.clone());
+            self.persistence.submit(crate::persistence::Snapshot::Settings(snapshot.clone()));
+            self.queued_settings = Some(snapshot);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn drain_persistence(&mut self) {
+        while let Some((snapshot, result)) = self.persistence.completed() {
+            match snapshot {
+                crate::persistence::Snapshot::Settings(settings) => {
+                    if self.queued_settings.as_ref().is_some_and(|queued| Arc::ptr_eq(queued, &settings)) {
+                        self.queued_settings = None;
+                    }
+                    match result {
+                        Ok(()) => { self.saved = (*settings).clone(); self.settings_save_error = None; }
+                        Err(error) => {
+                            if self.settings_save_error.as_ref() != Some(&error) {
+                                self.toast(ToastKind::Error, format!("Settings were not saved — {error}"));
+                                self.settings_save_error = Some(error);
+                            }
+                        }
+                    }
+                }
+                crate::persistence::Snapshot::Recovery(json) => {
+                    if self.queued_recovery.as_ref().is_some_and(|queued| Arc::ptr_eq(queued, &json)) {
+                        self.queued_recovery = None;
+                    }
+                    if result.is_ok() { self.recovery_json = Some((*json).clone()); }
+                }
+            }
+        }
+    }
+
     fn checkpoint_recovery(&mut self) {
         if self.embed || !self.settings.setup_done { return; }
         let snapshot = self.capture_recovery_snapshot();
         if let Ok(json) = serde_json::to_string(&snapshot) {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let previous = self.queued_recovery.as_deref().or(self.recovery_json.as_ref());
+                if previous != Some(&json) {
+                    let snapshot = Arc::new(json);
+                    self.persistence.submit(crate::persistence::Snapshot::Recovery(snapshot.clone()));
+                    self.queued_recovery = Some(snapshot);
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
             if self.recovery_json.as_ref() != Some(&json) {
                 match crate::recovery::save(&json) {
                     Ok(()) => self.recovery_json = Some(json),
@@ -20562,7 +20583,7 @@ impl HookEchoApp {
         self.views[self.active].basemap = style;
         if self.settings.basemap != style.slug() {
             self.settings.basemap = style.slug().to_string();
-            self.settings.save();
+            self.request_settings_save();
         }
     }
 
@@ -20999,102 +21020,66 @@ impl HookEchoApp {
         crate::dialog::request_open(crate::dialog::ImportKind::SettingsBundle, "");
     }
 
-    /// Route a picked file to whatever asked for it.
-    fn apply_import(&mut self, import: crate::dialog::Import, ctx: &egui::Context) {
-        use crate::dialog::ImportKind as K;
-        match import.kind {
-            K::SettingsBundle => self.apply_settings_bundle(&import, ctx),
-            K::Palette if import.tag == crate::ui::palette_editor::EDITOR_TAG => {
-                match import.text() {
-                    Ok(text) => self.palette_editor.pending_import = Some(text),
-                    Err(e) => self.toast(ToastKind::Error, format!("Palette import failed: {e}")),
-                }
-            }
-            K::Palette => {
-                // A platform that handed over content rather than a path (the browser) has no
-                // path worth storing — the content goes into the settings and the override names
-                // it, which is what `palette_paths` resolves back to a table.
-                let value = match &import.bytes {
-                    None => import.path.to_string_lossy().into_owned(),
-                    Some(_) => match import.text() {
-                        Ok(text) => {
-                            let name = import.name();
-                            self.settings.web_files.insert(name.clone(), text);
-                            name
-                        }
-                        Err(e) => {
-                            self.toast(ToastKind::Error, format!("Palette import failed: {e}"));
-                            return;
-                        }
-                    },
-                };
-                // Setting the override triggers the next-frame dirty-diff palette reload.
-                self.settings.palettes.insert(import.tag, value);
-            }
-            K::ChaseGpx => match import.text() {
-                Ok(xml) => {
-                    let track = crate::chaselog::from_gpx(&xml);
-                    if track.points.len() < 2 {
-                        self.toast(ToastKind::Error, "No track points in that file".to_string());
-                    } else {
-                        let n = track.points.len();
-                        self.chase_replay.load(track, import.name());
-                        self.toast(ToastKind::Info, format!("Loaded {n} track points"));
-                    }
-                }
-                Err(e) => self.toast(ToastKind::Error, format!("GPX import failed: {e}")),
-            },
-            K::Gis => {
-                let name = import.name();
-                let archive = name.to_ascii_lowercase().ends_with(".kmz")
-                    || name.to_ascii_lowercase().ends_with(".zip");
-                let content = if archive {
-                    use base64::Engine as _;
-                    import.content().map(|bytes| {
-                        format!(
-                            "base64:{}",
-                            base64::engine::general_purpose::STANDARD.encode(bytes)
-                        )
-                    })
+    /// Start bounded preparation without reading or parsing the selected document on the UI.
+    fn apply_import(&mut self, mut import: crate::dialog::Import, ctx: &egui::Context) {
+        if self.import_pending.is_some() {
+            self.toast(ToastKind::Error, "An import is already running");
+            return;
+        }
+        if import.kind == crate::dialog::ImportKind::MarkerIcon {
+            let marker = import.tag.parse::<usize>().ok().and_then(|index| self.settings.markers.get(index));
+            let Some(marker) = marker else {
+                crate::dialog::finish_import();
+                self.toast(ToastKind::Error, "The marker for that icon no longer exists");
+                return;
+            };
+            import.tag = marker.id.clone();
+        }
+        self.toast(ToastKind::Info, format!("Importing {}…", import.name()));
+        let gis_config = self.settings.placefiles.iter()
+            .find(|cfg| cfg.url == format!("gis:{}", import.name())).cloned();
+        self.import_pending = Some(crate::imports::start(import, gis_config, &self.spawner, ctx.clone()));
+    }
+
+    fn apply_prepared_import(&mut self, prepared: crate::imports::Prepared, ctx: &egui::Context) {
+        use crate::imports::Prepared;
+        match prepared {
+            Prepared::Settings { settings, gis } => self.apply_settings_bundle(*settings, gis, ctx),
+            Prepared::Palette { import, text } => {
+                if import.tag == crate::ui::palette_editor::EDITOR_TAG {
+                    self.palette_editor.pending_import = Some(text);
                 } else {
-                    import.text()
-                };
-                match content {
-                    Ok(content) => match stored_gis(&name, &content, None) {
-                        Ok((file, _)) => {
-                            let key = format!("gis:{name}");
-                            let items = file.items.len();
-                            self.settings.web_files.insert(key.clone(), content);
-                            if !self.settings.placefiles.iter().any(|cfg| cfg.url == key) {
-                                self.settings.placefiles.push(crate::settings::PlacefileConfig {
-                                    url: key.clone(),
-                                    enabled: true,
-                                    opacity: 1.0,
-                                    gis_label_field: None,
-                                    gis_color_field: None,
-                                    gis_valid_start_field: None,
-                                    gis_valid_end_field: None,
-                                });
-                            }
-                            self.placefiles.retain(|loaded| loaded.url != key);
-                            self.toast(
-                                ToastKind::Success,
-                                format!("Imported {items} GIS features"),
-                            );
-                        }
-                        Err(error) => self.toast(ToastKind::Error, error.to_string()),
-                    },
-                    Err(error) => {
-                        self.toast(ToastKind::Error, format!("GIS import failed: {error}"))
-                    }
+                    let value = if import.bytes.is_some() {
+                        let name = import.name();
+                        self.settings.web_files.insert(name.clone(), text);
+                        name
+                    } else { import.path.to_string_lossy().into_owned() };
+                    self.settings.palettes.insert(import.tag, value);
                 }
             }
-            K::CaseManifest => match import
-                .text()
-                .map_err(anyhow::Error::msg)
-                .and_then(|json| crate::casefile::CaseManifest::from_json(&json))
-            {
-                Ok(case) => {
+            Prepared::Gpx { name, track } => {
+                let n = track.points.len();
+                self.chase_replay.load(track, name);
+                self.toast(ToastKind::Info, format!("Loaded {n} track points"));
+            }
+            Prepared::Gis { content, layer } => {
+                if !layer.matches_config(self.settings.placefiles.iter().find(|cfg| cfg.url == layer.key)) {
+                    self.toast(ToastKind::Error, "The GIS layer changed during import. Import it again to use its current style.");
+                    return;
+                }
+                let items = layer.file.items.len();
+                self.settings.web_files.insert(layer.key.clone(), content);
+                if !self.settings.placefiles.iter().any(|cfg| cfg.url == layer.key) {
+                    self.settings.placefiles.push(crate::settings::PlacefileConfig {
+                        url: layer.key.clone(), enabled: true, opacity: 1.0,
+                        gis_label_field: None, gis_color_field: None,
+                        gis_valid_start_field: None, gis_valid_end_field: None,
+                    });
+                }
+                self.install_imported_gis(layer);
+                self.toast(ToastKind::Success, format!("Imported {items} GIS features"));
+            }
+            Prepared::Case(case) => {
                     self.apply_workspace(&case.workspace, ctx);
                     self.strokes = case
                         .annotations
@@ -21144,20 +21129,19 @@ impl HookEchoApp {
                         }
                     }
                     self.toast(ToastKind::Success, format!("Opened case: {}", case.name));
-                }
-                Err(error) => self.toast(ToastKind::Error, format!("Case import failed: {error}")),
-            },
-            K::MarkerIcon => {
-                let idx = import.tag.parse::<usize>().ok();
-                match (
-                    idx.and_then(|i| self.settings.markers.get_mut(i)),
-                    crate::ui::marker_window::store_icon(&import.path),
-                ) {
-                    (Some(m), Ok(name)) => m.icon = Some(name),
-                    (_, Err(error)) => self.toast(ToastKind::Error, format!("Icon import failed: {error}")),
-                    _ => log::warn!("marker icon import went nowhere (marker {})", import.tag),
-                }
             }
+            Prepared::Icon { marker_id, name } => {
+                if let Some(marker) = self.settings.markers.iter_mut().find(|m| m.id == marker_id) {
+                    marker.icon = Some(name);
+                } else { self.toast(ToastKind::Error, "The marker for that icon no longer exists"); }
+            }
+            Prepared::Asset(import) => self.apply_imported_asset(import),
+        }
+    }
+
+    fn apply_imported_asset(&mut self, import: crate::dialog::Import) {
+        use crate::dialog::ImportKind as K;
+        match import.kind {
             K::AlertSound => {
                 let file = import.path.to_string_lossy().into_owned();
                 let sound = crate::settings::AlertSound::Custom(file);
@@ -21172,30 +21156,34 @@ impl HookEchoApp {
                     other => log::warn!("no alert sound row named '{other}'"),
                 }
             }
+            _ => unreachable!("prepared assets have an asset kind"),
         }
     }
 
-    /// Apply a settings bundle the user picked.
-    fn apply_settings_bundle(&mut self, import: &crate::dialog::Import, ctx: &egui::Context) {
-        match import
-            .text()
-            .and_then(|s| crate::settings::Settings::import_bundle(&s))
-        {
-            Ok(settings) => {
-                self.settings = settings;
-                self.restore_overlay_settings();
-                self.palettes.reload(&self.settings.palette_paths());
-                self.sync_placefiles(ctx);
-                crate::platform::set_background_alerts(self.settings.background_alerts);
-                crate::platform::set_battery_saver(self.settings.battery_saver);
-                self.settings_checked = None;
-                self.toast(ToastKind::Success, "Settings imported. Review and enable imported plugins in Layers.");
-            }
-            Err(e) => {
-                log::warn!("settings import failed: {e}");
-                self.toast(ToastKind::Error, format!("Settings import failed: {e}"));
-            }
-        }
+    /// Install the already normalized geometry; sync_placefiles must not parse it again.
+    fn install_imported_gis(&mut self, layer: crate::imports::Gis) {
+        let enabled = self.settings.placefiles.iter().find(|cfg| cfg.url == layer.key)
+            .is_some_and(|cfg| cfg.enabled);
+        self.placefiles.retain(|loaded| loaded.url != layer.key);
+        self.placefiles.push(LoadedPlacefile { url: layer.key, enabled, pf: layer.file,
+            last_fetch: Some(Instant::now()), loaded: true, error: None, attributes: layer.attributes });
+        self.placefile_label_cache = None;
+        self.overlay_gen = self.overlay_gen.wrapping_add(1);
+    }
+
+    fn apply_settings_bundle(&mut self, settings: crate::settings::Settings,
+        gis: Vec<crate::imports::Gis>, ctx: &egui::Context)
+    {
+        self.settings = settings;
+        self.placefiles.retain(|loaded| !loaded.url.starts_with("gis:"));
+        for layer in gis { self.install_imported_gis(layer); }
+        self.restore_overlay_settings();
+        self.palettes.reload(&self.settings.palette_paths());
+        self.sync_placefiles(ctx);
+        crate::platform::set_background_alerts(self.settings.background_alerts);
+        crate::platform::set_battery_saver(self.settings.battery_saver);
+        self.settings_checked = None;
+        self.toast(ToastKind::Success, "Settings imported. Review and enable imported plugins in Layers.");
     }
 
     /// Start a loop export (GIF or MP4): rewind the active timeline and capture every frame.
@@ -23109,6 +23097,11 @@ impl eframe::App for HookEchoApp {
     /// Flush any settings change the one-second dirty-diff throttle hasn't picked up yet.
     fn on_exit(&mut self) {
         self.cancel_loop_export();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.persistence.flush();
+            self.drain_persistence();
+        }
         self.checkpoint_recovery();
         // Remember where we were looking, so a relaunch picks up the map where it was left. Only
         // while no explicit startup view is saved — that one is the user's choice, not ours.
@@ -23134,9 +23127,14 @@ impl eframe::App for HookEchoApp {
             Ok(q) => q.clone(),
             Err(p) => p.into_inner().clone(),
         };
-        if self.settings != self.saved {
-            self.settings.save();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.request_settings_save();
+            self.persistence.flush();
+            self.drain_persistence();
         }
+        #[cfg(target_arch = "wasm32")]
+        if self.settings != self.saved { self.settings.save(); }
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -23158,6 +23156,8 @@ impl eframe::App for HookEchoApp {
         crate::prof_scope!("ui");
         let ctx = root.ctx().clone();
         let ctx = &ctx;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.drain_persistence();
 
         // Stamp this frame for the background workers' foreground gate (see
         // `platform::activity`). A frame that follows a gap means the app just came back, so
@@ -23181,6 +23181,14 @@ impl eframe::App for HookEchoApp {
         self.frame_time_overlay(ctx);
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         let resumed = crate::platform::activity::mark_frame(focused);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.persistence_focused && !focused {
+                self.request_settings_save();
+                self.checkpoint_recovery();
+            }
+            self.persistence_focused = focused;
+        }
         let reconnected = crate::platform::network_recovered();
         if resumed || reconnected {
             wxdata::stats::radar_event(if reconnected { "network_recovered" } else { "foreground_refresh" }, "", serde_json::Value::Null);
@@ -23216,8 +23224,23 @@ impl eframe::App for HookEchoApp {
         // A file the user picked, from any of the import buttons. Routed here rather than at the
         // button, because on Android the picker is an activity result that lands long after the
         // click — through the same file handover a notification tap uses.
+        if let Some(error) = crate::dialog::take_error() {
+            self.toast(ToastKind::Error, error);
+        }
         if let Some(import) = crate::dialog::take_result() {
             self.apply_import(import, ctx);
+        }
+        if let Some(result) = self.import_pending.as_ref().and_then(|rx| match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("Import worker stopped".into())),
+        }) {
+            self.import_pending = None;
+            crate::dialog::finish_import();
+            match result {
+                Ok(prepared) => self.apply_prepared_import(prepared, ctx),
+                Err(error) => self.toast(ToastKind::Error, format!("Import failed: {error}")),
+            }
         }
 
         // Android paste: re-focus the text field that lost focus to the Paste-button tap, before
@@ -23666,17 +23689,14 @@ impl eframe::App for HookEchoApp {
             }
         }
         self.was_quiet = now_quiet;
-        // Hold the queue on disk as it changes, not only on a clean exit. A crash or a kill
-        // during quiet hours used to lose the whole night's held alerts; the queue is a handful
-        // of short strings, so comparing it every tick and writing only on a real change costs
-        // nothing worth measuring.
-        if let Ok(q) = self.quiet_queue.lock() {
+        // Enqueue held alerts immediately, before Android can stop producing frames.
+        let quiet_changed = if let Ok(q) = self.quiet_queue.lock() {
             if *q != self.settings.quiet_pending {
                 self.settings.quiet_pending = q.clone();
-                drop(q);
-                self.settings.save();
-            }
-        }
+                true
+            } else { false }
+        } else { false };
+        if quiet_changed { self.request_settings_save(); }
 
         // GOES lightning: granules land every 20 s, so poll about that often. One in flight at a
         // time — a slow fetch must not queue up behind itself.
@@ -24262,7 +24282,7 @@ impl eframe::App for HookEchoApp {
         // First run: pick a radar (or let the location do it) and get out of the way.
         if let Some(fin) = ui::firstrun::show(ctx, &mut self.firstrun, &mut self.settings) {
             self.settings.setup_done = true;
-            self.settings.save();
+            self.request_settings_save();
             let v = &mut self.views[self.active];
             if let Some((lon, lat)) = fin.location.filter(|_| fin.site.is_empty()) {
                 v.camera = crate::render::mercator::Camera::at_lonlat(lon, lat, 6.0);
@@ -24291,11 +24311,12 @@ impl eframe::App for HookEchoApp {
             // Dismissed without finishing. Setup is optional and re-runnable from three places,
             // so take the ✕ at its word rather than reopening this on every launch.
             self.settings.setup_done = true;
-            self.settings.save();
+            self.request_settings_save();
         }
 
         // Floating windows.
         if let Some(dialog) = &mut self.site_dialog {
+            let favorites = self.settings.presets.len();
             let keep = ui::site_dialog::show(
                 ctx,
                 dialog,
@@ -24306,6 +24327,7 @@ impl eframe::App for HookEchoApp {
             if !keep {
                 self.site_dialog = None;
             }
+            if favorites != self.settings.presets.len() { self.request_settings_save(); }
         }
         // Only the open settings window reads these; building the registry for a closed window
         // was a few hundred String allocations every frame.
@@ -24530,7 +24552,7 @@ impl eframe::App for HookEchoApp {
                 video_url: String::new(),
                 home: false,
             });
-            self.settings.save();
+            self.request_settings_save();
             let cam = &mut self.views[self.active].camera;
             cam.center = crate::render::mercator::lonlat_to_world(lon, lat);
             cam.zoom = cam.zoom.max(9.0);
@@ -25007,6 +25029,16 @@ impl eframe::App for HookEchoApp {
         {
             self.tour.start();
         }
+        let metric = self.metric();
+        if ui::rules_window::show(
+            &mut self.rules_window,
+            ctx,
+            &mut self.settings,
+            &mut self.drawer,
+            metric,
+        ) {
+            self.request_settings_save();
+        }
         let cells: &[Cell] = if self.archive_bucket().is_some() {
             &[]
         } else {
@@ -25029,16 +25061,6 @@ impl eframe::App for HookEchoApp {
                 .collect(),
             _ => std::collections::HashSet::new(),
         };
-        let metric = self.metric();
-        if ui::rules_window::show(
-            &mut self.rules_window,
-            ctx,
-            &mut self.settings,
-            &mut self.drawer,
-            metric,
-        ) {
-            self.settings.save();
-        }
         // One score per cell so the table can rank them; the join lives in wxdata.
         let couplets: &[wxdata::rotation::CoupletHit] = match &self.couplet_cache {
             Some((_, hits)) => hits,
@@ -25513,6 +25535,9 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if due { self.request_settings_save(); }
+        #[cfg(target_arch = "wasm32")]
         if due && self.settings != self.saved {
             // A palette-map change reloads the color tables (bumps gen -> LUT re-bake).
             if self.settings.palettes != self.saved.palettes || self.settings.web_files != self.saved.web_files {
@@ -26162,6 +26187,30 @@ mod field_lut_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn xsection_new_transect_then_product_change_discards_incomplete_result() {
+        use super::{Arc, Moment, Volume, build_xsection_for_points, level2};
+        let id = level2::Identifier::new("KDMX20261019_170000".into());
+        let scan = Arc::new(level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
+        let mut volume = Volume::new(scan, id.name().into(), id.date_time().unwrap());
+        let mut points = vec![[-93.8, 41.7], [-93.6, 41.8]];
+        let mut result = build_xsection_for_points(Some(&mut volume), &points, Moment::Reflectivity);
+        assert!(result.is_some(), "a complete transect still renders");
+
+        points.clear();
+        points.push([-93.7, 41.6]);
+        for moment in [Moment::Reflectivity, Moment::Velocity, Moment::CorrelationCoefficient] {
+            result = build_xsection_for_points(Some(&mut volume), &points, moment);
+            assert!(result.is_none(), "an unfinished transect cannot retain the old image");
+        }
+        points.push([-93.5, 41.9]);
+        result = build_xsection_for_points(Some(&mut volume), &points, Moment::Reflectivity);
+        assert!(result.is_some(), "finishing the new transect restores the image");
+        result = build_xsection_for_points(None, &points, Moment::Velocity);
+        assert!(result.is_none(), "a missing volume must not leave another product's image");
+        assert!(build_xsection_for_points(Some(&mut volume), &[], Moment::Reflectivity).is_none());
+    }
+
     #[tokio::test]
     async fn stalled_imagery_catalog_finishes_and_next_refresh_can_succeed() {
         use std::sync::{Arc, atomic::{AtomicBool, Ordering}};

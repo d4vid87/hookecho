@@ -31,22 +31,9 @@ import android.os.PowerManager
 class AlertAlarm : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!AlertService.isEnabled(context)) return
-        AlertService.createChannels(context)
-        val pending = goAsync()
-        Thread {
-            val wl = context.getSystemService(PowerManager::class.java)
-                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hookecho:alarm")
-            try {
-                wl.acquire(60_000L)
-                val result = AlertService.pollOnce(context, AlertService.loadSeen(context))
-                AlertWidget.refresh(context)
-                if (result.successfulRequests > 0) markPolled(context)
-            } finally {
-                if (wl.isHeld) wl.release()
-                arm(context)
-                pending.finish()
-            }
-        }.start()
+        // WorkManager owns the network pass; a receiver must finish before its ANR deadline.
+        arm(context)
+        AlertWorker.enqueueNow(context)
     }
 
     companion object {

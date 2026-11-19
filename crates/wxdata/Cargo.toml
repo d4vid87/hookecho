@@ -19,7 +19,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
 flate2.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 chrono.workspace = true
 lru.workspace = true

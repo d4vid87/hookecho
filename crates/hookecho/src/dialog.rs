@@ -81,7 +81,7 @@ pub fn finish_save(path: &std::path::Path) -> Result<String, String> {
 /// What an open request is for. The app needs this back with the path, because the picker returns
 /// long after the button that opened it was clicked, and by then nothing else says what the file
 /// was meant to be.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ImportKind {
     /// A settings bundle written by Export settings.
     SettingsBundle,
@@ -100,6 +100,24 @@ pub enum ImportKind {
 }
 
 impl ImportKind {
+    /// Same limits as Android's bounded Storage Access Framework copy.
+    pub const fn max_bytes(self) -> usize {
+        let mib = match self {
+            Self::Palette => 2,
+            Self::SettingsBundle | Self::MarkerIcon => 8,
+            Self::ChaseGpx | Self::CaseManifest => 16,
+            Self::AlertSound => 32,
+            Self::Gis => 64,
+        };
+        mib * 1024 * 1024
+    }
+
+    pub fn check_size(self, size: u64) -> Result<(), String> {
+        if size > self.max_bytes() as u64 {
+            Err(format!("{} exceeds the {} MiB limit", self.label(), self.max_bytes() / (1024 * 1024)))
+        } else { Ok(()) }
+    }
+
     fn label(self) -> &'static str {
         match self {
             ImportKind::SettingsBundle => "Settings bundle",
@@ -146,9 +164,22 @@ impl ImportKind {
 /// asked for it, and where it landed. The tag is how a result finds its way back to the row that
 /// opened the picker — by the time the user has finished choosing, nothing else remembers.
 static RESULT: std::sync::Mutex<Option<Import>> = std::sync::Mutex::new(None);
+static ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static IMPORTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn begin_import() -> bool {
+    if IMPORTING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        fail("An import is already running. Wait for it to finish.".into());
+        false
+    } else { true }
+}
+
+pub fn finish_import() { IMPORTING.store(false, std::sync::atomic::Ordering::Release); }
+fn fail(error: String) { *ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(error); }
+pub fn take_error() -> Option<String> { ERROR.lock().unwrap_or_else(|e| e.into_inner()).take() }
 
 /// A file the user picked.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Import {
     pub kind: ImportKind,
     /// Caller-chosen: a moment name, a marker index, an alert-sound row. Empty when the kind
@@ -165,18 +196,22 @@ impl Import {
     /// The file's raw content, including binary GIS archives.
     pub fn content(&self) -> Result<Vec<u8>, String> {
         match &self.bytes {
-            Some(bytes) => Ok(bytes.clone()),
-            None => std::fs::read(&self.path).map_err(|error| error.to_string()),
+            Some(bytes) => { self.kind.check_size(bytes.len() as u64)?; Ok(bytes.clone()) },
+            None => read_bounded(&self.path, self.kind),
+        }
+    }
+
+    pub fn into_content(mut self) -> Result<Vec<u8>, String> {
+        match self.bytes.take() {
+            Some(bytes) => { self.kind.check_size(bytes.len() as u64)?; Ok(bytes) },
+            None => read_bounded(&self.path, self.kind),
         }
     }
 
     /// The file's content as text. The one read that works everywhere: native and Android reopen
     /// the path, the browser already has the bytes.
     pub fn text(&self) -> Result<String, String> {
-        match &self.bytes {
-            Some(b) => String::from_utf8(b.clone()).map_err(|e| e.to_string()),
-            None => std::fs::read_to_string(&self.path).map_err(|e| e.to_string()),
-        }
+        String::from_utf8(self.content()?).map_err(|e| e.to_string())
     }
 
     /// The name to show, and on the web the only handle there is.
@@ -188,12 +223,31 @@ impl Import {
     }
 }
 
+fn read_bounded(path: &std::path::Path, kind: ImportKind) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() { return Err("Choose a regular file".into()); }
+    kind.check_size(metadata.len())?;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() { return Err("Choose a regular file".into()); }
+    kind.check_size(metadata.len())?;
+    let mut bytes = Vec::new();
+    file.take(kind.max_bytes() as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    kind.check_size(bytes.len() as u64)?;
+    Ok(bytes)
+}
+
 /// Ask the user for a file. Returns immediately on every platform; the answer arrives through
 /// [`take_result`], which the app polls.
 ///
 /// On desktop the dialog is modal and the answer is already there by the time this returns, which
 /// is fine — the caller reads it a frame later either way, and one code path beats two.
 pub fn request_open(kind: ImportKind, tag: impl Into<String>) {
+    if IMPORTING.load(std::sync::atomic::Ordering::Acquire) {
+        fail("An import is already running. Wait for it to finish.".into());
+        return;
+    }
     let tag = tag.into();
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     {
@@ -212,7 +266,7 @@ pub fn request_open(kind: ImportKind, tag: impl Into<String>) {
     #[cfg(target_os = "android")]
     {
         if let Err(e) = android_open::launch(kind, &tag) {
-            log::warn!("could not open the file picker: {e:?}");
+            fail(format!("Could not open the file picker: {e}"));
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -231,8 +285,10 @@ pub fn take_result() -> Option<Import> {
 /// Record a picked file, for the app to route on its next frame.
 #[allow(dead_code)]
 fn deliver(import: Import) {
-    *RESULT.lock().unwrap_or_else(|e| e.into_inner()) = Some(import);
+    if begin_import() { deliver_reserved(import); }
 }
+
+fn deliver_reserved(import: Import) { *RESULT.lock().unwrap_or_else(|e| e.into_inner()) = Some(import); }
 
 /// Storage Access Framework, through the activity.
 ///
@@ -338,13 +394,13 @@ mod android_open {
 /// once it has answered.
 #[cfg(target_arch = "wasm32")]
 mod web_open {
-    use super::{deliver, Import, ImportKind};
+    use super::{begin_import, deliver_reserved, fail, finish_import, Import, ImportKind};
     use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
 
     pub fn pick(kind: ImportKind, tag: String) {
         if let Err(e) = try_pick(kind, tag) {
-            log::warn!("file picker failed: {e:?}");
+            fail(format!("File picker failed: {e:?}"));
         }
     }
 
@@ -369,18 +425,20 @@ mod web_open {
             el.remove();
             let Some(file) = file else { return };
             let name = file.name();
+            if let Err(error) = kind.check_size(file.size() as u64) { fail(error); return; }
+            if !begin_import() { return; }
             wasm_bindgen_futures::spawn_local(async move {
                 match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
                     Ok(buf) => {
                         let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-                        deliver(Import {
+                        deliver_reserved(Import {
                             kind,
                             tag,
                             path: std::path::PathBuf::from(&name),
                             bytes: Some(bytes),
                         });
                     }
-                    Err(e) => log::warn!("could not read {name}: {e:?}"),
+                    Err(e) => { fail(format!("Could not read {name}: {e:?}")); finish_import(); },
                 }
             });
         }) as Box<dyn FnOnce()>);
@@ -430,5 +488,55 @@ mod web_save {
                 60_000,
             )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_limits_apply_before_native_read_and_to_browser_bytes() {
+        let path = std::env::temp_dir().join(format!("hookecho-import-limit-{}", std::process::id()));
+        let kinds = [ImportKind::SettingsBundle, ImportKind::Palette, ImportKind::MarkerIcon,
+            ImportKind::AlertSound, ImportKind::ChaseGpx, ImportKind::Gis, ImportKind::CaseManifest];
+        let file = std::fs::File::create(&path).unwrap();
+        for kind in kinds {
+            assert!(kind.check_size(kind.max_bytes() as u64).is_ok());
+            file.set_len(kind.max_bytes() as u64 + 1).unwrap();
+            let import = Import { kind, tag: String::new(), path: path.clone(), bytes: None };
+            assert!(import.content().unwrap_err().contains("limit"));
+        }
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+        let import = Import { kind: ImportKind::Palette, tag: String::new(), path: "table.pal".into(),
+            bytes: Some(vec![0; ImportKind::Palette.max_bytes() + 1]) };
+        assert!(import.into_content().unwrap_err().contains("limit"));
+        assert!(read_bounded(&std::env::temp_dir(), ImportKind::Gis).unwrap_err().contains("regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_files_are_rejected_before_opening_or_reading() {
+        let path = std::env::temp_dir().join(format!("hookecho-import-fifo-{}", std::process::id()));
+        assert!(std::process::Command::new("mkfifo").arg(&path).status().unwrap().success());
+        let result = read_bounded(&path, ImportKind::Gis);
+        std::fs::remove_file(path).unwrap();
+        assert!(result.unwrap_err().contains("regular file"));
+    }
+
+    #[test]
+    fn one_import_keeps_its_result_until_applied_and_then_allows_retry() {
+        finish_import();
+        assert!(begin_import());
+        deliver_reserved(Import { kind: ImportKind::Gis, tag: String::new(), path: "first.json".into(), bytes: Some(vec![]) });
+        assert!(!begin_import());
+        assert!(take_error().unwrap().contains("already running"));
+        assert_eq!(take_result().unwrap().name(), "first.json");
+        assert!(!begin_import(), "taking the source must not unlock preparation");
+        finish_import();
+        assert!(begin_import());
+        finish_import();
+        let _ = take_error();
     }
 }

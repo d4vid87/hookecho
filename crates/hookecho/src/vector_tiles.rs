@@ -1003,6 +1003,9 @@ pub struct VectorTileManager {
     labels: HashMap<TileId, Vec<PlaceLabel>>,
     /// Bumped on every change to `labels` (see [`Self::label_generation`]).
     label_gen: u64,
+    /// Geometry residency changes with labels; LRU reordering alone leaves protection valid.
+    protected_gen: Option<u64>,
+    protected: crate::render::VectorSelection<TileId>,
     palette: basemap_style::Palette,
     theme: crate::settings::Theme,
     simplified: bool,
@@ -1043,6 +1046,8 @@ impl VectorTileManager {
             labels: HashMap::new(),
             render_generation: 0,
             label_gen: 0,
+            protected_gen: None,
+            protected: crate::render::VectorSelection::default(),
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
             simplified: false,
@@ -1422,13 +1427,15 @@ impl VectorTileManager {
 
     /// Keep this frame's tiles at the front of the LRU so a wide view can't evict what it draws.
     pub fn touch_visible(&mut self, visible: &[VisibleTile]) {
-        let protected = crate::render::vector_draw_tiles(
-            &visible.iter().map(|v| v.id).collect::<Vec<_>>(),
-            self.uploaded.iter().map(|(id, _)| *id));
+        self.protected.update(visible.iter().map(|tile| tile.id),
+            self.protected_gen != Some(self.label_gen), || crate::render::vector_draw_tiles(
+                &visible.iter().map(|tile| tile.id).collect::<Vec<_>>(),
+                self.uploaded.iter().map(|(id, _)| *id)));
+        self.protected_gen = Some(self.label_gen);
         // Zoom-out can draw several cached children for every visible tile.
-        let want = VECTOR_TILE_CACHE.max(visible.len().max(protected.len()) + 8);
-        for id in protected {
-            self.uploaded.promote(&id);
+        let want = VECTOR_TILE_CACHE.max(visible.len().max(self.protected.selected().len()) + 8);
+        for id in self.protected.selected() {
+            self.uploaded.promote(id);
         }
         while self.uploaded.len() > want {
             if let Some((id, _)) = self.uploaded.pop_lru() {
@@ -1608,6 +1615,8 @@ mod tests {
             labels: HashMap::new(),
             render_generation: 0,
             label_gen: 0,
+            protected_gen: None,
+            protected: crate::render::VectorSelection::default(),
             palette: basemap_style::Palette::Dark,
             theme: crate::settings::Theme::Dark,
             simplified: false,
@@ -2012,6 +2021,48 @@ mod tests {
         manager.touch_visible(&[VisibleTile { id: (6, 14, 24), world_min: [0.0; 2], world_max: [1.0; 2] }]);
         assert!(manager.uploaded.contains(&parent));
         assert!(!manager.take_evicted().contains(&parent));
+    }
+
+    #[tokio::test]
+    async fn protection_cache_follows_uploads_evictions_and_style_changes() {
+        let mut manager = test_manager();
+        let parent = (5, 7, 12);
+        let child = (6, 14, 24);
+        let visible = [VisibleTile { id: child, world_min: [0.0; 2], world_max: [1.0; 2] }];
+        let queue = |manager: &mut VectorTileManager, id| {
+            manager.tx.send((manager.render_generation, Ok(FetchedVector {
+                id, vertices: Vec::new(), indices: Vec::new(), foreground_vertices: Vec::new(),
+                foreground_indices: Vec::new(), labels: Vec::new(),
+            }))).unwrap();
+        };
+        queue(&mut manager, parent);
+        assert_eq!(manager.drain_ready().len(), 1);
+        manager.touch_visible(&visible);
+        assert_eq!(manager.protected.selected(), &[parent]);
+        for _ in 0..60 { manager.touch_visible(&visible); }
+        assert_eq!(manager.protected_gen, Some(manager.label_gen));
+
+        queue(&mut manager, child);
+        assert_eq!(manager.drain_ready().len(), 1);
+        manager.touch_visible(&visible);
+        assert_eq!(manager.protected.selected(), &[child], "new exact geometry replaces its parent");
+
+        // Real completion eviction changes residency even without a different camera.
+        for x in 0..VECTOR_TILE_CACHE as u32 {
+            queue(&mut manager, (9, x, 0));
+            manager.drain_ready();
+        }
+        assert!(!manager.uploaded.contains(&child));
+        manager.touch_visible(&visible);
+        assert!(manager.protected.selected().is_empty());
+
+        queue(&mut manager, parent);
+        manager.drain_ready();
+        manager.touch_visible(&visible);
+        assert_eq!(manager.protected.selected(), &[parent]);
+        assert!(manager.set_style(basemap_style::Palette::Light));
+        manager.touch_visible(&visible);
+        assert!(manager.protected.selected().is_empty(), "style clear invalidates protection");
     }
 
     #[tokio::test]
