@@ -22,7 +22,7 @@ const CACHE = "shell-" + __VERSION__;
 
 // Survives deploys — the tiles in it are not versioned by our build, and throwing them away
 // because the wasm changed would be pure waste.
-const TILES = "tiles-v2";
+const TILES = "tiles-v3";
 
 // Roughly a few hundred MB of raster at worst, which is well inside a normal origin quota and
 // small enough that trimming stays cheap. Cache.keys() is insertion-ordered, so the oldest
@@ -82,14 +82,29 @@ async function tileBytes(response) {
   return bytes;
 }
 
-function queueTile(request, response) {
+function validTileBody(path, bytes) {
+  if (/\.(png|jpe?g|gif|webp)$/i.test(path)) {
+    const startsWith = signature => signature.every((byte, i) => bytes[i] === byte);
+    return startsWith([137, 80, 78, 71, 13, 10, 26, 10]) ||
+      startsWith([255, 216, 255]) ||
+      startsWith([71, 73, 70, 56]) ||
+      (startsWith([82, 73, 70, 70]) && bytes[8] === 87 && bytes[9] === 69 &&
+       bytes[10] === 66 && bytes[11] === 80);
+  }
+  // Tile routes can also serve protobufs and sprite JSON. Discard mislabelled HTML/XML bodies.
+  return !new TextDecoder().decode(bytes.subarray(0, 512)).trimStart().startsWith('<');
+}
+
+function queueTile(request, response, path) {
+  const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
   if (response.status !== 200 || pendingTileWrites >= MAX_TILE_WRITES ||
+      type === 'text/html' || type === 'application/xhtml+xml' ||
       Number(response.headers.get('content-length')) > MAX_TILE_BYTES) return;
   let copy;
   try { copy = response.clone(); } catch { return; }
   pendingTileWrites++;
   tileBytes(copy).then(bytes => {
-    if (!bytes) return;
+    if (!bytes || !validTileBody(path, bytes)) return;
     const write = tileWrites.then(() => storeTile(request, response.headers, bytes));
     tileWrites = write.catch(() => {});
     return write;
@@ -175,14 +190,12 @@ self.addEventListener("fetch", (e) => {
         (hit) =>
           hit ||
           fetch(req).then((res) => {
-            // Opaque responses (a tile host with no CORS headers) are cacheable and replayable,
-            // which is all the renderer needs. An error is not: caching a 404 tile would make a
-            // transient outage permanent.
+            // Persist only responses we can inspect. A provider error must expire with the outage.
             if (res.ok && res.type !== "opaque") {
               // Not waitUntil: by the time this runs the response has usually already been
               // handed to the page, and a settled event rejects it. The worker stays alive for
               // the fetch anyway, and a store that loses the race costs one re-download.
-              queueTile(req, res);
+              queueTile(req, res, url.pathname);
             }
             return res;
           }),

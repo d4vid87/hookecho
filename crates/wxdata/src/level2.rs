@@ -1075,6 +1075,15 @@ pub enum AzimuthAge {
     Current,
 }
 
+/// Half-degree display rows nearest to a beam's center, wrapping at north.
+fn azimuth_bins(radial: &nexrad_model::data::Radial) -> impl Iterator<Item = usize> {
+    const ROWS: usize = 720;
+    let center = radial.azimuth_angle_degrees().rem_euclid(360.0) * 2.0;
+    let width = (radial.azimuth_spacing_degrees() * 2.0).round().clamp(1.0, ROWS as f32) as usize;
+    let first = (center - (width as f32 - 1.0) * 0.5).floor().rem_euclid(ROWS as f32) as usize;
+    (0..width).map(move |offset| (first + offset) % ROWS)
+}
+
 /// Coverage of the displayed sweep in half-degree azimuths. The live object prefix identifies
 /// this scan; retained gates keep their earlier collection timestamps.
 pub fn azimuth_age(
@@ -1089,16 +1098,13 @@ pub fn azimuth_age(
         if moment.select(radial).is_none() {
             continue;
         }
-        let az = radial.azimuth_angle_degrees().rem_euclid(360.0);
-        let bin = (az * 2.0) as usize % 720;
-        let width = (radial.azimuth_spacing_degrees() * 2.0).round().max(1.0) as usize;
         let age = if radial.collection_timestamp() >= volume_start_ms {
             AzimuthAge::Current
         } else {
             AzimuthAge::Older
         };
-        for offset in 0..width.min(720) {
-            let cell = &mut ages[(bin + 720 - offset) % 720];
+        for bin in azimuth_bins(radial) {
+            let cell = &mut ages[bin];
             if *cell == AzimuthAge::Missing || age == AzimuthAge::Current {
                 *cell = age;
             }
@@ -1315,7 +1321,6 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
     // Azimuth resolution: 0.5-degree (720 bins) covers both super-res and legacy;
     // legacy 1-degree radials fill the two adjacent bins they span.
     const AZ_BINS: usize = 720;
-    const BIN_DEG: f32 = 360.0 / AZ_BINS as f32;
 
     // Gate geometry from the first radial that carries this moment.
     let sample = radials
@@ -1350,15 +1355,8 @@ pub fn bin_sweep_display(sweep: &Sweep, moment: Moment, radar_lat: f32, radar_lo
         // radial lands in one bin, but a 1-degree legacy or ODIM radial spans two — filling only
         // the bin under its centre leaves every other row transparent, which draws a sweep of
         // stripes rather than a field.
-        let az = radial.azimuth_angle_degrees().rem_euclid(360.0);
-        // Divide by the bin width rather than scaling by 720/360: BIN_DEG is a power of two, so
-        // this is exact, and a centre landing a bit-width short of its own bin was leaving gaps.
-        let bin = ((az / BIN_DEG) as usize) % AZ_BINS;
-        // The bins below `bin` are the rest of the beam: an azimuth is the radial's centre, so a
-        // 1-degree radial reaches back half a degree into the preceding bin.
-        let bins = ((radial.azimuth_spacing_degrees() / BIN_DEG).round() as usize).max(1);
-        for k in 0..bins {
-            by_bin[(bin + AZ_BINS - k) % AZ_BINS].push(radial);
+        for bin in azimuth_bins(radial) {
+            by_bin[bin].push(radial);
         }
     }
 

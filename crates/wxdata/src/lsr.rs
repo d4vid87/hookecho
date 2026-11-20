@@ -24,12 +24,13 @@ fn kind_of(code: &str) -> ReportKind {
 
 /// Parse an IEM `lsr.geojson` payload. Tolerant: rows missing coordinates are skipped.
 pub fn parse(json: &str) -> Vec<StormReport> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
-    };
-    let Some(feats) = v.get("features").and_then(|f| f.as_array()) else {
-        return Vec::new();
-    };
+    parse_collection(json).unwrap_or_default()
+}
+
+fn parse_collection(json: &str) -> anyhow::Result<Vec<StormReport>> {
+    let v = serde_json::from_str::<serde_json::Value>(json)?;
+    let feats = v.get("features").and_then(|f| f.as_array())
+        .ok_or_else(|| anyhow::anyhow!("storm report response is missing its features array"))?;
     let mut out = Vec::new();
     for f in feats {
         let Some(p) = f.get("properties") else {
@@ -54,17 +55,14 @@ pub fn parse(json: &str) -> Vec<StormReport> {
             }
             _ => String::new(),
         };
-        // Valid time "2026-07-20T02:48:00Z" → HHMM to match the existing report plumbing.
-        let valid = s("valid");
-        let time = valid
-            .get(11..16)
-            .map(|t| t.replace(':', ""))
-            .unwrap_or_default();
+        let valid_time = p.get("valid").and_then(|value| value.as_str())
+            .and_then(|time| time.parse::<chrono::DateTime<chrono::Utc>>().ok());
         out.push(StormReport {
             kind: kind_of(&s("type")),
             lat,
             lon,
-            time,
+            valid_time,
+            time: valid_time.map(|time| time.format("%H%M").to_string()).unwrap_or_default(),
             magnitude,
             location: s("city"),
             county: s("county"),
@@ -72,7 +70,7 @@ pub fn parse(json: &str) -> Vec<StormReport> {
             comments: s("remark"),
         });
     }
-    out
+    Ok(out)
 }
 
 /// Fetch LSRs: `window = None` pulls the trailing 6 h (live); `Some((sts, ets))` pulls an
@@ -90,7 +88,7 @@ pub async fn fetch(
         None => req.query(&[("hours", "6")]),
     };
     let body = req.send().await?.error_for_status()?.text().await?;
-    Ok(parse(&body))
+    parse_collection(&body)
 }
 
 #[cfg(test)]
@@ -115,6 +113,9 @@ mod tests {
         assert_eq!(r[0].kind, ReportKind::Wind);
         assert_eq!(r[0].magnitude, "64 MPH");
         assert_eq!(r[0].time, "0248");
+        assert_eq!(r[0].valid_time, Some("2026-07-20T02:48:00Z".parse().unwrap()));
+        assert!(parse_collection(r#"{"features":[]}"#).unwrap().is_empty());
+        assert!(parse_collection(r#"{"error":"temporarily unavailable"}"#).is_err());
         assert_eq!(r[1].kind, ReportKind::Tornado);
         assert_eq!(r[1].magnitude, "", "null magf → unmeasured");
         assert_eq!(r[1].location, "Moore");

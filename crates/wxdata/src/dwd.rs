@@ -22,8 +22,7 @@
 //! which puts a whole volume on the shared edge cache. That is real bandwidth, and it is the price
 //! of a radar app that draws Germany in a browser.
 //!
-//! ponytail: no per-moment toggles and no partial retry — a moment that fails to arrive is simply
-//! absent from the sweep, exactly as it was when this module fetched reflectivity alone.
+//! Exact archive frames require every reflectivity cut. Other moments are included as available.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use crate::level2::Identifier;
@@ -267,6 +266,7 @@ pub async fn list_volumes(http: &reqwest::Client, id: &str, date: NaiveDate) -> 
 
 /// Fetch the exact selected cycle; never substitute today's newest volume for an expired frame.
 pub async fn fetch_volume_at(http: &reqwest::Client, frame: &Identifier) -> anyhow::Result<(String, DateTime<Utc>, Scan)> {
+    anyhow::ensure!(!is_partial_frame(frame.name()), "a partial DWD live scan is not an archive frame");
     let id = frame.site().filter(|id| is_dwd(id)).ok_or_else(|| anyhow::anyhow!("invalid DWD frame"))?;
     let time = frame.date_time().ok_or_else(|| anyhow::anyhow!("invalid DWD frame time"))?;
     fetch_volume_inner(http, id, None, Some(time)).await?
@@ -322,7 +322,7 @@ async fn fetch_volume_inner(
             crate::stats::bump(crate::stats::Counter::FetchSkipped);
             return Ok(None);
         }
-        Probe::Fresh(bytes) => Some((probe_url, bytes)),
+        Probe::Fresh(bytes) => Some(bytes),
         Probe::Unreadable => None,
     };
     let mut probe = probe;
@@ -333,29 +333,14 @@ async fn fetch_volume_inner(
         // Tilt 0 was already fetched by the probe above; the rest go over the wire now.
         let prefetched = (tilt == 0).then(|| probe.take()).flatten();
         async move {
-            let (url, bytes) = match prefetched {
-                Some(pair) => pair,
-                None => get(url).await?,
-            };
-            // The stamp has to come off the reflectivity file before anything else is asked for:
-            // it is the only name the other moments answer to — and it comes out of the same
-            // decode, rather than a second open and parse of the same ~190 KB.
-            let (time, scan, stamp) = match crate::odim::decode_with_stamp(bytes) {
-                Ok(v) => v,
-                Err(e) => {
-                    // One unreadable elevation shouldn't cost the whole volume.
-                    log::warn!("dwd: skipping {url}: {e}");
-                    return None;
-                }
-            };
-            if target.is_some_and(|at| cycle_time(time) != at) { return None; }
+            let (time, scan, stamp) = read_reflectivity(http, &url, prefetched, target).await?;
             // One file is one sweep; a volume with more would mean the feed changed shape.
             let base = scan.sweeps().first()?;
             let angle = base.radials().first()?.elevation_angle_degrees();
 
             let Some(stamp) = stamp else {
                 log::warn!("dwd: {url} states no sweep end time; reflectivity only");
-                return Some((time, angle, base.clone()));
+                return Some((tilt, time, angle, base.clone()));
             };
             let extras = futures_util::future::join_all(
                 MOMENTS
@@ -383,7 +368,7 @@ async fn fetch_volume_inner(
                             .is_some_and(|r| r.elevation_angle_degrees() == angle)
                 })
                 .collect();
-            Some((time, angle, merge(base, &extras)))
+            Some((tilt, time, angle, merge(base, &extras)))
         }
     });
     // `join_all` and not a JoinSet: ten independent round trips with a small decode each, and this
@@ -400,11 +385,17 @@ async fn fetch_volume_inner(
     // when a straggler from the next volume lands mid-fetch.
     let time = found
         .iter()
-        .map(|(t, _, _)| *t)
+        .map(|(_, t, _, _)| *t)
         .min()
         .unwrap_or_else(Utc::now);
-    let sweeps = assemble(found.into_iter().filter(|(at, _, _)| cycle_time(*at) == cycle_time(time))
-        .map(|(_, a, s)| (a, s)).collect());
+    let mut slots = 0u16;
+    let parts = found.into_iter().filter(|(_, at, _, _)| cycle_time(*at) == cycle_time(time))
+        .map(|(tilt, _, angle, sweep)| {
+            slots |= 1 << tilt;
+            (angle, sweep)
+        }).collect();
+    let name = frame_name(id, time, slots, target.is_some())?;
+    let sweeps = assemble(parts);
 
     // ODIM carries no VCP: `vol5minng01` is a free-text scan strategy. Pattern 0 says so rather
     // than borrowing a NEXRAD number that would imply elevations this radar never scanned.
@@ -425,10 +416,42 @@ async fn fetch_volume_inner(
         Vec::new(),
     );
     Ok(Some((
-        volume_name(id, time),
+        name,
         time,
         Scan::with_site(meta.to_site(), vcp, sweeps),
     )))
+}
+
+pub fn is_partial_frame(name: &str) -> bool {
+    name.contains("_DWD~partial-")
+}
+
+fn frame_name(id: &str, time: DateTime<Utc>, slots: u16, exact: bool) -> anyhow::Result<String> {
+    let name = volume_name(id, time);
+    if slots == (1 << TILTS) - 1 { return Ok(name); }
+    anyhow::ensure!(!exact, "Incomplete DWD frame: received {} of {TILTS} reflectivity sweeps", slots.count_ones());
+    Ok(format!("{name}~partial-{slots:03x}"))
+}
+
+async fn read_reflectivity(
+    http: &reqwest::Client, url: &str, mut prefetched: Option<Vec<u8>>, target: Option<DateTime<Utc>>,
+) -> Option<(DateTime<Utc>, Scan, Option<String>)> {
+    // Only a missing exact-frame tilt gets retried. Other elevations and their moments stay decoded.
+    for attempt in 0..=u8::from(target.is_some()) {
+        if attempt > 0 { crate::task::sleep(std::time::Duration::from_millis(300)).await; }
+        let bytes = match prefetched.take() {
+            Some(bytes) => Ok(bytes),
+            None => crate::opera::bounded_get(http, url, 8 * 1024 * 1024).await,
+        };
+        match bytes.and_then(crate::odim::decode_with_stamp) {
+            Ok((time, scan, stamp)) if target.is_none_or(|at| cycle_time(time) == at)
+                && matches!(scan.sweeps(), [sweep] if sweep.radials().iter().any(|r| r.reflectivity().is_some())) =>
+                return Some((time, scan, stamp)),
+            Ok(_) => log::warn!("dwd: wrong cycle or missing reflectivity in {url}"),
+            Err(e) => log::warn!("dwd: could not load {url}: {e}"),
+        }
+    }
+    None
 }
 
 /// What the probe learned about the newest volume.
@@ -537,6 +560,33 @@ fn volume_name(id: &str, time: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn exact_frames_require_all_cuts_and_retry_a_missing_sweep() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let bytes = fixture("05");
+        let at = cycle_time(crate::odim::start_time(bytes.clone()).unwrap());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/tilt05", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for recovered in [false, true] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                let (status, body) = if recovered { ("200 OK", bytes.as_slice()) } else { ("503 Service Unavailable", &[][..]) };
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                socket.write_all(body).await.unwrap();
+            }
+        });
+        assert!(read_reflectivity(&reqwest::Client::new(), &url, None, Some(at)).await.is_some());
+        server.await.unwrap();
+        let complete = (1 << TILTS) - 1;
+        assert!(frame_name("DEBO", at, complete ^ (1 << 5), true).is_err());
+        let partial = frame_name("DEBO", at, complete ^ (1 << 5), false).unwrap();
+        assert!(is_partial_frame(&partial));
+        assert_ne!(partial, frame_name("DEBO", at, complete, true).unwrap());
+    }
 
     /// The probe skips a poll by predicting the name a full fetch would return. If the two ever
     /// spell it differently, every poll downloads a whole volume forever and nothing looks wrong
@@ -734,12 +784,20 @@ mod tests {
             .await
             .unwrap()
             .expect("a fresh fetch is never up to date");
-        let angles: Vec<f32> = scan
-            .sweeps()
-            .iter()
-            .map(|s| s.radials()[0].elevation_angle_degrees())
-            .collect();
-        println!("{name} at {time}: {angles:?}");
+        assert_eq!(is_partial_frame(&name), scan.sweeps().len() < TILTS as usize);
+        assert!((Utc::now() - time).num_minutes() < 30, "{time} is not a live volume");
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn exact_dwd_volume_has_all_advertised_cuts() {
+        let client = reqwest::Client::new();
+        let frames = list_volumes(&client, "DEBO", Utc::now().date_naive()).await.unwrap();
+        let frame = frames.last().expect("complete advertised DWD cycle");
+        let (name, time, scan) = fetch_volume_at(&client, frame).await.expect("fetch exact cycle");
+        assert_eq!(name, frame.name());
+        assert_eq!(Some(cycle_time(time)), frame.date_time());
+        let angles: Vec<_> = scan.sweeps().iter().map(|s| s.radials()[0].elevation_angle_degrees()).collect();
         assert_eq!(
             scan.sweeps().len(),
             TILTS as usize,
@@ -758,10 +816,6 @@ mod tests {
             angles[0] < 1.0,
             "base tilt is 0.5 degrees, got {}",
             angles[0]
-        );
-        assert!(
-            (Utc::now() - time).num_minutes() < 30,
-            "{time} is not a live volume"
         );
     }
 }

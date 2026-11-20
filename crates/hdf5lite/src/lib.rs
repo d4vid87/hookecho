@@ -83,11 +83,11 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// An attribute's value. HDF5 attributes are typed arrays, but every one this reader is asked for
-/// is a scalar number or a short string, so those are the two shapes offered.
+/// An attribute value. Numeric arrays are read in full only when explicitly requested.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Num(f64),
+    Numbers(Vec<f64>),
     Str(String),
 }
 
@@ -96,6 +96,7 @@ impl Value {
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Num(v) => Some(*v),
+            Value::Numbers(v) => v.first().copied(),
             Value::Str(_) => None,
         }
     }
@@ -104,7 +105,7 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) => Some(s),
-            Value::Num(_) => None,
+            _ => None,
         }
     }
 }
@@ -164,7 +165,13 @@ impl File {
 
     /// Every attribute on the object at `path`, group or dataset.
     pub fn attributes(&self, path: &str) -> Result<HashMap<String, Value>> {
-        Ok(header::object_attributes(&self.data, self.resolve(path)?)?
+        self.attributes_with_arrays(path, &[])
+    }
+
+    /// Read the specified one-dimensional numeric attributes only at their expected lengths.
+    /// Other attributes retain their usual scalar representation.
+    pub fn attributes_with_arrays(&self, path: &str, arrays: &[(&str, usize)]) -> Result<HashMap<String, Value>> {
+        Ok(header::object_attributes(&self.data, self.resolve(path)?, arrays)?
             .into_iter()
             .filter_map(|(k, v)| v.map(|v| (k, v)))
             .collect())

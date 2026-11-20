@@ -570,10 +570,6 @@ async fn fetch_group(
         }
     };
 
-    // Keep the published group timestamp as frame identity and decoded radial times as observations.
-    let (time, base) = fetch(group[0].clone())
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no decodable OPERA volume for {id}"))?;
     let mut dublin_velocity = None;
     if id.eq_ignore_ascii_case("IEDUB") {
         for back in 0..2 {
@@ -600,6 +596,10 @@ async fn fetch_group(
         return Ok(None);
     }
 
+    // The listing identifies the frame, including Dublin's velocity revision, before any HDF5 read.
+    let (time, base) = fetch(group[0].clone())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no decodable OPERA volume for {id}"))?;
     let files = futures_util::future::join_all(group[1..].iter().cloned().map(&fetch)).await;
     let files: Vec<Scan> = files.into_iter().flatten().map(|(_, scan)| scan).collect();
     if matches!(meta.state, "SE" | "FI" | "CH" | "EE" | "LT" | "FR") || id.eq_ignore_ascii_case("IEDUB") {
@@ -706,6 +706,22 @@ fn angle(sweep: &Sweep) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn unchanged_published_group_never_requests_hdf5() {
+        let meta = site_by_id("PLGSA").unwrap();
+        let group = groups_in(LISTING, meta).remove(0);
+        let anchor = key_minute(&group[0]).unwrap();
+        let name = volume_name(meta.id, anchor);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let http = reqwest::Client::builder().proxy(proxy).build().unwrap();
+        tokio::select! {
+            result = fetch_group(&http, meta, group, Some(&name), anchor) => assert!(result.unwrap().is_none()),
+            _ = listener.accept() => panic!("unchanged frame requested an object"),
+        }
+    }
 
     #[test]
     fn history_uses_complete_publisher_groups_and_parseable_full_site_names() {
@@ -935,7 +951,9 @@ mod tests {
             .await
             .expect("volume")
             .expect("a fresh fetch is never up to date");
-        assert!(name.starts_with("HRBIL-"), "{name}");
+        let frame = Identifier::new(name);
+        assert_eq!(frame.site(), Some("HRBIL"));
+        assert!(frame.date_time().is_some());
         assert!(scan.sweeps().len() >= 5, "{} sweeps", scan.sweeps().len());
         let base = &scan.sweeps()[0].radials()[0];
         assert!(

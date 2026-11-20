@@ -355,6 +355,7 @@ impl Timeline {
 
     /// Append a live scan without interrupting active playback or an archive selection.
     pub fn append_head(&mut self, id: Identifier) {
+        if wxdata::dwd::is_partial_frame(id.name()) { return; }
         if self.following {
             if let Some(time) = id.date_time() {
                 self.date = time.date_naive();
@@ -1167,6 +1168,8 @@ mod tests {
         t.playing = true;
         t.playhead = 2; // mid-window
         let before = t.frames.len();
+        t.append_head(Identifier::new("DEBO20261119_001000_DWD~partial-3df".into()));
+        assert_eq!(t.frames.len(), before, "partial DWD live frame cannot occupy an archive slot");
         t.append_head(Identifier::new("KTLX20130520_0012_00_V06".to_string()));
         assert_eq!(t.frames.len(), before + 1, "head appended");
         assert_eq!(

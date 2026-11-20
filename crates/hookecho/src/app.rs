@@ -9,6 +9,8 @@
 mod chrome;
 mod mobile;
 mod request_book;
+#[cfg(any(target_os = "android", test))]
+mod widget_snapshot;
 
 use request_book::{retry_once, RequestBook};
 
@@ -408,6 +410,33 @@ struct ChaserVideoCheck {
     result: Option<Result<wxdata::youtube::Status, String>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FireLayer { Perimeters, Incidents }
+
+impl FireLayer {
+    const BOTH: [Self; 2] = [Self::Perimeters, Self::Incidents];
+
+    fn lane(self) -> RequestLane {
+        RequestLane::Feed(match self {
+            Self::Perimeters => "Wildfire perimeters",
+            Self::Incidents => "Wildfire incidents",
+        })
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct FireRefresh {
+    next: Option<Instant>,
+    last_success: Option<Instant>,
+}
+
+impl FireRefresh {
+    fn finish(&mut self, now: Instant, success: bool) {
+        if success { self.last_success = Some(now); }
+        self.next = Some(now + Duration::from_secs(if success { 900 } else { 30 }));
+    }
+}
+
 /// Background overlay fetch results.
 enum OverlayMsg {
     ChaserVideo { url: String, requested: Instant, result: Result<wxdata::youtube::Status, String> },
@@ -492,7 +521,8 @@ enum OverlayMsg {
     /// FAA camera sites for the requested bbox.
     Webcams(Vec<wxdata::webcams::CamSite>),
     /// Wildfire perimeters + incident points for the requested bbox.
-    Fires(Vec<GeoFeature>, Vec<wxdata::wfigs::FireIncident>),
+    FirePerimeters(Vec<GeoFeature>),
+    FireIncidents(Vec<wxdata::wfigs::FireIncident>),
     /// AirNow AQI observations for the requested bbox.
     Aqi(Vec<wxdata::airnow::AqiOb>),
     /// Live surface stations for the telemetry cards.
@@ -645,7 +675,7 @@ enum OverlaySource {
     /// Windy API key — empty for FAA-only, which is the keyless default.
     Webcams(f64, f64, f64, f64, String),
     /// Wildfire perimeters + incidents within a lon/lat bbox `(west, south, east, north)`.
-    Fires(f64, f64, f64, f64),
+    Fires(FireLayer, [f64; 4]),
     /// AirNow AQI within a lon/lat bbox, plus the user's key (never fetched without one).
     Aqi(f64, f64, f64, f64, String),
     /// Live stations in a lat/lon bbox, plus the view centre the keyed networks are asked around
@@ -723,7 +753,7 @@ impl RequestLane {
                 "Hurricane reconnaissance" | "Aviation advisories" | "Nearest station observations"
                 | "HRRR station temperature" => 600,
                 "RTMA station temperature" => 3600,
-                "Tropical cyclones" | "Wildfires" | "Air quality"
+                "Tropical cyclones" | "Wildfire perimeters" | "Wildfire incidents" | "Air quality"
                 | "Temporary flight restrictions" | "Wind particles" | "Freezing levels"
                 | "Contours" | "Highway cameras" => 900,
                 "Surface analysis" | "Archived storm reports" => 1800,
@@ -807,13 +837,18 @@ struct AlertCoverage {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ArchiveWarningFrame {
+enum DisplayedOverlayFrame {
     Live,
     WaitingForScan,
     Scan(i64),
 }
 
-impl ArchiveWarningFrame {
+impl DisplayedOverlayFrame {
+    fn at(following: bool, time: Option<DateTime<Utc>>) -> Self {
+        if following { Self::Live }
+        else { time.map_or(Self::WaitingForScan, |t| Self::Scan(t.timestamp())) }
+    }
+
     fn features<'a>(
         self,
         live: &'a [GeoFeature],
@@ -824,6 +859,27 @@ impl ArchiveWarningFrame {
             Self::WaitingForScan => &[],
             Self::Scan(time) => archived.peek(&time).map_or(&[], Vec::as_slice),
         }
+    }
+
+    fn report_bucket(self) -> Option<i64> {
+        match self {
+            Self::Scan(time) => Some(time.div_euclid(1800)),
+            _ => None,
+        }
+    }
+
+    fn reports<'a>(
+        self, live: &'a [wxdata::spc::StormReport],
+        archived: &'a LruCache<i64, Vec<wxdata::spc::StormReport>>,
+    ) -> &'a [wxdata::spc::StormReport] {
+        let Self::Scan(scan) = self else {
+            return if self == Self::Live { live } else { &[] };
+        };
+        let Some(reports) = archived.peek(&scan.div_euclid(1800)) else { return &[] };
+        // Archived buckets are sorted newest first, with undated reports last.
+        let first = reports.partition_point(|r| r.valid_time.is_some_and(|t| t.timestamp() > scan));
+        let end = reports.partition_point(|r| r.valid_time.is_some_and(|t| t.timestamp() >= scan - 6 * 3600));
+        &reports[first..end]
     }
 
     fn notice(
@@ -844,7 +900,7 @@ impl ArchiveWarningFrame {
 #[cfg(test)]
 #[test]
 fn archive_warning_state_never_substitutes_another_scan() {
-    use ArchiveWarningFrame::{Live, Scan, WaitingForScan};
+    use DisplayedOverlayFrame::{Live, Scan, WaitingForScan};
     let live = vec![GeoFeature {
         rings: Vec::new(),
         fill: [0; 4],
@@ -864,6 +920,52 @@ fn archive_warning_state_never_substitutes_another_scan() {
     assert!(Scan(101).notice(&archived, Some(101)).unwrap().contains("unavailable"));
     archived.put(101, Vec::new());
     assert_eq!(Scan(101).notice(&archived, Some(101)), None);
+}
+
+#[cfg(test)]
+#[test]
+fn archived_reports_follow_painted_scan_across_midnight_without_future_or_live_data() {
+    let origin = "2013-05-21T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let report = |offset| {
+        let t = origin + chrono::Duration::minutes(offset);
+        wxdata::spc::StormReport { kind: wxdata::spc::ReportKind::Hail, lat: 1., lon: 2.,
+            valid_time: Some(t), time: String::new(), magnitude: String::new(),
+            location: String::new(), county: String::new(), state: String::new(), comments: String::new() }
+    };
+    let live = [report(24 * 60)];
+    let mut archived = LruCache::new(NonZeroUsize::new(2).unwrap());
+    let displayed = DisplayedOverlayFrame::at(false, Some(origin + chrono::Duration::minutes(2)));
+    assert!(displayed.reports(&live, &archived).is_empty());
+    archived.put(displayed.report_bucket().unwrap(), vec![
+        report(25), report(2), report(0), report(2 - 360), report(1 - 360),
+    ]);
+    let visible = displayed.reports(&live, &archived);
+    assert_eq!(visible.len(), 3);
+    assert_eq!(visible[0].valid_time, report(2).valid_time);
+    assert_eq!(visible[2].valid_time, report(2 - 360).valid_time);
+    let later = DisplayedOverlayFrame::at(false, Some(origin + chrono::Duration::minutes(25)));
+    assert_eq!(later.reports(&live, &archived)[0].valid_time, report(25).valid_time);
+    assert!(DisplayedOverlayFrame::at(false, None).reports(&live, &archived).is_empty());
+    assert_eq!(DisplayedOverlayFrame::at(true, None).reports(&live, &archived)[0].valid_time, live[0].valid_time);
+}
+
+#[cfg(test)]
+#[test]
+fn wildfire_subfeeds_recover_independently_without_advancing_last_good_time() {
+    let mut feeds = [FireRefresh::default(); 2];
+    let now = Instant::now();
+    feeds[0].finish(now, true);
+    feeds[1].finish(now, true);
+    let later = now + Duration::from_secs(900);
+    feeds[0].finish(later, false);
+    feeds[1].finish(later, true);
+    assert_eq!(feeds[0].last_success, Some(now));
+    assert_eq!(feeds[0].next, Some(later + Duration::from_secs(30)));
+    assert_eq!(feeds[1].last_success, Some(later));
+    assert_eq!(feeds[1].next, Some(later + Duration::from_secs(900)));
+    let perimeters = OverlaySource::Fires(FireLayer::Perimeters, [0.; 4]);
+    let incidents = OverlaySource::Fires(FireLayer::Incidents, [0.; 4]);
+    assert_ne!(perimeters.lane(), incidents.lane());
 }
 
 impl AlertCoverage {
@@ -981,7 +1083,7 @@ impl OverlaySource {
             Self::Tfr(..) => RequestLane::Feed("Temporary flight restrictions"),
             Self::Metar(..) => RequestLane::Feed("Surface observations"),
             Self::Webcams(..) => RequestLane::Feed("Webcams"),
-            Self::Fires(..) => RequestLane::Feed("Wildfires"),
+            Self::Fires(part, _) => part.lane(),
             Self::Aqi(..) => RequestLane::Feed("Air quality"),
             Self::Stations { .. } => RequestLane::Feed("Live stations"),
             Self::Ppef => RequestLane::Feed("Electric field"),
@@ -1258,7 +1360,7 @@ impl OverlaySource {
                     Some(b) => {
                         let end =
                             chrono::DateTime::from_timestamp((b + 1) * 1800, 0).unwrap_or_default();
-                        let start = end - chrono::Duration::hours(6);
+                        let start = end - chrono::Duration::minutes(390); // six hours before the earliest scan in this bucket
                         let fmt = "%Y-%m-%dT%H:%MZ";
                         wxdata::lsr::fetch(
                             http,
@@ -1497,23 +1599,10 @@ impl OverlaySource {
                 }
                 OverlayMsg::Webcams(sites)
             }
-            OverlaySource::Fires(w, s, e, n) => {
-                // Two servers; either can be down without taking the other's layer with it.
-                let bbox = [w, s, e, n];
-                let perims = wxdata::wfigs::fetch_perimeters(http, bbox)
-                    .await
-                    .unwrap_or_else(|e| {
-                        log::warn!("wfigs perimeters: {e}");
-                        Vec::new()
-                    });
-                let incidents = wxdata::wfigs::fetch_incidents(http, bbox)
-                    .await
-                    .unwrap_or_else(|e| {
-                        log::warn!("wfigs incidents: {e}");
-                        Vec::new()
-                    });
-                OverlayMsg::Fires(perims, incidents)
-            }
+            OverlaySource::Fires(FireLayer::Perimeters, bbox) =>
+                OverlayMsg::FirePerimeters(wxdata::wfigs::fetch_perimeters(http, bbox).await?),
+            OverlaySource::Fires(FireLayer::Incidents, bbox) =>
+                OverlayMsg::FireIncidents(wxdata::wfigs::fetch_incidents(http, bbox).await?),
             OverlaySource::Aqi(w, s, e, n, key) => {
                 OverlayMsg::Aqi(wxdata::airnow::fetch_bbox(http, &key, [w, s, e, n]).await?)
             }
@@ -2781,6 +2870,7 @@ enum ShotDest {
     /// Pushed to the user's ntfy topic as an attachment, captioned with this title.
     Push(String),
     /// Written silently for the Android home-screen widget to pick up.
+    #[cfg(target_os = "android")]
     Widget(std::path::PathBuf),
 }
 
@@ -2831,11 +2921,82 @@ struct LoopEncoding {
     cancel_browser: js_sys::Function,
 }
 
-/// A placefile the app has fetched and is tracking (mirrors a `PlacefileConfig` by URL).
-/// What the memoised placefile labels depend on: (placefile item/enabled/icon fingerprint,
-/// minute, view range in nmi).
-type PlaceLabelKey = (usize, i64, i32);
+#[derive(Default)]
+struct PlacefileGates {
+    times: Vec<DateTime<Utc>>,
+    ranges: Vec<f32>,
+}
 
+impl PlacefileGates {
+    fn new<'a>(items: impl Iterator<Item = &'a wxdata::placefile::PlaceItem>) -> Self {
+        let mut gates = Self::default();
+        for item in items {
+            if let Some((start, end)) = item.time {
+                gates.times.push(start);
+                // TimeRange includes both endpoints.
+                if let Some(after_end) = end.checked_add_signed(chrono::Duration::nanoseconds(1)) {
+                    gates.times.push(after_end);
+                }
+            }
+            if item.threshold_nmi > 0.0 { gates.ranges.push(item.threshold_nmi); }
+        }
+        gates.times.sort_unstable();
+        gates.times.dedup();
+        gates.ranges.sort_unstable_by(f32::total_cmp);
+        gates.ranges.dedup();
+        gates
+    }
+
+    fn view(&self, now: DateTime<Utc>, range: f32) -> PlacefileView {
+        PlacefileView { now, range, bucket: [
+            self.times.partition_point(|&time| time <= now),
+            self.ranges.partition_point(|&threshold| threshold < range),
+        ] }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PlacefileView {
+    now: DateTime<Utc>,
+    range: f32,
+    bucket: [usize; 2],
+}
+
+impl PlacefileView {
+    fn shows(self, item: &wxdata::placefile::PlaceItem) -> bool {
+        !(item.threshold_nmi > 0.0 && self.range > item.threshold_nmi)
+            && item.time.is_none_or(|(start, end)| self.now >= start && self.now <= end)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn placefile_buckets_track_exact_visibility_and_reuse_the_mesh_between_boundaries() {
+    let start = "2026-11-19T22:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let end = start + chrono::Duration::minutes(5);
+    let tick = chrono::Duration::nanoseconds(1);
+    let item = wxdata::placefile::PlaceItem {
+        time: Some((start, end)), threshold_nmi: 41.25, anchor: None, properties: None,
+        kind: wxdata::placefile::PlaceKind::Line { color: [255; 4], width: 1.0, pts: Vec::new() },
+    };
+    let gates = PlacefileGates::new(std::iter::once(&item));
+    let before = gates.view(start - tick, 41.25);
+    let first = gates.view(start, 41.25);
+    let last = gates.view(end, 41.25);
+    let after = gates.view(end + tick, 41.25);
+    let farther = gates.view(start, 41.26);
+    assert!(!before.shows(&item) && !after.shows(&item) && !farther.shows(&item));
+    assert!(first.shows(&item) && last.shows(&item));
+    assert_eq!(first.bucket, last.bucket);
+    for hidden in [before, after, farther] { assert_ne!(hidden.bucket, first.bucket); }
+    assert_eq!(gates.times.get(before.bucket[0]), Some(&start));
+    assert_eq!(gates.times.get(first.bucket[0]), Some(&(end + tick)));
+    assert_eq!(gates.times.get(after.bucket[0]), None);
+    assert_eq!(PlacefileGates::default().view(start, 1.0).bucket,
+        PlacefileGates::default().view(end, 200.0).bucket);
+}
+
+/// A placefile the app has fetched and is tracking (mirrors a PlacefileConfig by URL).
 struct LoadedPlacefile {
     /// A URL, or the synthetic `plugin:<name>` key for a plugin-produced overlay.
     url: String,
@@ -3908,13 +4069,13 @@ pub struct HookEchoApp {
     /// The scan currently being fetched (dedupes in-flight requests).
     arch_warn_inflight: Option<i64>,
     arch_warn_retry: Option<(i64, Instant)>,
-    arch_warn_shown: ArchiveWarningFrame,
+    arch_warn_shown: DisplayedOverlayFrame,
     arch_warn_shown_since: Instant,
     /// Archived local storm reports (feature CC) keyed by 30-min UTC bucket (ts/1800); shown while
     /// the active pane is scrubbed off-live (each bucket = the 6 h of reports ending there).
     arch_lsr: LruCache<i64, Vec<wxdata::spc::StormReport>>,
     arch_lsr_inflight: Option<i64>,
-    arch_lsr_shown: Option<i64>,
+    arch_lsr_retry: Option<(i64, Instant)>,
     /// One slot per SPC outlook day, 1..=8 (Days 4–8 are the experimental probability layer).
     outlook_features: [Vec<GeoFeature>; 8],
     fire_weather_features: Vec<GeoFeature>,
@@ -3956,6 +4117,7 @@ pub struct HookEchoApp {
     field_atlas: crate::field_atlas::Cache,
     built_gen: u64,
     built_zoom_bucket: i32,
+    built_placefile_bucket: [usize; 2],
     built_theme: crate::settings::Theme,
     pending_overlay: Option<OverlayUpload>,
     overlay_ready: bool,
@@ -4045,8 +4207,8 @@ pub struct HookEchoApp {
     paste_target: Option<egui::Id>,
     /// Loaded placefile overlays (reconciled from `settings.placefiles` by URL).
     placefiles: Vec<LoadedPlacefile>,
-    /// [`App::placefile_labels`] memoised, keyed by [`PlaceLabelKey`].
-    placefile_label_cache: Option<(PlaceLabelKey, std::sync::Arc<[PlaceLabel]>)>,
+    placefile_gates: Option<PlacefileGates>,
+    placefile_label_cache: Option<([usize; 2], std::sync::Arc<[PlaceLabel]>)>,
     placefile_window: ui::placefile_window::PlacefileWindow,
     /// Last map viewport size (px), used to estimate the view range for placefile thresholds.
     last_viewport: (f32, f32),
@@ -4145,8 +4307,11 @@ pub struct HookEchoApp {
     goes: Vec<crate::satellite_time::Catalog>,
     /// The previous flash-extent grid, kept only so the lightning jump has something to subtract.
     glm_fed_prev: Option<wxdata::mrms::MrmsField>,
-    /// When the Android widget snapshot was last written.
+    /// When the app last checked which home-screen widgets need updates.
+    #[cfg(target_os = "android")]
     widget_shot_at: Option<Instant>,
+    #[cfg(target_os = "android")]
+    widget_writer: Arc<tokio::sync::Semaphore>,
     /// A warning that wants a radar picture pushed after it (see `settings.ntfy_snapshot`).
     snapshot_push: Option<String>,
     /// Per-location cooldown for the rotation-near-a-watched-place alert.
@@ -4424,7 +4589,7 @@ pub struct HookEchoApp {
     fire_perims: Vec<GeoFeature>,
     fire_incidents: Vec<wxdata::wfigs::FireIncident>,
     fire_bounds: Option<(f64, f64, f64, f64)>,
-    fire_last_fetch: Option<Instant>,
+    fire_refresh: [FireRefresh; 2],
     /// AirNow AQI dots: toggle, the obs in view, and the bbox/clock they were fetched for. Needs
     /// a user key; without one the layer never fetches.
     show_aqi: bool,
@@ -5097,11 +5262,11 @@ impl HookEchoApp {
             arch_warns: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_warn_inflight: None,
             arch_warn_retry: None,
-            arch_warn_shown: ArchiveWarningFrame::Live,
+            arch_warn_shown: DisplayedOverlayFrame::Live,
             arch_warn_shown_since: Instant::now(),
             arch_lsr: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_lsr_inflight: None,
-            arch_lsr_shown: None,
+            arch_lsr_retry: None,
             outlook_features: std::array::from_fn(|_| Vec::new()),
             fire_weather_features: Vec::new(),
             cpc_features: Vec::new(),
@@ -5132,6 +5297,7 @@ impl HookEchoApp {
             field_atlas: Default::default(),
             built_gen: u64::MAX,
             built_zoom_bucket: i32::MIN,
+            built_placefile_bucket: [0; 2],
             built_theme: crate::settings::Theme::Dark,
             pending_overlay: None,
             overlay_ready: false,
@@ -5178,6 +5344,7 @@ impl HookEchoApp {
             pending_paste: None,
             paste_target: None,
             placefiles: Vec::new(),
+            placefile_gates: None,
             placefile_label_cache: None,
             placefile_window: Default::default(),
             last_viewport: (1000.0, 800.0),
@@ -5242,7 +5409,10 @@ impl HookEchoApp {
             share_sent: None,
             goes: Vec::new(),
             glm_fed_prev: None,
+            #[cfg(target_os = "android")]
             widget_shot_at: None,
+            #[cfg(target_os = "android")]
+            widget_writer: Arc::new(tokio::sync::Semaphore::new(1)),
             snapshot_push: None,
             rotation_alerted: std::collections::HashMap::new(),
             last_chime: None,
@@ -5422,7 +5592,7 @@ impl HookEchoApp {
             fire_perims: Vec::new(),
             fire_incidents: Vec::new(),
             fire_bounds: None,
-            fire_last_fetch: None,
+            fire_refresh: Default::default(),
             show_aqi: false,
             aqi: Vec::new(),
             aqi_bounds: None,
@@ -6301,9 +6471,7 @@ impl HookEchoApp {
             };
             self.spawn_overlay(ctx, source);
         }
-        if changed {
-            self.overlay_gen = self.overlay_gen.wrapping_add(1);
-        }
+        if changed { self.invalidate_placefiles(); }
     }
 
     /// What the active pane is showing, for a plugin to answer about. Archive-aware: scrubbing
@@ -8275,6 +8443,7 @@ impl HookEchoApp {
             self.saved = settings.clone();
         }
         self.settings = settings;
+        self.invalidate_placefiles();
         self.settings_save_error = None;
         self.restore_overlay_settings();
         self.palettes.reload(&self.settings.palette_paths());
@@ -9130,6 +9299,7 @@ impl HookEchoApp {
             if self.settings.stored_web_file(name) != Some(text.as_str()) {
                 self.settings.web_files.insert(name.clone(), text.clone());
                 self.placefiles.retain(|layer| layer.url != *name);
+                self.invalidate_placefiles();
             }
         }
         for config in &pack.placefiles {
@@ -11046,12 +11216,19 @@ impl HookEchoApp {
                         log::debug!("discarding stale {} reply", lane.label());
                         continue;
                     }
+                    if let Some(part) = FireLayer::BOTH.into_iter().find(|part| lane == part.lane()) {
+                        self.fire_refresh[part as usize].finish(Instant::now(), result.is_ok());
+                    }
                     match result {
                         Ok(msg) => msg,
                         Err(err) => {
                             if lane == RequestLane::Feed("Archived warnings") {
                                 self.arch_warn_retry = self.arch_warn_inflight.take()
                                     .map(|scan| (scan, Instant::now() + Duration::from_secs(15)));
+                            }
+                            if lane == RequestLane::Feed("Archived storm reports") {
+                                self.arch_lsr_retry = self.arch_lsr_inflight.take()
+                                    .map(|bucket| (bucket, Instant::now() + Duration::from_secs(15)));
                             }
                             if let RequestLane::Field(layer) = &lane {
                                 if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == *layer) {
@@ -11170,7 +11347,7 @@ impl HookEchoApp {
                         lp.loaded = true;
                         lp.error = None;
                         lp.last_fetch = Some(Instant::now());
-                        self.overlay_gen = self.overlay_gen.wrapping_add(1);
+                        self.invalidate_placefiles();
                     }
                 }
                 OverlayMsg::PlacefileError(url, err) => {
@@ -11328,10 +11505,14 @@ impl HookEchoApp {
                 OverlayMsg::GefsPostage(result) => {
                     self.gefs_postage = Some(result);
                 }
-                OverlayMsg::StormReports(bucket, reports) => match bucket {
+                OverlayMsg::StormReports(bucket, mut reports) => match bucket {
                     None => self.storm_reports = reports,
                     Some(b) => {
+                        reports.sort_by_key(|r| std::cmp::Reverse(r.valid_time));
                         self.arch_lsr.put(b, reports);
+                        if self.arch_lsr_retry.is_some_and(|(failed, _)| failed == b) {
+                            self.arch_lsr_retry = None;
+                        }
                         if self.arch_lsr_inflight == Some(b) {
                             self.arch_lsr_inflight = None;
                         }
@@ -11433,14 +11614,11 @@ impl HookEchoApp {
                     self.webcams = sites;
                 }
                 OverlayMsg::Aqi(obs) => self.aqi = obs,
-                OverlayMsg::Fires(perims, incidents) => {
+                OverlayMsg::FirePerimeters(perims) => {
                     self.fire_perims = perims;
-                    self.fire_incidents = incidents;
-                    // Perimeters ride the tessellated overlay layer, so the assembled feature
-                    // set has to be rebuilt — bumping the generation alone re-tessellates the
-                    // old list and the perimeters never appear.
                     self.rebuild_overlays();
                 }
+                OverlayMsg::FireIncidents(incidents) => self.fire_incidents = incidents,
                 OverlayMsg::Stations(obs) => self.stations.ingest(obs),
                 OverlayMsg::Ppef(p) => self.stations.ppef = Some(p),
                 OverlayMsg::DotCams(cams) => self.stations.cams = cams,
@@ -11652,15 +11830,14 @@ impl HookEchoApp {
         Some(v.volume.as_ref()?.time.timestamp() / 300)
     }
 
-    fn archive_warning_frame(&self) -> ArchiveWarningFrame {
-        let view = &self.views[self.active];
-        if view.timeline.following {
-            ArchiveWarningFrame::Live
-        } else {
-            view.displayed_time().map_or(ArchiveWarningFrame::WaitingForScan, |time| {
-                ArchiveWarningFrame::Scan(time.timestamp())
-            })
-        }
+    fn archive_warning_frame(&self) -> DisplayedOverlayFrame {
+        let v = &self.views[self.active];
+        DisplayedOverlayFrame::at(v.timeline.following, v.displayed_time())
+    }
+
+    fn storm_report_frame(&self) -> DisplayedOverlayFrame {
+        let v = &self.views[self.active];
+        DisplayedOverlayFrame::at(v.timeline.following, v.presented_time())
     }
 
     /// Drive the shared archived-warning layer from the active pane's displayed scan.
@@ -11671,7 +11848,7 @@ impl HookEchoApp {
             self.arch_warn_shown_since = Instant::now();
             self.rebuild_overlays();
         }
-        let ArchiveWarningFrame::Scan(scan) = frame else {
+        let DisplayedOverlayFrame::Scan(scan) = frame else {
             if self.arch_warn_inflight.take().is_some() {
                 self.overlay_requests
                     .lock()
@@ -11716,40 +11893,29 @@ impl HookEchoApp {
     }
 
     fn active_storm_reports(&self) -> &[wxdata::spc::StormReport] {
-        if let Some(b) = self.arch_lsr_shown {
-            if let Some(r) = self.arch_lsr.peek(&b) {
-                return r;
-            }
-        }
-        &self.storm_reports
+        self.storm_report_frame().reports(&self.storm_reports, &self.arch_lsr)
     }
 
-    /// Drive the archived-LSR set from the active pane's playhead (mirrors
-    /// [`Self::sync_archive_warnings`], on 30-min buckets).
+    /// Archived local storm reports share a half-hour download but follow the exact painted scan.
     fn sync_archive_lsr(&mut self, ctx: &egui::Context) {
-        if !self.show_storm_reports {
-            return;
+        let target = self.storm_report_frame().report_bucket().filter(|_| self.show_storm_reports);
+        let needed = target.filter(|b| self.arch_lsr.get(b).is_none());
+        if self.arch_lsr_inflight.is_some() && self.arch_lsr_inflight != needed {
+            self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                .cancel(&RequestLane::Feed("Archived storm reports"));
+            self.arch_lsr_inflight = None;
         }
-        let bucket = (|| {
-            let v = &self.views[self.active];
-            if v.timeline.following {
-                return None;
-            }
-            Some(v.volume.as_ref()?.time.timestamp() / 1800)
-        })();
-        match bucket {
-            None => self.arch_lsr_shown = None,
-            Some(b) => {
-                let cached = self.arch_lsr.contains(&b);
-                if !cached && self.arch_lsr_inflight != Some(b) {
-                    self.arch_lsr_inflight = Some(b);
-                    self.spawn_overlay(ctx, OverlaySource::StormReports(Some(b)));
-                }
-                if cached {
-                    self.arch_lsr_shown = Some(b);
-                }
+        let Some(b) = needed else { return };
+        if self.arch_lsr_inflight == Some(b) { return; }
+        if let Some((failed, deadline)) = self.arch_lsr_retry {
+            let wait = deadline.saturating_duration_since(Instant::now());
+            if failed == b && !wait.is_zero() {
+                ctx.request_repaint_after(wait);
+                return;
             }
         }
+        self.arch_lsr_inflight = Some(b);
+        self.spawn_overlay(ctx, OverlaySource::StormReports(Some(b)));
     }
 
     /// Fetch the Area Forecast Discussion for the active site's WFO (feature DD).
@@ -12027,20 +12193,33 @@ impl HookEchoApp {
             return;
         }
         let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
-        let stale = self
-            .fire_last_fetch
-            .is_none_or(|t| t.elapsed().as_secs() >= 900);
         let (clon, clat) = ((min_lon + max_lon) * 0.5, (min_lat + max_lat) * 0.5);
         let drifted = self.fire_bounds.is_none_or(|(lo0, la0, lo1, la1)| {
             let (mlon, mlat) = ((lo0 + lo1) * 0.5, (la0 + la1) * 0.5);
             let (hw, hh) = ((lo1 - lo0) * 0.25, (la1 - la0) * 0.25);
             (clon - mlon).abs() > hw || (clat - mlat).abs() > hh
+                || max_lon - min_lon > (lo1 - lo0) * 1.25 || max_lat - min_lat > (la1 - la0) * 1.25
         });
-        if stale || drifted {
-            let b = (min_lon, min_lat, max_lon, max_lat);
-            self.fire_last_fetch = Some(Instant::now());
-            self.fire_bounds = Some(b);
-            self.spawn_overlay(ctx, OverlaySource::Fires(b.0, b.1, b.2, b.3));
+        if drifted {
+            self.fire_bounds = Some((min_lon, min_lat, max_lon, max_lat));
+            self.fire_refresh = Default::default();
+            self.fire_incidents.clear();
+            if !self.fire_perims.is_empty() {
+                self.fire_perims.clear();
+                self.rebuild_overlays();
+            }
+        }
+        let (w, s, e, n) = self.fire_bounds.unwrap_or((min_lon, min_lat, max_lon, max_lat));
+        let now = Instant::now();
+        for part in FireLayer::BOTH {
+            let feed = &mut self.fire_refresh[part as usize];
+            if feed.next.is_none_or(|deadline| deadline <= now) {
+                feed.next = Some(now + Duration::from_secs(900));
+                self.spawn_overlay(ctx, OverlaySource::Fires(part, [w, s, e, n]));
+            }
+        }
+        if let Some(next) = self.fire_refresh.iter().filter_map(|f| f.next).min() {
+            ctx.request_repaint_after(next.saturating_duration_since(now));
         }
     }
 
@@ -12865,18 +13044,9 @@ impl HookEchoApp {
     /// Placefile items currently visible (enabled, zoom threshold met, within time range), as
     /// `(item, opacity, loaded-placefile index)`. Iterated in `settings.placefiles` order, which
     /// is the paint order the Layer Manager reorders.
-    fn visible_placefile_items(&self) -> Vec<(&wxdata::placefile::PlaceItem, f32, usize)> {
-        crate::prof_scope!("visible_placefile_items");
-        self.visible_placefile_iter().collect()
-    }
-
-    /// The same set, lazily — so a caller that only asks whether there *are* any does not build
-    /// the whole list to find out.
     fn visible_placefile_iter(
-        &self,
+        &self, view: PlacefileView,
     ) -> impl Iterator<Item = (&wxdata::placefile::PlaceItem, f32, usize)> {
-        let range = self.view_range_nmi();
-        let now = self.placefile_time();
         // Configured placefiles in Layer-Manager order, then plugin output on top of them: a
         // plugin is something the user wrote for this session, so it should not be buried.
         let sources = self
@@ -12901,42 +13071,45 @@ impl HookEchoApp {
                     lp.pf
                         .items
                         .iter()
-                        .filter(move |it| !(it.threshold_nmi > 0.0 && range > it.threshold_nmi))
-                        .filter(move |it| it.time.is_none_or(|(a, b)| now >= a && now <= b))
+                        .filter(move |it| view.shows(it))
                         .map(move |it| (it, opacity, li))
                 })
         })
     }
 
-    fn placefile_time(&self) -> chrono::DateTime<Utc> {
-        self.views[self.active]
-            .timeline
-            .selected_time()
-            .or_else(|| self.views[self.active].displayed_time())
-            .unwrap_or_else(Utc::now)
+    fn placefile_clock(&self) -> Option<DateTime<Utc>> {
+        let view = &self.views[self.active];
+        view.timeline.selected_time().or_else(|| view.displayed_time())
     }
 
-    /// [`Self::placefile_labels`] memoised for the frame's inputs — it deep-clones every item's
-    /// strings, and ran once per frame over every enabled placefile.
-    fn placefile_labels_cached(&mut self) -> std::sync::Arc<[PlaceLabel]> {
-        // Include the selected frame's exact second so archive scrubbing changes timed labels.
-        let fingerprint: usize = self
-            .placefiles
-            .iter()
-            .map(|p| p.pf.items.len() + usize::from(p.enabled))
-            .sum::<usize>()
-            + self.pf_icon_tex.len();
-        let key = (
-            fingerprint,
-            self.placefile_time().timestamp(),
-            self.view_range_nmi() as i32,
-        );
+    fn invalidate_placefiles(&mut self) {
+        self.placefile_gates = None;
+        self.placefile_label_cache = None;
+        self.overlay_gen = self.overlay_gen.wrapping_add(1);
+    }
+
+    fn placefile_view(&mut self, ctx: &egui::Context) -> PlacefileView {
+        let clock = self.placefile_clock();
+        let range = self.view_range_nmi();
+        let gates = self.placefile_gates.get_or_insert_with(|| PlacefileGates::new(
+            self.placefiles.iter().filter(|p| p.enabled).flat_map(|p| &p.pf.items)));
+        let view = gates.view(clock.unwrap_or_else(Utc::now), range);
+        if clock.is_none() {
+            if let Some(next) = gates.times.get(view.bucket[0]) {
+                if let Ok(wait) = (*next - view.now).to_std() { ctx.request_repaint_after(wait); }
+            }
+        }
+        view
+    }
+
+    fn placefile_labels_cached(&mut self, view: PlacefileView) -> std::sync::Arc<[PlaceLabel]> {
+        let key = view.bucket;
         if self
             .placefile_label_cache
             .as_ref()
             .is_none_or(|(k, _)| *k != key)
         {
-            let labels: std::sync::Arc<[PlaceLabel]> = self.placefile_labels().into();
+            let labels: std::sync::Arc<[PlaceLabel]> = self.placefile_labels(view).into();
             self.placefile_label_cache = Some((key, labels));
         }
         self.placefile_label_cache
@@ -12947,13 +13120,12 @@ impl HookEchoApp {
 
     /// Owned labels/markers for the visible placefile items (drawn by the egui painter).
     /// Icons resolve their sheet cell here, so the painter just blits a quad.
-    fn placefile_labels(&self) -> Vec<PlaceLabel> {
+    fn placefile_labels(&self, view: PlacefileView) -> Vec<PlaceLabel> {
         crate::prof_scope!("placefile_labels");
         use wxdata::placefile::PlaceKind;
-        self.visible_placefile_items()
-            .iter()
+        self.visible_placefile_iter(view)
             .filter_map(|(it, opacity, li)| {
-                let fade = |c: [u8; 4]| rgba32(c).gamma_multiply(*opacity);
+                let fade = |c: [u8; 4]| rgba32(c).gamma_multiply(opacity);
                 Some(match &it.kind {
                     PlaceKind::Text {
                         color,
@@ -12979,7 +13151,7 @@ impl HookEchoApp {
                         anchor: it.anchor,
                         hover: hover.clone(),
                         kind: self
-                            .sprite_for(*li, *sheet, *angle)
+                            .sprite_for(li, *sheet, *angle)
                             .unwrap_or(PlaceLabelKind::Marker),
                     },
                     _ => return None,
@@ -13034,6 +13206,7 @@ impl HookEchoApp {
             let tex =
                 ctx.load_texture(format!("pficon:{url}"), image, egui::TextureOptions::LINEAR);
             self.pf_icon_tex.insert(url, Some(tex));
+            self.placefile_label_cache = None;
         }
         let wanted: Vec<String> = self
             .placefiles
@@ -13061,15 +13234,8 @@ impl HookEchoApp {
     }
 
     /// Re-tessellate the overlay when its set or the zoom bucket changed.
-    fn sync_overlay(&mut self) {
+    fn sync_overlay(&mut self, view: PlacefileView) {
         crate::prof_scope!("sync_overlay");
-        // Asked lazily: on a frame with nothing to rebuild — which is most of them — this is the
-        // only question, and building the whole visible list a second time to answer it was the
-        // second-largest per-frame allocation in the pane.
-        if self.overlays.is_empty() && self.visible_placefile_iter().next().is_none() {
-            self.overlay_ready = false;
-            return;
-        }
         let zoom = self.views[self.active].camera.zoom;
         let bucket = (zoom * 2.0).round() as i32;
         // A pinch crosses several half-zoom buckets, and each crossing used to re-run lyon over
@@ -13083,14 +13249,14 @@ impl HookEchoApp {
         let theme_changed = self.settings.theme != self.built_theme;
         if should_retess(
             self.gesture_live,
-            self.overlay_gen != self.built_gen || theme_changed,
+            self.overlay_gen != self.built_gen || view.bucket != self.built_placefile_bucket || theme_changed,
             bucket != self.built_zoom_bucket || theme_changed,
         ) {
             let mut geom = overlay_build::build_map_with_theme(
                 &self.overlays, zoom, self.settings.theme, self.filters.ero_border_px,
             );
             let pf: Vec<(&wxdata::placefile::PlaceItem, f32)> = self
-                .visible_placefile_iter()
+                .visible_placefile_iter(view)
                 .map(|(it, op, _)| (it, op))
                 .collect();
             overlay_build::append_placefiles_with_theme(&mut geom, &pf, zoom, self.settings.theme);
@@ -13100,6 +13266,7 @@ impl HookEchoApp {
                 indices: geom.indices,
             });
             self.built_gen = self.overlay_gen;
+            self.built_placefile_bucket = view.bucket;
             self.built_zoom_bucket = bucket;
             self.built_theme = self.settings.theme;
         }
@@ -13414,7 +13581,7 @@ impl HookEchoApp {
                     ..
                 } => {
                     let scan = Arc::new(scan);
-                    if missing_tdwr_products == 0 {
+                    if missing_tdwr_products == 0 && !wxdata::dwd::is_partial_frame(&name) {
                         self.scan_cache.put(name.clone(), Arc::clone(&scan));
                     }
                     let v = &mut self.views[view];
@@ -14356,6 +14523,7 @@ impl HookEchoApp {
     /// Download a specific archive volume (a scrubbed timeline frame), routed to `view_idx`.
     fn spawn_frame_fetch(&mut self, view_idx: usize, site: String, id: Identifier, ctx: egui::Context) {
         let pane = &self.views[view_idx];
+        let retry_dwd = wxdata::dwd::is_dwd(&site) && pane.failed_frame.as_deref() == Some(id.name());
         let tdwr_retry = pane.volume.as_ref().filter(|volume| volume.name == id.name())
             .zip(pane.tdwr_archive_retry)
             .map(|(volume, (missing, _))| (Arc::clone(&volume.scan), missing));
@@ -14364,6 +14532,7 @@ impl HookEchoApp {
         let tx = self.msg_tx.clone();
         let http = self.http.clone();
         let handle = self.spawner.spawn_abortable(async move {
+            if retry_dwd { wxdata::task::sleep(Duration::from_secs(10)).await; }
             let name = id.name().to_string();
             let time = id.date_time().unwrap_or_else(Utc::now);
             // The `Err` arm is what matters here: it clears the pane's `loading` flag. Without a
@@ -21401,8 +21570,7 @@ impl HookEchoApp {
         self.placefiles.retain(|loaded| loaded.url != layer.key);
         self.placefiles.push(LoadedPlacefile { url: layer.key, enabled, pf: layer.file,
             last_fetch: Some(Instant::now()), loaded: true, error: None, attributes: layer.attributes });
-        self.placefile_label_cache = None;
-        self.overlay_gen = self.overlay_gen.wrapping_add(1);
+        self.invalidate_placefiles();
     }
 
     fn apply_settings_bundle(&mut self, settings: crate::settings::Settings,
@@ -21410,6 +21578,7 @@ impl HookEchoApp {
     {
         self.settings = settings;
         self.placefiles.retain(|loaded| !loaded.url.starts_with("gis:"));
+        self.invalidate_placefiles();
         for layer in gis { self.install_imported_gis(layer); }
         self.restore_overlay_settings();
         self.palettes.reload(&self.settings.palette_paths());
@@ -21744,107 +21913,6 @@ impl HookEchoApp {
         }
     }
 
-    /// Write the widget's picture, downscaled, and tell the widget about it.
-    ///
-    /// Downscaled because `RemoteViews.setImageViewBitmap` sends the bitmap over a Binder
-    /// transaction with a ~1 MB ceiling, and the decoded bitmap is 4 bytes a pixel — so the budget
-    /// is in *pixels*, not width. 150k of them is ~600 KB decoded, and more than a home-screen
-    /// tile can show anyway. (A full-screen 1440x3120 grab is 18 MB decoded: the widget would
-    /// throw rather than draw.)
-    fn save_widget_snapshot(&self, path: &std::path::Path, image: &egui::ColorImage) {
-        const MAX_PIXELS: f32 = 150_000.0;
-        let (w, h) = (image.size[0] as u32, image.size[1] as u32);
-        if w == 0 || h == 0 {
-            return;
-        }
-        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-        for px in &image.pixels {
-            rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
-        }
-        let Some(buf) = image::RgbaImage::from_raw(w, h, rgba) else {
-            return;
-        };
-        let scale = (MAX_PIXELS / (w as f32 * h as f32)).sqrt();
-        let small = if scale < 1.0 {
-            let (nw, nh) = (
-                ((w as f32 * scale).round() as u32).max(1),
-                ((h as f32 * scale).round() as u32).max(1),
-            );
-            image::imageops::resize(&buf, nw, nh, image::imageops::FilterType::Triangle)
-        } else {
-            buf
-        };
-        // Silent: nobody asked for this one, so a toast would be the app talking to itself. A
-        // failed write costs the widget one stale caption.
-        match small.save(path) {
-            Ok(()) => {
-                self.save_widget_caption();
-                crate::platform::refresh_radar_widget();
-            }
-            Err(e) => log::warn!("widget snapshot failed: {e}"),
-        }
-    }
-
-    /// Write the widget's storm line beside the picture, measured from the place the user cares
-    /// about: where they are while chasing, else their home marker. Neither one means no line —
-    /// a distance from an arbitrary map centre is a number that misleads.
-    ///
-    /// Deleted rather than left stale when there is nothing to say: the file is read on its own
-    /// clock by a widget that has no idea how old it is.
-    fn save_widget_caption(&self) {
-        let Some(path) = crate::paths::widget_caption() else {
-            return;
-        };
-        let here = self.chase_pos.or_else(|| {
-            self.settings
-                .markers
-                .iter()
-                .find(|m| m.home)
-                .map(|m| (m.lon, m.lat))
-        });
-        let line = here.and_then(|(lon, lat)| {
-            widget_storm_line(self.active_storm_cells(), lon, lat, self.metric())
-        });
-        match line {
-            Some(line) => {
-                if let Err(e) = std::fs::write(&path, line) {
-                    log::warn!("widget caption failed: {e}");
-                }
-            }
-            None => {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
-    }
-
-    /// Keep the Android home-screen widget's picture fresh while the app is on screen.
-    ///
-    /// Every few minutes, not every scan: the widget's own clock cannot beat 30 minutes anyway,
-    /// and a full-resolution PNG per volume is a write nobody asked for. Nothing runs off Android.
-    fn drive_widget_snapshot(&mut self, ctx: &egui::Context) {
-        let every = std::time::Duration::from_secs(if self.settings.battery_saver {
-            900
-        } else {
-            300
-        });
-        if !cfg!(target_os = "android")
-            || self.screenshot_pending.is_some()
-            || self.share_card.is_some()
-            || self.views[self.active].volume.is_none()
-        {
-            return;
-        }
-        if self.widget_shot_at.is_some_and(|t| t.elapsed() < every) {
-            return;
-        }
-        let Some(path) = crate::paths::widget_snapshot() else {
-            return;
-        };
-        self.widget_shot_at = Some(Instant::now());
-        self.screenshot_pending = Some(ShotDest::Widget(path));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
-    }
-
     /// A warning asked for a radar picture: take one, as long as nothing else is mid-capture.
     ///
     /// Deliberately the live view rather than a headless render — it is the picture the user is
@@ -22141,7 +22209,8 @@ impl HookEchoApp {
                 }
                 ShotDest::Loop { source, token, .. } => self.record_loop_frame(ctx, &image, source, token),
                 ShotDest::Push(title) => self.push_snapshot(title, &image),
-                ShotDest::Widget(path) => self.save_widget_snapshot(&path, &image),
+                #[cfg(target_os = "android")]
+                ShotDest::Widget(path) => self.queue_widget_write(Some((path, image))),
             }
         }
     }
@@ -23020,6 +23089,7 @@ fn nearest_cell(cells: &[Cell], lon: f64, lat: f64, max_km: f64) -> Option<&Cell
 /// read — "R3 12 mi SSW, moving NE 35 mph". `None` when nothing is being tracked nearby, which
 /// the widget renders as no line at all rather than as "no storms" (the app may simply have been
 /// looking at another part of the country).
+#[cfg(any(target_os = "android", test))]
 fn widget_storm_line(cells: &[Cell], lon: f64, lat: f64, metric: bool) -> Option<String> {
     let c = nearest_cell(cells, lon, lat, 300.0)?;
     let (km, bearing) = crate::geo::great_circle([c.lon, c.lat], [lon, lat]);
@@ -23460,6 +23530,9 @@ impl eframe::App for HookEchoApp {
         if let (true, Some((_, retry_at))) = (reconnected, self.arch_warn_retry.as_mut()) {
             *retry_at = Instant::now();
         }
+        if let (true, Some((_, retry_at))) = (reconnected, self.arch_lsr_retry.as_mut()) {
+            *retry_at = Instant::now();
+        }
         if resumed || reconnected {
             wxdata::stats::radar_event(if reconnected { "network_recovered" } else { "foreground_refresh" }, "", serde_json::Value::Null);
             self.last_stream_attempt = None;
@@ -23653,6 +23726,7 @@ impl eframe::App for HookEchoApp {
         }
 
         self.drive_snapshot_push(ctx);
+        #[cfg(target_os = "android")]
         self.drive_widget_snapshot(ctx);
         self.poll_loop_encoding();
         self.save_pending_screenshot(ctx);
@@ -24665,7 +24739,7 @@ impl eframe::App for HookEchoApp {
             .show(ctx, &mut self.settings, &pf_status, &mut self.drawer);
         if let Some(url) = self.placefile_window.restyle_gis.take() {
             self.placefiles.retain(|loaded| loaded.url != url);
-            self.placefile_label_cache = None;
+            self.invalidate_placefiles();
         }
         if std::mem::take(&mut self.placefile_window.import_gis) {
             crate::dialog::request_open(crate::dialog::ImportKind::Gis, "");
@@ -24711,7 +24785,7 @@ impl eframe::App for HookEchoApp {
             &active_fields,
             &mut self.drawer,
         ) {
-            self.overlay_gen += 1; // paint order / opacity changed — re-tessellate
+            self.invalidate_placefiles();
         }
         // The edge's geo-IP fix, if it beat the user to it: move the default view to the radar
         // that covers them. Skipped once they have panned or picked a site themselves.
@@ -25606,7 +25680,8 @@ impl eframe::App for HookEchoApp {
                 self.pane_shown.remove(&idx);
             }
         }
-        self.sync_overlay();
+        let placefile_view = self.placefile_view(ctx);
+        self.sync_overlay(placefile_view);
         let sync_ms = sync_started.elapsed().as_secs_f32() * 1000.0;
 
         // OBS-mode hint so the chrome-free view is still escapable.
@@ -25631,7 +25706,7 @@ impl eframe::App for HookEchoApp {
         }
 
         let map_started = Instant::now();
-        let placefile_labels = self.placefile_labels_cached();
+        let placefile_labels = self.placefile_labels_cached(placefile_view);
         // Visibility history spans the frame; each clipped pane starts a fresh collision pass.
         self.labels.begin();
         egui::CentralPanel::default().show(root, |ui| {

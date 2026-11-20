@@ -81,6 +81,10 @@ class RadarWidget : AppWidgetProvider() {
         /** Where the Rust side writes the storm line that goes under it. */
         const val CAPTION = "widget-radar.txt"
 
+        @JvmStatic
+        fun hasWidgets(context: Context): Boolean = AppWidgetManager.getInstance(context)
+            .getAppWidgetIds(ComponentName(context, RadarWidget::class.java)).isNotEmpty()
+
         /** Re-render every placed widget now. Called from Rust after it writes a new snapshot. */
         @JvmStatic
         fun refresh(context: Context) {

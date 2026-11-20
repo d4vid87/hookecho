@@ -11,11 +11,8 @@
 //!
 //! # Azimuth registration
 //!
-//! Rays are decoded in file order, azimuth `(i + 0.5) × 360/nrays`, and `a1gate` is deliberately
-//! ignored. ODIM's `a1gate` names the ray radiated *first in time*, not the ray pointing north:
-//! DWD files carry values like 55 or 247 while `/dataset<n>/how/startazA[0]` is ~0.01°, so ray 0
-//! already starts at north. Rotating the sweep by `a1gate` would misregister it by that many
-//! degrees. Verified against live DWD volumes; do not "fix" this without checking `startazA`.
+//! Rays retain their measured start and stop bearings when published. Files without usable
+//! bearings use uniformly spaced rays in file order. `a1gate` describes acquisition order.
 
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc};
 use hdf5lite::Value;
@@ -63,7 +60,7 @@ fn moment_slot(quantity: &str) -> Option<usize> {
 
 /// One moment of one sweep, already packed into the byte layout [`MomentData`] wants.
 struct Moment {
-    slot: usize,
+    priority: u8,
     /// `nrays × nbins` gates, big-endian when `word_bits` is 16.
     raw: Vec<u8>,
     scale: f32,
@@ -208,7 +205,7 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
     let rscale = num(&w, "rscale").unwrap_or(0.0);
     // `rstart` is the one ODIM range field in kilometres, not metres.
     let rstart_m = num(&w, "rstart").unwrap_or(0.0) * 1000.0;
-    if nrays == 0 || nbins == 0 || rscale <= 0.0 {
+    if nrays == 0 || nrays > u16::MAX as usize || nbins == 0 || nbins > u16::MAX as usize || rscale <= 0.0 {
         anyhow::bail!("{group}: nrays={nrays} nbins={nbins} rscale={rscale}");
     }
     // Gate ranges in the model are to the gate's centre; ODIM's are to its near edge.
@@ -218,36 +215,41 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
     let what = attrs(format!("{group}/what")).unwrap_or_default();
     let start = timestamp(&what, "startdate", "starttime");
 
-    let mut moments: Vec<Moment> = Vec::new();
+    let mut moments: [Option<Moment>; 6] = Default::default();
     for child in f.children(group).map_err(|e| anyhow::anyhow!("{e}"))? {
         if !child.starts_with("data") || child.starts_with("dataset") {
             continue;
         }
-        match moment(f, &format!("{group}/{child}"), nrays * nbins) {
-            Ok(Some(m)) => moments.push(m),
-            Ok(None) => {}
-            Err(e) => log::warn!("odim: skipping {group}/{child}: {e}"),
+        if let Err(e) = read_moment(f, &format!("{group}/{child}"), nrays * nbins, &mut moments) {
+            log::warn!("odim: skipping {group}/{child}: {e}");
         }
     }
-    if moments.is_empty() {
+    if moments.iter().all(Option::is_none) {
         return Ok(None);
     }
 
     // NI is the instrument's Nyquist interval in m/s, never inferred from observed gates.
-    let nyquist = attrs(format!("{group}/how")).ok()
-        .and_then(|how| num(&how, "NI"))
+    let how = f.attributes_with_arrays(&format!("{group}/how"), &[("startazA", nrays), ("stopazA", nrays)])
+        .unwrap_or_default();
+    let nyquist = num(&how, "NI")
         .or_else(|| f.attributes("how").ok().and_then(|how| num(&how, "NI")))
         .filter(|v| v.is_finite() && *v > 0.0).map(|v| v as f32);
     let spacing = 360.0 / nrays as f32;
+    let azimuths = match (how.get("startazA"), how.get("stopazA")) {
+        (Some(Value::Numbers(starts)), Some(Value::Numbers(stops))) =>
+            starts.iter().zip(stops).map(|(&start, &stop)| ray_azimuth(start, stop)).collect::<Option<Vec<_>>>(),
+        _ => None,
+    };
     let radials = (0..nrays)
         .map(|i| {
             let mut slots: [Option<MomentData>; 6] = Default::default();
-            for m in &moments {
+            for (slot, moment) in moments.iter().enumerate() {
+                let Some(m) = moment else { continue };
                 let stride = nbins * (m.word_bits as usize / 8);
                 let Some(gates) = m.raw.get(i * stride..(i + 1) * stride) else {
                     continue;
                 };
-                slots[m.slot] = Some(MomentData::from_fixed_point(
+                slots[slot] = Some(MomentData::from_fixed_point(
                     nbins as u16,
                     first_gate,
                     gate_interval,
@@ -258,13 +260,12 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
                 ));
             }
             let [refl, vel, sw, zdr, phi, rho] = slots;
+            let (azimuth, width) = azimuths.as_ref().map_or(((i as f32 + 0.5) * spacing, spacing), |angles| angles[i]);
             Radial::new(
                 start.map(|t| t.timestamp_millis()).unwrap_or(0),
                 i as u16,
-                // Ray `i` spans one azimuth step starting at `i × spacing`; the model wants its
-                // centre.
-                (i as f32 + 0.5) * spacing,
-                spacing,
+                azimuth,
+                width,
                 RadialStatus::ScanStart,
                 elevation_number,
                 elevation,
@@ -281,16 +282,34 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
     Ok(Some(Sweep::new(elevation_number, radials)))
 }
 
+fn ray_azimuth(start: f64, stop: f64) -> Option<(f32, f32)> {
+    if ![start, stop].iter().all(|v| (0.0..=360.0).contains(v)) { return None; }
+    let span = (stop - start + 180.0).rem_euclid(360.0) - 180.0;
+    if span == 0.0 || span.abs() >= 180.0 { return None; }
+    Some((((start + span / 2.0) as f32).rem_euclid(360.0), span.abs() as f32))
+}
+
 /// Read one `data<n>` group into packed gate bytes plus the scale and offset that invert
 /// ODIM's packing.
-fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option<Moment>> {
+fn read_moment(f: &hdf5lite::File, path: &str, gates: usize, moments: &mut [Option<Moment>; 6]) -> anyhow::Result<()> {
     let what = f
         .attributes(&format!("{path}/what"))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let quantity = text(&what, "quantity").unwrap_or_default();
     let Some(slot) = moment_slot(quantity) else {
-        return Ok(None);
+        return Ok(());
     };
+    // Prefer filtered horizontal reflectivity to other polarizations and unfiltered total power.
+    let priority = match quantity {
+        "DBZH" => 4,
+        "DBZ" => 3,
+        "DBZV" => 2,
+        "TH" => 1,
+        _ => 0,
+    };
+    if moments[slot].as_ref().is_some_and(|selected| selected.priority > priority) {
+        return Ok(());
+    }
 
     let data = format!("{path}/data");
     let ds = f.dataset(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -325,7 +344,8 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
             };
             raw.extend_from_slice(&code.to_be_bytes());
         }
-        return Ok(Some(Moment { slot, raw, scale: 100.0, offset: 32768.0, word_bits: 16 }));
+        moments[slot] = Some(Moment { priority, raw, scale: 100.0, offset: 32768.0, word_bits: 16 });
+        return Ok(());
     }
 
     // The model decodes a gate as `(raw − offset) / scale`; ODIM packs it as `gain × raw + off`.
@@ -361,13 +381,14 @@ fn moment(f: &hdf5lite::File, path: &str, gates: usize) -> anyhow::Result<Option
             raw.extend_from_slice(&(v as u16).to_be_bytes());
         }
     }
-    Ok(Some(Moment {
-        slot,
+    moments[slot] = Some(Moment {
+        priority,
         raw,
         scale: scale as f32,
         offset: offset as f32,
         word_bits,
-    }))
+    });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -451,6 +472,8 @@ mod tests {
         let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../hdf5lite/tests/data/seang.h5");
         let (_, scan) = decode(std::fs::read(p).expect("seang.h5 fixture")).expect("decode");
         let sweep = &scan.sweeps()[0];
+        // DBZH marks this gate undetected; the unfiltered TH reports 42.59 dBZ.
+        assert_eq!(sweep.radials()[0].reflectivity().unwrap().values()[1], MomentValue::BelowThreshold);
         assert!((sweep.radials()[0].nyquist_velocity_mps().unwrap() - 24.069).abs() < 0.001);
         let negative = sweep.radials()[2].velocity().unwrap().values()[1];
         let positive = sweep.radials()[1].velocity().unwrap().values()[1];
@@ -475,12 +498,27 @@ mod tests {
         let (_, scan) = decode(std::fs::read(p).expect("esahr.h5 fixture")).expect("decode");
         assert_eq!(scan.sweeps().len(), 2);
         let radial = &scan.sweeps()[0].radials()[0];
+        assert!((radial.azimuth_angle_degrees() - 0.997011).abs() < 0.0001);
+        assert!((radial.azimuth_spacing_degrees() - 1.01624).abs() < 0.0001);
         let reflectivity = radial.reflectivity().expect("DBZH").values();
         let velocity = radial.velocity().expect("VRADH").values();
         assert_eq!(reflectivity[0], MomentValue::BelowThreshold);
         assert_eq!(reflectivity[3], MomentValue::Value(-24.0));
         assert!(matches!(velocity[3], MomentValue::Value(v) if (v - 2.20).abs() < 0.02), "{:?}", velocity[3]);
         assert!(matches!(velocity[4], MomentValue::Value(v) if (v - 5.03).abs() < 0.02), "{:?}", velocity[4]);
+        let single_ray = Sweep::new(1, vec![radial.clone()]);
+        let binned = crate::level2::bin_sweep(&single_ray, crate::level2::Moment::Reflectivity, 0.0, 0.0).unwrap();
+        let rows: Vec<_> = binned.data.chunks(binned.gate_count).enumerate()
+            .filter_map(|(i, gates)| (gates[3] >= 2).then_some(i)).collect();
+        assert_eq!(rows, [1, 2], "beam edges 0.489° and 1.505° span the half-degree rows centered at 0.75° and 1.25°");
+    }
+
+    #[test]
+    fn measured_beams_wrap_north_in_either_direction() {
+        assert_eq!(ray_azimuth(359.5, 0.5), Some((0.0, 1.0)));
+        assert_eq!(ray_azimuth(0.5, 359.5), Some((0.0, 1.0)));
+        assert_eq!(ray_azimuth(f64::NAN, 0.5), None);
+        assert_eq!(ray_azimuth(0.5, 0.5), None);
     }
 
     #[test]

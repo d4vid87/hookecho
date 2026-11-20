@@ -105,7 +105,7 @@ impl HookEchoApp {
     }
     pub(crate) fn priority_time(&self) -> chrono::DateTime<Utc> {
         if self.archive_bucket().is_some() {
-            self.placefile_time()
+            self.placefile_clock().unwrap_or_else(Utc::now)
         } else {
             Utc::now()
         }

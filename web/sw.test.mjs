@@ -38,7 +38,7 @@ function worker(fetch) {
   };
   const context = vm.createContext({
     __SHELL__: ['/', '/dist/hookecho-12345678.js?boot=2'], __VERSION__: 'test',
-    caches, fetch, Response, Headers, URL,
+    caches, fetch, Response, Headers, URL, TextDecoder,
     self: {location: new URL('https://app.test/'), addEventListener: (name, callback) => listeners[name] = callback},
   });
   vm.runInContext(source, context);
@@ -53,8 +53,8 @@ function worker(fetch) {
     navigate: () => new Promise(resolve => listeners.fetch({
       request: {url: 'https://app.test/', method: 'GET', mode: 'navigate'}, respondWith: task => resolve(task),
     })),
-    tile: (id = 1) => new Promise(resolve => listeners.fetch({
-      request: {url: `https://app.test/tiles/1/2/${id}.png`, method: 'GET'}, respondWith: resolve,
+    tile: (id = 1, extension = 'pbf') => new Promise(resolve => listeners.fetch({
+      request: {url: `https://app.test/tiles/1/2/${id}.${extension}`, method: 'GET'}, respondWith: resolve,
     })),
   };
 }
@@ -137,10 +137,10 @@ test('slow storage admits a bounded number of copies without delaying map respon
   assert.equal(vm.runInContext('pendingTileWrites', w.context), 8);
   release();
   await finishWrites(w);
-  assert.equal(w.stores.get('tiles-v2').size, 8);
+  assert.equal(w.stores.get('tiles-v3').size, 8);
   await (await w.tile(200)).text();
   await finishWrites(w);
-  assert.equal(w.stores.get('tiles-v2').size, 9);
+  assert.equal(w.stores.get('tiles-v3').size, 9);
 });
 
 test('oversized bodies with and without content-length are displayed but not cached', async () => {
@@ -149,7 +149,7 @@ test('oversized bodies with and without content-length are displayed but not cac
     const w = worker(async () => new Response(bytes, {headers}));
     assert.equal((await (await w.tile()).arrayBuffer()).byteLength, bytes.length);
     await finishWrites(w);
-    assert.equal(w.stores.get('tiles-v2')?.size ?? 0, 0);
+    assert.equal(w.stores.get('tiles-v3')?.size ?? 0, 0);
   }
 });
 
@@ -166,7 +166,7 @@ test('a failed cache write releases its slot and later tiles can be cached', asy
   fail = false;
   await (await w.tile(2)).text();
   await finishWrites(w);
-  assert.equal(w.stores.get('tiles-v2').size, 1);
+  assert.equal(w.stores.get('tiles-v3').size, 1);
 });
 
 test('partial tile responses cannot poison the complete-tile cache', async () => {
@@ -175,5 +175,25 @@ test('partial tile responses cannot poison the complete-tile cache', async () =>
   assert.equal(response.status, 206);
   assert.equal(await response.text(), 'part');
   await finishWrites(w);
-  assert.equal(w.stores.get('tiles-v2')?.size ?? 0, 0);
+  assert.equal(w.stores.get('tiles-v3')?.size ?? 0, 0);
+});
+
+test('maintenance HTML never prevents a raster or vector tile from recovering', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j9n0AAAAASUVORK5CYII=', 'base64');
+  const pbf = Uint8Array.of(0x1a, 0x07, 0x0a, 0x03, 0x6c, 0x61, 0x79, 0x78, 0x02);
+  for (const [extension, tile] of [['png', png], ['pbf', pbf]]) {
+    for (const contentType of ['text/html; charset=utf-8', 'application/octet-stream']) {
+      let requests = 0;
+      const w = worker(async () => ++requests === 1
+        ? new Response('  <!DOCTYPE html><title>Maintenance</title>', {headers: {'content-type': contentType}})
+        : new Response(tile));
+      assert.match(await (await w.tile(1, extension)).text(), /Maintenance/);
+      await finishWrites(w);
+      assert.equal(w.stores.get('tiles-v3')?.size ?? 0, 0);
+      assert.deepEqual(new Uint8Array(await (await w.tile(1, extension)).arrayBuffer()), new Uint8Array(tile));
+      await finishWrites(w);
+      assert.deepEqual(new Uint8Array(await (await w.tile(1, extension)).arrayBuffer()), new Uint8Array(tile));
+      assert.equal(requests, 2);
+    }
+  }
 });

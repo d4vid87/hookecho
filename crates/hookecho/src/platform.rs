@@ -125,7 +125,7 @@ pub fn stop_speech() {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "export function clearHookEchoMapCache(){return caches.delete('tiles-v2')}")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "export function clearHookEchoMapCache(){return caches.delete('tiles-v3')}")]
 extern "C" { fn clearHookEchoMapCache(); }
 
 #[cfg(target_arch = "wasm32")]
@@ -847,58 +847,40 @@ mod android_back {
     }
 }
 
-/// The home-screen radar widget's one call into Java: "there is a new picture on disk".
 #[cfg(target_os = "android")]
 mod android_widget {
-    use jni::objects::JObject;
+    use super::android_alerts::with_class;
+    use jni::objects::JValue;
 
-    /// Tell the home-screen radar widget a new picture is on disk.
-    pub fn refresh_radar_widget() {
-        if let Err(e) = refresh() {
-            log::warn!("radar widget refresh failed: {e:?}");
-        }
+    const RADAR_WIDGET: &str = "io.hookecho.HookEcho.RadarWidget";
+
+    fn installed(class: &str) -> bool {
+        with_class(class, |env, class, activity| {
+            let result = env.call_static_method(
+                class, "hasWidgets", "(Landroid/content/Context;)Z", &[JValue::Object(activity)],
+            );
+            if result.is_err() { let _ = env.exception_clear(); }
+            result?.z()
+        }).unwrap_or_else(|error| {
+            log::warn!("widget lookup failed for {class}: {error}");
+            false
+        })
     }
 
-    fn refresh() -> jni::errors::Result<()> {
-        use jni::objects::{JClass, JValue};
-        let Some(app) = super::android::app() else {
-            return Ok(());
-        };
-        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut jni::sys::JavaVM) }?;
-        let mut env = vm.attach_current_thread()?;
-        let activity = unsafe { JObject::from_raw(app.activity_as_ptr() as jni::sys::jobject) };
-        // The app's own ClassLoader, not `find_class`: a thread attached from Rust gets the
-        // *system* loader, which has no app dex on its path, so `find_class` leaves a pending
-        // ClassNotFoundException and the next JNI call aborts the runtime under -Xcheck:jni.
-        // (Same reason `android_alerts::try_set` does this.)
-        let loader = env
-            .call_method(
-                &activity,
-                "getClassLoader",
-                "()Ljava/lang/ClassLoader;",
-                &[],
-            )?
-            .l()?;
-        let name = env.new_string("io.hookecho.HookEcho.RadarWidget")?;
-        let class = env
-            .call_method(
-                &loader,
-                "loadClass",
-                "(Ljava/lang/String;)Ljava/lang/Class;",
-                &[(&name).into()],
-            )?
-            .l()?;
-        let class = JClass::from(class);
-        let res = env.call_static_method(
-            &class,
-            "refresh",
-            "(Landroid/content/Context;)V",
-            &[JValue::Object(&activity)],
-        );
-        if res.is_err() {
-            let _ = env.exception_clear();
+    pub(crate) fn radar_widget_installed() -> bool { installed(RADAR_WIDGET) }
+    pub(crate) fn alert_widget_installed() -> bool { installed("io.hookecho.HookEcho.AlertWidget") }
+
+    pub fn refresh_radar_widget() {
+        let result = with_class(RADAR_WIDGET, |env, class, activity| {
+            let result = env.call_static_method(
+                class, "refresh", "(Landroid/content/Context;)V", &[JValue::Object(activity)],
+            );
+            if result.is_err() { let _ = env.exception_clear(); }
+            result?.v()
+        });
+        if let Err(error) = result {
+            log::warn!("radar widget refresh failed: {error}");
         }
-        res.map(|_| ())
     }
 }
 
@@ -1456,6 +1438,8 @@ pub use android_location::start_location;
 pub use android_tts::speak;
 #[cfg(target_os = "android")]
 pub use android_widget::refresh_radar_widget;
+#[cfg(target_os = "android")]
+pub(crate) use android_widget::{alert_widget_installed, radar_widget_installed};
 
 /// Timeouts for an HTTP client, where the platform has them.
 ///

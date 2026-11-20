@@ -121,11 +121,44 @@ impl HookEchoApp {
             }
             PaletteAction::ToggleOverlay(toggle) => match toggle {
                 T::AlertPanel | T::Alerts => RequestLane::Feed("Weather alerts"),
+                T::StormReports if self.storm_report_frame() != DisplayedOverlayFrame::Live => {
+                    let bucket = self.storm_report_frame().report_bucket()?;
+                    if self.arch_lsr.contains(&bucket) { return None; }
+                    let retry_at = self.arch_lsr_retry.filter(|(failed, _)| *failed == bucket)
+                        .map(|(_, deadline)| deadline);
+                    if self.arch_lsr_inflight != Some(bucket) && retry_at.is_none() { return None; }
+                    let mut health = self.request_health(RequestLane::Feed("Archived storm reports"));
+                    // This bucket has no usable data. The lane's previous success may belong to a different day.
+                    health.last_success = None;
+                    if let Some(deadline) = retry_at {
+                        if let Some(age) = health.last_attempt {
+                            health.cadence = age + deadline.saturating_duration_since(Instant::now());
+                        }
+                    } else {
+                        health.last_failure = None;
+                        health.error = None;
+                    }
+                    return Some(health);
+                }
                 T::StormReports => RequestLane::Feed("Storm reports"),
                 T::Spotters => RequestLane::Feed("Spotter Network"),
                 T::Metar => RequestLane::Feed("Surface observations"),
                 T::Webcams => RequestLane::Feed("Webcams"),
-                T::Fires => RequestLane::Feed("Wildfires"),
+                T::Fires => {
+                    let now = Instant::now();
+                    return FireLayer::BOTH.into_iter().map(|part| {
+                        let mut health = self.request_health(part.lane());
+                        let feed = &self.fire_refresh[part as usize];
+                        health.last_success = feed.last_success.map(|t| now.saturating_duration_since(t));
+                        if let (Some(next), Some(age)) = (feed.next, health.last_attempt) {
+                            health.cadence = age + next.saturating_duration_since(now);
+                        }
+                        health
+                    }).max_by_key(|h| match h.state() {
+                        HealthState::Failed => 4, HealthState::Stale => 3, HealthState::Fetching => 2,
+                        HealthState::Waiting => 1, HealthState::Fresh => 0,
+                    });
+                }
                 T::Aqi => RequestLane::Feed("Air quality"),
                 T::Stations => RequestLane::Feed("Live stations"),
                 T::Dat => RequestLane::Feed("Damage surveys"),
@@ -796,7 +829,18 @@ impl HookEchoApp {
                 T::StormReports,
                 "Severe",
                 "Storm reports (LSR)",
-                "What people on the ground actually reported today",
+                match self.storm_report_frame() {
+                    DisplayedOverlayFrame::Live => "Ground reports from the last six hours",
+                    DisplayedOverlayFrame::WaitingForScan => "Waiting for the archived radar scan",
+                    frame => match frame.report_bucket() {
+                        Some(b) if self.arch_lsr.contains(&b) =>
+                            if self.active_storm_reports().is_empty() { "No reports in the six hours through this scan" }
+                            else { "Ground reports from the six hours through this scan" },
+                        Some(b) if self.arch_lsr_retry.is_some_and(|(failed, _)| failed == b) =>
+                            "Archived storm reports unavailable. Retrying when enabled.",
+                        _ => "Load ground reports for this archived radar scan",
+                    },
+                },
                 true,
             ),
             (

@@ -67,17 +67,17 @@ test('corrupt tiles are removed from map caches without touching the app shell',
   ]);
 });
 
-test('deployment cleanup preserves explicitly saved map tiles', async () => {
+test('tile cache migration clears previous entries and preserves explicitly saved maps', async () => {
   const source = await readFile(new URL('./sw.src.js', import.meta.url), 'utf8');
   const kept = 'hookecho-offline-maps-v1';
   const listeners = {};
   const deleted = [];
   const context = vm.createContext({
     __SHELL__: [], __VERSION__: 'test',
-    caches: { keys: async () => [kept, 'tiles-v2', 'shell-test', 'shell-old'], delete: async (name) => deleted.push(name) },
+    caches: { keys: async () => [kept, 'tiles-v2', 'tiles-v3', 'shell-test', 'shell-old'], delete: async (name) => deleted.push(name) },
     self: { addEventListener: (event, callback) => listeners[event] = callback, clients: { claim() {} } },
   });
   vm.runInContext(source, context);
   await new Promise((resolve, reject) => listeners.activate({ waitUntil: (promise) => promise.then(resolve, reject) }));
-  assert.deepEqual(deleted, ['shell-old']);
+  assert.deepEqual(deleted, ['tiles-v2', 'shell-old']);
 });

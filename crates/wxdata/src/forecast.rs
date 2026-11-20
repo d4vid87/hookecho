@@ -163,16 +163,17 @@ pub async fn enrich(http: &reqwest::Client, lat: f64, lon: f64, mut forecast: Po
 
 async fn fetch_models(http: &reqwest::Client, lat: f64, lon: f64) -> Vec<ModelRain> {
     let models = [("Euro", "ecmwf_ifs025"), ("GFS", "gfs_seamless"), ("HRRR", "ncep_hrrr_conus")];
+    let now = Utc::now().timestamp();
     futures_util::future::join_all(models.into_iter().map(|(name, model)| async move {
         let result = async {
             let body = http
                 .get(crate::net::fetch_url("https://api.open-meteo.com/v1/forecast"))
                 .query(&[("latitude", lat.to_string()), ("longitude", lon.to_string()),
                     ("hourly", "precipitation".into()), ("models", model.into()),
-                    ("forecast_days", "2".into()), ("timeformat", "unixtime".into())])
+                    ("forecast_hours", "26".into()), ("timeformat", "unixtime".into())])
                 .timeout(crate::net::FEED_TIMEOUT).send().await?.error_for_status()?.text().await?;
             let body: serde_json::Value = serde_json::from_str(&body)?;
-            anyhow::Ok(rain_24h(&body, Utc::now().timestamp()))
+            anyhow::Ok(rain_24h(&body, now))
         }.await;
         ModelRain { name, inches: result.unwrap_or(None) }
     })).await
@@ -182,11 +183,23 @@ fn rain_24h(body: &serde_json::Value, now: i64) -> Option<f32> {
     let hourly = body.get("hourly")?;
     let times = hourly.get("time")?.as_array()?;
     let rain = hourly.get("precipitation")?.as_array()?;
-    let values: Vec<f32> = times.iter().zip(rain).filter_map(|(time, value)| {
-        let time = time.as_i64()?;
-        (time >= now && time < now + 86_400).then(|| value.as_f64().map(|mm| mm as f32))?
-    }).collect();
-    (!values.is_empty()).then(|| values.iter().sum::<f32>() / 25.4)
+    const HOUR: i64 = 3600;
+    // The values are sums for the hour ending at the timestamp. Start at the next full hour.
+    let start = now.div_euclid(HOUR) * HOUR + if now.rem_euclid(HOUR) == 0 { 0 } else { HOUR };
+    let mut hours = [None; 24];
+    for (time, value) in times.iter().zip(rain) {
+        let Some(time) = time.as_i64() else { continue };
+        if time <= start || time > start + 24 * HOUR || time.rem_euclid(HOUR) != 0 {
+            continue;
+        }
+        let index = ((time - start) / HOUR - 1) as usize;
+        let mm = value.as_f64().filter(|mm| mm.is_finite() && *mm >= 0.0)?;
+        if hours[index].replace(mm).is_some() {
+            return None;
+        }
+    }
+    let inches = (hours.into_iter().sum::<Option<f64>>()? / 25.4) as f32;
+    inches.is_finite().then_some(inches)
 }
 
 async fn fetch_spc_risk(http: &reqwest::Client, lat: f64, lon: f64) -> Option<String> {
@@ -263,13 +276,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_rain_uses_only_the_next_24_hours() {
-        let response = serde_json::json!({"hourly": {
-            "time": [0, 3600, 7200, 90000],
-            "precipitation": [25.4, 12.7, null, 50.8]
-        }});
-        assert_eq!(rain_24h(&response, 1), Some(0.5));
+    fn model_rain_requires_every_hour_in_the_same_complete_window() {
+        let times: Vec<_> = (0..=26).map(|hour| hour * 3600).collect();
+        let mut rain = vec![25.4; times.len()];
+        rain[0] = 50.8;
+        rain[1] = 50.8;
+        rain[26] = 50.8;
+        let mut response = serde_json::json!({"hourly": {"time": times, "precipitation": rain}});
+        assert_eq!(rain_24h(&response, 1), Some(24.0));
+        assert_eq!(rain_24h(&response, 3600), Some(24.0));
         assert_eq!(rain_24h(&response, 100000), None);
+        response["hourly"]["time"][8] = serde_json::json!(7 * 3600);
+        assert_eq!(rain_24h(&response, 1), None);
+        response["hourly"]["time"][8] = serde_json::json!(8 * 3600);
+        response["hourly"]["precipitation"][8] = serde_json::Value::Null;
+        assert_eq!(rain_24h(&response, 1), None);
     }
 
     const SAMPLE: &str = r#"{

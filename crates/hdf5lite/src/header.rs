@@ -427,7 +427,7 @@ pub(crate) fn parse_dataset(d: &[u8], addr: u64) -> Result<Dataset> {
         }
     }
 
-    for (name, value) in object_attributes(d, addr)? {
+    for (name, value) in object_attributes(d, addr, &[])? {
         let value = value.and_then(|v| v.as_f64());
         match name.as_str() {
             "scale_factor" => scale_factor = value,
@@ -602,7 +602,7 @@ fn parse_filters(d: &[u8], at: usize) -> Result<Filters> {
 
 /// Parse an attribute message: its name, its first value (when numeric), and the offset just past
 /// it — dense attributes are stored end to end and the caller needs to know where the next begins.
-pub(crate) fn parse_attribute(d: &[u8], at: usize) -> Result<(String, Option<Value>, usize)> {
+pub(crate) fn parse_attribute(d: &[u8], at: usize, arrays: &[(&str, usize)]) -> Result<(String, Option<Value>, usize)> {
     let mut c = Cur::new(d, at, "attribute");
     let version = c.u8()?;
     let (name_len, space_len, type_len, name_pad, other_pad);
@@ -652,15 +652,24 @@ pub(crate) fn parse_attribute(d: &[u8], at: usize) -> Result<(String, Option<Val
     let data_at = c.p;
     // Anything we can't read as a number (strings, compounds) is still a valid attribute — we
     // just have no use for its value, but we DO need its length to find the next one.
-    let count = parse_dataspace(d, space_at)
-        .map(|dims| dims.iter().map(|&n| n as usize).product::<usize>().max(1))
-        .unwrap_or(1);
+    let dims = parse_dataspace(d, space_at)?;
+    let count = dims.iter().try_fold(1usize, |count, &dim| {
+        count.checked_mul(usize::try_from(dim).ok()?)
+    }).ok_or_else(|| Error::Unsupported("attribute dimensions overflow".into()))?;
     // Advance by the on-disk element width whatever the class is — string attributes
     // (`standard_name`, `units`, ODIM's `quantity`) sit between the numeric ones, and mis-measuring
     // them desyncs the whole dense-attribute walk.
     let raw_sz = datatype_size(d, type_at).unwrap_or(0);
-    let end = data_at + count.saturating_mul(raw_sz);
-    Ok((name, attr_value(d, type_at, data_at), end))
+    let nbytes = count.checked_mul(raw_sz).ok_or_else(|| Error::Unsupported("attribute size overflow".into()))?;
+    let data = c.bytes(nbytes)?;
+    let value = if dims.len() == 1 && arrays.contains(&(name.as_str(), count)) && matches!(raw_sz, 1 | 2 | 4 | 8) {
+        parse_datatype(d, type_at).ok().map(|t| Value::Numbers(data.chunks_exact(raw_sz).map(|v| t.read(v)).collect()))
+    } else if count > 0 {
+        attr_value(d, type_at, data_at)
+    } else {
+        None
+    };
+    Ok((name, value, c.p))
 }
 
 /// Read an attribute's first element as whatever it is: a number, or a string.
@@ -727,19 +736,19 @@ fn global_heap_string(d: &[u8], at: usize) -> Option<String> {
 
 /// Every attribute on an object, group or dataset alike. ODIM keeps its whole metadata model in
 /// group attributes (`what`, `where`, `how`), so groups need this as much as datasets do.
-pub(crate) fn object_attributes(d: &[u8], addr: u64) -> Result<Vec<(String, Option<Value>)>> {
+pub(crate) fn object_attributes(d: &[u8], addr: u64, arrays: &[(&str, usize)]) -> Result<Vec<(String, Option<Value>)>> {
     let mut out: Vec<(String, Option<Value>)> = Vec::new();
     for m in messages(d, addr)? {
         match m.kind {
             MSG_ATTRIBUTE => {
-                if let Ok((name, value, _)) = parse_attribute(d, m.start) {
+                if let Ok((name, value, _)) = parse_attribute(d, m.start, arrays) {
                     out.push((name, value));
                 }
             }
             // Objects with more than a handful of attributes move them into a fractal heap.
             MSG_ATTRIBUTE_INFO => {
                 if let Ok(heap) = attribute_info_heap(d, m.start) {
-                    out.extend(crate::heap::dense_attributes(d, heap));
+                    out.extend(crate::heap::dense_attributes(d, heap, arrays));
                 }
             }
             _ => {}

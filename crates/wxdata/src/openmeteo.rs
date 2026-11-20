@@ -25,33 +25,30 @@ pub fn parse_forecast(body: &str) -> anyhow::Result<PointForecast> {
     let daily = v
         .get("daily")
         .ok_or_else(|| anyhow::anyhow!("no daily forecast in response"))?;
-    let times = arr_i64(daily, "time");
-    let temps = arr_f64(daily, "temperature_2m_max");
-    let precip = arr_f64(daily, "precipitation_probability_max");
-    let codes = arr_f64(daily, "weather_code");
-    let wind = arr_f64(daily, "wind_speed_10m_max");
-    let wind_dir = arr_f64(daily, "wind_direction_10m_dominant");
+    let times = array(daily, "time");
+    let temps = array(daily, "temperature_2m_max");
+    let precip = array(daily, "precipitation_probability_max");
+    let codes = array(daily, "weather_code");
+    let wind = array(daily, "wind_speed_10m_max");
+    let wind_dir = array(daily, "wind_direction_10m_dominant");
 
     let mut out = Vec::with_capacity(times.len());
-    for (i, t) in times.iter().enumerate() {
-        let Some(start) = Utc.timestamp_opt(*t, 0).single() else {
+    for (i, time) in times.iter().enumerate() {
+        let Some(start) = time.as_i64().and_then(|t| Utc.timestamp_opt(t, 0).single()) else {
             continue;
         };
+        let (speed, direction) = (number(wind, i), number(wind_dir, i));
         out.push(Period {
             start,
             // Open-Meteo's daily rows are calendar days, so the weekday is the name; the NWS's
             // "This Afternoon" / "Tuesday Night" split doesn't exist here.
             name: start.format("%A").to_string(),
-            temp_f: temps.get(i).copied().unwrap_or(f64::NAN) as f32,
-            precip_pct: precip.get(i).map(|p| *p as u8),
-            short: wmo_label(codes.get(i).copied().unwrap_or(-1.0)).to_string(),
-            wind: match (wind.get(i), wind_dir.get(i)) {
-                (Some(s), Some(d)) => format!("{} {s:.0} mph", compass(*d)),
-                (Some(s), None) => format!("{s:.0} mph"),
-                _ => String::new(),
-            },
-            wind_mph: wind.get(i).map(|s| *s as f32),
-            wind_deg: wind_dir.get(i).map(|d| *d as f32),
+            temp_f: number(temps, i).unwrap_or(f32::NAN),
+            precip_pct: probability(precip, i),
+            short: number(codes, i).map_or("", wmo_label).to_string(),
+            wind: wind_label(speed, direction),
+            wind_mph: speed,
+            wind_deg: direction,
             // A daily row covers a whole day; the window colors it as a day period.
             is_day: true,
         });
@@ -71,52 +68,59 @@ pub fn parse_forecast(body: &str) -> anyhow::Result<PointForecast> {
 /// Hourly rows, trimmed to the ones still ahead — the response starts at midnight local, and the
 /// strip is meant to read "next 24 hours" like the NWS one does.
 fn parse_hourly(hourly: &serde_json::Value) -> Vec<Period> {
-    let times = arr_i64(hourly, "time");
-    let temps = arr_f64(hourly, "temperature_2m");
-    let precip = arr_f64(hourly, "precipitation_probability");
-    let wind = arr_f64(hourly, "wind_speed_10m");
-    let wind_dir = arr_f64(hourly, "wind_direction_10m");
+    let times = array(hourly, "time");
+    let temps = array(hourly, "temperature_2m");
+    let precip = array(hourly, "precipitation_probability");
+    let wind = array(hourly, "wind_speed_10m");
+    let wind_dir = array(hourly, "wind_direction_10m");
     let now = Utc::now().timestamp();
     times
         .iter()
         .enumerate()
-        .filter(|(_, t)| **t >= now - 3600)
-        .filter_map(|(i, t)| {
+        .filter_map(|(i, time)| {
+            let time = time.as_i64()?;
+            if time < now - 3600 {
+                return None;
+            }
+            let (speed, direction) = (number(wind, i), number(wind_dir, i));
             Some(Period {
-                start: Utc.timestamp_opt(*t, 0).single()?,
+                start: Utc.timestamp_opt(time, 0).single()?,
                 name: String::new(),
-                temp_f: temps.get(i).copied().unwrap_or(f64::NAN) as f32,
-                precip_pct: precip.get(i).map(|p| *p as u8),
+                temp_f: number(temps, i).unwrap_or(f32::NAN),
+                precip_pct: probability(precip, i),
                 short: String::new(),
-                wind: match (wind.get(i), wind_dir.get(i)) {
-                    (Some(s), Some(d)) => format!("{} {s:.0} mph", compass(*d)),
-                    (Some(s), None) => format!("{s:.0} mph"),
-                    _ => String::new(),
-                },
-                wind_mph: wind.get(i).map(|s| *s as f32),
-                wind_deg: wind_dir.get(i).map(|d| *d as f32),
+                wind: wind_label(speed, direction),
+                wind_mph: speed,
+                wind_deg: direction,
                 is_day: true,
             })
         })
         .collect()
 }
 
-fn arr_f64(v: &serde_json::Value, key: &str) -> Vec<f64> {
-    v.get(key)
-        .and_then(|a| a.as_array())
-        .map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect())
-        .unwrap_or_default()
+fn array<'a>(v: &'a serde_json::Value, key: &str) -> &'a [serde_json::Value] {
+    v.get(key).and_then(|a| a.as_array()).map(Vec::as_slice).unwrap_or_default()
 }
 
-fn arr_i64(v: &serde_json::Value, key: &str) -> Vec<i64> {
-    v.get(key)
-        .and_then(|a| a.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
-        .unwrap_or_default()
+fn number(values: &[serde_json::Value], index: usize) -> Option<f32> {
+    let value = values.get(index)?.as_f64()? as f32;
+    value.is_finite().then_some(value)
+}
+
+fn probability(values: &[serde_json::Value], index: usize) -> Option<u8> {
+    number(values, index).filter(|p| (0.0..=100.0).contains(p)).map(|p| p as u8)
+}
+
+fn wind_label(speed: Option<f32>, direction: Option<f32>) -> String {
+    match (speed, direction) {
+        (Some(s), Some(d)) => format!("{} {s:.0} mph", compass(d)),
+        (Some(s), None) => format!("{s:.0} mph"),
+        _ => String::new(),
+    }
 }
 
 /// 16-point compass label for a bearing in degrees.
-fn compass(deg: f64) -> &'static str {
+fn compass(deg: f32) -> &'static str {
     const D: [&str; 16] = [
         "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
         "NW", "NNW",
@@ -127,7 +131,10 @@ fn compass(deg: f64) -> &'static str {
 /// WMO 4677 present-weather code as the phrase the forecast window prints. Codes Open-Meteo
 /// doesn't emit are simply absent, so anything unmatched reads as an empty short forecast rather
 /// than as a guess.
-fn wmo_label(code: f64) -> &'static str {
+fn wmo_label(code: f32) -> &'static str {
+    if code.fract() != 0.0 {
+        return "";
+    }
     match code as i32 {
         0 => "Clear",
         1 => "Mainly Clear",
@@ -226,6 +233,41 @@ mod tests {
         assert_eq!(f.hourly[0].temp_f, 48.2);
         assert_eq!(f.hourly[1].precip_pct, Some(35));
         assert!(f.hourly[0].name.is_empty(), "hourly periods are unnamed");
+    }
+
+    #[test]
+    fn missing_values_stay_unknown_and_missing_times_do_not_shift_rows() {
+        let forecast = parse_forecast(r#"{
+            "daily": {
+                "time": [null, 4102444800, 4102531200],
+                "temperature_2m_max": [72, null, 50],
+                "precipitation_probability_max": [80, null, 0],
+                "weather_code": [95, null, 0],
+                "wind_speed_10m_max": [20, 8, null],
+                "wind_direction_10m_dominant": [90, null, 270]
+            },
+            "hourly": {
+                "time": [null, 4102444800],
+                "temperature_2m": [72, 50],
+                "precipitation_probability": [30, null],
+                "wind_speed_10m": [10, null],
+                "wind_direction_10m": [90, null]
+            }
+        }"#).unwrap();
+        assert_eq!(forecast.daily.len(), 2);
+        let first = &forecast.daily[0];
+        assert!(first.temp_f.is_nan() && first.short.is_empty());
+        assert_eq!(first.precip_pct, None);
+        assert_eq!(first.wind_deg, None);
+        assert_eq!(first.wind, "8 mph");
+        let next = &forecast.daily[1];
+        assert_eq!(next.precip_pct, Some(0));
+        assert_eq!(next.short, "Clear");
+        assert_eq!(next.wind_mph, None);
+        assert!(next.wind.is_empty());
+        let hourly = &forecast.hourly[0];
+        assert_eq!(hourly.temp_f, 50.0);
+        assert_eq!((hourly.precip_pct, hourly.wind_mph, hourly.wind_deg), (None, None, None));
     }
 
     #[test]

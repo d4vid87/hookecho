@@ -23,7 +23,8 @@ class AlertWidget : AppWidgetProvider() {
     }
 
     companion object {
-        internal fun hasWidgets(context: Context): Boolean = AppWidgetManager.getInstance(context)
+        @JvmStatic
+        fun hasWidgets(context: Context): Boolean = AppWidgetManager.getInstance(context)
             .getAppWidgetIds(ComponentName(context, AlertWidget::class.java)).isNotEmpty()
 
         internal fun render(context: Context, result: AlertPoller.Result) {

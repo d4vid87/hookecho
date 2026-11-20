@@ -128,7 +128,7 @@ impl HookEchoApp {
                 self.alert_coverage.covers((marker.lon, marker.lat, marker.lon, marker.lat))
             });
             ui::alert_panel::FeedStatus {
-                archived: frame != ArchiveWarningFrame::Live,
+                archived: frame != DisplayedOverlayFrame::Live,
                 archive_notice: frame.notice(&self.arch_warns, self.arch_warn_retry.map(|(scan, _)| scan)),
                 view_covered: self.alert_coverage.covers(bounds),
                 saved_places_covered,

@@ -87,11 +87,12 @@ fn atlas_body(
 ) {
     let observation = now.and_then(|s| s.obs.first());
     let current = observation.and_then(|o| o.temp_c.map(crate::ui::station_card::c_to_f))
+        .filter(|temp| temp.is_finite())
         .or_else(|| f.hourly.first().map(|p| p.temp_f));
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(RichText::new("CURRENT").monospace().size(10.0).color(MUTED));
-            ui.label(RichText::new(current.map_or("—".to_string(), |t| format!("{t:.0}°")))
+            ui.label(RichText::new(temperature_label(current.unwrap_or(f32::NAN)))
                 .size(58.0).strong().color(GOLD));
             if let Some((station, ob)) = now.and_then(|s| s.obs.first().map(|o| (s, o))) {
                 ui.label(RichText::new(conditions_line(ob, &station.station_id)).size(11.0).color(MUTED));
@@ -135,7 +136,7 @@ fn atlas_body(
     let range = totals.iter().copied().reduce(f32::min).zip(totals.iter().copied().reduce(f32::max));
     ui.columns(2, |cols| {
         tile(&mut cols[0], "Rain probability · next 24h", rain_chance.map_or("—".into(), |p| format!("{p}%")), BLUE);
-        tile(&mut cols[1], "Model rainfall range", range.map_or("—".into(), |(lo, hi)| format!("{lo:.1}–{hi:.1} in")), MINT);
+        tile(&mut cols[1], "Model precipitation range", range.map_or("—".into(), |(lo, hi)| format!("{lo:.1}–{hi:.1} in")), MINT);
     });
     ui.add_space(15.0);
     ui.horizontal(|ui| { ui.strong("Four-period outlook"); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(RichText::new(&f.office).small().color(MUTED)); }); });
@@ -154,7 +155,7 @@ fn atlas_body(
         });
     }
     ui.add_space(15.0);
-    ui.horizontal(|ui| { ui.strong("Guidance spread"); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(RichText::new("24h rainfall · model").small().color(MUTED)); }); });
+    ui.horizontal(|ui| { ui.strong("Guidance spread"); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(RichText::new("24h precipitation · from next full hour").small().color(MUTED)); }); });
     ui.add_space(6.0);
     for model in &f.models {
         egui::Frame::new().fill(Color32::from_rgb(33, 56, 75)).corner_radius(8.0)
@@ -173,7 +174,7 @@ fn atlas_body(
         ui.add_space(5.0);
     }
     ui.add_space(5.0);
-    ui.label(RichText::new("NWS/Open-Meteo: official point forecast · SPC: Day-1 risk · Euro/GFS/HRRR: independent model guidance. Model rainfall is not an official warning.")
+    ui.label(RichText::new("Point forecast from NWS or Open-Meteo · Day-1 risk from SPC · Precipitation guidance from Euro, GFS, and HRRR")
         .size(10.0).color(MUTED));
     egui::CollapsingHeader::new("All forecast details").show(ui, |ui| {
         ui.weak(almanac_line(at, tz, Utc::now()));
@@ -182,15 +183,22 @@ fn atlas_body(
         crate::ui::sensor_window::temperature_comparison(ui,
             now.map(|station| station.obs.as_slice()).unwrap_or(&[]), history);
         if !history.has_samples() { ui.weak("Waiting for analysis and forecast samples."); }
-        for p in &f.daily { ui.label(format!("{} · {:.0}° · {} · {}", p.name, p.temp_f,
-            p.precip_pct.map_or("—".into(), |v| format!("{v}% rain")), p.short)); }
+        for p in &f.daily {
+            ui.label(format!("{} · {} · {} · {}", p.name, temperature_label(p.temp_f),
+                p.precip_pct.map_or("—".into(), |v| format!("{v}% rain")),
+                if p.short.is_empty() { "—" } else { &p.short }));
+        }
     });
+}
+
+fn temperature_label(temp: f32) -> String {
+    if temp.is_finite() { format!("{temp:.0}°") } else { "—".into() }
 }
 
 fn outlook_tile(ui: &mut egui::Ui, period: &wxdata::forecast::Period) {
     egui::Frame::new().fill(Color32::from_rgb(33, 56, 75)).corner_radius(9.0).inner_margin(7.0).show(ui, |ui| {
         ui.label(RichText::new(&period.name).size(10.0).color(MUTED));
-        ui.label(RichText::new(format!("{:.0}°", period.temp_f)).strong().size(18.0)
+        ui.label(RichText::new(temperature_label(period.temp_f)).strong().size(18.0)
             .color(if period.is_day { GOLD } else { BLUE }));
         ui.label(RichText::new(period.precip_pct.map_or("—".into(), |p| format!("{p}% rain"))).size(10.0).color(BLUE));
     });
@@ -284,29 +292,30 @@ fn hourly_strip(ui: &mut egui::Ui, hours: &[wxdata::forecast::Period], tz: Optio
         p.rect_filled(bar, 1.0, Color32::from_rgba_unmultiplied(70, 140, 230, 120));
     }
 
-    let pts: Vec<egui::Pos2> = temps
-        .iter()
-        .enumerate()
-        .map(|(i, &t)| egui::pos2(x_of(i), y_of(t)))
-        .collect();
-    p.add(egui::Shape::line(
-        pts.clone(),
-        Stroke::new(1.6, Color32::from_rgb(245, 190, 90)),
-    ));
+    for (i, pair) in temps.windows(2).enumerate() {
+        if pair[0].is_finite() && pair[1].is_finite() {
+            p.line_segment(
+                [egui::pos2(x_of(i), y_of(pair[0])), egui::pos2(x_of(i + 1), y_of(pair[1]))],
+                Stroke::new(1.6, Color32::from_rgb(245, 190, 90)),
+            );
+        }
+    }
 
     // Label the ends and the extremes only — 24 numbers is noise.
     let font = FontId::proportional(9.0);
     let hottest = temps
         .iter()
         .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .filter(|(_, temp)| temp.is_finite())
+        .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i);
     for i in [Some(0), hottest, Some(hours.len() - 1)]
         .into_iter()
         .flatten()
+        .filter(|&i| temps[i].is_finite())
     {
         p.text(
-            pts[i] - Vec2::new(0.0, 4.0),
+            egui::pos2(x_of(i), y_of(temps[i]) - 4.0),
             Align2::CENTER_BOTTOM,
             format!("{:.0}°", temps[i]),
             font.clone(),
@@ -357,15 +366,14 @@ fn wind_strip(ui: &mut egui::Ui, hours: &[wxdata::forecast::Period]) {
     let x_of = |i: usize| body.left() + (i as f32 + 0.5) / hours.len() as f32 * body.width();
     let y_of = |v: f32| body.bottom() - (v / peak) * body.height() * 0.62;
 
-    let pts: Vec<egui::Pos2> = hours
-        .iter()
-        .enumerate()
-        .filter_map(|(i, x)| Some(egui::pos2(x_of(i), y_of(x.wind_mph?))))
-        .collect();
-    p.add(egui::Shape::line(
-        pts,
-        Stroke::new(1.6, Color32::from_rgb(120, 210, 190)),
-    ));
+    for (i, pair) in hours.windows(2).enumerate() {
+        if let (Some(left), Some(right)) = (pair[0].wind_mph, pair[1].wind_mph) {
+            p.line_segment(
+                [egui::pos2(x_of(i), y_of(left)), egui::pos2(x_of(i + 1), y_of(right))],
+                Stroke::new(1.6, Color32::from_rgb(120, 210, 190)),
+            );
+        }
+    }
 
     // Direction arrows: every third hour, pointing the way the wind is going (the compass
     // reading is where it comes *from*, so the arrow is the reverse).

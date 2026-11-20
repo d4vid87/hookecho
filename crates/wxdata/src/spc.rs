@@ -105,8 +105,8 @@ pub fn parse_outlook(json: &str, day: u8) -> anyhow::Result<Vec<GeoFeature>> {
 }
 
 /// Parse an SPC outlook GeoJSON payload for a given hazard kind. Categorical uses the risk
-/// `LABEL2`; probabilistic layers carry a numeric `LABEL` (e.g. "0.05") plus a `SIGN` significant
-/// hatch polygon.
+/// code in `LABEL` and the description in `LABEL2`. Probabilistic layers carry a numeric
+/// `LABEL` (e.g. "0.05") plus a `SIGN` significant hatch polygon.
 pub fn parse_outlook_kind(
     json: &str,
     day: u8,
@@ -116,21 +116,17 @@ pub fn parse_outlook_kind(
     for_each_feature(json, |geom, props| {
         let str_of = |k: &str| props.get(k).and_then(|v| v.as_str()).unwrap_or("");
         if kind == OutlookKind::Categorical {
-            let label = {
-                let l2 = str_of("LABEL2");
-                if l2.is_empty() {
-                    str_of("LABEL").to_string()
-                } else {
-                    l2.to_string()
-                }
-            };
+            let code = str_of("LABEL");
+            let description = str_of("LABEL2");
+            let label = if code.is_empty() { description } else { code };
             if label.is_empty() {
                 return;
             }
-            let rgb = hex_rgb(str_of("fill")).unwrap_or_else(|| risk_color(&label));
+            let rgb = hex_rgb(str_of("fill")).unwrap_or_else(|| risk_color(label));
             let title = format!("Day {day}: {label}");
+            let category = if description.is_empty() { label } else { description };
             let detail = format!(
-                "SPC Day {day} Convective Outlook\nCategory: {label}\nValid: {}",
+                "SPC Day {day} Convective Outlook\nCategory: {category}\nValid: {}",
                 str_of("VALID"),
             );
             push_polys(
@@ -515,7 +511,9 @@ pub struct StormReport {
     pub kind: ReportKind,
     pub lat: f64,
     pub lon: f64,
-    /// UTC-ish report time as issued (HHMM string).
+    /// Full UTC observation time for playback, when supplied by the source.
+    pub valid_time: Option<chrono::DateTime<chrono::Utc>>,
+    /// Short UTC time for report labels.
     pub time: String,
     /// F-scale, wind speed, or hail size column, as issued.
     pub magnitude: String,
@@ -593,12 +591,13 @@ mod tests {
         let json = r##"{"type":"FeatureCollection","features":[
             {"type":"Feature",
              "geometry":{"type":"Polygon","coordinates":[[[-100,35],[-98,35],[-98,37],[-100,35]]]},
-             "properties":{"LABEL2":"ENH","fill":"#E6985A","VALID":"today"}}]}"##;
+             "properties":{"LABEL":"ENH","LABEL2":"Enhanced Risk","fill":"#E6985A","VALID":"today"}}]}"##;
         let feats = parse_outlook(json, 1).unwrap();
         assert_eq!(feats.len(), 1);
         assert_eq!(feats[0].kind, FeatureKind::Outlook);
         assert_eq!(feats[0].stroke, [230, 152, 90, 230]);
-        assert!(feats[0].title.contains("ENH"));
+        assert_eq!(feats[0].title, "Day 1: ENH");
+        assert!(feats[0].detail.contains("Category: Enhanced Risk"));
     }
 
     #[test]

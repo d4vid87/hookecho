@@ -1026,7 +1026,8 @@ impl MapView {
         };
         if let Some(old) = self.volume.replace(vol) {
             // Not a volume still being written, and not a stale copy of the one just shown.
-            if !was_retained && !old.live && old.name != self.volume.as_ref().expect("just set").name {
+            if !was_retained && !old.live && !wxdata::dwd::is_partial_frame(&old.name)
+                && old.name != self.volume.as_ref().expect("just set").name {
                 self.recent.put(old.name.clone(), old);
             }
         }

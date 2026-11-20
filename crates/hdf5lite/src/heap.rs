@@ -304,7 +304,7 @@ fn parse_link(d: &[u8], at: usize, end: usize) -> Result<(String, u64, usize)> {
 /// Walk a dense attribute heap the same way we walk group links: direct blocks, messages laid end
 /// to end. Failures are silent — a missing `scale_factor` degrades to unscaled data, which the
 /// golden tests would catch, whereas refusing to open the file would lose everything.
-pub(crate) fn dense_attributes(d: &[u8], heap_addr: u64) -> Vec<(String, Option<crate::Value>)> {
+pub(crate) fn dense_attributes(d: &[u8], heap_addr: u64, arrays: &[(&str, usize)]) -> Vec<(String, Option<crate::Value>)> {
     let mut out = Vec::new();
     let Ok(blocks) = direct_blocks(d, heap_addr) else {
         return out;
@@ -317,7 +317,7 @@ pub(crate) fn dense_attributes(d: &[u8], heap_addr: u64) -> Vec<(String, Option<
         // can't desync. The golden tests assert the values we actually need come out right.
         let mut p = start;
         while p < end {
-            match crate::header::parse_attribute(d, p) {
+            match crate::header::parse_attribute(d, p, arrays) {
                 Ok((name, value, next))
                     if next > p
                         && next <= end
