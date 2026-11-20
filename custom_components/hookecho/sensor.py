@@ -24,6 +24,7 @@ from .const import (
     KEY_ALERT_EVENT,
     KEY_ALERT_UNTIL,
     KEY_ALERTS,
+    KEY_ALERTS_COMPLETE,
     KEY_STATION,
     MEASUREMENTS,
 )
@@ -116,6 +117,10 @@ class HookEchoAlertCount(HookEchoEntity, SensorEntity):
         self._attr_unique_id = f"hookecho_{spot}_alerts"
 
     @property
+    def available(self) -> bool:
+        return super().available and self.spot.get(KEY_ALERTS_COMPLETE, True)
+
+    @property
     def native_value(self) -> int:
         return len(self.spot.get(KEY_ALERTS) or [])
 
@@ -130,6 +135,7 @@ class HookEchoAlertCount(HookEchoEntity, SensorEntity):
             "until": worst.get(KEY_ALERT_UNTIL),
             "distance_km": worst.get(KEY_ALERT_DISTANCE),
             "escalation": worst.get(KEY_ALERT_ESCALATION),
+            "coverage_complete": self.spot.get(KEY_ALERTS_COMPLETE),
         }
 
 

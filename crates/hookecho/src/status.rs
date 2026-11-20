@@ -49,6 +49,8 @@ pub struct SpotStatus {
     pub wind_dir: Option<String>,
     pub pressure_in: Option<f32>,
     pub alerts: Vec<AlertBrief>,
+    /// False when fallback point lookups cannot establish coverage throughout the watch radius.
+    pub alerts_complete: bool,
     /// The closest storm cell the nearest radar's algorithms are tracking, if there is one.
     /// Absent — not zero — when nothing is being tracked: "no storms" and "the feed is down"
     /// must not both read as a distance of nought.
@@ -136,7 +138,7 @@ fn parse_point(s: &str) -> Option<(f64, f64)> {
 /// would otherwise miss them.
 pub async fn collect(http: &reqwest::Client, spots: &[Spot]) -> anyhow::Result<Vec<SpotStatus>> {
     let points: Vec<(f64, f64)> = spots.iter().map(|s| (s.lat, s.lon)).collect();
-    let feats = wxdata::alerts::fetch_active(http, &points).await?;
+    let (feats, alerts_complete) = wxdata::alerts::fetch_active_with_coverage(http, &points, &[]).await?;
     let mut out = Vec::with_capacity(spots.len());
     // One Level 3 fetch per radar, however many spots that radar covers.
     let mut cells: std::collections::HashMap<String, Vec<wxdata::level3::Cell>> =
@@ -164,6 +166,7 @@ pub async fn collect(http: &reqwest::Client, spots: &[Spot]) -> anyhow::Result<V
             observation(http, spot).await,
             alerts,
             cell,
+            alerts_complete,
         ));
     }
     Ok(out)
@@ -237,6 +240,7 @@ fn status_for(
     ob: Option<(String, wxdata::obs::Observation)>,
     alerts: Vec<AlertBrief>,
     nearest_cell: Option<CellBrief>,
+    alerts_complete: bool,
 ) -> SpotStatus {
     let (station, o) = match ob {
         Some((id, o)) => (Some(id), Some(o)),
@@ -262,6 +266,7 @@ fn status_for(
             .and_then(|o| o.slp_pa.or(o.pressure_pa))
             .map(|pa| pa / 3386.389),
         alerts,
+        alerts_complete,
         nearest_cell,
     }
 }
@@ -418,8 +423,9 @@ mod tests {
                 Some(("KOKC".into(), ob())),
                 vec![warning()],
                 None,
+                true,
             ),
-            status_for(&spot("Cabin", false), None, vec![], None),
+            status_for(&spot("Cabin", false), None, vec![], None, true),
         ];
         let text = human(&report);
         assert_eq!(
@@ -431,12 +437,13 @@ mod tests {
     #[test]
     fn line_reports_home_even_when_it_is_not_first() {
         let report = vec![
-            status_for(&spot("Cabin", false), None, vec![], None),
+            status_for(&spot("Cabin", false), None, vec![], None, true),
             status_for(
                 &spot("Home", true),
                 Some(("KOKC".into(), ob())),
                 vec![warning()],
                 None,
+                true,
             ),
         ];
         assert_eq!(
@@ -452,6 +459,7 @@ mod tests {
             Some(("KOKC".into(), ob())),
             vec![],
             None,
+            true,
         )];
         assert_eq!(line(&report), "74°F 62%rh SW 12kt");
         assert!(line(&[]).is_empty());
@@ -464,6 +472,7 @@ mod tests {
             Some(("KOKC".into(), ob())),
             vec![warning()],
             None,
+            false,
         )];
         let v: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
@@ -474,9 +483,11 @@ mod tests {
         assert_eq!(v[0]["wind_dir"], "SW");
         assert_eq!(v[0]["alerts"][0]["event"], "Tornado Warning");
         assert_eq!(v[0]["alerts"][0]["escalation"], 2);
+        assert_eq!(v[0]["alerts_complete"], false);
         // A station that reported nothing serializes as null, not as a zero.
-        let empty = status_for(&spot("Cabin", false), None, vec![], None);
+        let empty = status_for(&spot("Cabin", false), None, vec![], None, true);
         let v = serde_json::to_value(&empty).unwrap();
+        assert_eq!(v["alerts_complete"], true);
         assert!(v["temp_f"].is_null() && v["station"].is_null());
         // No tracked storms: the key is absent, so a consumer says "unavailable" rather than
         // reading a distance of zero as "on top of you".
@@ -493,6 +504,7 @@ mod tests {
                 hail_in: Some(1.75),
                 tvs: None,
             }),
+            true,
         );
         let v = serde_json::to_value(&stormy).unwrap();
         assert_eq!(v["nearest_cell"]["id"], "O7");
@@ -514,6 +526,7 @@ mod tests {
             Some(("KXYZ".into(), sparse)),
             vec![],
             None,
+            true,
         );
         assert_eq!(conditions(&s), "50°F");
     }

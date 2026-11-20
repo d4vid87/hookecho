@@ -141,6 +141,12 @@ pub fn parse_motion(desc: &str) -> Option<StormMotion> {
 /// 3 Tornado Emergency / PDS. Higher tiers sort to the top and trigger the emergency sound.
 pub fn escalation(a: &AlertInfo) -> u8 {
     let head = format!("{} {}", a.headline, a.description).to_ascii_uppercase();
+    if a.event == "Flash Flood Emergency"
+        || (a.event == "Flash Flood Warning"
+            && head.split_ascii_whitespace().collect::<Vec<_>>().join(" ").contains("FLASH FLOOD EMERGENCY"))
+    {
+        return 3;
+    }
     if head.contains("TORNADO EMERGENCY") || head.contains("PARTICULARLY DANGEROUS SITUATION") {
         return 3;
     }
@@ -167,7 +173,7 @@ pub fn escalation(a: &AlertInfo) -> u8 {
 /// (FeatureKind, base RGB) for an event; fill is this at low alpha, stroke at full.
 pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
     let e = event.to_ascii_lowercase();
-    let kind = if e.contains("warning") {
+    let kind = if e.contains("warning") || event == "Flash Flood Emergency" {
         FeatureKind::Warning
     } else if e.contains("watch") {
         FeatureKind::Watch
@@ -179,7 +185,7 @@ pub(crate) fn event_style(event: &str) -> (FeatureKind, [u8; 3]) {
     let rgb = match event {
         "Tornado Warning" => [255, 0, 0],
         "Severe Thunderstorm Warning" => [255, 165, 0],
-        "Flash Flood Warning" => [57, 255, 20],
+        "Flash Flood Warning" | "Flash Flood Emergency" => [57, 255, 20],
         "Flood Warning" => [0, 160, 90],
         "Fire Weather Watch" | "Red Flag Warning" | "Extreme Heat Warning"
         | "Excessive Heat Warning" => [205, 133, 63],
@@ -254,6 +260,7 @@ fn build_alert(
         tornado_detection: param(props, "tornadoDetection"),
         damage_threat: param(props, "thunderstormDamageThreat")
             .or_else(|| param(props, "tornadoDamageThreat"))
+            .or_else(|| param(props, "flashFloodDamageThreat"))
             // A snow squall's tag rides in the same field: it is the same kind of statement about
             // the same kind of warning, and everything downstream already reads this one.
             .or_else(|| param(props, "snowSquallImpact")),
@@ -869,6 +876,25 @@ mod tests {
             escalation(&mk("THIS IS A TORNADO EMERGENCY", None, None)),
             3
         );
+    }
+
+    #[test]
+    fn flash_flood_emergency_escalates_from_text_or_damage_tag() {
+        let bulletin = |event, description, parameters| {
+            let value = serde_json::json!({ "properties": {
+                "event": event, "description": description, "parameters": parameters,
+            }});
+            parse_alert_info(&value.to_string()).unwrap()
+        };
+        assert_eq!(escalation(&bulletin("Flash Flood Warning",
+            "...FLASH FLOOD\nEMERGENCY FOR THE CITY...", serde_json::json!({}))), 3);
+        let tagged = bulletin("Flash Flood Warning", "",
+            serde_json::json!({ "flashFloodDamageThreat": ["CATASTROPHIC"] }));
+        assert_eq!(tagged.damage_threat.as_deref(), Some("CATASTROPHIC"));
+        assert_eq!(escalation(&tagged), 2);
+        assert_eq!(escalation(&bulletin("Flash Flood Warning", "", serde_json::json!({}))), 0);
+        assert_eq!(escalation(&bulletin("Flash Flood Emergency", "", serde_json::json!({}))), 3);
+        assert_eq!(event_style("Flash Flood Emergency").0, FeatureKind::Warning);
     }
 
     // Live network check (nation-wide there are essentially always active alerts).

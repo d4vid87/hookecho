@@ -75,7 +75,7 @@ pub struct Row<'a> {
 pub fn rows_in_view(feats: &[GeoFeature], bounds: (f64, f64, f64, f64)) -> Vec<Row<'_>> {
     let (vx0, vy0, vx1, vy1) = bounds;
     rows_matching(feats, |_, (x0, y0, x1, y1)| {
-        !(x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1)
+        y1 >= vy0 && y0 <= vy1 && wxdata::overlay::longitude_ranges_overlap(x0, x1, vx0, vx1)
     })
 }
 
@@ -215,6 +215,7 @@ fn near_saved_places(feature: &GeoFeature, places: &[crate::settings::Marker]) -
 
 pub(crate) struct FeedStatus {
     pub archived: bool,
+    pub archive_notice: Option<&'static str>,
     pub view_covered: bool,
     pub saved_places_covered: bool,
     pub last_success: Option<std::time::Duration>,
@@ -339,7 +340,7 @@ pub(crate) fn body(
             });
             ui.separator();
             let notice = if feed.archived {
-                None
+                feed.archive_notice.map(str::to_owned)
             } else {
                 feed_notice(
                     feed.last_success,
@@ -365,7 +366,7 @@ pub(crate) fn body(
                     } else if !query.is_empty() || filters.category.is_some() {
                         "No alerts match these filters. Clear the search or choose All."
                     } else if feed.archived {
-                        "No matching archived alerts loaded."
+                        "No archived warnings in this scope for the displayed scan."
                     } else if filters.scope == AlertScope::SavedPlaces {
                         "No alerts near your saved places in the loaded feeds."
                     } else {
@@ -557,6 +558,7 @@ mod tests {
                                 &[],
                                 &FeedStatus {
                                     archived: false,
+                                    archive_notice: None,
                                     view_covered: true,
                                     saved_places_covered: true,
                                     last_success: Some(std::time::Duration::ZERO),

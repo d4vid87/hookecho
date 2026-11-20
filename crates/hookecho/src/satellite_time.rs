@@ -28,6 +28,24 @@ impl Selection {
         self.source_slug = Some(slug.to_owned());
     }
 
+    pub fn selected_for_pane(
+        &self,
+        frames: &[DateTime<Utc>],
+        radar: Option<DateTime<Utc>>,
+        forecast_now: Option<DateTime<Utc>>,
+        linked: bool,
+    ) -> Option<DateTime<Utc>> {
+        if linked && !self.follow_radar {
+            if let Some(target) = self.time {
+                return nearest(frames, target);
+            }
+        }
+        match forecast_now {
+            Some(now) => self.selected_forecast(frames, now),
+            None => self.selected(frames, radar),
+        }
+    }
+
     pub fn selected(
         &self,
         frames: &[DateTime<Utc>],
@@ -225,6 +243,22 @@ mod tests {
             serde_json::from_str::<Selection>("{}").unwrap(),
             Selection::default()
         );
+    }
+
+    #[test]
+    fn linked_products_resolve_the_same_request_against_their_own_catalogs() {
+        let target = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut follower = Selection::default();
+        follower.bind_source("goes-c13");
+        follower.follow_radar = false;
+        follower.time = Some(target);
+        let nearest = target + chrono::Duration::minutes(5);
+        let distant = target + chrono::Duration::hours(1);
+        follower.bind_source("goes-c13");
+        assert_eq!(follower.source_slug.as_deref(), Some("goes-c13"));
+        assert_eq!(follower.selected_for_pane(&[nearest, distant], Some(distant), None, true), Some(nearest));
+        assert_eq!(follower.selected_for_pane(&[distant], Some(distant), None, true), None);
+        assert_eq!(follower.selected_for_pane(&[nearest, distant], Some(distant), None, false), None);
     }
 
     #[test]

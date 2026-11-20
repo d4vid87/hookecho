@@ -613,7 +613,9 @@ fn cached_json(server: &Server, path: &str) -> anyhow::Result<Vec<u8>> {
         "/alerts.json" => serde_json::to_vec(
             &report
                 .iter()
-                .map(|s| serde_json::json!({ "name": s.name, "alerts": s.alerts }))
+                .map(|s| serde_json::json!({
+                    "name": s.name, "alerts": s.alerts, "alerts_complete": s.alerts_complete,
+                }))
                 .collect::<Vec<_>>(),
         )?,
         "/obs.json" => serde_json::to_vec(
@@ -623,6 +625,7 @@ fn cached_json(server: &Server, path: &str) -> anyhow::Result<Vec<u8>> {
                     let mut v = serde_json::to_value(s).unwrap_or_default();
                     if let Some(map) = v.as_object_mut() {
                         map.remove("alerts");
+                        map.remove("alerts_complete");
                     }
                     v
                 })

@@ -898,6 +898,7 @@ pub struct RenderResources {
     /// its quad list is still current.
     tiles_gen: u64,
     gpu_timers: HashMap<u32, crate::gpu_metrics::Timer>,
+    last_memory_sample: Option<wxdata::clock::Instant>,
     /// GPU wind particles, built on first use. `None` when the CPU path is in charge.
     wind: HashMap<u32, crate::wind_gpu::WindGpu>,
     wind_grid: Option<Box<crate::wind_gpu::WindGrid>>,
@@ -1257,6 +1258,7 @@ impl RenderResources {
             panes: HashMap::new(),
             tiles_gen: 0,
             gpu_timers: HashMap::new(),
+            last_memory_sample: None,
             wind: HashMap::new(),
             wind_grid: None,
             target_format,
@@ -2229,9 +2231,20 @@ impl RenderResources {
         if let std::collections::hash_map::Entry::Vacant(entry) = self.gpu_timers.entry(cb.pane) {
             if let Some(timer) = crate::gpu_metrics::Timer::new(device) { entry.insert(timer); }
         }
+        crate::gpu_metrics::set_uploads(self.upload_tokens());
+    }
+
+    fn sample_memory(&mut self) {
+        let now = wxdata::clock::Instant::now();
+        if self.last_memory_sample.is_some_and(|last| {
+            now.duration_since(last) < std::time::Duration::from_millis(250)
+        }) {
+            return;
+        }
+        self.last_memory_sample = Some(now);
+        crate::prof_scope!("GPU memory inventory");
         let (gpu, shadows) = self.memory_bytes();
         crate::gpu_metrics::set_memory(gpu, shadows);
-        crate::gpu_metrics::set_uploads(self.upload_tokens());
     }
 
     pub fn upload_tokens(&self) -> [u64; 4] {
@@ -2337,6 +2350,7 @@ impl RenderResources {
         clear: wgpu::Color,
     ) {
         self.prepare_pane(device, queue, cb);
+        self.sample_memory();
         self.draw_pane(device, queue, view, cb.pane, clear);
     }
 }
@@ -2355,6 +2369,18 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         res.prepare_pane(device, queue, self);
         if let Some(timer) = res.gpu_timers.get(&self.pane) { timer.collect_into(_encoder, queue, self.pane); }
         res.step_wind(device, queue, _encoder, self);
+        Vec::new()
+    }
+
+    fn finish_prepare(
+        &self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _encoder: &mut wgpu::CommandEncoder,
+        resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        // All panes have prepared their resources by this stage.
+        resources.get_mut::<RenderResources>().unwrap().sample_memory();
         Vec::new()
     }
 

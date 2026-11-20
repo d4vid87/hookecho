@@ -123,11 +123,13 @@ impl HookEchoApp {
         };
         let alert_feed = alerts_tab.then(|| {
             let health = self.request_health(RequestLane::Feed("Weather alerts"));
+            let frame = self.archive_warning_frame();
             let saved_places_covered = self.settings.markers.iter().all(|marker| {
                 self.alert_coverage.covers((marker.lon, marker.lat, marker.lon, marker.lat))
             });
             ui::alert_panel::FeedStatus {
-                archived: self.arch_warn_shown.is_some(),
+                archived: frame != ArchiveWarningFrame::Live,
+                archive_notice: frame.notice(&self.arch_warns, self.arch_warn_retry.map(|(scan, _)| scan)),
                 view_covered: self.alert_coverage.covers(bounds),
                 saved_places_covered,
                 last_success: health.last_success,

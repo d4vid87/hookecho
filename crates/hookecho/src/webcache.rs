@@ -21,7 +21,7 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 #[cfg(target_arch = "wasm32")]
-use web_sys::{IdbDatabase, IdbObjectStore, IdbRequest, IdbTransactionMode};
+use web_sys::{IdbDatabase, IdbObjectStore, IdbTransactionMode};
 
 #[cfg(target_arch = "wasm32")]
 const DB_NAME: &str = "hookecho-packs";
@@ -131,66 +131,11 @@ pub fn save_cancelled() -> bool {
 }
 
 #[cfg(target_arch = "wasm32")]
-/// Await an `IDBRequest`, resolving to its result.
-#[cfg(target_arch = "wasm32")]
-async fn await_request(req: IdbRequest) -> anyhow::Result<JsValue> {
-    let promise = js_sys::Promise::new(&mut |resolve, reject| {
-        let r = req.clone();
-        let ok = Closure::once_into_js(move |_: JsValue| {
-            let _ = resolve.call1(&JsValue::NULL, &r.result().unwrap_or(JsValue::NULL));
-        });
-        req.set_onsuccess(Some(ok.unchecked_ref()));
-        let err = Closure::once_into_js(move |_: JsValue| {
-            let _ = reject.call1(&JsValue::NULL, &"indexeddb request failed".into());
-        });
-        req.set_onerror(Some(err.unchecked_ref()));
-    });
-    JsFuture::from(promise).await.map_err(|e| anyhow!("{e:?}"))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn transaction_done(tx: &web_sys::IdbTransaction) -> js_sys::Promise {
-    js_sys::Promise::new(&mut |resolve, reject| {
-        let ok = Closure::once_into_js(move |_: JsValue| { let _ = resolve.call0(&JsValue::NULL); });
-        tx.set_oncomplete(Some(ok.unchecked_ref()));
-        let failure = Closure::once_into_js(move |_: JsValue| {
-            let _ = reject.call1(&JsValue::NULL, &"Browser storage write aborted (quota or permission)".into());
-        });
-        tx.set_onabort(Some(failure.unchecked_ref()));
-    })
-}
+use wxdata::indexed_db::{await_request, open as open_storage, transaction_done};
 
 #[cfg(target_arch = "wasm32")]
 async fn open() -> anyhow::Result<IdbDatabase> {
     open_storage(DB_NAME, &[VOLUMES, PACKS]).await
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn open_storage(
-    name: &str,
-    stores: &'static [&'static str],
-) -> anyhow::Result<IdbDatabase> {
-    let factory = web_sys::window()
-        .and_then(|w| w.indexed_db().ok().flatten())
-        .ok_or_else(|| anyhow!("no IndexedDB in this browser"))?;
-    let req = factory
-        .open_with_u32(name, 1)
-        .map_err(|e| anyhow!("{e:?}"))?;
-    let upgrade = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
-        let Some(req) = ev.target().and_then(|t| t.dyn_into::<IdbRequest>().ok()) else {
-            return;
-        };
-        let Ok(db) = req.result().and_then(|v| v.dyn_into::<IdbDatabase>()) else {
-            return;
-        };
-        for store in stores {
-            let _ = db.create_object_store(store);
-        }
-    });
-    req.set_onupgradeneeded(Some(upgrade.as_ref().unchecked_ref()));
-    let db = await_request(req.clone().unchecked_into()).await;
-    req.set_onupgradeneeded(None);
-    db?.dyn_into::<IdbDatabase>().map_err(|e| anyhow!("{e:?}"))
 }
 
 /// The object store for `name`, in a transaction of `mode`.
@@ -212,7 +157,7 @@ pub(crate) async fn write_gis_sources(
     let outcome = async {
         let store = store(&db, GIS_SOURCES, IdbTransactionMode::Readwrite)?;
         let tx = store.transaction();
-        let committed = transaction_done(&tx);
+        let committed = transaction_done(&tx, "Browser storage write aborted (quota or permission)");
         // A replacement must not overwrite a source still referenced by saved preferences.
         let queued = sources.into_iter().map(|(name, content)| {
             let reference = format!("{}{:x}", crate::settings::GIS_STORAGE_PREFIX, Sha256::digest(content.as_bytes()));
@@ -265,9 +210,14 @@ pub async fn volume(name: &str) -> Option<Vec<u8>> {
 /// Every saved pack, newest first.
 #[cfg(target_arch = "wasm32")]
 pub async fn packs() -> Vec<Pack> {
-    let Ok(db) = open().await else { return Vec::new() };
-    let Ok(mut out) = list_packs(&db).await else { return Vec::new() };
-    for pack in &mut out {
+    checked_packs().await.map(|manifests| manifests.packs).unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn checked_packs() -> anyhow::Result<Manifests> {
+    let db = open().await?;
+    let mut manifests = list_packs(&db).await?;
+    for pack in &mut manifests.packs {
         pack.available = !pack.volumes.is_empty();
         for name in &pack.volumes {
             let found = if let Ok(store) = store(&db, VOLUMES, IdbTransactionMode::Readonly) {
@@ -284,24 +234,42 @@ pub async fn packs() -> Vec<Pack> {
             if wxdata::object_cache::get("mrms", key).await.is_none() { pack.available = false; }
         }
     }
-    out.sort_by_key(|p: &Pack| std::cmp::Reverse(p.saved_at));
-    out
-}
-
-/// Metadata only: accounting and reference checks must not load/checksum weather blobs.
-#[cfg(target_arch = "wasm32")]
-async fn list_packs(db: &IdbDatabase) -> anyhow::Result<Vec<Pack>> {
-    let request = store(db, PACKS, IdbTransactionMode::Readonly)?.get_all()
-        .map_err(|error| anyhow!("{error:?}"))?;
-    decode_manifests(await_request(request).await?)
+    manifests.packs.sort_by_key(|pack| std::cmp::Reverse(pack.saved_at));
+    Ok(manifests)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn decode_manifests(value: JsValue) -> anyhow::Result<Vec<Pack>> {
-    js_sys::Array::from(&value).iter().map(|value| {
-        let json = value.as_string().ok_or_else(|| anyhow!("Invalid saved weather manifest"))?;
-        serde_json::from_str(&json).map_err(Into::into)
-    }).collect()
+#[derive(Default)]
+struct Manifests {
+    packs: Vec<Pack>,
+    damaged: Vec<String>,
+}
+
+/// Read keys and values together so a damaged record can still be identified by its key.
+#[cfg(target_arch = "wasm32")]
+async fn list_packs(db: &IdbDatabase) -> anyhow::Result<Manifests> {
+    read_manifests(&store(db, PACKS, IdbTransactionMode::Readonly)?).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn read_manifests(store: &IdbObjectStore) -> anyhow::Result<Manifests> {
+    let keys = store.get_all_keys().map_err(|error| anyhow!("{error:?}"))?;
+    let values = store.get_all().map_err(|error| anyhow!("{error:?}"))?;
+    let (keys, values) = futures_util::try_join!(await_request(keys), await_request(values))?;
+    let (keys, values) = (js_sys::Array::from(&keys), js_sys::Array::from(&values));
+    anyhow::ensure!(keys.length() == values.length(), "Saved weather keys and values differ");
+    let mut manifests = Manifests::default();
+    for (key, value) in keys.iter().zip(values.iter()) {
+        let key = key.as_string();
+        let pack = value.as_string()
+            .and_then(|json| serde_json::from_str::<Pack>(&json).ok())
+            .filter(|pack| key.as_deref().is_some_and(|key| pack.key() == key));
+        match pack {
+            Some(pack) => manifests.packs.push(pack),
+            None => manifests.damaged.push(key.unwrap_or_else(|| "Unknown replay".to_owned())),
+        }
+    }
+    Ok(manifests)
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -334,7 +302,8 @@ fn unreferenced(pack: &Pack, surviving: &[Pack]) -> Unreferenced {
 #[cfg(target_arch = "wasm32")]
 async fn release_objects(db: &IdbDatabase, pack: &Pack) {
     let Ok(current) = list_packs(db).await else { return };
-    let unused = unreferenced(pack, &current);
+    if !current.damaged.is_empty() { return; }
+    let unused = unreferenced(pack, &current.packs);
     for (family, keys) in [("satellite", &unused.satellite), ("mrms", &unused.mrms)] {
         for key in keys {
             if let Err(error) = wxdata::object_cache::set_pinned(family, key, false).await {
@@ -352,26 +321,28 @@ async fn commit_pack(
     let stores = js_sys::Array::of2(&VOLUMES.into(), &PACKS.into());
     let tx = db.transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readwrite)
         .map_err(|error| anyhow!("{error:?}"))?;
-    let committed = transaction_done(&tx);
+    let committed = transaction_done(&tx, "Browser storage write aborted (quota or permission)");
     let queued = async {
         let data = tx.object_store(VOLUMES).map_err(|error| anyhow!("{error:?}"))?;
         let manifests = tx.object_store(PACKS).map_err(|error| anyhow!("{error:?}"))?;
-        let request = manifests.get_all().map_err(|error| anyhow!("{error:?}"))?;
-        let mut current = decode_manifests(await_request(request).await?)?;
-        let previous = current.iter().find(|old| old.key() == key).cloned();
-        current.retain(|old| old.key() != key);
-        if let Some(pack) = pack { current.push(pack.clone()); }
+        let mut current = read_manifests(&manifests).await?;
+        let previous = current.packs.iter().find(|old| old.key() == key).cloned();
+        current.packs.retain(|old| old.key() != key);
+        if let Some(pack) = pack { current.packs.push(pack.clone()); }
         anyhow::ensure!(pack.is_none() || !save_cancelled(), "Weather download cancelled; no replay saved");
         // Consume queued buffers instead of retaining a second full pack until commit completes.
         for (name, bytes) in volumes {
             data.put_with_key(&js_sys::Uint8Array::from(bytes.as_slice()), &name.as_str().into())
                 .map_err(|error| anyhow!("{error:?}"))?;
         }
-        let request = data.get_all_keys().map_err(|error| anyhow!("{error:?}"))?;
-        let names: Vec<_> = js_sys::Array::from(&await_request(request).await?).iter().filter_map(|value| value.as_string()).collect();
-        // Read references under the same write lock: other tabs' committed packs stay protected.
-        for name in unreferenced_volumes(&names, &current) {
-            data.delete(&name.as_str().into()).map_err(|error| anyhow!("{error:?}"))?;
+        // A damaged manifest may still own these volumes. Preserve its data until recovery.
+        if current.damaged.is_empty() {
+            let request = data.get_all_keys().map_err(|error| anyhow!("{error:?}"))?;
+            let names: Vec<_> = js_sys::Array::from(&await_request(request).await?).iter()
+                .filter_map(|value| value.as_string()).collect();
+            for name in unreferenced_volumes(&names, &current.packs) {
+                data.delete(&name.as_str().into()).map_err(|error| anyhow!("{error:?}"))?;
+            }
         }
         anyhow::ensure!(pack.is_none() || !save_cancelled(), "Weather download cancelled; no replay saved");
         if let Some(pack) = pack {
@@ -445,7 +416,9 @@ pub async fn save_pack(
 /// Delete oldest packs until the manifests fit under the cap.
 #[cfg(target_arch = "wasm32")]
 async fn evict(db: &IdbDatabase, keep: &str) {
-    let Ok(mut all) = list_packs(db).await else { return };
+    let Ok(manifests) = list_packs(db).await else { return };
+    if !manifests.damaged.is_empty() { return; }
+    let mut all = manifests.packs;
     let mut total: f64 = all.iter().map(|pack| pack.bytes).sum();
     all.sort_by_key(|pack| pack.saved_at);
     for pack in all {
@@ -470,7 +443,7 @@ pub async fn remove(key: String) {
     let Some(_guard) = begin_save() else { return };
     let result = async {
         let db = open().await?;
-        if let Some(pack) = list_packs(&db).await?.into_iter().find(|pack| pack.key() == key) {
+        if let Some(pack) = list_packs(&db).await?.packs.into_iter().find(|pack| pack.key() == key) {
             delete_pack(&db, &pack).await?;
         }
         Ok::<_, anyhow::Error>(())
@@ -485,8 +458,16 @@ pub async fn remove(key: String) {
 /// loads, which have nowhere else to put a result — the picker is drawn from a `&mut self` the
 /// spawned task cannot hold.
 #[cfg(target_arch = "wasm32")]
-static STATE: std::sync::Mutex<(Vec<Pack>, Option<String>, bool)> =
-    std::sync::Mutex::new((Vec::new(), None, false));
+#[derive(Default)]
+struct PickerState {
+    manifests: Manifests,
+    status: Option<String>,
+    requested: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+static STATE: std::sync::LazyLock<std::sync::Mutex<PickerState>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(PickerState::default()));
 
 /// Packs known to the UI. The first call kicks off the read that fills them.
 #[cfg(target_arch = "wasm32")]
@@ -495,34 +476,42 @@ pub fn known_packs() -> Vec<Pack> {
         let Ok(mut s) = STATE.lock() else {
             return Vec::new();
         };
-        std::mem::replace(&mut s.2, true)
+        std::mem::replace(&mut s.requested, true)
     };
     if !asked {
         wasm_bindgen_futures::spawn_local(async {
             refresh().await;
         });
     }
-    STATE.lock().map(|s| s.0.clone()).unwrap_or_default()
+    STATE.lock().map(|s| s.manifests.packs.clone()).unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn damaged_packs() -> Vec<String> {
+    STATE.lock().map(|s| s.manifests.damaged.clone()).unwrap_or_default()
 }
 
 /// The last progress or error line, for the picker.
 #[cfg(target_arch = "wasm32")]
 pub fn status() -> Option<String> {
-    STATE.lock().ok().and_then(|s| s.1.clone())
+    STATE.lock().ok().and_then(|s| s.status.clone())
 }
 
 #[cfg(target_arch = "wasm32")]
 fn set_status(msg: Option<String>) {
     if let Ok(mut s) = STATE.lock() {
-        s.1 = msg;
+        s.status = msg;
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 async fn refresh() {
-    let list = packs().await;
+    let result = checked_packs().await;
     if let Ok(mut s) = STATE.lock() {
-        s.0 = list;
+        match result {
+            Ok(manifests) => s.manifests = manifests,
+            Err(error) => s.status = Some(format!("Could not read saved weather: {error}")),
+        }
     }
 }
 

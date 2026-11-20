@@ -1,5 +1,6 @@
 package io.hookecho.HookEcho
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -272,28 +273,43 @@ object Nws {
 
     private const val MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
-    private fun geometryTouches(geometry: JSONObject?, lat: Double, lon: Double, radiusMi: Double): Boolean {
+    internal fun geometryTouches(geometry: JSONObject?, lat: Double, lon: Double, radiusMi: Double): Boolean {
         geometry ?: return false
         val coordinates = geometry.optJSONArray("coordinates") ?: return false
-        val rings = when (geometry.optString("type")) {
-            "Polygon" -> (0 until coordinates.length()).mapNotNull { coordinates.optJSONArray(it) }
-            "MultiPolygon" -> (0 until coordinates.length()).flatMap { p ->
-                val polygon = coordinates.optJSONArray(p) ?: return@flatMap emptyList()
-                (0 until polygon.length()).mapNotNull { polygon.optJSONArray(it) }
+        fun touchesPolygon(polygon: JSONArray): Boolean {
+            val outer = polygon.optJSONArray(0) ?: return false
+            return when (ringContact(outer, lat, lon, radiusMi)) {
+                RingContact.BOUNDARY -> true
+                RingContact.OUTSIDE -> false
+                RingContact.INSIDE -> (1 until polygon.length()).none { i ->
+                    val hole = polygon.optJSONArray(i) ?: return@none false
+                    ringContact(hole, lat, lon, radiusMi) == RingContact.INSIDE
+                }
             }
-            else -> emptyList()
         }
-        return rings.any { ringTouches(it, lat, lon, radiusMi) }
+        return when (geometry.optString("type")) {
+            "Polygon" -> touchesPolygon(coordinates)
+            "MultiPolygon" -> (0 until coordinates.length()).any { i ->
+                coordinates.optJSONArray(i)?.let(::touchesPolygon) == true
+            }
+            else -> false
+        }
     }
 
-    private fun ringTouches(ring: org.json.JSONArray, lat: Double, lon: Double, radiusMi: Double): Boolean {
+    private enum class RingContact { OUTSIDE, INSIDE, BOUNDARY }
+
+    private fun ringContact(ring: JSONArray, lat: Double, lon: Double, radiusMi: Double): RingContact {
+        val longitudeScale = Math.cos(Math.toRadians(lat)) * 69.172
+        var previousOffset = 0.0
         val points = (0 until ring.length()).mapNotNull { i ->
             val p = ring.optJSONArray(i) ?: return@mapNotNull null
-            val x = (p.optDouble(0) - lon) * Math.cos(Math.toRadians(lat)) * 69.172
+            val offset = p.optDouble(0) - lon
             val y = (p.optDouble(1) - lat) * 69.0
-            if (x.isFinite() && y.isFinite()) doubleArrayOf(x, y) else null
+            if (!offset.isFinite() || !y.isFinite()) return@mapNotNull null
+            previousOffset += Math.IEEEremainder(offset - previousOffset, 360.0)
+            doubleArrayOf(previousOffset * longitudeScale, y)
         }
-        if (points.size < 3) return false
+        if (points.size < 3) return RingContact.OUTSIDE
         var inside = false
         var previous = points.last()
         for (point in points) {
@@ -307,10 +323,10 @@ object Nws {
                 (-(point[0] * dx + point[1] * dy) / length2).coerceIn(0.0, 1.0)
             val nearestX = point[0] + t * dx
             val nearestY = point[1] + t * dy
-            if (nearestX * nearestX + nearestY * nearestY <= radiusMi * radiusMi) return true
+            if (nearestX * nearestX + nearestY * nearestY <= radiusMi * radiusMi) return RingContact.BOUNDARY
             previous = point
         }
-        return inside
+        return if (inside) RingContact.INSIDE else RingContact.OUTSIDE
     }
 
     /** Notification tier used for quiet hours and channel selection. */

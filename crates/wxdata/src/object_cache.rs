@@ -159,9 +159,10 @@ fn newest_key(entries: &[Meta], family: &str, prefix: &str) -> Option<String> {
 mod browser {
     use super::{CacheStats, CachedObject, Meta, checksum, eviction_keys, family_cap, newest_key};
     use anyhow::anyhow;
-    use wasm_bindgen::{JsCast, prelude::*};
+    use crate::indexed_db::{await_request, transaction_done};
+    use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
-    use web_sys::{IdbDatabase, IdbObjectStore, IdbRequest, IdbTransactionMode};
+    use web_sys::{IdbDatabase, IdbObjectStore, IdbTransactionMode};
 
     const DB: &str = "hookecho-objects";
     const DATA: &str = "data";
@@ -216,51 +217,8 @@ mod browser {
         }
     }
 
-    async fn await_request(req: IdbRequest) -> anyhow::Result<JsValue> {
-        let promise = js_sys::Promise::new(&mut |resolve, reject| {
-            let result = req.clone();
-            let ok = Closure::once_into_js(move |_: JsValue| {
-                let _ = resolve.call1(&JsValue::NULL, &result.result().unwrap_or(JsValue::NULL));
-            });
-            req.set_onsuccess(Some(ok.unchecked_ref()));
-            let err = Closure::once_into_js(move |_: JsValue| {
-                let _ = reject.call1(&JsValue::NULL, &"indexeddb request failed".into());
-            });
-            req.set_onerror(Some(err.unchecked_ref()));
-        });
-        JsFuture::from(promise)
-            .await
-            .map_err(|error| anyhow!("{error:?}"))
-    }
-
     async fn open() -> anyhow::Result<IdbDatabase> {
-        let factory = web_sys::window()
-            .and_then(|window| window.indexed_db().ok().flatten())
-            .ok_or_else(|| anyhow!("IndexedDB unavailable"))?;
-        let request = factory
-            .open_with_u32(DB, 1)
-            .map_err(|error| anyhow!("{error:?}"))?;
-        let upgrade = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
-            let Some(request) = event
-                .target()
-                .and_then(|target| target.dyn_into::<IdbRequest>().ok())
-            else {
-                return;
-            };
-            let Ok(db) = request
-                .result()
-                .and_then(|value| value.dyn_into::<IdbDatabase>())
-            else {
-                return;
-            };
-            let _ = db.create_object_store(DATA);
-            let _ = db.create_object_store(META);
-        });
-        request.set_onupgradeneeded(Some(upgrade.as_ref().unchecked_ref()));
-        let db = await_request(request.clone().unchecked_into()).await?;
-        upgrade.forget();
-        db.dyn_into::<IdbDatabase>()
-            .map_err(|error| anyhow!("{error:?}"))
+        crate::indexed_db::open(DB, &[DATA, META]).await
     }
 
     fn store(
@@ -273,18 +231,6 @@ mod browser {
             .map_err(|error| anyhow!("{error:?}"))
     }
 
-    fn transaction_done(tx: &web_sys::IdbTransaction) -> js_sys::Promise {
-        // A successful request can still be rolled back when the transaction hits storage quota.
-        js_sys::Promise::new(&mut |resolve, reject| {
-            let ok = Closure::once_into_js(move |_: JsValue| { let _ = resolve.call0(&JsValue::NULL); });
-            tx.set_oncomplete(Some(ok.unchecked_ref()));
-            let failed = Closure::once_into_js(move |_: JsValue| {
-                let _ = reject.call1(&JsValue::NULL, &"Weather cache write aborted".into());
-            });
-            tx.set_onabort(Some(failed.unchecked_ref()));
-        })
-    }
-
     async fn read_meta(store: &IdbObjectStore, key: &str) -> anyhow::Result<Option<Meta>> {
         let request = store.get(&key.into()).map_err(|error| anyhow!("{error:?}"))?;
         let value = await_request(request).await?;
@@ -294,7 +240,7 @@ mod browser {
     async fn update_meta(db: &IdbDatabase, family: &str, key: &str, edit: impl FnOnce(&mut Meta)) -> anyhow::Result<()> {
         let store = store(db, META, IdbTransactionMode::Readwrite)?;
         let tx = store.transaction();
-        let committed = transaction_done(&tx);
+        let committed = transaction_done(&tx, "Weather cache write aborted");
         let queued = async {
             let mut meta = read_meta(&store, key).await?.filter(|meta| meta.family == family)
                 .ok_or_else(|| anyhow!("cached object not found"))?;
@@ -313,7 +259,7 @@ mod browser {
         let stores = js_sys::Array::of2(&DATA.into(), &META.into());
         let tx = db.transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readwrite)
             .map_err(|error| anyhow!("{error:?}"))?;
-        let committed = transaction_done(&tx);
+        let committed = transaction_done(&tx, "Weather cache write aborted");
         let queued = async {
             let meta = tx.object_store(META).map_err(|error| anyhow!("{error:?}"))?;
             // A pack may have pinned this object after eviction took its metadata snapshot.
@@ -381,7 +327,7 @@ mod browser {
         let stores = js_sys::Array::of2(&DATA.into(), &META.into());
         let tx = db.transaction_with_str_sequence_and_mode(&stores, IdbTransactionMode::Readwrite)
             .map_err(|error| anyhow!("{error:?}"))?;
-        let committed = transaction_done(&tx);
+        let committed = transaction_done(&tx, "Weather cache write aborted");
         let queued = async {
             let metadata = tx.object_store(META).map_err(|error| anyhow!("{error:?}"))?;
             let pinned = read_meta(&metadata, key).await?.is_some_and(|meta| meta.family == family && meta.pinned);

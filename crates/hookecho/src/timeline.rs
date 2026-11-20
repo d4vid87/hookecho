@@ -68,6 +68,54 @@ pub struct Timeline {
     last_advance: Option<Instant>,
 }
 
+pub(crate) struct ExportCursor {
+    pub date: NaiveDate,
+    source: Option<Identifier>,
+    playhead: usize,
+    forecast_hour: Option<u8>,
+    following: bool,
+    playing: bool,
+    seek_target: Option<DateTime<Utc>>,
+    seek_forecast_hour: Option<u8>,
+    replay_times: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    cut_playback: bool,
+    cut_index: usize,
+    cut_reverse_pending: bool,
+}
+
+impl ExportCursor {
+    pub fn restore(&self, timeline: &mut Timeline) {
+        timeline.following = self.following;
+        timeline.playing = self.playing;
+        timeline.seek_target = self.seek_target;
+        timeline.seek_forecast_hour = self.seek_forecast_hour;
+        timeline.cut_playback = self.cut_playback;
+        timeline.cut_index = self.cut_index;
+        timeline.cut_count = 0;
+        timeline.cut_reverse_pending = self.cut_reverse_pending;
+        timeline.last_advance = None;
+        timeline.playhead = if let Some(hour) = self.forecast_hour.filter(|_| timeline.slot_count() > 0 && timeline.forecast_hours > 0) {
+            timeline.frames.len() + usize::from(hour.min(timeline.forecast_hours)) - 1
+        } else if self.following && !self.playing {
+            timeline.frames.len().saturating_sub(1)
+        } else if let Some(index) = self.source.as_ref().and_then(|source| {
+            timeline.frames.iter().position(|frame| frame == source)
+                .or_else(|| source.date_time().and_then(|time| timeline.nearest_frame(time)))
+        }) {
+            index
+        } else if self.following {
+            timeline.frames.len().saturating_sub(1)
+        } else {
+            self.playhead.min(timeline.frames.len().saturating_sub(1))
+        };
+        timeline.replay = self.replay_times.and_then(|(start, end)| {
+            let (start, end) = timeline.nearest_frame(start).zip(timeline.nearest_frame(end))?;
+            (start < end).then_some((start, end))
+        });
+        timeline.replay_time_range = self.replay_times.filter(|_| timeline.replay.is_none());
+    }
+}
+
 impl Default for Timeline {
     fn default() -> Self {
         Self {
@@ -99,6 +147,45 @@ impl Default for Timeline {
 }
 
 impl Timeline {
+    pub(crate) fn export_frames(&self) -> Vec<String> {
+        let frames = match self.replay {
+            Some((start, end)) => self.frames.get(start..=end.min(self.frames.len().saturating_sub(1))).unwrap_or_default(),
+            None => &self.frames,
+        };
+        let mut frames: Vec<_> = frames.iter()
+            .filter(|id| !id.name().ends_with("_LIVE"))
+            .map(|id| id.name().to_owned())
+            .collect();
+        if self.following {
+            let excess = frames.len().saturating_sub(self.live_window.max(1));
+            frames.drain(..excess);
+        }
+        frames
+    }
+
+    pub(crate) fn begin_export(&mut self) -> ExportCursor {
+        let cursor = ExportCursor {
+            date: self.date,
+            source: self.current().cloned(),
+            playhead: self.playhead,
+            forecast_hour: self.forecast_hour(),
+            following: self.following,
+            playing: self.playing,
+            seek_target: self.seek_target,
+            seek_forecast_hour: self.seek_forecast_hour,
+            replay_times: self.replay.and_then(|(start, end)| {
+                self.frames.get(start)?.date_time().zip(self.frames.get(end)?.date_time())
+            }).or(self.replay_time_range),
+            cut_playback: self.cut_playback,
+            cut_index: self.cut_index,
+            cut_reverse_pending: self.cut_reverse_pending,
+        };
+        self.enable_cut_playback(false);
+        self.go_begin();
+        self.replay = None;
+        cursor
+    }
+
     /// The identifier of the volume at the playhead, if any (`None` in the forecast tail).
     pub fn current(&self) -> Option<&Identifier> {
         self.frames.get(self.playhead)
@@ -1144,6 +1231,14 @@ mod tests {
         assert_eq!(t.replay, Some((138, 150)));
         assert_eq!(t.playhead, 138, "starts before the event, not on it");
         assert!(t.playing && t.loop_enabled);
+        assert_eq!(t.export_frames(), t.frames[138..=150].iter().map(|f| f.name().to_owned()).collect::<Vec<_>>());
+        let cursor = t.begin_export();
+        assert!(t.replay.is_none() && !t.playing);
+        t.playhead = 150;
+        cursor.restore(&mut t);
+        assert_eq!(t.replay, Some((138, 150)));
+        assert_eq!(t.playhead, 138);
+        assert!(t.playing);
 
         // Playback wraps at the end of the window instead of running on into the afternoon.
         t.playhead = 150;
@@ -1154,5 +1249,29 @@ mod tests {
         // Taking the playhead back by hand ends the bundle.
         t.step(1);
         assert_eq!(t.replay, None);
+    }
+
+    #[test]
+    fn loop_export_restores_forecast_hour_and_cut_cursor() {
+        let mut timeline = Timeline { frames: day("KTLX", 10), following: false, ..Timeline::default() };
+        timeline.playhead = 11;
+        assert_eq!(timeline.forecast_hour(), Some(2));
+        let forecast = timeline.begin_export();
+        timeline.frames = day("KTLX", 11);
+        forecast.restore(&mut timeline);
+        assert_eq!(timeline.forecast_hour(), Some(2));
+
+        timeline.playhead = 3;
+        let name = timeline.current().unwrap().name().to_owned();
+        timeline.enable_cut_playback(true);
+        timeline.set_cut_count(5);
+        timeline.cut_index = 2;
+        let cut = timeline.begin_export();
+        assert!(!timeline.cut_playback);
+        timeline.frames.remove(0);
+        cut.restore(&mut timeline);
+        assert_eq!(timeline.current().unwrap().name(), name);
+        assert!(timeline.cut_playback);
+        assert_eq!(timeline.cut_index, 2);
     }
 }

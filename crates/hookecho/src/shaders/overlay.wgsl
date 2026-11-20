@@ -111,7 +111,8 @@ fn vs_main(in: VsIn) -> VsOut {
     let b = world - in.world;
     let low = in.world_low + ((in.world - (world - b)) + (shift - b));
     let projected = project_world(world, low);
-    out.horizon = projected.z;
+    // Offset Z of 2 marks the already-wrapped Mercator polygon copy.
+    out.horizon = select(projected.z, -1.0, in.offset.z == 2.0);
     out.stroke = vec4<f32>(0.0, 0.0, 1.0, 0.0);
     out.building = select(0.0, 1.0, in.offset.z <= -1.0);
     let p = projected.xy
@@ -170,6 +171,7 @@ fn gamma_from_linear(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_main_gamma(in: VsOut) -> @location(0) vec4<f32> {
     if (in.building > 0.5 && (camera.globe.z != 0.0 || camera.planar.w == 0.0)) { discard; }
+    if (camera.globe.z != 0.0 && in.horizon < 0.0) { discard; }
     if (camera.globe.z == 0.0 && camera.planar.w != 0.0 && in.stroke.w > 0.0
         && length(in.stroke.xy / max(in.stroke.z, 1e-8)) > in.stroke.w + 0.01) { discard; }
     return vec4<f32>(gamma_from_linear(in.color.rgb), in.color.a);

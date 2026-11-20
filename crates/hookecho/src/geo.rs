@@ -164,40 +164,80 @@ pub fn compass(deg: f32) -> &'static str {
     D[((deg.rem_euclid(360.0) / 22.5).round() as usize) % 16]
 }
 
+/// The adjacent Mercator world that displays the other half of a date-line polygon.
+pub fn date_line_copy(west: f64, east: f64) -> Option<f64> {
+    if west < -180.0 {
+        Some(1.0)
+    } else if east > 180.0 {
+        Some(-1.0)
+    } else {
+        None
+    }
+}
+
+fn path_world_copies(
+    points: &[[f64; 2]],
+    globe: bool,
+) -> impl Iterator<Item = f64> {
+    let copy = if globe {
+        None
+    } else {
+        let (west, east) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY),
+            |(w, e), point| (w.min(point[0]), e.max(point[0])));
+        date_line_copy(west, east)
+    };
+    [Some(0.0), copy].into_iter().flatten()
+}
+
 /// Paint geographic paths with hemisphere clipping in globe mode.
 pub fn paint_path(painter: &egui::Painter, camera: &crate::render::mercator::Camera, rect: egui::Rect, points: &[[f64; 2]], stroke: egui::Stroke) {
+    if points.len() < 2 { return; }
     let vp = (rect.width(), rect.height());
-    let world = |ll: [f64; 2]| crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
-    if !camera.globe && camera.pitch_deg == 0.0 {
-        let points = points.iter().map(|&ll| {
-            let p = camera.world_to_screen(world(ll), vp);
-            rect.min + egui::vec2(p.0, p.1)
-        }).collect();
-        painter.add(egui::Shape::line(points, stroke));
-        return;
-    }
-    for pair in points.windows(2) {
-        if let Some((a,b)) = camera.project_segment(world(pair[0]), world(pair[1]), vp) {
-            painter.line_segment([rect.min + egui::vec2(a.0,a.1), rect.min + egui::vec2(b.0,b.1)], stroke);
+    let points = wxdata::overlay::continuous_longitudes(points, camera.center.0 * 360.0 - 180.0);
+    for copy in path_world_copies(&points, camera.globe) {
+        let world = |ll: [f64; 2]| crate::render::mercator::lonlat_to_world(ll[0] + 360.0 * copy, ll[1]);
+        if !camera.globe && camera.pitch_deg == 0.0 {
+            let path = points.iter().map(|&ll| {
+                let p = camera.world_to_screen(world(ll), vp);
+                rect.min + egui::vec2(p.0, p.1)
+            }).collect();
+            painter.add(egui::Shape::line(path, stroke));
+        } else {
+            for pair in points.windows(2) {
+                if let Some((a,b)) = camera.project_segment(world(pair[0]), world(pair[1]), vp) {
+                    painter.line_segment([rect.min + egui::vec2(a.0,a.1), rect.min + egui::vec2(b.0,b.1)], stroke);
+                }
+            }
         }
     }
 }
 
-/// Project a small convex geographic ring, clipping its edges at the horizon.
-pub fn project_ring(camera: &crate::render::mercator::Camera, rect: egui::Rect, points: &[[f64; 2]]) -> Vec<egui::Pos2> {
-    if points.len() < 3 { return Vec::new(); }
+/// Project the visible copies of a small convex ring, clipping its edges at the horizon.
+pub fn project_ring<'a>(
+    camera: &'a crate::render::mercator::Camera,
+    rect: egui::Rect,
+    points: &'a [[f64; 2]],
+) -> impl Iterator<Item = Vec<egui::Pos2>> + 'a {
+    let points = wxdata::overlay::continuous_longitudes(points, camera.center.0 * 360.0 - 180.0);
+    path_world_copies(&points, camera.globe).map(move |copy| project_ring_copy(camera, rect, &points, copy))
+        .filter(move |part| {
+            part.len() >= 3 && egui::Rect::from_points(part).intersects(rect)
+        })
+}
+
+fn project_ring_copy(camera: &crate::render::mercator::Camera, rect: egui::Rect, points: &[[f64; 2]], copy: f64) -> Vec<egui::Pos2> {
     let vp = (rect.width(), rect.height());
+    let world = |p: [f64; 2]| crate::render::mercator::lonlat_to_world(p[0] + 360.0 * copy, p[1]);
     if !camera.globe && camera.pitch_deg == 0.0 {
-        return points.iter().map(|p| {
-            let world = crate::render::mercator::lonlat_to_world(p[0],p[1]);
-            let p = camera.world_to_screen(world,vp);
+        return points.iter().map(|&p| {
+            let p = camera.world_to_screen(world(p), vp);
             rect.min + egui::vec2(p.0,p.1)
         }).collect();
     }
     let mut out = Vec::new();
     for i in 0..points.len() {
-        let a = crate::render::mercator::lonlat_to_world(points[i][0], points[i][1]);
-        let b = crate::render::mercator::lonlat_to_world(points[(i+1)%points.len()][0], points[(i+1)%points.len()][1]);
+        let a = world(points[i]);
+        let b = world(points[(i + 1) % points.len()]);
         if let Some((a,b)) = camera.project_segment(a,b,vp) {
             for p in [a,b] {
                 let p = rect.min + egui::vec2(p.0,p.1);

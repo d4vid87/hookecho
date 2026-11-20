@@ -155,19 +155,27 @@ pub fn analyze_storm_route(
 
 /// Distance along a route to its first entry into a polygon, including interior holes.
 pub fn first_intersection_m(points: &[[f64; 2]], rings: &[Vec<[f64; 2]>]) -> Option<f64> {
+    use crate::overlay::{continuous_longitudes, longitude_near, point_in_continuous_ring};
     let outer = rings.first()?;
+    let origin = outer.first()?[0];
+    let rings: Vec<_> = rings.iter().map(|ring| continuous_longitudes(ring, origin)).collect();
     let inside = |point: [f64; 2]| {
-        crate::overlay::point_in_ring(outer, point[0], point[1])
+        point_in_continuous_ring(&rings[0], point[0], point[1])
             && !rings[1..]
                 .iter()
-                .any(|hole| crate::overlay::point_in_ring(hole, point[0], point[1]))
+                .any(|hole| point_in_continuous_ring(hole, point[0], point[1]))
     };
     let mut traveled = 0.0;
     for segment in points.windows(2) {
-        let (a, b) = (segment[0], segment[1]);
+        let (mut a, mut b) = (segment[0], segment[1]);
+        b[0] = longitude_near(b[0], a[0]);
+        let center = (a[0] + b[0]) * 0.5;
+        let shift = longitude_near(center, origin) - center;
+        a[0] += shift;
+        b[0] += shift;
         let length = distance_m(a, b);
         let mut cuts = vec![0.0, 1.0];
-        for ring in rings {
+        for ring in &rings {
             for edge in ring.windows(2) {
                 if let Some(t) = crossing_fraction(a, b, edge[0], edge[1]) {
                     cuts.push(t);
@@ -440,6 +448,15 @@ mod tests {
 
         let hole = vec![[-2.0, -0.5], [2.0, -0.5], [2.0, 0.5], [-2.0, 0.5]];
         assert!(first_intersection_m(&route, &[outer, hole]).is_none());
+    }
+
+    #[test]
+    fn date_line_route_intersects_only_the_short_geographic_edges() {
+        let polygon = vec![vec![[179.0, -1.0], [-179.0, -1.0], [-179.0, 1.0], [179.0, 1.0]]];
+        let distance = first_intersection_m(&[[178.0, 0.0], [-178.0, 0.0]], &polygon).unwrap();
+        assert!((distance / 1000.0 - 111.2).abs() < 1.0);
+        assert!(first_intersection_m(&[[0.0, 0.0], [-179.5, 0.0]], &polygon).is_some());
+        assert!(first_intersection_m(&[[-2.0, 0.0], [2.0, 0.0]], &polygon).is_none());
     }
 
     #[test]

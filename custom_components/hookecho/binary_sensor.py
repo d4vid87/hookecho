@@ -17,6 +17,7 @@ from .const import (
     KEY_ALERT_EVENT,
     KEY_ALERT_UNTIL,
     KEY_ALERTS,
+    KEY_ALERTS_COMPLETE,
 )
 from .sensor import HookEchoEntity
 
@@ -39,6 +40,11 @@ class HookEchoAlertActive(HookEchoEntity, BinarySensorEntity):
         self._attr_unique_id = f"hookecho_{spot}_alert_active"
 
     @property
+    def available(self) -> bool:
+        # Known alerts remain actionable with partial coverage. Older servers omit this field.
+        return super().available and (self.is_on or self.spot.get(KEY_ALERTS_COMPLETE, True))
+
+    @property
     def is_on(self) -> bool:
         return bool(self.spot.get(KEY_ALERTS))
 
@@ -52,4 +58,5 @@ class HookEchoAlertActive(HookEchoEntity, BinarySensorEntity):
             # 0 plain, 1 considerable, 2 destructive/observed, 3 tornado emergency or PDS.
             "escalation": worst.get(KEY_ALERT_ESCALATION),
             "count": len(alerts),
+            "coverage_complete": self.spot.get(KEY_ALERTS_COMPLETE),
         }

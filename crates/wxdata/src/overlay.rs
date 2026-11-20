@@ -143,8 +143,9 @@ impl GeoFeature {
     /// the feature has no vertices.
     pub fn bbox(&self) -> Option<(f64, f64, f64, f64)> {
         let mut b: Option<(f64, f64, f64, f64)> = None;
+        let origin = self.rings.iter().find_map(|ring| ring.first())?[0];
         for ring in &self.rings {
-            for p in ring {
+            for p in continuous_longitudes(ring, origin).iter() {
                 b = Some(match b {
                     None => (p[0], p[1], p[0], p[1]),
                     Some((x0, y0, x1, y1)) => {
@@ -168,11 +169,14 @@ impl GeoFeature {
         }
         const KM_PER_DEG: f64 = 111.194_927;
         let scale = lat.to_radians().cos().max(0.01);
-        let to_xy = |p: [f64; 2]| [(p[0] - lon) * scale * KM_PER_DEG, (p[1] - lat) * KM_PER_DEG];
         let mut best = f64::INFINITY;
         for ring in &self.rings {
-            for pair in ring.windows(2) {
-                let (a, b) = (to_xy(pair[0]), to_xy(pair[1]));
+            let Some(first) = ring.first() else { continue };
+            let ring = continuous_longitudes(ring, first[0]);
+            let lon = longitude_near(lon, first[0]);
+            let to_xy = |p: [f64; 2]| [(p[0] - lon) * scale * KM_PER_DEG, (p[1] - lat) * KM_PER_DEG];
+            for (&start, &end) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+                let (a, b) = (to_xy(start), to_xy(end));
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 let len2 = dx * dx + dy * dy;
                 // Clamp the projection to the segment, so endpoints win for a point "past" it.
@@ -200,6 +204,40 @@ impl GeoFeature {
             .iter()
             .any(|hole| point_in_ring(hole, lon, lat))
     }
+}
+
+/// The copy of a longitude within 180° of a reference.
+pub fn longitude_near(lon: f64, reference: f64) -> f64 {
+    let delta = lon - reference;
+    if delta.abs() <= 180.0 {
+        lon
+    } else {
+        lon - 360.0 * (delta / 360.0).round()
+    }
+}
+
+/// Keep successive edges short and put the first vertex near the requested world copy.
+pub fn continuous_longitudes(
+    points: &[[f64; 2]],
+    reference: f64,
+) -> std::borrow::Cow<'_, [[f64; 2]]> {
+    if points.first().is_none_or(|p| (p[0] - reference).abs() <= 180.0)
+        && points.windows(2).all(|edge| (edge[1][0] - edge[0][0]).abs() <= 180.0)
+    {
+        return std::borrow::Cow::Borrowed(points);
+    }
+    std::borrow::Cow::Owned(points.iter().scan(reference, |previous, &[lon, lat]| {
+        *previous = longitude_near(lon, *previous);
+        Some([*previous, lat])
+    }).collect())
+}
+
+/// Compare longitude intervals that may be expressed in different copies of the world.
+pub fn longitude_ranges_overlap(west: f64, east: f64, other_west: f64, other_east: f64) -> bool {
+    let center = (west + east) * 0.5;
+    let other_center = (other_west + other_east) * 0.5;
+    (longitude_near(center, other_center) - other_center).abs()
+        <= ((east - west) + (other_east - other_west)) * 0.5
 }
 
 /// The highest-priority feature containing `(lon, lat)`, if any.
@@ -232,13 +270,18 @@ pub fn rings_intersect(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
             |(x0, y0, x1, y1), p| (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1])),
         )
     };
-    let (ax0, ay0, ax1, ay1) = bbox(a);
-    let (bx0, by0, bx1, by1) = bbox(b);
+    let origin = a[0][0];
+    let a = continuous_longitudes(a, origin);
+    let b = continuous_longitudes(b, origin);
+    let (ax0, ay0, ax1, ay1) = bbox(&a);
+    let (bx0, by0, bx1, by1) = bbox(&b);
     if ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0 {
         return false;
     }
     // Containment either way (no edge crosses when one ring is wholly inside the other).
-    if point_in_ring(b, a[0][0], a[0][1]) || point_in_ring(a, b[0][0], b[0][1]) {
+    if point_in_continuous_ring(&b, a[0][0], a[0][1])
+        || point_in_continuous_ring(&a, b[0][0], b[0][1])
+    {
         return true;
     }
     // Any pair of edges crossing. Rings are treated as closed, so the last→first edge counts.
@@ -279,6 +322,12 @@ fn segments_cross(p1: [f64; 2], p2: [f64; 2], q1: [f64; 2], q2: [f64; 2]) -> boo
 
 /// Even-odd point-in-polygon test on a `[lon, lat]` ring.
 pub fn point_in_ring(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
+    let Some(first) = ring.first() else { return false };
+    let ring = continuous_longitudes(ring, first[0]);
+    point_in_continuous_ring(&ring, longitude_near(lon, first[0]), lat)
+}
+
+pub(crate) fn point_in_continuous_ring(ring: &[[f64; 2]], lon: f64, lat: f64) -> bool {
     let mut inside = false;
     let n = ring.len();
     if n < 3 {
@@ -480,6 +529,33 @@ mod tests {
         assert!(rings_intersect(&base, &sq(1.0, 0.0, 1.0)));
         // Degenerate rings are never a match.
         assert!(!rings_intersect(&base, &[[0.5, 0.5], [0.6, 0.6]]));
+    }
+
+    #[test]
+    fn date_line_ring_hits_both_sides_and_excludes_greenwich() {
+        let ring = vec![[179.0, 50.0], [-179.0, 50.0], [-179.0, 52.0], [179.0, 52.0]];
+        let feature = GeoFeature {
+            rings: vec![
+                ring.clone(),
+                vec![[-179.9, 50.9], [-179.6, 50.9], [-179.6, 51.1], [-179.9, 51.1]],
+            ],
+            fill: [0; 4],
+            stroke: [0; 4],
+            kind: FeatureKind::Warning,
+            title: String::new(),
+            detail: String::new(),
+            alert: None,
+        };
+        assert!(feature.contains(179.5, 51.0));
+        assert!(feature.contains(-179.5, 51.0));
+        assert!(!feature.contains(-179.8, 51.0), "the hole is excluded");
+        assert!(!feature.contains(0.0, 51.0));
+        assert!(feature.distance_km(178.9, 50.0) < 8.0);
+        assert!(feature.distance_km(-178.9, 50.0) < 8.0);
+        assert_eq!(feature.bbox(), Some((179.0, 50.0, 181.0, 52.0)));
+        assert!(longitude_ranges_overlap(179.0, 181.0, -180.0, -177.0));
+        assert!(rings_intersect(&ring, &[[-180.0, 49.0], [-179.5, 51.0], [-178.0, 49.0]]));
+        assert!(!rings_intersect(&ring, &[[-1.0, 50.0], [1.0, 51.0], [-1.0, 52.0]]));
     }
 }
 

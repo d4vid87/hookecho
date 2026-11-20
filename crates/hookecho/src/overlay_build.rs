@@ -72,6 +72,20 @@ mod rainfall_border_tests {
     }
 
     #[test]
+    fn date_line_mesh_has_two_short_planar_copies_and_one_globe_copy() {
+        let mut f = square("Pacific warning");
+        f.rings = vec![vec![[179.0, 50.0], [-179.0, 50.0], [-179.0, 52.0], [179.0, 52.0]]];
+        let mesh = build(&[f], 6.0);
+        assert!(!mesh.indices.is_empty());
+        assert!(mesh.vertices.iter().any(|v| v.offset[2] == 2.0 && v.precise_world()[0] < 0.0));
+        assert!(mesh.vertices.iter().any(|v| v.offset[2] == 0.0 && v.precise_world()[0] > 1.0));
+        for tri in mesh.indices.as_chunks::<3>().0 {
+            let x = |i| mesh.vertices[tri[i] as usize].precise_world()[0];
+            assert!((x(0) - x(1)).abs() < 0.01 && (x(0) - x(2)).abs() < 0.01);
+        }
+    }
+
+    #[test]
     fn street_zoom_polygons_keep_subpixel_vertices_and_stroke_width() {
         let origin = lonlat_to_world(139.75, 35.68);
         let wpp = 1.0 / (256.0 * 2f64.powi(20));
@@ -160,6 +174,21 @@ fn build_polygons(features: &[GeoFeature], zoom: f64, theme: crate::settings::Th
                     &opts,
                     &mut BuffersBuilder::new(&mut buf, |v: StrokeVertex| OverlayVertex::new([origin.0 + v.position().x as f64, origin.1 + v.position().y as f64], stroke, [0.0; 3])),
                 );
+            }
+        }
+        // Only seam-crossing features need a second planar mesh. The globe already wraps.
+        if let Some(copy) = f.bbox().and_then(|(west, _, east, _)| crate::geo::date_line_copy(west, east)) {
+            let base = buf.vertices.len() as u32;
+            buf.vertices.reserve(base as usize);
+            for i in 0..base as usize {
+                let vertex = buf.vertices[i];
+                let [x, y] = vertex.precise_world();
+                buf.vertices.push(OverlayVertex::new([x + copy, y], vertex.color, [0.0, 0.0, 2.0]));
+            }
+            let count = buf.indices.len();
+            buf.indices.reserve(count);
+            for i in 0..count {
+                buf.indices.push(buf.indices[i] + base);
             }
         }
         append(&mut geom, buf);
@@ -312,6 +341,7 @@ pub fn append_placefiles_with_theme(
 fn feature_path(f: &GeoFeature, origin: (f64, f64)) -> Path {
     let mut b = Path::builder();
     for ring in &f.rings {
+        let ring = wxdata::overlay::continuous_longitudes(ring, origin.0 * 360.0 - 180.0);
         let mut pts = ring.iter().map(|&[lon, lat]| {
             let (wx, wy) = lonlat_to_world(lon, lat);
             lyon::math::point((wx - origin.0) as f32, (wy - origin.1) as f32)

@@ -119,6 +119,12 @@ fn bilinear(heights: &[f32], px: f64, py: f64) -> f32 {
     top * (1.0 - fy) + bottom * fy
 }
 
+pub(crate) fn decode_tile(bytes: &[u8]) -> anyhow::Result<image::RgbaImage> {
+    let image = crate::image_load::decode_tile(bytes)?;
+    anyhow::ensure!(image.dimensions() == (256, 256), "Terrarium tile must be 256x256");
+    Ok(image)
+}
+
 /// Terrain height above sea level (metres) at `(lat, lon)`, or `None` if the covering DEM tile is
 /// unavailable (offline and not packed, or ocean-edge).
 pub async fn elevation_m(client: &reqwest::Client, lat: f64, lon: f64) -> Option<f32> {
@@ -134,9 +140,7 @@ pub async fn elevation_m(client: &reqwest::Client, lat: f64, lon: f64) -> Option
     }
     let path = crate::paths::cache_dir().map(|d| tile_path(&d.join("tiles"), tx, ty));
     let decoded = crate::tiles::load_tile_decoded(client, &tile_url(tx, ty), path.as_deref(), |bytes| async move {
-        let image = crate::image_load::decode_tile(&bytes)?;
-        // A wrong-size DEM must be evicted and retried, just like any other invalid tile.
-        anyhow::ensure!(image.dimensions() == (256, 256), "Terrarium tile must be 256x256");
+        let image = decode_tile(&bytes)?;
         Ok(Arc::new(image.pixels().map(|p| decode_height([p[0], p[1], p[2]])).collect::<Vec<f32>>()))
     }).await.ok();
     if let Ok(mut c) = cache().lock() {

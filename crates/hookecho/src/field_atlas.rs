@@ -314,6 +314,7 @@ struct Prepared {
     style: Style,
     key: String,
     rings: Vec<WorldRing>,
+    date_line_copy: Option<f64>,
 }
 struct WorldRing {
     points: Vec<(f64, f64)>,
@@ -401,11 +402,13 @@ impl Cache {
                     .as_ref()
                     .map(|a| a.id.clone())
                     .unwrap_or_else(|| format!("{:?}:{}:{}", f.kind, f.title, f.detail));
+                let origin = f.rings.iter().find_map(|ring| ring.first())?[0];
                 let rings = f
                     .rings
                     .iter()
                     .filter(|r| r.len() >= 3)
                     .map(|ring| {
+                        let ring = wxdata::overlay::continuous_longitudes(ring, origin);
                         let mut points: Vec<_> = ring
                             .iter()
                             .map(|p| crate::render::mercator::lonlat_to_world(p[0], p[1]))
@@ -445,6 +448,7 @@ impl Cache {
                     style: s,
                     key,
                     rings,
+                    date_line_copy: f.bbox().and_then(|(west, _, east, _)| crate::geo::date_line_copy(west, east)),
                 })
             })
             .collect();
@@ -507,18 +511,27 @@ impl Cache {
             (Cluster, std::collections::HashSet<&str>),
         > = Default::default();
         for p in &self.prepared {
-            for ring in &p.rings {
+            for (ring, shift) in p.rings.iter().flat_map(|ring| {
+                if key.globe {
+                    let center = (ring.bounds[0] + ring.bounds[2]) * 0.5;
+                    [Some((key.center.0 - center).round()), None]
+                } else {
+                    [Some(0.0), p.date_line_copy]
+                }.into_iter().flatten().map(move |shift| (ring, shift))
+            }) {
                 let [x0, y0, x1, y1] = ring.bounds;
+                let (x0, x1) = (x0 + shift, x1 + shift);
                 if x1 < lo.0 || y1 < lo.1 || x0 > hi.0 || y0 > hi.1 {
                     continue;
                 }
+                let shifted = |(x, y)| (x + shift, y);
                 if key.globe || key.pitch_deg != 0.0 || (key.zoom < CLUSTER_ZOOM && !p.style.emergency) {
                     let stroke = Stroke::new(1.1 * key.scale, p.style.color());
                     for i in 0..ring.points.len() {
                         if !ring.exterior[i] {
                             continue;
                         }
-                        let Some((a, b)) = cam.project_segment(ring.points[i], ring.points[(i + 1) % ring.points.len()], vp) else { continue; };
+                        let Some((a, b)) = cam.project_segment(shifted(ring.points[i]), shifted(ring.points[(i + 1) % ring.points.len()]), vp) else { continue; };
                         let a = key.clip.min + egui::vec2(a.0, a.1);
                         let b = key.clip.min + egui::vec2(b.0, b.1);
                         if let Some(edge) = clip_segment(a, b, key.clip.expand(8.0)) {
@@ -535,7 +548,7 @@ impl Cache {
                     // Subpixel simplification affects paint only, never source inspection.
                     let mut pts = Vec::with_capacity(ring.points.len());
                     for &w in &ring.points {
-                        let s = project(w);
+                        let s = project(shifted(w));
                         if pts
                             .last()
                             .is_none_or(|last: &Pos2| last.distance_sq(s) >= 0.64)
@@ -551,6 +564,7 @@ impl Cache {
                 let bounds = if key.globe || key.pitch_deg != 0.0 || key.bearing_deg != 0.0 {
                     let mut bounds = Rect::NOTHING;
                     for &point in &ring.points {
+                        let point = shifted(point);
                         if cam.point_visible(point, vp) { bounds.extend_with(project(point)); }
                     }
                     if !bounds.is_positive() { continue; }

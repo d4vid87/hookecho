@@ -145,4 +145,27 @@ class NwsTest {
         assertEquals(Nws.TIER_WATCH, tier("Tornado Watch",
             """{"description":"Consult local news if a tornado emergency is issued."}"""))
     }
+
+    @Test fun warningRadiusRespectsHolesAndIndependentPolygonParts() {
+        val rings = """[[[-101,28],[-93,28],[-93,36],[-101,36],[-101,28]],[[-99,30],[-95,30],[-95,34],[-99,34],[-99,30]]]"""
+        val polygon = JSONObject("""{"type":"Polygon","coordinates":$rings}""")
+        assertFalse(Nws.geometryTouches(polygon, 32.0, -97.0, 30.0))
+        assertTrue(Nws.geometryTouches(polygon, 32.0, -98.9, 30.0))
+        assertTrue(Nws.geometryTouches(polygon, 32.0, -100.0, 0.0))
+        assertFalse(Nws.geometryTouches(polygon, 32.0, -103.0, 30.0))
+
+        val island = """[[[-97.5,31.5],[-96.5,31.5],[-96.5,32.5],[-97.5,32.5],[-97.5,31.5]]]"""
+        val multiPolygon = JSONObject("""{"type":"MultiPolygon","coordinates":[$rings,$island]}""")
+        assertTrue(Nws.geometryTouches(multiPolygon, 32.0, -97.0, 30.0))
+    }
+
+    @Test fun warningRadiusFollowsTheShortEdgeAcrossTheDateLine() {
+        val polygon = JSONObject(
+            """{"type":"Polygon","coordinates":[[[179,50],[-179,50],[-179,52],[179,52],[179,50]]]}""",
+        )
+        assertTrue(Nws.geometryTouches(polygon, 51.0, 179.5, 0.0))
+        assertTrue(Nws.geometryTouches(polygon, 51.0, -179.5, 0.0))
+        assertTrue(Nws.geometryTouches(polygon, 51.0, -178.9, 30.0))
+        assertFalse(Nws.geometryTouches(polygon, 51.0, 0.0, 30.0))
+    }
 }

@@ -4170,6 +4170,50 @@ mod golden_tests {
 
     #[test]
     #[ignore = "gpu"]
+    fn gpu_date_line_warning_only_covers_the_pacific() {
+        use wxdata::overlay::{FeatureKind, GeoFeature};
+
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let (device, queue, _) = init_gpu(&rt).unwrap();
+        let sweep = synthetic_sweep();
+        let palette = crate::colormap::default_table(Moment::Reflectivity).clone();
+        let warning = GeoFeature {
+            rings: vec![vec![[179.0, 50.0], [-179.0, 50.0], [-179.0, 52.0], [179.0, 52.0]]],
+            fill: [255, 0, 0, 96],
+            stroke: [255, 0, 0, 255],
+            kind: FeatureKind::Warning,
+            title: "Pacific warning".into(),
+            detail: String::new(),
+            alert: None,
+        };
+        let mesh = crate::overlay_build::build(&[warning], 6.0);
+        for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+            let target = new_target(&device, format, GOLDEN_SIZE);
+            let view = target.create_view(&Default::default());
+            let mut resources = RenderResources::new(&device, format);
+            for globe in [false, true] {
+                for (lon, expected_alpha) in [(179.5, 96), (-179.5, 96), (0.0, 0)] {
+                    let mut camera = Camera::at_lonlat(lon, 51.0, 6.0);
+                    camera.globe = globe;
+                    let mut cb = performance_callback(&sweep, &palette, camera, false);
+                    cb.radar_upload = None;
+                    cb.draw_radar = false;
+                    cb.draw_overlay = true;
+                    cb.overlay_upload = Some(crate::render::OverlayUpload {
+                        vertices: mesh.vertices.clone(),
+                        indices: mesh.indices.clone(),
+                    });
+                    resources.render_once(&device, &queue, &view, &cb, wgpu::Color::TRANSPARENT);
+                    let rgba = read_target(&device, &queue, &target, GOLDEN_SIZE);
+                    let center = ((GOLDEN_SIZE / 2) * (GOLDEN_SIZE + 1) * 4 + 3) as usize;
+                    assert!(rgba[center].abs_diff(expected_alpha) <= 1, "{format:?}, globe={globe}, {lon}°: expected alpha {expected_alpha}, got {}", rgba[center]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "gpu"]
     fn gpu_globe_field_matches_geographic_picking_and_clips_sky() {
         let vp = (GOLDEN_SIZE as f32, GOLDEN_SIZE as f32);
         let mut camera = Camera::at_lonlat(0.0, 0.0, 2.0);

@@ -198,6 +198,37 @@ try {
     check(Object.keys(await volumes()).join() === 'newest', 'budget eviction discarded the just-saved pack');
     await api.delete_pack('2026-05-26');
 
+    await save('2026-05-27', ['damaged-volume'], ['shared']);
+    await save('2026-05-28', ['healthy-volume']);
+    const damage = async () => {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('hookecho-packs');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction('packs', 'readwrite');
+          tx.objectStore('packs').put('{', 'KTLX-2026-05-27');
+          tx.oncomplete = resolve;
+          tx.onabort = () => reject(tx.error);
+        });
+      } finally { db.close(); }
+    };
+    await damage();
+    check(await api.ready() === '[true]', 'damaged replay hid healthy replay');
+    await save('2026-05-29', ['new-volume']);
+    check(await api.ready() === '[true,true]', 'damaged replay blocked a new save');
+    check((await records('hookecho-packs', 'packs'))['KTLX-2026-05-27'] === '{',
+      'unrelated save overwrote the damaged manifest');
+    check('damaged-volume' in await volumes() && (await metadata()).shared.pinned,
+      'files for damaged replay were reclaimed prematurely');
+    await save('2026-05-27', ['recovered-volume'], ['shared']);
+    check(await api.ready() === '[true,true,true]', 'saved replay did not replace damaged manifest');
+    for (const day of ['27', '28', '29']) await api.delete_pack(`2026-05-${day}`);
+    check(Object.keys(await volumes()).length === 0 && !(await metadata()).shared.pinned,
+      'recovery did not restore normal file cleanup');
+
     await api.seed_object('rewrite');
     await api.pin_object('rewrite', true);
     await api.seed_object('rewrite');
@@ -260,10 +291,47 @@ try {
       'concurrent browser contexts preserve committed and shared radar files',
       'budget eviction preserves the just-saved pack despite stale timestamps',
       'object rewrites preserve pins and late transaction aborts leave no orphan metadata',
-      'access-time updates preserve concurrent offline pins'];
+      'access-time updates preserve concurrent offline pins',
+      'a damaged replay preserves its files without hiding healthy replays or blocking saves'];
   });
-  assert.equal(checks.length, 7);
-  console.log(JSON.stringify({checks}, null, 2));
+  await page.evaluate(async () => {
+    const api = await import('/hookecho_weather_audit.js');
+    await api.save_pack('2026-05-30', '["retention-volume"]', '["rewrite"]');
+    const callbacks = globalThis.idbCallbacks = [];
+    const restore = [];
+    for (const [prototype, names] of [
+      [IDBRequest.prototype, ['onsuccess', 'onerror']],
+      [IDBOpenDBRequest.prototype, ['onupgradeneeded']],
+      [IDBTransaction.prototype, ['oncomplete', 'onabort']],
+    ]) {
+      for (const name of names) {
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+        Object.defineProperty(prototype, name, {...descriptor, set(callback) {
+          if (typeof callback === 'function') callbacks.push(new WeakRef(callback));
+          descriptor.set.call(this, callback);
+        }});
+        restore.push(() => Object.defineProperty(prototype, name, descriptor));
+      }
+    }
+    try {
+      for (let i = 0; i < 200; i++) {
+        if (await api.ready() !== '[true]') throw new Error('readiness soak lost its replay');
+      }
+    } finally {
+      for (const restoreDescriptor of restore) restoreDescriptor();
+    }
+  });
+  const cdp = await page.createCDPSession();
+  await cdp.send('HeapProfiler.collectGarbage');
+  await cdp.send('HeapProfiler.collectGarbage');
+  const retention = await page.evaluate(() => ({
+    total: idbCallbacks.length, retained: idbCallbacks.filter(ref => ref.deref()).length,
+  }));
+  assert(retention.total >= 200, 'IDB callback soak did not exercise actual requests');
+  assert.equal(retention.retained, 0, 'terminal IDB callbacks stay alive after operations settle');
+  checks.push('settled replay and weather-cache operations release their browser callbacks');
+  assert.equal(checks.length, 9);
+  console.log(JSON.stringify({checks, retention}, null, 2));
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

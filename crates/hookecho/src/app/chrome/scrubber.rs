@@ -980,6 +980,13 @@ pub(super) fn history_controls(
                 }
             });
         }
+        let damaged = crate::webcache::damaged_packs();
+        for key in &damaged {
+            ui.label(format!("Damaged saved replay — {key}"));
+        }
+        if !damaged.is_empty() {
+            ui.weak("Save this loop again for the same radar and date to replace a damaged replay.");
+        }
         if let Some(msg) = pack_status {
             ui.weak(msg);
         }

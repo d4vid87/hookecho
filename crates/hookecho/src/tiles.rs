@@ -1413,6 +1413,7 @@ fn ndfd_advertised_frame_times(
     from: chrono::DateTime<chrono::Utc>,
     to: chrono::DateTime<chrono::Utc>,
     limit: usize,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<chrono::DateTime<chrono::Utc>> {
     use chrono::NaiveDateTime;
     if from > to || limit == 0 { return Vec::new(); }
@@ -1426,7 +1427,12 @@ fn ndfd_advertised_frame_times(
         (from <= t && t <= to).then_some(t)
     }).collect();
     out.sort_unstable(); out.dedup();
-    if out.len() > limit { out.drain(..out.len() - limit); }
+    if out.len() > limit {
+        let first_future = out.partition_point(|time| *time < now);
+        let start = first_future.min(out.len() - limit);
+        out.drain(..start);
+        out.truncate(limit);
+    }
     out
 }
 
@@ -1515,7 +1521,7 @@ pub async fn fetch_frame_times(
             }
         }
         return std::str::from_utf8(&bytes).map_or_else(|_| Vec::new(), |xml| {
-            ndfd_advertised_frame_times(xml, layer, from, to, limit)
+            ndfd_advertised_frame_times(xml, layer, from, to, limit, chrono::Utc::now())
         });
     }
     if style == BasemapStyle::RainViewerGlobal {
@@ -2298,7 +2304,13 @@ pub(crate) async fn load_tile_bytes(
     load_tile_decoded(client, url, path, |bytes| async move { Ok(bytes) }).await
 }
 
-async fn load_tile_bytes_inner(client: &reqwest::Client, url: &str, path: Option<&std::path::Path>, refresh: bool) -> anyhow::Result<Vec<u8>> {
+async fn load_tile_bytes_inner(
+    client: &reqwest::Client,
+    url: &str,
+    path: Option<&std::path::Path>,
+    refresh: bool,
+    write_cache: bool,
+) -> anyhow::Result<Vec<u8>> {
     let weather = crate::weather_tile_cache::is_weather_tile(url);
     let max_bytes = if weather { 4 * 1024 * 1024 } else { MAX_TILE_BYTES };
     if refresh && weather { crate::weather_tile_cache::invalidate(url); }
@@ -2348,9 +2360,9 @@ async fn load_tile_bytes_inner(client: &reqwest::Client, url: &str, path: Option
         }
         Ok(bytes)
     }).await?;
-    if weather { crate::weather_tile_cache::put(url, Arc::clone(&bytes)); }
+    if weather && write_cache { crate::weather_tile_cache::put(url, Arc::clone(&bytes)); }
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(p) = path {
+    if let Some(p) = path.filter(|_| write_cache) {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -2375,9 +2387,19 @@ where
     F: Fn(Vec<u8>) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<T>>,
 {
+    load_tile_decoded_with_cache(client, url, path, true, decode).await
+}
+
+async fn load_tile_decoded_with_cache<T, F, Fut>(
+    client: &reqwest::Client, url: &str, path: Option<&std::path::Path>, write_cache: bool, decode: F,
+) -> anyhow::Result<T>
+where
+    F: Fn(Vec<u8>) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
     for attempt in 0..2 {
         let decoded = async {
-            let bytes = load_tile_bytes_inner(client, url, path, attempt > 0).await?;
+            let bytes = load_tile_bytes_inner(client, url, path, attempt > 0, write_cache).await?;
             decode(bytes).await
         }.await;
         match decoded {
@@ -2660,6 +2682,17 @@ pub(crate) fn pack_tile_ids(
     ids
 }
 
+async fn load_pack_tile(client: &reqwest::Client, url: &str, path: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    let kind = crate::offline::TileKind::from_cache_path(path);
+    // The pack writes accepted bytes only after validation and its size/cancellation checks.
+    load_tile_decoded_with_cache(client, url, Some(path), false, |bytes| async move {
+        wxdata::task::blocking(move || {
+            kind.validate(&bytes)?;
+            Ok(bytes)
+        }).await?
+    }).await
+}
+
 /// Download a user-selected area with at most four requests; every success is persisted.
 pub fn start_pack_download(
     spawner: &crate::rt::Spawner,
@@ -2689,8 +2722,7 @@ pub fn start_pack_download(
                     if cancel.load(Ordering::Relaxed) { break; }
                     let Some((url, path)) = queue.lock().unwrap().next() else { break };
                     let result: anyhow::Result<u64> = async {
-                        let bytes = load_tile_bytes(&client, &url, Some(&path)).await?;
-                        anyhow::ensure!(!bytes.is_empty(), "Tile was empty");
+                        let bytes = load_pack_tile(&client, &url, &path).await?;
                         let total = bytes_used.fetch_add(bytes.len() as u64, Ordering::Relaxed).saturating_add(bytes.len() as u64);
                         anyhow::ensure!(total <= crate::offline::BYTE_LIMIT, "Area exceeds 50 MB; choose a smaller area");
                         anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Download cancelled");
@@ -2768,6 +2800,28 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
+    async fn offline_pack_rejects_http_success_with_an_html_error() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/tile", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let body = b"<html>upstream error</html>";
+            for stream in listener.incoming().take(2) {
+                let mut stream = stream.unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+                assert!(stream.read(&mut [0; 2048]).unwrap() > 0);
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        let path = std::env::temp_dir().join(format!("hookecho-pack-invalid-{}", std::process::id()));
+        assert!(super::load_pack_tile(&reqwest::Client::new(), &url, &path).await.is_err());
+        server.join().unwrap();
+        assert!(!path.exists());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
     async fn tile_downloads_bound_headers_and_chunked_bodies_before_caching() {
         use std::io::{Read, Write};
         for chunked in [false, true] {
@@ -2787,7 +2841,7 @@ mod tests {
                 }
             });
             let path = std::env::temp_dir().join(format!("hookecho-tile-limit-{}-{chunked}", std::process::id()));
-            let error = load_tile_bytes_inner(&reqwest::Client::new(), &url, Some(&path), false).await.unwrap_err();
+            let error = load_tile_bytes_inner(&reqwest::Client::new(), &url, Some(&path), false, true).await.unwrap_err();
             assert!(error.to_string().contains("size limit"));
             assert!(!path.exists(), "oversized responses must not enter the disk cache");
             server.join().unwrap();
@@ -3454,9 +3508,9 @@ mod tests {
         let from = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
         let to = from + chrono::Duration::days(2);
         let xml = r#"<Layer><Name>ndfd.conus.maxt</Name><Dimension name="vtit" default="1970-01-01T00:00">2026-10-15T00:00,2026-10-16T00:00,2026-10-17T00:00</Dimension></Layer>"#;
-        assert_eq!(ndfd_advertised_frame_times(xml, "ndfd.conus.maxt", from, to, 2),
-            vec![from + chrono::Duration::days(1), from + chrono::Duration::days(2)]);
-        assert!(ndfd_advertised_frame_times(xml, "ndfd.conus.pop12", from, to, 8).is_empty());
+        assert_eq!(ndfd_advertised_frame_times(xml, "ndfd.conus.maxt", from, to, 2, from),
+            vec![from, from + chrono::Duration::days(1)]);
+        assert!(ndfd_advertised_frame_times(xml, "ndfd.conus.pop12", from, to, 8, from).is_empty());
         for style in [BasemapStyle::NdfdRainChance, BasemapStyle::NdfdMaxTemp, BasemapStyle::NdfdMinTemp,
             BasemapStyle::NdfdAlaskaRainChance, BasemapStyle::NdfdAlaskaMaxTemp, BasemapStyle::NdfdAlaskaMinTemp,
             BasemapStyle::NdfdHawaiiRainChance, BasemapStyle::NdfdHawaiiMaxTemp, BasemapStyle::NdfdHawaiiMinTemp,
@@ -3498,6 +3552,21 @@ mod tests {
                 now + chrono::Duration::days(8), 48).await;
             assert!(times.iter().any(|time| *time > now), "{style:?}: {times:?}");
         }
+    }
+
+    #[test]
+    fn dense_ndfd_catalog_keeps_the_next_valid_period() {
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let from = now - chrono::Duration::hours(12);
+        let to = now + chrono::Duration::days(4);
+        let advertised = (0..90).map(|hour| {
+            (from + chrono::Duration::hours(hour)).format("%Y-%m-%dT%H:%M").to_string()
+        }).collect::<Vec<_>>().join(",");
+        let xml = format!(r#"<Layer><Name>ndfd.conus.windgust</Name><Dimension name="vtit">{advertised}</Dimension></Layer>"#);
+        let frames = ndfd_advertised_frame_times(&xml, "ndfd.conus.windgust", from, to, 48, now);
+        assert_eq!(frames.len(), 48);
+        let next = crate::satellite_time::Selection::default().selected_forecast(&frames, now);
+        assert!((now..now + chrono::Duration::hours(1)).contains(&next.unwrap()));
     }
 
     /// The picker draws one section per category. A style in no section is invisible, and a

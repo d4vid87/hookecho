@@ -806,6 +806,66 @@ struct AlertCoverage {
     canada: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArchiveWarningFrame {
+    Live,
+    WaitingForScan,
+    Scan(i64),
+}
+
+impl ArchiveWarningFrame {
+    fn features<'a>(
+        self,
+        live: &'a [GeoFeature],
+        archived: &'a LruCache<i64, Vec<GeoFeature>>,
+    ) -> &'a [GeoFeature] {
+        match self {
+            Self::Live => live,
+            Self::WaitingForScan => &[],
+            Self::Scan(time) => archived.peek(&time).map_or(&[], Vec::as_slice),
+        }
+    }
+
+    fn notice(
+        self,
+        archived: &LruCache<i64, Vec<GeoFeature>>,
+        failed: Option<i64>,
+    ) -> Option<&'static str> {
+        match self {
+            Self::Live => None,
+            Self::WaitingForScan => Some("Waiting for the archived radar scan…"),
+            Self::Scan(time) if archived.contains(&time) => None,
+            Self::Scan(time) if failed == Some(time) => Some("Archived warnings unavailable. Retrying…"),
+            Self::Scan(_) => Some("Loading archived warnings…"),
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn archive_warning_state_never_substitutes_another_scan() {
+    use ArchiveWarningFrame::{Live, Scan, WaitingForScan};
+    let live = vec![GeoFeature {
+        rings: Vec::new(),
+        fill: [0; 4],
+        stroke: [0; 4],
+        kind: overlay::FeatureKind::Warning,
+        title: "Warning only in live data".into(),
+        detail: String::new(),
+        alert: None,
+    }];
+    let mut archived = LruCache::new(NonZeroUsize::new(2).unwrap());
+    archived.put(100, live.clone());
+    assert_eq!(Live.features(&live, &archived).len(), 1);
+    assert!(WaitingForScan.features(&live, &archived).is_empty());
+    assert!(!Scan(100).features(&live, &archived).is_empty());
+    assert!(Scan(101).features(&live, &archived).is_empty());
+    assert!(Scan(101).notice(&archived, Some(100)).unwrap().contains("Loading"));
+    assert!(Scan(101).notice(&archived, Some(101)).unwrap().contains("unavailable"));
+    archived.put(101, Vec::new());
+    assert_eq!(Scan(101).notice(&archived, Some(101)), None);
+}
+
 impl AlertCoverage {
     fn covers(self, bounds: (f64, f64, f64, f64)) -> bool {
         let (west, south, east, north) = bounds;
@@ -1388,20 +1448,11 @@ impl OverlaySource {
                 let levels = wxdata::level3::fetch_vwp(http, &site).await;
                 OverlayMsg::Vwp(site, levels)
             }
-            OverlaySource::ArchiveWarnings(bucket) => {
-                let ts = chrono::DateTime::from_timestamp(bucket * 300, 0)
-                    .unwrap_or_default()
+            OverlaySource::ArchiveWarnings(scan) => {
+                let ts = chrono::DateTime::from_timestamp(scan, 0)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid archived scan time"))?
                     .to_rfc3339();
-                // An IEM outage caches the bucket empty (self-heals via LRU); log it so a
-                // silent "no warnings that day" isn't mistaken for truth.
-                let feats = match wxdata::archive_warnings::fetch(http, &ts).await {
-                    Ok(f) => f,
-                    Err(e) => {
-                        log::warn!("archive warnings fetch {ts}: {e} (bucket shown empty)");
-                        Vec::new()
-                    }
-                };
-                OverlayMsg::ArchiveWarnings(bucket, feats)
+                OverlayMsg::ArchiveWarnings(scan, wxdata::archive_warnings::fetch(http, &ts).await?)
             }
             OverlaySource::Metar(lat0, lon0, lat1, lon1) => {
                 let mut obs = wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?;
@@ -1804,7 +1855,7 @@ fn alerts_geojson(
     for feature in features {
         let Some(alert) = &feature.alert else { continue };
         let Some((x0, y0, x1, y1)) = feature.bbox() else { continue };
-        if x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1 { continue; }
+        if y1 < vy0 || y0 > vy1 || !overlay::longitude_ranges_overlap(x0, x1, vx0, vx1) { continue; }
         let mut rings = feature.rings.clone();
         anyhow::ensure!(!rings.is_empty(), "alert polygon has no rings");
         for ring in &mut rings {
@@ -2748,9 +2799,9 @@ struct LoopExport {
     view_index: usize,
     dest: std::path::PathBuf,
     format: crate::loopexport::LoopFormat,
-    return_live: bool,
-    resume_playing: bool,
-    prior_playhead: usize,
+    cursor: crate::timeline::ExportCursor,
+    prior_cut: Option<crate::view::RecoveryCut>,
+    targets: Vec<String>,
     frames: Vec<image::RgbaImage>,
     capture_dimensions: Option<((u32, u32), (u32, u32))>,
     /// Slots still to capture (counts down as frames are grabbed).
@@ -3852,13 +3903,13 @@ pub struct HookEchoApp {
     filters: OverlayFilters,
     alert_features: Vec<GeoFeature>,
     alert_coverage: AlertCoverage,
-    /// Archived storm-based warnings (feature W) keyed by 5-min UTC bucket (ts/300); shown while
-    /// the active pane is scrubbed off-live.
+    /// Archived storm-based warnings keyed by UTC scan time (whole seconds).
     arch_warns: LruCache<i64, Vec<GeoFeature>>,
-    /// The 5-min bucket currently being fetched (dedupes in-flight requests).
+    /// The scan currently being fetched (dedupes in-flight requests).
     arch_warn_inflight: Option<i64>,
-    /// The bucket whose warnings are currently substituted into the overlay set (None = live).
-    arch_warn_shown: Option<i64>,
+    arch_warn_retry: Option<(i64, Instant)>,
+    arch_warn_shown: ArchiveWarningFrame,
+    arch_warn_shown_since: Instant,
     /// Archived local storm reports (feature CC) keyed by 30-min UTC bucket (ts/1800); shown while
     /// the active pane is scrubbed off-live (each bucket = the 6 h of reports ending there).
     arch_lsr: LruCache<i64, Vec<wxdata::spc::StormReport>>,
@@ -5045,7 +5096,9 @@ impl HookEchoApp {
             alert_coverage: AlertCoverage::default(),
             arch_warns: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_warn_inflight: None,
-            arch_warn_shown: None,
+            arch_warn_retry: None,
+            arch_warn_shown: ArchiveWarningFrame::Live,
+            arch_warn_shown_since: Instant::now(),
             arch_lsr: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_lsr_inflight: None,
             arch_lsr_shown: None,
@@ -7673,6 +7726,8 @@ impl HookEchoApp {
         }
         let times = self.goes[idx].times.clone();
         let forecast = self.views[idx].basemap.ndfd_layer().is_some();
+        let forecast_now = forecast.then(Utc::now);
+        let linked = self.settings.link_satellite_times;
         let composite = self.worldwide_view();
         let loop_times = if forecast { times.as_slice() }
         else if self.views[idx].basemap == crate::tiles::BasemapStyle::ImergRate && self.goes[idx].hour.is_none() {
@@ -7697,16 +7752,14 @@ impl HookEchoApp {
                     && self.goes[idx].last_advance.is_none_or(|at| at.elapsed() >= frame_interval)
                 {
                     let selection = &mut self.views[idx].satellite;
-                    let current = if forecast { selection.selected_forecast(&times, Utc::now()) }
-                        else { selection.selected(&times, radar) };
+                    let current = selection.selected_for_pane(&times, radar, forecast_now, linked);
                     selection.time = crate::satellite_time::next_loop_frame(loop_times, current);
                     selection.follow_radar = false;
                     self.goes[idx].last_advance = Some(Instant::now());
                 }
             }
         }
-        let selected = if forecast { self.views[idx].satellite.selected_forecast(&times, Utc::now()) }
-            else { self.views[idx].satellite.selected(&times, radar) };
+        let selected = self.views[idx].satellite.selected_for_pane(&times, radar, forecast_now, linked);
         let tz = self.active_tz();
         let workspace = self.settings.radar_workspace && !chrome::compact(ctx);
         let forecast_only = forecast && !self.views[idx].show_radar && self.views[idx].fields_on.is_empty();
@@ -7904,11 +7957,10 @@ impl HookEchoApp {
                 let _ = tx.send(times);
             }));
         }
-        if style.ndfd_layer().is_some() {
-            self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
-        } else {
-            self.views[idx].satellite.selected(&catalog.times, selection_clock)
-        }
+        self.views[idx].satellite.selected_for_pane(
+            &catalog.times, selection_clock, style.ndfd_layer().is_some().then(Utc::now),
+            self.settings.link_satellite_times,
+        )
     }
 
     /// Open the gpsd stream and enter chase mode. Shared by the Chase tab's connect button,
@@ -8380,7 +8432,9 @@ impl HookEchoApp {
         let Some((element, label, unit)) = style.ndfd_point() else { return; };
         let Some(region) = style.ndfd_region() else { return; };
         let Some(valid) = self.goes.get(idx).and_then(|catalog| {
-            self.views[idx].satellite.selected_forecast(&catalog.times, Utc::now())
+            self.views[idx].satellite.selected_for_pane(
+                &catalog.times, None, Some(Utc::now()), self.settings.link_satellite_times,
+            )
         }) else {
             self.toast(ToastKind::Info, "Forecast time is still loading".to_string());
             return;
@@ -8477,7 +8531,7 @@ impl HookEchoApp {
                 .flat_map(|(_, feats)| feats.iter())
                 .filter(|f| {
                     f.bbox().is_some_and(|(w, s, e, n)| {
-                        clon >= w && clon <= e && clat >= s && clat <= n
+                        overlay::longitude_ranges_overlap(w, e, clon, clon) && clat >= s && clat <= n
                     })
                 })
                 .find_map(|f| f.alert.as_ref().map(|a| a.area.clone()))
@@ -9334,16 +9388,10 @@ impl HookEchoApp {
     /// instantly; if an Anthropic key is set, Claude rewrites it in the background.
     fn generate_digest(&mut self) {
         let bounds = self.view_bounds();
-        let overlaps = |f: &GeoFeature| {
-            let Some((w, s, e, n)) = f.bbox() else {
-                return false;
-            };
-            !(e < bounds.0 || w > bounds.2 || n < bounds.1 || s > bounds.3)
-        };
         let alerts: Vec<crate::digest::AlertLine> = self
             .alert_features
             .iter()
-            .filter(|f| overlaps(f))
+            .filter(|f| feature_in_box(f, bounds))
             .filter_map(|f| f.alert.as_ref())
             .map(|a| crate::digest::AlertLine {
                 event: a.event.clone(),
@@ -11001,6 +11049,10 @@ impl HookEchoApp {
                     match result {
                         Ok(msg) => msg,
                         Err(err) => {
+                            if lane == RequestLane::Feed("Archived warnings") {
+                                self.arch_warn_retry = self.arch_warn_inflight.take()
+                                    .map(|scan| (scan, Instant::now() + Duration::from_secs(15)));
+                            }
                             if let RequestLane::Field(layer) = &lane {
                                 if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == *layer) {
                                     loop_state.error = Some(err.clone());
@@ -11357,11 +11409,14 @@ impl HookEchoApp {
                         self.hodo_site = Some(site);
                     }
                 }
-                OverlayMsg::ArchiveWarnings(bucket, mut feats) => {
+                OverlayMsg::ArchiveWarnings(scan, mut feats) => {
                     feats.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
-                    self.arch_warns.put(bucket, feats);
-                    if self.arch_warn_inflight == Some(bucket) {
+                    self.arch_warns.put(scan, feats);
+                    if self.arch_warn_inflight == Some(scan) {
                         self.arch_warn_inflight = None;
+                    }
+                    if self.arch_warn_retry.is_some_and(|(failed, _)| failed == scan) {
+                        self.arch_warn_retry = None;
                     }
                 }
                 OverlayMsg::Metar(obs, tafs) => {
@@ -11449,15 +11504,9 @@ impl HookEchoApp {
         }
     }
 
-    /// The alert features to display right now: live alerts, or the archived set while the active
-    /// pane is scrubbed off-live to a bucket we've fetched (feature W).
+    /// The alert features for the active pane's displayed radar time.
     fn active_alert_features(&self) -> &[GeoFeature] {
-        if let Some(b) = self.arch_warn_shown {
-            if let Some(f) = self.arch_warns.peek(&b) {
-                return f;
-            }
-        }
-        &self.alert_features
+        self.archive_warning_frame().features(&self.alert_features, &self.arch_warns)
     }
 
     fn route_warning_exposure(&self) -> Option<(String, f64)> {
@@ -11603,28 +11652,52 @@ impl HookEchoApp {
         Some(v.volume.as_ref()?.time.timestamp() / 300)
     }
 
-    /// Drive the archived-warning overlay from the active pane's playhead: fetch the bucket the
-    /// scrubbed frame falls in, and swap it in for the live alerts (or back to live at the head).
+    fn archive_warning_frame(&self) -> ArchiveWarningFrame {
+        let view = &self.views[self.active];
+        if view.timeline.following {
+            ArchiveWarningFrame::Live
+        } else {
+            view.displayed_time().map_or(ArchiveWarningFrame::WaitingForScan, |time| {
+                ArchiveWarningFrame::Scan(time.timestamp())
+            })
+        }
+    }
+
+    /// Drive the shared archived-warning layer from the active pane's displayed scan.
     fn sync_archive_warnings(&mut self, ctx: &egui::Context) {
-        match self.archive_bucket() {
-            None => {
-                if self.arch_warn_shown.is_some() {
-                    self.arch_warn_shown = None;
-                    self.rebuild_overlays();
-                }
+        let frame = self.archive_warning_frame();
+        if self.arch_warn_shown != frame {
+            self.arch_warn_shown = frame;
+            self.arch_warn_shown_since = Instant::now();
+            self.rebuild_overlays();
+        }
+        let ArchiveWarningFrame::Scan(scan) = frame else {
+            if self.arch_warn_inflight.take().is_some() {
+                self.overlay_requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .cancel(&RequestLane::Feed("Archived warnings"));
             }
-            Some(b) => {
-                let cached = self.arch_warns.contains(&b);
-                if !cached && self.arch_warn_inflight != Some(b) {
-                    self.arch_warn_inflight = Some(b);
-                    self.spawn_overlay(ctx, OverlaySource::ArchiveWarnings(b));
-                }
-                if cached && self.arch_warn_shown != Some(b) {
-                    self.arch_warn_shown = Some(b);
-                    self.rebuild_overlays();
-                }
+            return;
+        };
+        if self.arch_warns.get(&scan).is_some() || self.arch_warn_inflight == Some(scan) {
+            return;
+        }
+        // Let the playhead settle before replacing the single in-flight archive request.
+        let settle = Duration::from_millis(200).saturating_sub(self.arch_warn_shown_since.elapsed());
+        if !settle.is_zero() {
+            ctx.request_repaint_after(settle);
+            return;
+        }
+        if let Some((failed, retry_at)) = self.arch_warn_retry {
+            let wait = retry_at.saturating_duration_since(Instant::now());
+            if failed == scan && !wait.is_zero() {
+                ctx.request_repaint_after(wait);
+                return;
             }
         }
+        self.arch_warn_inflight = Some(scan);
+        self.spawn_overlay(ctx, OverlaySource::ArchiveWarnings(scan));
     }
 
     /// The storm reports to display right now: the live trailing window, or the archived set
@@ -18764,7 +18837,8 @@ impl HookEchoApp {
         // Saved watch zones, plus the one being clicked out right now.
         {
             let screen = |ll: [f64; 2]| {
-                let w = crate::render::mercator::lonlat_to_world(ll[0], ll[1]);
+                let lon = overlay::longitude_near(ll[0], cam.center.0 * 360.0 - 180.0);
+                let w = crate::render::mercator::lonlat_to_world(lon, ll[1]);
                 let (sx, sy) = cam.world_to_screen(w, vp);
                 egui::pos2(prect.left() + sx, prect.top() + sy)
             };
@@ -18773,16 +18847,15 @@ impl HookEchoApp {
                 if z.ring.len() < 3 {
                     continue;
                 }
-                let pts = crate::geo::project_ring(&cam, prect, &z.ring);
-                if pts.len() < 3 { continue; }
-                painter.add(egui::Shape::convex_polygon(
-                    pts.clone(),
-                    egui::Color32::from_rgba_unmultiplied(120, 200, 255, 26),
-                    egui::Stroke::new(1.5, zone_col),
-                ));
-                if let Some(first) = pts.first() {
+                for pts in crate::geo::project_ring(&cam, prect, &z.ring) {
+                    let first = pts[0];
+                    painter.add(egui::Shape::convex_polygon(
+                        pts,
+                        egui::Color32::from_rgba_unmultiplied(120, 200, 255, 26),
+                        egui::Stroke::new(1.5, zone_col),
+                    ));
                     painter.text(
-                        *first + egui::vec2(4.0, -4.0),
+                        first + egui::vec2(4.0, -4.0),
                         egui::Align2::LEFT_BOTTOM,
                         &z.name,
                         egui::FontId::proportional(11.0),
@@ -21366,12 +21439,8 @@ impl HookEchoApp {
         #[cfg(target_arch = "wasm32")]
         let _ = ext;
         let v = &mut self.views[self.active];
-        let available = v.timeline.frames.iter().filter(|id| !id.name().ends_with("_LIVE")).count();
-        let slots = if v.timeline.following {
-            available.min(v.timeline.live_window.max(1))
-        } else {
-            available
-        };
+        let targets = v.timeline.export_frames();
+        let slots = targets.len();
         if slots == 0 {
             log::warn!("loop export: no timeline frames");
             self.toast(
@@ -21381,25 +21450,24 @@ impl HookEchoApp {
             return;
         }
         let speed = v.timeline.speed;
-        let return_live = v.timeline.following;
-        let resume_playing = v.timeline.playing;
-        let prior_playhead = v.timeline.playhead;
         let (lon, lat) =
             crate::render::mercator::world_to_lonlat(v.camera.center.0, v.camera.center.1);
-        if v.timeline.cut_playback {
-            v.timeline.enable_cut_playback(false);
-            v.cut_selection = None;
-        }
-        let first = if v.timeline.following { available - slots } else { 0 };
-        v.timeline.go_begin();
-        v.timeline.playhead = first;
+        let cursor = v.timeline.begin_export();
+        let prior_cut = v.recovery_cut.take().or_else(|| {
+            Some(crate::view::RecoveryCut {
+                site: v.site.clone(),
+                volume_ms: v.volume.as_ref()?.time.timestamp_millis(),
+                selection: v.cut_selection?,
+            })
+        });
+        v.cut_selection = None;
         self.loop_export = Some(LoopExport {
             view_index: self.active,
             dest: path,
             format,
-            return_live,
-            resume_playing,
-            prior_playhead,
+            cursor,
+            prior_cut,
+            targets,
             frames: Vec::with_capacity(slots),
             capture_dimensions: None,
             remaining: slots,
@@ -21425,6 +21493,7 @@ impl HookEchoApp {
         if self.loop_export.as_ref().is_some_and(|le| {
             let view = &self.views[self.active];
             le.view_index != self.active || !view.show_radar || le.site != view.site
+                || le.cursor.date != view.timeline.date
                 || le.product != view.custom_product.as_deref().unwrap_or_else(|| view.moment.short_name())
         }) {
             self.cancel_loop_export();
@@ -21444,26 +21513,38 @@ impl HookEchoApp {
             }
             return;
         }
-        let view = &self.views[self.active];
-        let requested = view.timeline.current().map(|frame| frame.name());
+        let source = &le.targets[le.requested_count - le.remaining];
+        let view = &mut self.views[self.active];
+        let index = if view.timeline.current().is_some_and(|frame| frame.name() == source) {
+            Some(view.timeline.playhead)
+        } else {
+            view.timeline.frames.iter().position(|frame| frame.name() == source)
+        };
+        if let Some(index) = index {
+            if view.timeline.playhead != index || view.timeline.following || view.timeline.playing {
+                view.timeline.playhead = index;
+                view.timeline.following = false;
+                view.timeline.playing = false;
+                ctx.request_repaint();
+            }
+        }
         let token = self.pane_upload_tokens.get(&self.active).copied().unwrap_or(0);
         let painted = crate::gpu_metrics::painted_tokens().get(self.active).copied().unwrap_or(0);
-        if !expired && self.screenshot_pending.is_none() && self.share_card.is_none()
+        if !expired && index.is_some() && self.screenshot_pending.is_none() && self.share_card.is_none()
             && radar_frame_painted(view, self.pane_shown.get(&self.active), token, painted)
         {
-            let source = requested.expect("painted timeline frame has an identifier").to_string();
+            let source = source.clone();
             le.capturing = true;
             self.request_capture(ctx, ShotDest::Loop { source, token, request: egui::UserData::new(()) });
             return;
         }
-        if expired || requested.is_some_and(|name| view.failed_frame.as_deref() == Some(name)) {
-            log::warn!("loop export skipped unpainted radar frame: {}", requested.unwrap_or("unknown"));
+        if expired || index.is_none() || view.failed_frame.as_deref() == Some(source) {
+            log::warn!("loop export skipped unpainted radar frame: {source}");
             le.remaining -= 1;
             if le.remaining == 0 {
                 self.finish_loop_export(ctx);
                 return;
             }
-            self.views[self.active].timeline.step(1);
             le.wait_started = wxdata::clock::Instant::now();
             ctx.request_repaint();
         } else {
@@ -21484,7 +21565,10 @@ impl HookEchoApp {
         // The backend returns the screenshot on the next update. Reject a different sweep
         // painted during capture, including while the share caption was being laid out.
         let view = &self.views[self.active];
-        if !frame_result_is_current(&view.timeline, &source)
+        if le.site != view.site || le.cursor.date != view.timeline.date
+            || le.product != view.custom_product.as_deref().unwrap_or_else(|| view.moment.short_name())
+            || source != le.targets[le.requested_count - le.remaining]
+            || !frame_result_is_current(&view.timeline, &source)
             || self.pane_upload_tokens.get(&self.active) != Some(&token)
             || crate::gpu_metrics::painted_tokens().get(self.active) != Some(&token)
         {
@@ -21520,18 +21604,15 @@ impl HookEchoApp {
         le.sources.push(source);
         le.remaining -= 1;
         if le.remaining > 0 {
-            self.views[self.active].timeline.step(1);
-            if let Some(le) = &mut self.loop_export {
-                le.wait_started = wxdata::clock::Instant::now();
-            }
+            le.wait_started = wxdata::clock::Instant::now();
         } else {
             self.finish_loop_export(ctx);
         }
     }
 
     fn finish_loop_export(&mut self, ctx: &egui::Context) {
-        let le = self.loop_export.take().unwrap();
-        self.restore_loop_timeline(&le);
+        let mut le = self.loop_export.take().unwrap();
+        self.restore_loop_timeline(&mut le);
         if le.frames.is_empty() {
             self.toast(ToastKind::Error, "Loop export failed: no radar frames were available");
             return;
@@ -21580,16 +21661,21 @@ impl HookEchoApp {
         }
     }
 
-    fn restore_loop_timeline(&mut self, le: &LoopExport) {
+    fn restore_loop_timeline(&mut self, le: &mut LoopExport) {
         let Some(view) = self.views.get_mut(le.view_index) else { return; };
-        let timeline = &mut view.timeline;
-        if le.return_live {
-            timeline.go_head();
-            if le.resume_playing && !timeline.playing { timeline.toggle_play(); }
-        } else {
-            timeline.following = false;
-            timeline.playhead = le.prior_playhead.min(timeline.frames.len().saturating_sub(1));
-            timeline.playing = le.resume_playing;
+        if view.site != le.site || view.timeline.date != le.cursor.date {
+            return;
+        }
+        le.cursor.restore(&mut view.timeline);
+        if le.product == view.custom_product.as_deref().unwrap_or_else(|| view.moment.short_name()) {
+            view.tilt = le.tilt;
+            if let Some(cut) = le.prior_cut.take() {
+                if view.volume.as_ref().is_some_and(|vol| vol.time.timestamp_millis() == cut.volume_ms) {
+                    view.cut_selection = Some(cut.selection);
+                } else {
+                    view.recovery_cut = Some(cut);
+                }
+            }
         }
     }
 
@@ -21600,8 +21686,8 @@ impl HookEchoApp {
             let _ = encoding.cancel_browser.call0(&wasm_bindgen::JsValue::UNDEFINED);
             return;
         }
-        let Some(le) = self.loop_export.take() else { return; };
-        self.restore_loop_timeline(&le);
+        let Some(mut le) = self.loop_export.take() else { return; };
+        self.restore_loop_timeline(&mut le);
         if matches!(self.screenshot_pending.as_ref(), Some(ShotDest::Loop { .. })) {
             self.screenshot_pending = None;
         }
@@ -22828,7 +22914,8 @@ impl CellWarningCache {
         let dy = 0.5 / 111.194_927;
         let dx = dy / lat.to_radians().cos().max(0.01);
         let warned = self.bounds.iter().any(|&(i, (x0, y0, x1, y1))| {
-            if lon < x0 - dx || lon > x1 + dx || lat < y0 - dy || lat > y1 + dy {
+            if lat < y0 - dy || lat > y1 + dy
+                || !overlay::longitude_ranges_overlap(x0 - dx, x1 + dx, lon, lon) {
                 return false;
             }
             #[cfg(test)]
@@ -23031,7 +23118,7 @@ fn feature_in_box(f: &GeoFeature, bx: (f64, f64, f64, f64)) -> bool {
         return false;
     };
     let (bx0, by0, bx1, by1) = bx;
-    x1 >= bx0 && x0 <= bx1 && y1 >= by0 && y0 <= by1
+    y1 >= by0 && y0 <= by1 && overlay::longitude_ranges_overlap(x0, x1, bx0, bx1)
 }
 
 /// Keep every county/polygon part available until all notification geography has been checked.
@@ -23108,8 +23195,9 @@ fn warning_zone_part<'a>(parts: &[&'a GeoFeature], ring: &[[f64; 2]]) -> Option<
 
 fn warning_centroid(feature: &GeoFeature) -> Option<[f64; 2]> {
     let ring = feature.rings.first().filter(|ring| !ring.is_empty())?;
+    let ring = overlay::continuous_longitudes(ring, ring[0][0]);
     let (x, y) = ring.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
-    Some([x / ring.len() as f64, y / ring.len() as f64])
+    Some([overlay::longitude_near(x / ring.len() as f64, 0.0), y / ring.len() as f64])
 }
 
 fn histogram_text(bins: &[u32; 16]) -> String {
@@ -23369,6 +23457,9 @@ impl eframe::App for HookEchoApp {
             self.persistence_focused = focused;
         }
         let reconnected = crate::platform::network_recovered();
+        if let (true, Some((_, retry_at))) = (reconnected, self.arch_warn_retry.as_mut()) {
+            *retry_at = Instant::now();
+        }
         if resumed || reconnected {
             wxdata::stats::radar_event(if reconnected { "network_recovered" } else { "foreground_refresh" }, "", serde_json::Value::Null);
             self.last_stream_attempt = None;
@@ -24537,7 +24628,7 @@ impl eframe::App for HookEchoApp {
         if previous_optional_alerts.is_some_and(|previous| previous != self.settings.optional_alert_events) {
             self.alert_features.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
             self.arch_warns.clear();
-            self.arch_warn_shown = None;
+            self.rebuild_overlays();
             self.fetch_alerts(ctx);
         }
         if std::mem::take(&mut self.settings_window.map_changed) {
@@ -25597,8 +25688,14 @@ impl eframe::App for HookEchoApp {
             // a double-resolution tile is roughly double the bytes.
             clear_tiles |= self.tiles.set_retina(ctx.pixels_per_point() > 1.0 && !crate::platform::is_metered());
             if self.settings.link_satellite_times {
-                let selection = self.views[self.active.min(n - 1)].satellite.clone();
-                for view in &mut self.views { view.satellite = selection.clone(); }
+                let leader = &mut self.views[self.active.min(n - 1)];
+                if leader.basemap.timed() { leader.satellite.bind_source(leader.basemap.slug()); }
+                let (follow_radar, time) = (leader.satellite.follow_radar, leader.satellite.time);
+                for view in &mut self.views {
+                    if view.basemap.timed() { view.satellite.bind_source(view.basemap.slug()); }
+                    view.satellite.follow_radar = follow_radar;
+                    view.satellite.time = time;
+                }
             }
             self.last_viewport = rects
                 .get(self.active)

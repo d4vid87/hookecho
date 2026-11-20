@@ -274,6 +274,19 @@ fn maybe_gunzip(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
+pub(crate) fn validate_tile(bytes: &[u8]) -> anyhow::Result<()> {
+    let reader = Reader::new(maybe_gunzip(bytes)?)?;
+    for layer in reader.get_layer_metadata()? {
+        let name = layer.name.as_str();
+        if FILL_LAYERS.iter().any(|(fill, _)| name == *fill)
+            || STROKE_LAYERS.iter().any(|(stroke, _, _)| name == *stroke)
+        {
+            reader.get_features(layer.layer_index)?;
+        }
+    }
+    Ok(())
+}
+
 /// Background geometry, foreground geometry, and labels for one vector tile.
 pub type TileGeometry = (
     Vec<OverlayVertex>,
@@ -1510,6 +1523,14 @@ impl VectorTileManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pack_validation_rejects_invalid_required_layer_features() {
+        // Protobuf envelope and metadata are valid, but the water feature has geometry type 4.
+        let tile = [0x1a, 13, 0x0a, 5, b'w', b'a', b't', b'e', b'r', 0x12, 2, 0x18, 4, 0x78, 2];
+        assert!(super::Reader::new(tile.to_vec()).unwrap().get_layer_metadata().is_ok());
+        assert!(super::validate_tile(&tile).is_err());
+    }
+
     #[test]
     fn vector_tile_bytes_and_inflation_are_bounded() {
         use std::io::{Read, Write};

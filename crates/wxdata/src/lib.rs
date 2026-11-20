@@ -45,6 +45,8 @@ pub mod net;
 pub mod shared_read;
 pub mod nohrsc;
 pub mod object_cache;
+#[cfg(target_arch = "wasm32")]
+pub mod indexed_db;
 pub mod obs;
 pub mod odim;
 pub mod openmeteo;
