@@ -21,11 +21,25 @@ use std::io::BufReader;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
+static TONE_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn tone_epoch() -> u64 {
+    TONE_EPOCH.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn stop_tones() {
+    TONE_EPOCH.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
 /// Play an alert sound once at `volume` (0.0..=1.0), non-blocking. Best-effort: failures logged.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn play(sound: &AlertSound, volume: f32) {
     let sound = sound.clone();
-    std::thread::spawn(move || play_blocking(&sound, volume));
+    let epoch = tone_epoch();
+    std::thread::spawn(move || play_blocking(&sound, volume, epoch));
 }
 
 /// [`play`], but on the calling thread: returns when the sound has finished.
@@ -33,7 +47,9 @@ pub fn play(sound: &AlertSound, volume: f32) {
 /// This is what lets the tone come *before* the voice instead of on top of it — see
 /// `speech::announce`, which owns the one thread both of them run on.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn play_blocking(sound: &AlertSound, volume: f32) {
+pub(crate) fn play_blocking(sound: &AlertSound, volume: f32, epoch: u64) {
+    let cancelled = || tone_epoch() != epoch;
+    if cancelled() { return; }
     let (_stream, handle) = match rodio::OutputStream::try_default() {
         Ok(s) => s,
         Err(e) => {
@@ -49,6 +65,8 @@ pub fn play_blocking(sound: &AlertSound, volume: f32) {
         }
     };
     sink.set_volume(volume.clamp(0.0, 1.0));
+    // Prepare without emitting samples, since opening the device and decoding can race mute.
+    sink.pause();
     match sound {
         AlertSound::StormChime => {
             if let Ok(src) = rodio::Decoder::new(std::io::Cursor::new(STORM_CHIME_MP3)) {
@@ -65,13 +83,15 @@ pub fn play_blocking(sound: &AlertSound, volume: f32) {
         }
         builtin => append_builtin(&sink, builtin),
     }
-    drain(&sink, Duration::from_secs(30));
+    if !cancelled() { sink.play(); }
+    drain(&sink, Duration::from_secs(30), cancelled);
 }
 
 /// Play WAV bytes that some other part of the app just produced (today: Piper's stdout), and
 /// return when they have finished.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn play_wav_blocking(bytes: Vec<u8>, volume: f32) {
+pub(crate) fn play_wav_blocking(bytes: Vec<u8>, volume: f32, cancelled: impl Fn() -> bool) {
+    if cancelled() { return; }
     let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
         log::warn!("no audio output for speech");
         return;
@@ -80,6 +100,7 @@ pub fn play_wav_blocking(bytes: Vec<u8>, volume: f32) {
         return;
     };
     sink.set_volume(volume.clamp(0.0, 1.0));
+    sink.pause();
     match rodio::Decoder::new(std::io::Cursor::new(bytes)) {
         Ok(src) => sink.append(src),
         Err(e) => {
@@ -88,7 +109,8 @@ pub fn play_wav_blocking(bytes: Vec<u8>, volume: f32) {
         }
     }
     // A spoken warning runs longer than any tone, and a long instruction longer still.
-    drain(&sink, Duration::from_secs(120));
+    if !cancelled() { sink.play(); }
+    drain(&sink, Duration::from_secs(120), cancelled);
 }
 
 /// Wait for the sink to empty, but not forever.
@@ -98,14 +120,32 @@ pub fn play_wav_blocking(bytes: Vec<u8>, volume: f32) {
 /// survivable when every playback owned a throwaway thread; now that one thread serializes the
 /// tone and the speech behind a lock, a wedged wait would silence every warning after it.
 #[cfg(not(target_arch = "wasm32"))]
-fn drain(sink: &Sink, cap: Duration) {
+fn drain(sink: &Sink, cap: Duration, cancelled: impl Fn() -> bool) {
     let start = std::time::Instant::now();
-    while !sink.empty() && start.elapsed() < cap {
-        std::thread::sleep(Duration::from_millis(50));
+    while !sink.empty() {
+        if cancelled() {
+            sink.stop();
+            return;
+        }
+        if start.elapsed() >= cap {
+            sink.stop();
+            log::warn!("audio device stopped draining after {cap:?}; giving up on this cue");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
-    if !sink.empty() {
-        log::warn!("audio device stopped draining after {cap:?}; giving up on this cue");
-    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn stopping_playback_discards_audio_already_in_the_sink() {
+    let (sink, mut output) = Sink::new_idle();
+    sink.append(rodio::buffer::SamplesBuffer::new(1, 16_000, vec![0.5; 160]));
+    // Use Rodio's in-memory sink so the regression cannot produce sound.
+    assert_eq!(output.next(), Some(0.5));
+    drain(&sink, Duration::from_secs(1), || true);
+    // Rodio applies stop to its source on its next control update (every 5 ms).
+    assert!(output.skip(80).take(80).all(|sample| sample == 0.0));
 }
 
 /// Try to queue a user audio file (wav/mp3/ogg/flac). Returns false (logged) on any failure.

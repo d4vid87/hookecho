@@ -252,6 +252,9 @@ fn build_alert(
         area: get("areaDesc").to_string(),
         description: get("description").to_string(),
         instruction: get("instruction").to_string(),
+        sent_at: chrono::DateTime::parse_from_rfc3339(get("sent"))
+            .ok()
+            .map(|d| d.with_timezone(&chrono::Utc)),
         expires: chrono::DateTime::parse_from_rfc3339(get("expires"))
             .ok()
             .map(|d| d.with_timezone(&chrono::Utc)),
@@ -788,7 +791,7 @@ mod tests {
         let json = r#"{"type":"FeatureCollection","features":[
             {"type":"Feature",
              "geometry":{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,35]]]},
-             "properties":{"id":"urn:oid:tor1","event":"Tornado Warning","headline":"TOR until 5pm","description":"...","areaDesc":"Cleveland, OK",
+             "properties":{"id":"urn:oid:tor1","event":"Tornado Warning","headline":"TOR until 5pm","description":"...","areaDesc":"Cleveland, OK","sent":"2026-09-01T16:30:00-05:00",
                "parameters":{"maxHailSize":["1.00"],"maxWindGust":["60 MPH"],"tornadoDetection":["RADAR INDICATED"]}}}]}"#;
         let feats = parse_alerts(json).unwrap();
         assert_eq!(feats.len(), 1);
@@ -798,6 +801,7 @@ mod tests {
         assert_eq!(category("Tornado Warning"), Category::Tornado);
         let a = feats[0].alert.as_ref().expect("alert info");
         assert_eq!(a.id, "urn:oid:tor1");
+        assert_eq!(a.sent_at.unwrap().to_rfc3339(), "2026-09-01T21:30:00+00:00");
         assert_eq!(a.max_hail_in, Some(1.0));
         assert_eq!(a.max_wind.as_deref(), Some("60 MPH"));
         assert_eq!(a.tornado_detection.as_deref(), Some("RADAR INDICATED"));
@@ -859,6 +863,7 @@ mod tests {
             area: String::new(),
             description: String::new(),
             instruction: String::new(),
+            sent_at: None,
             expires: None,
             max_hail_in: None,
             max_wind: None,
@@ -923,6 +928,7 @@ mod tests {
             area: String::new(),
             description: String::new(),
             instruction: String::new(),
+            sent_at: None,
             expires: None,
             max_hail_in: None,
             max_wind: None,

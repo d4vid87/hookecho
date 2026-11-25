@@ -155,6 +155,7 @@ fn parse(body: &str) -> anyhow::Result<Vec<GeoFeature>> {
                     area: format!("{area}, {province}"),
                     description: description.clone(),
                     instruction: String::new(),
+                    sent_at: None,
                     expires,
                     max_hail_in: None,
                     max_wind: None,

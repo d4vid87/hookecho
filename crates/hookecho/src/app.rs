@@ -6681,10 +6681,6 @@ impl HookEchoApp {
             return;
         }
         self.spoken_check = Some(Instant::now());
-        if self.settings.mute_alerts {
-            crate::speech::stop();
-            return;
-        }
         if !self.settings.speak_warnings || self.settings.mute_alerts
             || self.archive_bucket().is_some()
             || !crate::speech::automatic_ready()
@@ -6695,29 +6691,17 @@ impl HookEchoApp {
         let Some(home) = self.settings.markers.iter().find(|marker| marker.home) else {
             return;
         };
-        let quiet = self.in_quiet_hours();
-        let mut announcements = Vec::new();
-        for feature in &self.alert_features {
-            if feature.kind != overlay::FeatureKind::Warning
-                || !warning_is_near_home(feature, home.lon, home.lat)
-            {
-                continue;
-            }
-            let Some(alert) = &feature.alert else { continue };
-            let escalation = wxdata::alerts::escalation(alert);
-            if escalation < self.settings.alert_min_escalation || (quiet && escalation < 2) {
-                continue;
-            }
-            if self.spoken_alerts.take(alert, now) {
-                let until = alert.expires.map(|at| crate::timefmt::fmt_clock(at,
-                    self.settings.tz_for(self.views[self.active].site.as_deref()), false))
-                    .unwrap_or_default();
-                announcements.push((escalation, wxdata::spoken::warning_script(alert, "", &until)));
-            }
-        }
-        announcements.sort_by_key(|(escalation, _)| std::cmp::Reverse(*escalation));
+        let min_tier = self.settings.alert_min_escalation.max(if self.in_quiet_hours() { 2 } else { 0 });
+        let alerts = self.alert_features.iter()
+            .filter(|feature| feature.kind == overlay::FeatureKind::Warning
+                && warning_is_near_home(feature, home.lon, home.lat))
+            .filter_map(|feature| feature.alert.as_ref());
+        let announcements = self.spoken_alerts.new_warnings(alerts, now, min_tier);
+        let tz = self.settings.tz_for(self.views[self.active].site.as_deref());
         crate::speech::set_volume(self.settings.alert_volume);
-        for (escalation, script) in announcements {
+        for (escalation, alert) in announcements {
+            let until = alert.expires.map(|at| crate::timefmt::fmt_clock(at, tz, false)).unwrap_or_default();
+            let script = wxdata::spoken::warning_script(alert, "", &until);
             crate::speech::announce(if escalation >= 2 {
                 crate::speech::Priority::Emergency
             } else { crate::speech::Priority::Warning }, None, vec![script]);
@@ -23489,6 +23473,7 @@ impl eframe::App for HookEchoApp {
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ui_started = Instant::now();
+        let (was_muted, warnings_were_spoken) = (self.settings.mute_alerts, self.settings.speak_warnings);
         crate::profiling::new_frame();
         crate::prof_scope!("ui");
         let ctx = root.ctx().clone();
@@ -25886,6 +25871,11 @@ impl eframe::App for HookEchoApp {
                 }
             }
         }
+        if !was_muted && self.settings.mute_alerts {
+            crate::speech::stop();
+        } else if warnings_were_spoken && !self.settings.speak_warnings {
+            crate::speech::stop_voice();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if due { self.request_settings_save(); }
         #[cfg(target_arch = "wasm32")]
@@ -27658,6 +27648,7 @@ mod tests {
             area: "Cleveland County".into(),
             description: "Move to shelter.".into(),
             instruction: "Take cover now.".into(),
+            sent_at: None,
             expires: chrono::DateTime::parse_from_rfc3339("2026-09-22T18:00:00Z")
                 .ok().map(|time| time.with_timezone(&chrono::Utc)),
             max_hail_in: None,

@@ -320,6 +320,7 @@ pub fn parse_watches(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
                     area: String::new(),
                     description: String::new(),
                     instruction: String::new(),
+                    sent_at: None,
                     expires,
                     max_hail_in: None,
                     max_wind: None,

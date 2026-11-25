@@ -284,6 +284,7 @@ pub fn parse(body: &str) -> Vec<GeoFeature> {
                         area: desc.to_string(),
                         description: str_of("description"),
                         instruction: str_of("instruction"),
+                        sent_at: None,
                         expires,
                         max_hail_in: None,
                         max_wind: None,

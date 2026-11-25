@@ -70,6 +70,9 @@ pub struct AlertInfo {
     pub area: String,
     pub description: String,
     pub instruction: String,
+    /// Bulletin issuance time, when supplied by the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at: Option<chrono::DateTime<chrono::Utc>>,
     pub expires: Option<chrono::DateTime<chrono::Utc>>,
     pub max_hail_in: Option<f32>,
     /// Raw wind string as issued, e.g. "60 MPH".
@@ -571,6 +574,7 @@ mod dedupe_tests {
             area: String::new(),
             description: String::new(),
             instruction: String::new(),
+            sent_at: None,
             expires: None,
             max_hail_in: None,
             max_wind: None,

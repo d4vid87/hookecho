@@ -1622,7 +1622,7 @@ fn alert_notification_settings(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.collapsing("Sounds & volume", |ui| sound_picker(ui, settings));
     ui.collapsing("Spoken warnings", |ui| {
     if ui.button("Stop speech").clicked() {
-        crate::speech::stop();
+        crate::speech::stop_voice();
     }
     ui.small("Reads warnings within 30 miles of Home. Muting alerts also mutes speech.");
     #[cfg(target_arch = "wasm32")]

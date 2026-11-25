@@ -62,6 +62,7 @@ pub fn parse(json: &str) -> anyhow::Result<Vec<GeoFeature>> {
             area: get("wfo").to_string(),
             description: detail.clone(),
             instruction: String::new(),
+            sent_at: None,
             expires,
             max_hail_in: None,
             max_wind: None,

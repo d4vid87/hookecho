@@ -160,7 +160,7 @@ mod tests {
             title: "Tornado Warning".into(), detail: String::new(),
             alert: Some(wxdata::overlay::AlertInfo {
                 id: "test".into(), event: "Tornado Warning".into(), headline: String::new(), area: String::new(),
-                description: String::new(), instruction: String::new(), expires: Some(now + chrono::Duration::minutes(5)),
+                description: String::new(), instruction: String::new(), sent_at: None, expires: Some(now + chrono::Duration::minutes(5)),
                 max_hail_in: None, max_wind: None, tornado_detection: None, damage_threat: None, source: None, motion: None, vtec: None,
             }),
         };

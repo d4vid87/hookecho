@@ -447,6 +447,7 @@ pub fn demo_alert() -> AlertInfo {
         instruction: "TAKE COVER NOW! Move to a basement or an interior room on the lowest floor \
                       of a sturdy building.\n\nAvoid windows."
             .into(),
+        sent_at: None,
         expires: None,
         max_hail_in: Some(1.75),
         max_wind: None,

@@ -84,6 +84,7 @@ mod tests {
                 area: String::new(),
                 description: String::new(),
                 instruction: String::new(),
+                sent_at: None,
                 expires,
                 max_hail_in: None,
                 max_wind: None,

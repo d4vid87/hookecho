@@ -12,16 +12,38 @@ static STATUS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 static CANCEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn stop() {
-    CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
-    terminate_piper();
-    crate::platform::stop_speech();
+    stop_queued(true);
+}
+
+/// Interrupt speech without muting alert chimes.
+pub fn stop_voice() {
+    stop_queued(false);
+}
+
+fn stop_queued(include_tones: bool) {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(mut jobs) = speech_queue().jobs.lock() { jobs.clear(); }
+    {
+        let mut state = speech_queue().state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        discard_queued(&mut state.jobs, include_tones);
+        if include_tones { crate::audio::stop_tones(); }
+        // The worker captures its tickets while taking the next job under this same lock.
+        cancel_voice();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        WEB_QUEUE.with(|queue| discard_queued(&mut queue.borrow_mut().jobs, include_tones));
+        cancel_voice();
+    }
+}
+
+fn cancel_voice() {
+    CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    imp::stop();
+    crate::platform::stop_speech();
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::JsCast;
-        WEB_QUEUE.with(|queue| queue.borrow_mut().jobs.clear());
         if let Ok(stop) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStop".into()) {
             if let Some(stop) = stop.dyn_ref::<js_sys::Function>() {
                 let _ = stop.call0(&js_sys::global());
@@ -30,21 +52,8 @@ pub fn stop() {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
-static PIPER_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
-fn terminate_piper() {
-    let pid = PIPER_PID.swap(0, std::sync::atomic::Ordering::AcqRel);
-    if pid == 0 {
-        return;
-    }
-    #[cfg(unix)]
-    let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .status();
+fn voice_epoch() -> u64 {
+    CANCEL_EPOCH.load(std::sync::atomic::Ordering::Acquire)
 }
 
 pub fn status() -> String {
@@ -360,6 +369,17 @@ fn enqueue(queue: &mut std::collections::VecDeque<SpeechJob>, job: SpeechJob) {
     queue.push_back(job);
 }
 
+fn discard_queued(queue: &mut std::collections::VecDeque<SpeechJob>, include_tones: bool) {
+    if include_tones {
+        queue.clear();
+    } else {
+        queue.retain_mut(|job| {
+            job.lines.clear();
+            job.tone.is_some()
+        });
+    }
+}
+
 fn emergency_waiting(queue: &std::collections::VecDeque<SpeechJob>) -> bool {
     queue.iter().any(|job| job.priority == Priority::Emergency)
 }
@@ -368,9 +388,20 @@ fn should_preempt(current: Priority, queue: &std::collections::VecDeque<SpeechJo
     current != Priority::Emergency && emergency_waiting(queue)
 }
 
+fn interrupts_voice(current: Option<Priority>, next: Priority) -> bool {
+    next == Priority::Emergency && current != Some(Priority::Emergency)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct NativeQueue {
+    jobs: std::collections::VecDeque<SpeechJob>,
+    priority: Option<Priority>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct SpeechQueue {
-    jobs: std::sync::Mutex<std::collections::VecDeque<SpeechJob>>,
+    state: std::sync::Mutex<NativeQueue>,
     ready: std::sync::Condvar,
 }
 
@@ -379,7 +410,7 @@ fn speech_queue() -> &'static std::sync::Arc<SpeechQueue> {
     static QUEUE: std::sync::OnceLock<std::sync::Arc<SpeechQueue>> = std::sync::OnceLock::new();
     QUEUE.get_or_init(|| {
         let queue = std::sync::Arc::new(SpeechQueue {
-            jobs: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            state: std::sync::Mutex::new(NativeQueue::default()),
             ready: std::sync::Condvar::new(),
         });
         let worker = std::sync::Arc::clone(&queue);
@@ -391,37 +422,42 @@ fn speech_queue() -> &'static std::sync::Arc<SpeechQueue> {
 #[cfg(not(target_arch = "wasm32"))]
 fn speech_worker(queue: &SpeechQueue) {
     loop {
-        let mut jobs = queue
-            .jobs
+        let mut state = queue
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while jobs.is_empty() {
-            jobs = queue
+        state.priority = None;
+        while state.jobs.is_empty() {
+            state = queue
                 .ready
-                .wait(jobs)
+                .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        let job = jobs.pop_front().expect("queue was not empty");
-        drop(jobs);
+        let job = state.jobs.pop_front().expect("queue was not empty");
+        state.priority = Some(job.priority);
+        let epoch = voice_epoch();
+        let tone_epoch = crate::audio::tone_epoch();
+        drop(state);
 
-        let epoch = CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
         if let Some((sound, volume)) = job.tone {
-            crate::audio::play_blocking(&sound, volume);
+            crate::audio::play_blocking(&sound, volume, tone_epoch);
         }
         for line in job.lines {
-            if CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed) != epoch { break; }
-            let jobs = queue
-                .jobs
+            if voice_epoch() != epoch { break; }
+            let state = queue
+                .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let preempt = should_preempt(job.priority, &jobs);
-            drop(jobs);
+            let preempt = should_preempt(job.priority, &state.jobs);
+            drop(state);
             if preempt {
                 break;
             }
-            if let Err(e) = imp::speak_blocking(&line) {
-                log::warn!("speech failed: {e}");
-                set_status(format!("Speech unavailable: {e}. Check your system voice and try the test warning."));
+            if let Err(e) = imp::speak_blocking(&line, epoch) {
+                if voice_epoch() == epoch {
+                    log::warn!("speech failed: {e}");
+                    set_status(format!("Speech unavailable: {e}. Check your system voice and try the test warning."));
+                }
                 break;
             }
         }
@@ -437,22 +473,17 @@ pub(crate) fn announce(
     tone: Option<(crate::settings::AlertSound, f32)>,
     lines: Vec<String>,
 ) {
-    if priority == Priority::Emergency {
-        CANCEL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        #[cfg(not(target_os = "android"))]
-        terminate_piper();
-        crate::platform::stop_speech();
-    }
     let job = SpeechJob::new(priority, tone, lines);
     if job.is_empty() {
         return;
     }
     let queue = speech_queue();
-    let mut jobs = queue
-        .jobs
+    let mut state = queue
+        .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    enqueue(&mut jobs, job);
+    if interrupts_voice(state.priority, priority) { cancel_voice(); }
+    enqueue(&mut state.jobs, job);
     queue.ready.notify_one();
 }
 
@@ -492,13 +523,8 @@ pub(crate) fn announce(
     }
     let start = WEB_QUEUE.with(|queue| {
         let mut queue = queue.borrow_mut();
-        if priority == Priority::Emergency && queue.priority != Some(Priority::Emergency) {
-            use wasm_bindgen::JsCast;
-            if let Ok(stop) = js_sys::Reflect::get(&js_sys::global(), &"__hookechoAmyStop".into()) {
-                if let Some(stop) = stop.dyn_ref::<js_sys::Function>() {
-                    let _ = stop.call0(&js_sys::global());
-                }
-            }
+        if interrupts_voice(queue.priority, priority) {
+            cancel_voice();
         }
         enqueue(&mut queue.jobs, job);
         if queue.running {
@@ -525,13 +551,13 @@ async fn web_speech_worker() {
             WEB_QUEUE.with(|queue| queue.borrow_mut().running = false);
             return;
         };
-        let epoch = CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+        let epoch = voice_epoch();
         if let Some((sound, volume)) = &job.tone {
             crate::audio::play(sound, *volume);
             crate::fonts::sleep_ms(crate::audio::duration_ms(sound)).await;
         }
         for line in job.lines {
-            if CANCEL_EPOCH.load(std::sync::atomic::Ordering::Relaxed) != epoch { break; }
+            if voice_epoch() != epoch { break; }
             let preempt =
                 WEB_QUEUE.with(|queue| should_preempt(job.priority, &queue.borrow().jobs));
             if preempt {
@@ -681,12 +707,22 @@ fn speech_volume() -> f32 {
 
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 mod imp {
-    use std::process::{Command, Stdio};
+    use std::io::{Read, Write};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::{Mutex, PoisonError};
+
+    static PIPER_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+
+    pub(super) fn stop() {
+        if let Some(child) = PIPER_CHILD.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+            let _ = child.kill();
+        }
+    }
 
     /// Piper is the only speech engine: a failed neural voice must be visible, never silently
     /// replaced by a robotic device voice.
-    pub fn speak_blocking(text: &str) -> Result<(), String> {
-        match piper(text) {
+    pub fn speak_blocking(text: &str, epoch: u64) -> Result<(), String> {
+        match piper(text, epoch) {
             Ok(true) => Ok(()),
             Ok(false) => Err("Piper voice is not configured".into()),
             Err(e) => Err(e),
@@ -699,8 +735,7 @@ mod imp {
     // ponytail: subprocess, not in-process ONNX. `ort` would put a C++ runtime and a licence
     // question into a build that currently cross-compiles to four targets without one; the
     // process boundary costs a fork per warning, which is nothing against a network fetch.
-    fn piper(text: &str) -> Result<bool, String> {
-        use std::io::Write;
+    fn piper(text: &str, epoch: u64) -> Result<bool, String> {
         let (bin, voice) = super::PIPER
             .read()
             .map(|g| g.clone())
@@ -723,44 +758,68 @@ mod imp {
         crate::platform::no_window(&mut cmd);
         // `--output_file -` gives a WAV on stdout, which rodio decodes directly. Writing to a
         // temp file would mean choosing a directory and cleaning it up for no gain.
-        let mut child = match cmd
-            .args(["--model", &voice, "--output_file", "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            // Not installed is the common case, and it is not a failure worth a warning — but it
-            // is worth saying so in Settings, where the user asked for this voice.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                super::set_piper_problem(Some(super::NOT_FOUND.to_string()));
-                return Ok(false);
-            }
-            Err(e) => return Err(format!("spawn {bin}: {e}")),
+        cmd.args(["--model", &voice, "--output_file", "-"])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let cancelled = || super::voice_epoch() != epoch;
+        let (mut stdin, mut stdout) = {
+            let mut active = PIPER_CHILD.lock().unwrap_or_else(PoisonError::into_inner);
+            // Stop either invalidates this launch or sees the registered child and kills it.
+            if cancelled() { return Ok(true); }
+            let mut child = match cmd.spawn() {
+                Ok(child) => child,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    super::set_piper_problem(Some(super::NOT_FOUND.to_string()));
+                    return Ok(false);
+                }
+                Err(e) => return Err(format!("spawn {bin}: {e}")),
+            };
+            let pipes = (child.stdin.take().expect("piped stdin"), child.stdout.take().expect("piped stdout"));
+            *active = Some(child);
+            pipes
         };
-        super::PIPER_PID.store(child.id(), std::sync::atomic::Ordering::Release);
-        child
-            .stdin
-            .take()
-            .ok_or("no stdin")?
-            .write_all(text.as_bytes())
-            .map_err(|e| e.to_string())?;
-        let out = child.wait_with_output().map_err(|e| e.to_string())?;
-        super::PIPER_PID.store(0, std::sync::atomic::Ordering::Release);
-        if !out.status.success() || out.stdout.is_empty() {
+        let input = stdin.write_all(text.as_bytes());
+        drop(stdin);
+        let mut wav = Vec::new();
+        let output = input.and_then(|()| stdout.read_to_end(&mut wav));
+        let status = loop {
+            let mut active = PIPER_CHILD.lock().unwrap_or_else(PoisonError::into_inner);
+            let child = active.as_mut().expect("speech worker owns its registered child");
+            if output.is_err() {
+                let _ = child.kill();
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    *active = None;
+                    break Ok(status);
+                }
+                Ok(None) => {
+                    // A process can close stdout and stay alive. Leave Stop free to kill it.
+                    drop(active);
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    *active = None;
+                    break Err(error);
+                }
+            }
+        };
+        if cancelled() { return Ok(true); }
+        output.map_err(|e| e.to_string())?;
+        let status = status.map_err(|e| e.to_string())?;
+        if !status.success() || wav.is_empty() {
             // The likeliest cause on Arch is the wrong `piper`: `extra/piper` is a mouse
             // configuration tool that installs the same binary name.
             super::set_piper_problem(Some(format!(
                 "{bin} exited {} with no audio — is this the text-to-speech piper?",
-                out.status
+                status
             )));
-            return Err(format!("piper exited {}", out.status));
+            return Err(format!("piper exited {status}"));
         }
         super::set_piper_problem(None);
         // Blocking: this call is already inside `announce`'s one thread, and the next line of the
         // warning must not start until this one has been heard.
-        crate::audio::play_wav_blocking(out.stdout, super::speech_volume());
+        crate::audio::play_wav_blocking(wav, super::speech_volume(), cancelled);
         Ok(true)
     }
 }
@@ -768,7 +827,8 @@ mod imp {
 #[cfg(target_os = "android")]
 mod imp {
     /// Android's bundled Piper bridge lives in `platform`.
-    pub fn speak_blocking(text: &str) -> Result<(), String> {
+    pub fn speak_blocking(text: &str, epoch: u64) -> Result<(), String> {
+        if super::voice_epoch() != epoch { return Ok(()); }
         crate::platform::speak(text)
     }
 }
@@ -794,6 +854,22 @@ mod tests {
         assert!(should_preempt(Priority::Warning, &queue));
         assert!(should_preempt(Priority::Background, &queue));
         assert!(!should_preempt(Priority::Emergency, &queue));
+        assert!(interrupts_voice(Some(Priority::Warning), Priority::Emergency));
+        assert!(!interrupts_voice(Some(Priority::Emergency), Priority::Emergency));
+    }
+
+    #[test]
+    fn stop_voice_preserves_queued_alert_tones() {
+        let mut queue = std::collections::VecDeque::from([
+            job(Priority::Warning, "voice only"),
+            SpeechJob::new(Priority::Warning, Some((crate::settings::AlertSound::Chime, 0.5)), vec!["with a tone".into()]),
+        ]);
+        discard_queued(&mut queue, false);
+        assert_eq!(queue.len(), 1);
+        assert!(queue[0].lines.is_empty());
+        assert!(queue[0].tone.is_some());
+        discard_queued(&mut queue, true);
+        assert!(queue.is_empty());
     }
 
     #[test]
