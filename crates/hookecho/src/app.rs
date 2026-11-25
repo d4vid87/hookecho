@@ -23,7 +23,7 @@ use crate::render::{mercator::Camera, MapCallback, OverlayUpload, RadarUpload, R
 use crate::settings::Settings;
 use crate::tiles::TileManager;
 use crate::ui;
-use crate::ui::detail_window::Detail;
+use crate::ui::detail_window::{Detail, DetailImage, PhotoSource};
 use crate::view::{MapView, Volume};
 use chrono::{DateTime, NaiveDate, Utc};
 use lru::LruCache;
@@ -511,8 +511,8 @@ enum OverlayMsg {
     PointGfs(String, Vec<wxdata::global::PointTemperature>),
     /// VAD wind profile for a site.
     Vwp(String, Vec<wxdata::level3::VwpLevel>),
-    /// Archived storm-based warnings for a 5-min UTC bucket (feature W).
-    ArchiveWarnings(i64, Vec<GeoFeature>),
+    /// Archived storm-based warnings for an exact scan and its bounded request slot.
+    ArchiveWarnings(i64, usize, Vec<GeoFeature>),
     /// Surface observations (METAR station plots) for the requested bbox (feature U).
     Metar(
         Vec<wxdata::metar::SurfaceOb>,
@@ -534,7 +534,7 @@ enum OverlayMsg {
     /// Newest reading from a configured ground field mill (kV/m).
     Mill(f32),
     /// NWS damage-survey points and surveyed tracks for the requested bbox + storm day.
-    Dat(Vec<wxdata::dat::DamagePoint>, Vec<wxdata::dat::DamageTrack>),
+    Dat(DamageSurveyKey, Vec<wxdata::dat::DamagePoint>, Vec<wxdata::dat::DamageTrack>),
     /// A plugin or placefile that failed to load, with why (shown in the manager window).
     PlacefileError(String, String),
     /// A finished multi-radar reflectivity composite: the grid, its contributing sites, and the
@@ -653,7 +653,7 @@ enum OverlaySource {
     /// VAD wind profile for `site`.
     Vwp(String),
     /// Archived storm-based warnings valid at a 5-min UTC bucket (Unix seconds, feature W).
-    ArchiveWarnings(i64),
+    ArchiveWarnings(i64, usize),
     /// Aviation SIGMET/AIRMET polygons (feature GG).
     Aviation,
     /// FAA Temporary Flight Restrictions; carries the NOTAM ids already held, so a refresh only
@@ -694,7 +694,7 @@ enum OverlaySource {
     /// A user-configured field-mill endpoint.
     Mill(String),
     /// Damage surveys: a lon/lat bbox plus the UTC day whose storms to ask for.
-    Dat((f64, f64, f64, f64), chrono::NaiveDate),
+    Dat(DamageSurveyKey),
     /// Multi-radar mosaic over a named set of sites (chosen from the view before spawning, so the
     /// fetch task needs no camera state).
     Mosaic(Vec<String>),
@@ -725,6 +725,7 @@ enum RequestLane {
     PaneField(usize, crate::render::FieldLayer),
     Placefile(String),
     FreezingLevels(String),
+    ArchiveWarnings(usize),
     Feed(&'static str),
 }
 
@@ -735,6 +736,7 @@ impl RequestLane {
             Self::PaneField(pane, layer) => format!("pane {} field {}", pane + 1, layer.slug()),
             Self::Placefile(source) => format!("Placefile {source}"),
             Self::FreezingLevels(site) => format!("Freezing levels {site}"),
+            Self::ArchiveWarnings(_) => "Archived warnings".into(),
             Self::Feed(label) => (*label).into(),
         }
     }
@@ -744,11 +746,12 @@ impl RequestLane {
             Self::Field(layer) | Self::PaneField(_, layer) => field_refresh_secs(*layer),
             Self::Placefile(_) => 120,
             Self::FreezingLevels(_) => 900,
+            Self::ArchiveWarnings(_) => 300,
             Self::Feed(label) => match *label {
                 "Spotter Network" | "Live stations" | "Field mill" | "Derived radar fields" => 60,
                 "Surface observations" => 75,
                 "mPING reports" | "Power outages" | "River gauges" | "Electric field"
-                | "VAD profile" | "Archived warnings" => 300,
+                | "VAD profile" => 300,
                 "Webcams" => 480,
                 "Hurricane reconnaissance" | "Aviation advisories" | "Nearest station observations"
                 | "HRRR station temperature" => 600,
@@ -843,10 +846,118 @@ enum DisplayedOverlayFrame {
     Scan(i64),
 }
 
+#[derive(Default)]
+struct ArchiveWarningRequests {
+    wanted: std::collections::HashMap<i64, ArchiveWarningRequest>,
+}
+
+struct ArchiveWarningRequest {
+    since: Instant,
+    slot: Option<usize>,
+    retry_at: Option<Instant>,
+}
+
+impl ArchiveWarningRequests {
+    fn set_wanted(&mut self, frames: &[DisplayedOverlayFrame], now: Instant) -> Vec<usize> {
+        let mut cancelled = Vec::new();
+        self.wanted.retain(|scan, request| {
+            if frames.contains(&DisplayedOverlayFrame::Scan(*scan)) { return true; }
+            cancelled.extend(request.slot);
+            false
+        });
+        for &frame in frames {
+            if let DisplayedOverlayFrame::Scan(scan) = frame {
+                self.wanted.entry(scan).or_insert(ArchiveWarningRequest { since: now, slot: None, retry_at: None });
+            }
+        }
+        cancelled
+    }
+
+    fn finish(&mut self, slot: usize, retry_at: Option<Instant>) -> bool {
+        let Some(request) = self.wanted.values_mut().find(|r| r.slot == Some(slot)) else { return false; };
+        request.slot = None;
+        request.retry_at = retry_at;
+        true
+    }
+}
+
+type DamageSurveyKey = ((f64, f64, f64, f64), chrono::NaiveDate);
+
+#[derive(Default)]
+struct DamageSurveyRequest {
+    wanted: Option<DamageSurveyKey>,
+    inflight: Option<DamageSurveyKey>,
+    loaded: Option<DamageSurveyKey>,
+    retry_at: Option<Instant>,
+}
+
+impl DamageSurveyRequest {
+    fn select(&mut self, wanted: Option<DamageSurveyKey>) -> bool {
+        if self.wanted == wanted { return false; }
+        self.wanted = wanted;
+        self.retry_at = None;
+        self.inflight.take().is_some()
+    }
+
+    fn next(&self, now: Instant) -> Result<Option<DamageSurveyKey>, Duration> {
+        if self.wanted == self.loaded || self.inflight.is_some() { return Ok(None); }
+        if let Some(retry) = self.retry_at.filter(|retry| *retry > now) { return Err(retry - now); }
+        Ok(self.wanted)
+    }
+
+    fn begin(&mut self, key: DamageSurveyKey) { self.inflight = Some(key); }
+
+    fn finish(&mut self, key: DamageSurveyKey) -> bool {
+        if self.inflight != Some(key) { return false; }
+        self.inflight = None;
+        self.loaded = Some(key);
+        self.retry_at = None;
+        true
+    }
+
+    fn fail(&mut self, now: Instant) {
+        if self.inflight.take().is_some() { self.retry_at = Some(now + Duration::from_secs(15)); }
+    }
+
+    fn shows(&self, key: Option<DamageSurveyKey>) -> bool {
+        key.is_some() && self.wanted == key && self.loaded == key
+    }
+}
+
+enum ImageTarget {
+    Placefile(String),
+    Detail(u64),
+}
+
+#[derive(PartialEq, Eq)]
+struct PaneOverlayKey {
+    shared_generation: u64,
+    archive_generation: u64,
+    frame: DisplayedOverlayFrame,
+    live_minute: i64,
+}
+type WarningMeshKey = (u64, i32, crate::settings::Theme);
+
+struct PaneOverlay {
+    key: PaneOverlayKey,
+    revision: u64,
+    alerts: Vec<GeoFeature>,
+}
+
 impl DisplayedOverlayFrame {
     fn at(following: bool, time: Option<DateTime<Utc>>) -> Self {
         if following { Self::Live }
         else { time.map_or(Self::WaitingForScan, |t| Self::Scan(t.timestamp())) }
+    }
+
+    fn warnings(view: &MapView) -> Self {
+        if !view.show_radar {
+            return Self::at(view.timeline.following, view.displayed_time());
+        }
+        let time = view.presented_time();
+        let live = view.timeline.following && (time.is_none() || view.presented_as_live()
+            || (time == view.displayed_time() && view.decoded_live_frame()));
+        Self::at(live, time)
     }
 
     fn features<'a>(
@@ -1078,7 +1189,7 @@ impl OverlaySource {
             Self::PointRtma { .. } => RequestLane::Feed("RTMA selected-point temperature"),
             Self::PointGfs { .. } => RequestLane::Feed("GFS selected-point temperature"),
             Self::Vwp(..) => RequestLane::Feed("VAD profile"),
-            Self::ArchiveWarnings(..) => RequestLane::Feed("Archived warnings"),
+            Self::ArchiveWarnings(_, slot) => RequestLane::ArchiveWarnings(*slot),
             Self::Aviation => RequestLane::Feed("Aviation advisories"),
             Self::Tfr(..) => RequestLane::Feed("Temporary flight restrictions"),
             Self::Metar(..) => RequestLane::Feed("Surface observations"),
@@ -1550,11 +1661,11 @@ impl OverlaySource {
                 let levels = wxdata::level3::fetch_vwp(http, &site).await;
                 OverlayMsg::Vwp(site, levels)
             }
-            OverlaySource::ArchiveWarnings(scan) => {
+            OverlaySource::ArchiveWarnings(scan, slot) => {
                 let ts = chrono::DateTime::from_timestamp(scan, 0)
                     .ok_or_else(|| anyhow::anyhow!("Invalid archived scan time"))?
                     .to_rfc3339();
-                OverlayMsg::ArchiveWarnings(scan, wxdata::archive_warnings::fetch(http, &ts).await?)
+                OverlayMsg::ArchiveWarnings(scan, slot, wxdata::archive_warnings::fetch(http, &ts).await?)
             }
             OverlaySource::Metar(lat0, lon0, lat1, lon1) => {
                 let mut obs = wxdata::metar::fetch_bbox(http, lat0, lon0, lat1, lon1).await?;
@@ -1633,7 +1744,7 @@ impl OverlaySource {
                 r.sort_by_key(|x| x.time);
                 OverlayMsg::Mill(r.last().map(|x| x.kv_per_m).unwrap_or(0.0))
             }
-            OverlaySource::Dat(bbox, day) => {
+            OverlaySource::Dat((bbox, day)) => {
                 // A survey is filed against the storm's local date, which can be either side of the
                 // UTC one for an evening event — ask for the day either side and let the bbox and
                 // the map do the rest.
@@ -1645,7 +1756,7 @@ impl OverlaySource {
                     .and_utc();
                 let end = start + chrono::Duration::days(3);
                 let (points, tracks) = wxdata::dat::fetch(http, bbox, start, end).await?;
-                OverlayMsg::Dat(points, tracks)
+                OverlayMsg::Dat((bbox, day), points, tracks)
             }
             OverlaySource::Mosaic(sites) => {
                 let m = wxdata::mosaic::fetch(http, &sites)
@@ -4066,11 +4177,8 @@ pub struct HookEchoApp {
     alert_coverage: AlertCoverage,
     /// Archived storm-based warnings keyed by UTC scan time (whole seconds).
     arch_warns: LruCache<i64, Vec<GeoFeature>>,
-    /// The scan currently being fetched (dedupes in-flight requests).
-    arch_warn_inflight: Option<i64>,
-    arch_warn_retry: Option<(i64, Instant)>,
-    arch_warn_shown: DisplayedOverlayFrame,
-    arch_warn_shown_since: Instant,
+    arch_warning_requests: ArchiveWarningRequests,
+    archive_warning_generation: u64,
     /// Archived local storm reports (feature CC) keyed by 30-min UTC bucket (ts/1800); shown while
     /// the active pane is scrubbed off-live (each bucket = the 6 h of reports ending there).
     arch_lsr: LruCache<i64, Vec<wxdata::spc::StormReport>>,
@@ -4111,10 +4219,15 @@ pub struct HookEchoApp {
     show_probsevere: bool,
     probsevere: Vec<GeoFeature>,
     probsevere_last_fetch: Option<Instant>,
-    /// The currently-displayed, filtered feature set (hit-tested + tessellated).
+    /// The filtered features shared across panes. Time-dependent warnings are merged per pane.
     overlays: Vec<GeoFeature>,
     overlay_gen: u64,
-    field_atlas: crate::field_atlas::Cache,
+    alert_overlay_index: usize,
+    pane_overlays: [Option<Arc<PaneOverlay>>; crate::workspace::MAX_PANES],
+    pane_warning_meshes: [Option<(WarningMeshKey, Arc<OverlayUpload>)>; crate::workspace::MAX_PANES],
+    pane_overlay_revision: u64,
+    field_atlas: [crate::field_atlas::Cache; crate::workspace::MAX_PANES],
+    field_atlas_open_pane: Option<usize>,
     built_gen: u64,
     built_zoom_bucket: i32,
     built_placefile_bucket: [usize; 2],
@@ -4123,6 +4236,7 @@ pub struct HookEchoApp {
     overlay_ready: bool,
     overlay_last_fetch: Option<Instant>,
     detail: Option<Detail>,
+    next_detail_photo: u64,
     /// Open "Storm {id} Attributes" window (a clicked storm cell).
     cell_popup: Option<Cell>,
     /// Stable identity of the marker being edited in the map popup.
@@ -4553,8 +4667,8 @@ pub struct HookEchoApp {
     /// Placefile icon-sheet textures by URL. `None` = fetch in flight or failed (negative-cached
     /// so a broken sheet isn't retried every frame), same idiom as `marker_icon_tex`.
     pf_icon_tex: std::collections::HashMap<String, Option<egui::TextureHandle>>,
-    pf_icon_rx: Receiver<(String, egui::ColorImage)>,
-    pf_icon_tx: Sender<(String, egui::ColorImage)>,
+    pf_icon_rx: Receiver<(ImageTarget, egui::ColorImage)>,
+    pf_icon_tx: Sender<(ImageTarget, egui::ColorImage)>,
     /// Android: hide all floating chrome to view the whole radar (toggled by the eye button).
     mobile_chrome_hidden: bool,
     /// Touch: when and where the last tap landed, so a drag that starts right on top of it is
@@ -4616,7 +4730,7 @@ pub struct HookEchoApp {
     show_dat: bool,
     dat_points: Vec<wxdata::dat::DamagePoint>,
     dat_tracks: Vec<wxdata::dat::DamageTrack>,
-    dat_key: Option<((f64, f64, f64, f64), chrono::NaiveDate)>,
+    dat_request: DamageSurveyRequest,
     /// Multi-radar mosaic: which sites the last composite used, the oldest scan in it, the view it
     /// was built for — panning off the composite refetches instead of leaving a stale picture.
     mosaic_sites: Vec<String>,
@@ -5260,10 +5374,8 @@ impl HookEchoApp {
             alert_features: seeded_alerts,
             alert_coverage: AlertCoverage::default(),
             arch_warns: LruCache::new(NonZeroUsize::new(50).unwrap()),
-            arch_warn_inflight: None,
-            arch_warn_retry: None,
-            arch_warn_shown: DisplayedOverlayFrame::Live,
-            arch_warn_shown_since: Instant::now(),
+            arch_warning_requests: ArchiveWarningRequests::default(),
+            archive_warning_generation: 0,
             arch_lsr: LruCache::new(NonZeroUsize::new(50).unwrap()),
             arch_lsr_inflight: None,
             arch_lsr_retry: None,
@@ -5294,7 +5406,12 @@ impl HookEchoApp {
             probsevere_last_fetch: None,
             overlays: Vec::new(),
             overlay_gen: 0,
+            alert_overlay_index: 0,
+            pane_overlays: Default::default(),
+            pane_warning_meshes: Default::default(),
+            pane_overlay_revision: 0,
             field_atlas: Default::default(),
+            field_atlas_open_pane: None,
             built_gen: u64::MAX,
             built_zoom_bucket: i32::MIN,
             built_placefile_bucket: [0; 2],
@@ -5303,6 +5420,7 @@ impl HookEchoApp {
             overlay_ready: false,
             overlay_last_fetch: None,
             detail: None,
+            next_detail_photo: 0,
             cell_popup: None,
             marker_popup: None,
             global_model: wxdata::global::GlobalModel::default(),
@@ -5615,7 +5733,7 @@ impl HookEchoApp {
             show_dat: false,
             dat_points: Vec::new(),
             dat_tracks: Vec::new(),
-            dat_key: None,
+            dat_request: DamageSurveyRequest::default(),
             mosaic_sites: Vec::new(),
             mosaic_oldest: None,
             mosaic_provenance: None,
@@ -9585,9 +9703,12 @@ impl HookEchoApp {
 
     /// Lon/lat bounds `(min_lon, min_lat, max_lon, max_lat)` of the active pane's viewport.
     fn view_bounds(&self) -> (f64, f64, f64, f64) {
+        self.pane_view_bounds(self.active, self.last_viewport)
+    }
+
+    fn pane_view_bounds(&self, pane: usize, vp: (f32, f32)) -> (f64, f64, f64, f64) {
         use crate::render::mercator::world_to_lonlat;
-        let cam = &self.views[self.active].camera;
-        let vp = self.last_viewport;
+        let cam = &self.views[pane].camera;
         let ((wx0, wy0), (wx1, wy1)) = cam.visible_bounds(vp);
         let (lon0, lat0) = world_to_lonlat(wx0, wy0);
         let (lon1, lat1) = world_to_lonlat(wx1, wy1);
@@ -11206,13 +11327,15 @@ impl HookEchoApp {
                     match result {
                         Ok(msg) => msg,
                         Err(err) => {
-                            if lane == RequestLane::Feed("Archived warnings") {
-                                self.arch_warn_retry = self.arch_warn_inflight.take()
-                                    .map(|scan| (scan, Instant::now() + Duration::from_secs(15)));
+                            if let RequestLane::ArchiveWarnings(slot) = &lane {
+                                self.arch_warning_requests.finish(*slot, Some(Instant::now() + Duration::from_secs(15)));
                             }
                             if lane == RequestLane::Feed("Archived storm reports") {
                                 self.arch_lsr_retry = self.arch_lsr_inflight.take()
                                     .map(|bucket| (bucket, Instant::now() + Duration::from_secs(15)));
+                            }
+                            if lane == RequestLane::Feed("Damage surveys") {
+                                self.dat_request.fail(Instant::now());
                             }
                             if let RequestLane::Field(layer) = &lane {
                                 if let Some(loop_state) = self.mrms_loops.iter_mut().find(|state| state.layer == *layer) {
@@ -11574,29 +11697,19 @@ impl HookEchoApp {
                         self.hodo_site = Some(site);
                     }
                 }
-                OverlayMsg::ArchiveWarnings(scan, mut feats) => {
-                    feats.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
-                    self.arch_warns.put(scan, feats);
-                    if self.arch_warn_inflight == Some(scan) {
-                        self.arch_warn_inflight = None;
+                OverlayMsg::ArchiveWarnings(scan, slot, mut feats) => {
+                    if self.arch_warning_requests.finish(slot, None) {
+                        feats.retain(|feature| alerts::event_enabled(&feature.title, &self.settings.optional_alert_events));
+                        self.arch_warns.put(scan, feats);
+                        self.archive_warning_generation = self.archive_warning_generation.wrapping_add(1);
                     }
-                    if self.arch_warn_retry.is_some_and(|(failed, _)| failed == scan) {
-                        self.arch_warn_retry = None;
-                    }
+                    continue;
                 }
                 OverlayMsg::Metar(obs, tafs) => {
                     self.metars = obs;
                     self.tafs = tafs;
                 }
-                OverlayMsg::Webcams(sites) => {
-                    // Drop the cached stills with the list they belonged to. Windy's free-tier
-                    // image URLs expire after ten minutes, and a kept texture would otherwise
-                    // show the same frame until the layer was toggled off and on. Keep the open
-                    // card's image while its metadata refreshes, so the card does not blank.
-                    let open_image = self.detail.as_ref().and_then(|d| d.image.as_deref());
-                    self.pf_icon_tex.retain(|k, _| !k.starts_with("cam:") || open_image == Some(k.as_str()));
-                    self.webcams = sites;
-                }
+                OverlayMsg::Webcams(sites) => self.webcams = sites,
                 OverlayMsg::Aqi(obs) => self.aqi = obs,
                 OverlayMsg::FirePerimeters(perims) => {
                     self.fire_perims = perims;
@@ -11607,12 +11720,14 @@ impl HookEchoApp {
                 OverlayMsg::Ppef(p) => self.stations.ppef = Some(p),
                 OverlayMsg::DotCams(cams) => self.stations.cams = cams,
                 OverlayMsg::Mill(kv) => self.stations.mill_kv_per_m = Some(kv),
-                OverlayMsg::Dat(mut points, tracks) => {
+                OverlayMsg::Dat(key, mut points, tracks) => {
+                    if !self.dat_request.finish(key) { continue; }
                     // Weakest first, so the EF4/EF5 points end up painted on top of the EF0 and
                     // straight-line-wind ones that outnumber them ten to one.
                     points.sort_by_key(|p| wxdata::dat::ef_number(&p.efscale).unwrap_or(0));
                     self.dat_points = points;
                     self.dat_tracks = tracks;
+                    continue;
                 }
                 OverlayMsg::Mosaic(mosaic) => {
                     self.mosaic_sites = mosaic.provenance.sites.clone();
@@ -11668,7 +11783,11 @@ impl HookEchoApp {
 
     /// The alert features for the active pane's displayed radar time.
     fn active_alert_features(&self) -> &[GeoFeature] {
-        self.archive_warning_frame().features(&self.alert_features, &self.arch_warns)
+        self.pane_alert_features(self.active)
+    }
+
+    fn pane_alert_features(&self, pane: usize) -> &[GeoFeature] {
+        self.pane_warning_frame(pane).features(&self.alert_features, &self.arch_warns)
     }
 
     fn route_warning_exposure(&self) -> Option<(String, f64)> {
@@ -11815,8 +11934,11 @@ impl HookEchoApp {
     }
 
     fn archive_warning_frame(&self) -> DisplayedOverlayFrame {
-        let v = &self.views[self.active];
-        DisplayedOverlayFrame::at(v.timeline.following, v.displayed_time())
+        self.pane_warning_frame(self.active)
+    }
+
+    fn pane_warning_frame(&self, pane: usize) -> DisplayedOverlayFrame {
+        DisplayedOverlayFrame::warnings(&self.views[pane])
     }
 
     fn storm_report_frame(&self) -> DisplayedOverlayFrame {
@@ -11824,41 +11946,40 @@ impl HookEchoApp {
         DisplayedOverlayFrame::at(v.timeline.following, v.presented_time())
     }
 
-    /// Drive the shared archived-warning layer from the active pane's displayed scan.
+    /// Request each displayed scan once, keeping distinct scans independent across the panes.
     fn sync_archive_warnings(&mut self, ctx: &egui::Context) {
-        let frame = self.archive_warning_frame();
-        if self.arch_warn_shown != frame {
-            self.arch_warn_shown = frame;
-            self.arch_warn_shown_since = Instant::now();
-            self.rebuild_overlays();
+        let now = Instant::now();
+        let solo = chrome::compact(ctx);
+        let frames: [_; crate::workspace::MAX_PANES] = std::array::from_fn(|pane| {
+            if pane < self.views.len() && (!solo || pane == self.active) { self.pane_warning_frame(pane) }
+            else { DisplayedOverlayFrame::WaitingForScan }
+        });
+        let cancelled = self.arch_warning_requests.set_wanted(&frames, now);
+        if !cancelled.is_empty() {
+            let mut book = self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            for slot in cancelled { book.cancel(&RequestLane::ArchiveWarnings(slot)); }
         }
-        let DisplayedOverlayFrame::Scan(scan) = frame else {
-            if self.arch_warn_inflight.take().is_some() {
-                self.overlay_requests
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .cancel(&RequestLane::Feed("Archived warnings"));
-            }
-            return;
-        };
-        if self.arch_warns.get(&scan).is_some() || self.arch_warn_inflight == Some(scan) {
-            return;
+        let mut slots = [false; crate::workspace::MAX_PANES];
+        for request in self.arch_warning_requests.wanted.values() {
+            if let Some(slot) = request.slot { slots[slot] = true; }
         }
-        // Let the playhead settle before replacing the single in-flight archive request.
-        let settle = Duration::from_millis(200).saturating_sub(self.arch_warn_shown_since.elapsed());
-        if !settle.is_zero() {
-            ctx.request_repaint_after(settle);
-            return;
-        }
-        if let Some((failed, retry_at)) = self.arch_warn_retry {
-            let wait = retry_at.saturating_duration_since(Instant::now());
-            if failed == scan && !wait.is_zero() {
+        let mut fetch = Vec::new();
+        for (&scan, request) in &mut self.arch_warning_requests.wanted {
+            if self.arch_warns.get(&scan).is_some() || request.slot.is_some() { continue; }
+            let ready_at = request.retry_at.unwrap_or(request.since + Duration::from_millis(200));
+            let wait = ready_at.saturating_duration_since(now);
+            if !wait.is_zero() {
                 ctx.request_repaint_after(wait);
-                return;
+                continue;
             }
+            let Some(slot) = slots.iter().position(|used| !used) else { break; };
+            slots[slot] = true;
+            request.slot = Some(slot);
+            fetch.push((scan, slot));
         }
-        self.arch_warn_inflight = Some(scan);
-        self.spawn_overlay(ctx, OverlaySource::ArchiveWarnings(scan));
+        for (scan, slot) in fetch {
+            self.spawn_overlay(ctx, OverlaySource::ArchiveWarnings(scan, slot));
+        }
     }
 
     /// The storm reports to display right now: the live trailing window, or the archived set
@@ -12331,18 +12452,30 @@ impl HookEchoApp {
     /// (rounded) view box and the day the active pane is looking at — scrub the timeline onto a
     /// storm date and the survey for that day appears over it.
     fn sync_dat(&mut self, ctx: &egui::Context) {
-        if !self.show_dat {
-            return;
+        let key = self.damage_survey_key(self.active, self.last_viewport);
+        if self.dat_request.select(key) {
+            self.overlay_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                .cancel(&RequestLane::Feed("Damage surveys"));
         }
-        let (min_lon, min_lat, max_lon, max_lat) = self.view_bounds();
+        match self.dat_request.next(Instant::now()) {
+            Ok(Some(key)) => {
+                self.dat_request.begin(key);
+                self.spawn_overlay(ctx, OverlaySource::Dat(key));
+            }
+            Ok(None) => {}
+            Err(wait) => ctx.request_repaint_after(wait),
+        }
+    }
+
+    fn damage_survey_key(&self, pane: usize, vp: (f32, f32)) -> Option<DamageSurveyKey> {
+        if !self.show_dat { return None; }
+        let (min_lon, min_lat, max_lon, max_lat) = self.pane_view_bounds(pane, vp);
         if (max_lon - min_lon) > 12.0 {
-            return; // a continental query is tens of thousands of points
+            return None; // a continental query is tens of thousands of points
         }
-        let day = self.views[self.active]
-            .volume
-            .as_ref()
-            .map(|v| v.time.date_naive())
-            .unwrap_or_else(|| chrono::Utc::now().date_naive());
+        let view = &self.views[pane];
+        let time = if view.show_radar { view.presented_time() } else { view.displayed_time() };
+        let day = time.or_else(|| view.timeline.following.then(Utc::now))?.date_naive();
         // Snap the box to a half-degree grid so panning around inside a county doesn't refetch.
         let snap = |v: f64, up: bool| {
             let g = v * 2.0;
@@ -12354,18 +12487,15 @@ impl HookEchoApp {
             snap(max_lon, true),
             snap(max_lat, true),
         );
-        if self.dat_key == Some((bbox, day)) {
-            return;
-        }
-        self.dat_key = Some((bbox, day));
-        self.spawn_overlay(ctx, OverlaySource::Dat(bbox, day));
+        Some((bbox, day))
+    }
+
+    fn detail_image(&mut self, source: PhotoSource) -> DetailImage {
+        self.next_detail_photo = self.next_detail_photo.wrapping_add(1);
+        DetailImage::new(self.next_detail_photo, source)
     }
 
     /// Open a camera site's detail popup and start pulling its newest frame.
-    ///
-    /// The image rides the placefile-icon texture cache: same fetch, same decode, same upload, and
-    /// the key is known before the fetch resolves, so the window can show a placeholder and swap
-    /// the picture in when it lands.
     fn open_webcam(&mut self, site: &wxdata::webcams::CamSite, ctx: &egui::Context) {
         let mut body = String::new();
         if !site.icao.is_empty() {
@@ -12389,12 +12519,13 @@ impl HookEchoApp {
         });
         // The first working camera is the one we show; the rest are listed above.
         let cam = site.cameras.iter().find(|c| !c.out_of_order);
-        let key = cam.map(|c| format!("cam:{}", c.id));
+        let image = cam.map(|c| self.detail_image(PhotoSource::Webcam(c.id)));
+        let request = image.as_ref().map(|image| image.request);
         self.detail = Some(Detail {
             title: format!("{} webcam", site.name),
             body,
             color: [110, 180, 240, 255],
-            image: key.clone(),
+            image,
             // Not decoration: the link back to the camera's own page is a condition of using
             // Windy's images at all.
             link: site
@@ -12404,13 +12535,9 @@ impl HookEchoApp {
             stream: None,
         });
         self.webcam_detail_last_fetch = Some(Instant::now());
-        let (Some(key), Some(cam)) = (key, cam) else {
+        let (Some(request), Some(cam)) = (request, cam) else {
             return;
         };
-        if self.pf_icon_tex.contains_key(&key) {
-            return; // already loaded, or a fetch is already in flight
-        }
-        self.pf_icon_tex.insert(key.clone(), None);
         let http = self.http.clone();
         let tx = self.pf_icon_tx.clone();
         let ctx2 = ctx.clone();
@@ -12434,7 +12561,7 @@ impl HookEchoApp {
             };
             match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), false).await {
                 Ok(image) => {
-                    let _ = tx.send((key, image));
+                    let _ = tx.send((ImageTarget::Detail(request), image));
                     ctx2.request_repaint();
                 }
                 Err(e) => log::warn!("webcam image {url} failed: {e}"),
@@ -12445,16 +12572,15 @@ impl HookEchoApp {
     /// FAA publishes new stills at its own cadence. Keep an open card current without blanking
     /// it between the metadata lookup and the replacement image arriving.
     fn refresh_open_webcam(&mut self, ctx: &egui::Context) {
-        let Some((key, cam_id)) = self.detail.as_ref().and_then(|detail| {
+        let Some((request, cam_id, loaded)) = self.detail.as_ref().and_then(|detail| {
             if detail.link.is_some() { return None; } // Windy URLs arrive with the site list.
-            let key = detail.image.as_ref()?;
-            let id = key.strip_prefix("cam:")?.parse::<u64>().ok()?;
-            Some((key.clone(), id))
+            let image = detail.image.as_ref()?;
+            let PhotoSource::Webcam(cam_id) = image.source else { return None; };
+            Some((image.request, cam_id, image.texture.is_some()))
         }) else {
             self.webcam_detail_last_fetch = None;
             return;
         };
-        let loaded = self.pf_icon_tex.get(&key).and_then(Option::as_ref).is_some();
         let interval = Duration::from_secs(if loaded { 600 } else { 60 });
         let elapsed = self.webcam_detail_last_fetch.map(|time| time.elapsed()).unwrap_or_default();
         if elapsed < interval {
@@ -12467,7 +12593,7 @@ impl HookEchoApp {
             match wxdata::webcams::latest_image(&http, cam_id).await {
                 Ok(Some(url)) => match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), false).await {
                     Ok(image) => {
-                        let _ = tx.send((key, image));
+                        let _ = tx.send((ImageTarget::Detail(request), image));
                         ctx2.request_repaint();
                     }
                     Err(e) => log::warn!("webcam image {url} refresh failed: {e}"),
@@ -12481,27 +12607,23 @@ impl HookEchoApp {
     /// Open a public highway camera directly, without requiring a nearby station card.
     fn open_dotcam(&mut self, cam: &wxdata::dotcams::DotCam, ctx: &egui::Context) {
         let title = if cam.name.is_empty() { cam.id.clone() } else { cam.name.clone() };
-        let image = cam.image_url.as_ref().map(|_| {
-            // A still URL can remain constant while its bytes change. A five-minute texture key
-            // lets reopening the camera refresh it without minting a texture on every frame.
-            format!("dotcam:{}:{}", cam.id, Utc::now().timestamp() / 300)
-        });
+        let image = cam.image_url.as_ref().map(|_| self.detail_image(PhotoSource::Highway));
+        let request = image.as_ref().map(|image| image.request);
         let place = if cam.place.is_empty() { String::new() } else { format!("\n{}", cam.place) };
         let capability = if cam.stream_url.is_some() { "Stream URL available" } else { "Still image only" };
         self.detail = Some(Detail {
             title: format!("{} camera", cam.agency),
             body: format!("{title}{place}\n{capability}\nChecks for a new still about once a minute while open. Capture time is not supplied by the camera catalog.\nPublic fixed highway camera; not a chaser feed."),
             color: [91, 220, 206, 255],
-            image: image.clone(),
+            image,
             link: cam.image_url.as_ref()
                 .map(|url| ("Open image from Caltrans".to_string(), url.clone())),
             stream: cam.stream_url.clone(),
         });
         self.dotcam_detail_last_fetch = Some(Instant::now());
         ctx.request_repaint_after(Duration::from_secs(60));
-        let (Some(key), Some(url)) = (image, cam.image_url.clone()) else { return; };
-        self.pf_icon_tex.entry(key.clone()).or_insert(None);
-        self.fetch_dotcam_still(key, url, ctx);
+        let (Some(request), Some(url)) = (request, cam.image_url.clone()) else { return; };
+        self.fetch_dotcam_still(request, url, ctx);
     }
 
     fn show_public_streams(&mut self, ctx: &egui::Context) {
@@ -12583,7 +12705,7 @@ impl HookEchoApp {
         }
     }
 
-    fn fetch_dotcam_still(&self, key: String, url: String, ctx: &egui::Context) {
+    fn fetch_dotcam_still(&self, request: u64, url: String, ctx: &egui::Context) {
         let (http, tx, ctx2) = (self.http.clone(), self.pf_icon_tx.clone(), ctx.clone());
         // The JPEG URL stays fixed while its bytes change. A shared minute bucket bypasses older
         // browser-cache entries without making every viewer use a unique proxy cache key.
@@ -12592,7 +12714,7 @@ impl HookEchoApp {
         self.spawner.spawn(async move {
             match crate::stationlayer::fetch_image(&http, &request_url, ctx2.input(|i| i.max_texture_side)).await {
                 Ok(image) => {
-                    let _ = tx.send((key, image));
+                    let _ = tx.send((ImageTarget::Detail(request), image));
                     ctx2.request_repaint();
                 }
                 Err(e) => log::warn!("highway camera still {url}: {e}"),
@@ -12601,22 +12723,21 @@ impl HookEchoApp {
     }
 
     fn refresh_open_dotcam(&mut self, ctx: &egui::Context) {
-        let Some(detail) = self.detail.as_ref().filter(|detail| {
-            detail.image.as_deref().is_some_and(|key| key.starts_with("dotcam:"))
+        let Some((image, url)) = self.detail.as_ref().and_then(|detail| {
+            let image = detail.image.as_ref().filter(|image| matches!(image.source, PhotoSource::Highway))?;
+            Some((image, &detail.link.as_ref()?.1))
         }) else {
             self.dotcam_detail_last_fetch = None;
             return;
         };
-        let Some((_, url)) = detail.link.as_ref() else { return; };
-        let Some(key) = detail.image.as_ref() else { return; };
         let elapsed = self.dotcam_detail_last_fetch.map(|time| time.elapsed()).unwrap_or_default();
         if elapsed < Duration::from_secs(60) {
             ctx.request_repaint_after(Duration::from_secs(60) - elapsed);
             return;
         }
-        let (key, url) = (key.clone(), url.clone());
+        let (request, url) = (image.request, url.clone());
         self.dotcam_detail_last_fetch = Some(Instant::now());
-        self.fetch_dotcam_still(key, url, ctx);
+        self.fetch_dotcam_still(request, url, ctx);
         ctx.request_repaint_after(Duration::from_secs(60));
     }
 
@@ -12692,7 +12813,6 @@ impl HookEchoApp {
     }
 
     /// Open a damage-survey point's detail popup, pulling its survey photo when one was attached.
-    /// Shares the placefile-icon texture cache with the webcam popup.
     fn open_damage_point(&mut self, p: &wxdata::dat::DamagePoint, ctx: &egui::Context) {
         let mut body = String::new();
         if !p.damage.is_empty() {
@@ -12714,7 +12834,8 @@ impl HookEchoApp {
             body.push_str(&format!("\n{c}\n"));
         }
         body.push_str(&format!("\nNWS {} survey (DAT)", p.office));
-        let key = p.image.as_ref().map(|url| format!("dat:{url}"));
+        let image = p.image.as_ref().map(|_| self.detail_image(PhotoSource::Survey));
+        let request = image.as_ref().map(|image| image.request);
         let color = ef_color(&p.efscale).to_array();
         self.detail = Some(Detail {
             title: format!(
@@ -12727,24 +12848,20 @@ impl HookEchoApp {
             ),
             body,
             color,
-            image: key.clone(),
+            image,
             link: None,
             stream: None,
         });
-        let (Some(key), Some(url)) = (key, p.image.clone()) else {
+        let (Some(request), Some(url)) = (request, p.image.clone()) else {
             return;
         };
-        if self.pf_icon_tex.contains_key(&key) {
-            return; // loaded, or already in flight
-        }
-        self.pf_icon_tex.insert(key.clone(), None);
         let http = self.http.clone();
         let tx = self.pf_icon_tx.clone();
         let ctx2 = ctx.clone();
         self.spawner.spawn(async move {
             match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), false).await {
                 Ok(image) => {
-                    let _ = tx.send((key, image));
+                    let _ = tx.send((ImageTarget::Detail(request), image));
                     ctx2.request_repaint();
                 }
                 Err(e) => log::warn!("survey photo {url} failed: {e}"),
@@ -12976,13 +13093,7 @@ impl HookEchoApp {
         if self.show_outages {
             v.extend(self.outage_features.iter().cloned());
         }
-        if self.filters.show_alerts {
-            for f in self.active_alert_features() {
-                if self.map_alert_visible(f) {
-                    v.push(f.clone());
-                }
-            }
-        }
+        self.alert_overlay_index = v.len();
         if self.show_probsevere {
             v.extend(self.probsevere.iter().cloned());
         }
@@ -13013,6 +13124,45 @@ impl HookEchoApp {
         }
         self.overlays = v;
         self.overlay_gen = self.overlay_gen.wrapping_add(1);
+    }
+
+    fn prepare_pane_overlay(&mut self, pane: usize, frame: DisplayedOverlayFrame) -> Arc<PaneOverlay> {
+        let warning_time = match frame {
+            DisplayedOverlayFrame::Scan(scan) => DateTime::from_timestamp(scan, 0).unwrap_or_else(Utc::now),
+            _ => Utc::now(),
+        };
+        let live_minute = if frame == DisplayedOverlayFrame::Live { warning_time.timestamp() / 60 } else { 0 };
+        let warning_generation = if matches!(frame, DisplayedOverlayFrame::Scan(_)) { self.archive_warning_generation } else { 0 };
+        let key = PaneOverlayKey { shared_generation: self.overlay_gen, archive_generation: warning_generation, frame, live_minute };
+        if let Some(prepared) = self.pane_overlays.iter().flatten().find(|prepared| prepared.key == key) {
+            let prepared = prepared.clone();
+            self.pane_overlays[pane] = Some(prepared.clone());
+            return prepared;
+        }
+
+        let alerts = frame.features(&self.alert_features, &self.arch_warns).iter()
+            .filter(|feature| self.filters.show_alerts && self.map_alert_visible(feature, warning_time)).cloned().collect();
+        self.pane_overlay_revision = self.pane_overlay_revision.wrapping_add(1);
+        let prepared = Arc::new(PaneOverlay { key, revision: self.pane_overlay_revision, alerts });
+        self.pane_overlays[pane] = Some(prepared.clone());
+        prepared
+    }
+
+    fn pane_warning_mesh(&mut self, pane: usize, overlay: &PaneOverlay, zoom: f64) -> Option<Arc<OverlayUpload>> {
+        if overlay.alerts.is_empty() {
+            self.pane_warning_meshes[pane] = None;
+            return None;
+        }
+        let bucket = (zoom * 2.0).round() as i32;
+        let key = (overlay.revision, bucket, self.settings.theme);
+        let mesh = self.pane_warning_meshes.iter().flatten().find(|(cached, _)| *cached == key)
+            .map(|(_, mesh)| mesh.clone()).unwrap_or_else(|| {
+                let geom = overlay_build::build_map_with_theme(&overlay.alerts, f64::from(bucket) / 2.0,
+                    self.settings.theme, self.filters.ero_border_px);
+                Arc::new(OverlayUpload { vertices: geom.vertices, indices: geom.indices })
+            });
+        self.pane_warning_meshes[pane] = Some((key, mesh.clone()));
+        Some(mesh)
     }
 
     /// Approximate map view range in nautical miles (viewport height), for placefile thresholds.
@@ -13183,14 +13333,21 @@ impl HookEchoApp {
         })
     }
 
-    /// Fetch + decode any icon sheet a loaded placefile references but we don't have yet, and
-    /// upload arrivals. `// ponytail: no disk cache — sheets are a few KB and refetch on launch.`
+    /// Upload decoded images and fetch missing icon sheets referenced by enabled placefiles.
     fn sync_pf_icons(&mut self, ctx: &egui::Context) {
-        while let Ok((url, image)) = self.pf_icon_rx.try_recv() {
-            let tex =
-                ctx.load_texture(format!("pficon:{url}"), image, egui::TextureOptions::LINEAR);
-            self.pf_icon_tex.insert(url, Some(tex));
-            self.placefile_label_cache = None;
+        while let Ok((target, image)) = self.pf_icon_rx.try_recv() {
+            match target {
+                ImageTarget::Placefile(url) => {
+                    let tex = ctx.load_texture(format!("pficon:{url}"), image, egui::TextureOptions::LINEAR);
+                    self.pf_icon_tex.insert(url, Some(tex));
+                    self.placefile_label_cache = None;
+                }
+                ImageTarget::Detail(request) => {
+                    if let Some(photo) = self.detail.as_mut().and_then(|detail| detail.image.as_mut()) {
+                        photo.receive(ctx, request, image);
+                    }
+                }
+            }
         }
         let wanted: Vec<String> = self
             .placefiles
@@ -13208,7 +13365,7 @@ impl HookEchoApp {
             self.spawner.spawn(async move {
                 match fetch_icon_sheet(&http, &url, ctx2.input(|i| i.max_texture_side), true).await {
                     Ok(image) => {
-                        let _ = tx.send((url, image));
+                        let _ = tx.send((ImageTarget::Placefile(url), image));
                         ctx2.request_repaint();
                     }
                     Err(e) => note_feed_error("Placefile icons", format!("{url}: {e}")),
@@ -15335,6 +15492,7 @@ impl HookEchoApp {
     ) {
         crate::prof_scope!("render_pane");
         self.labels.begin_pane();
+        let mut pane_overlay = self.prepare_pane_overlay(idx, self.pane_warning_frame(idx));
         let trace_started = crate::map_trace::enabled().then(Instant::now);
         let mut place_label_work = 0;
         let mut place_label_budget = crate::map_work::LabelBudget::default();
@@ -15759,7 +15917,7 @@ impl HookEchoApp {
                     && cam_site.is_none()
                     && dotcam_hit.is_none()
                     && tool == MapTool::Interrogate
-                    && self.show_dat)
+                    && self.dat_request.shows(self.damage_survey_key(idx, vp)))
                     .then(|| {
                         self.dat_points
                             .iter()
@@ -16115,7 +16273,9 @@ impl HookEchoApp {
                                 None => {
                                     // Warnings/watches open the warning window (deduped by alert id
                                     // across MultiPolygon parts); other features use the generic popup.
-                                    let hits = overlay::hit_all(&self.overlays, lon, lat);
+                                    let (before, after) = self.overlays.split_at(self.alert_overlay_index);
+                                    let features = crate::field_atlas::Features([before, &pane_overlay.alerts, after]);
+                                    let hits = overlay::hit_all(features.iter(), lon, lat);
                                     let mut seen = std::collections::HashSet::new();
                                     let mut cards: Vec<ui::warning_window::WarnCard> = hits
                                         .iter()
@@ -16301,6 +16461,14 @@ impl HookEchoApp {
             draw_radar = false;
         }
         if !draw_radar { self.views[idx].clear_presentation(); }
+        let view = &self.views[idx];
+        let radar_changing = radar_upload.is_some() && view.presented_time() != view.displayed_time();
+        if radar_changing {
+            ctx.request_repaint();
+            if pane_overlay.key.frame != DisplayedOverlayFrame::Live || !view.decoded_live_frame() {
+                pane_overlay = self.prepare_pane_overlay(idx, DisplayedOverlayFrame::WaitingForScan);
+            }
+        }
 
         // Field layers: upload freshly-fetched grids on the first pane; every pane draws the
         // currently-enabled layers.
@@ -16403,6 +16571,7 @@ impl HookEchoApp {
                 labels: vlabels.len(), prepare_ms: started.elapsed().as_secs_f32() * 1000.0,
             });
         }
+        let warning_overlay = self.pane_warning_mesh(idx, &pane_overlay, cam.zoom);
         let cb = MapCallback {
             pane: idx as u32,
             retain_only_pane: (chrome::compact(ctx) && self.views.len() > 1).then_some(idx as u32),
@@ -16427,6 +16596,7 @@ impl HookEchoApp {
                 None
             },
             draw_overlay: self.overlay_ready,
+            warning_overlay,
             field_uploads,
             field_draws,
             drop_fields,
@@ -17191,8 +17361,14 @@ impl HookEchoApp {
             }
         }
 
-        self.field_atlas.draw(ui, idx, self.overlay_gen, &self.overlays, prect, cam,
-            crate::theme::overlay_stroke_scale(self.settings.theme));
+        let (before, after) = self.overlays.split_at(self.alert_overlay_index);
+        let features = crate::field_atlas::Features([before, &pane_overlay.alerts, after]);
+        if self.field_atlas[idx].draw(ui, idx, pane_overlay.revision, features, prect, cam,
+            crate::theme::overlay_stroke_scale(self.settings.theme)) {
+            if let Some(previous) = self.field_atlas_open_pane.replace(idx).filter(|previous| *previous != idx) {
+                self.field_atlas[previous].dismiss_list();
+            }
+        }
 
         // Storm-cell dots + SCIT forecast tracks.
         if self.filters.show_cells && self.cells_site.as_deref() == view.site.as_deref() {
@@ -17942,7 +18118,7 @@ impl HookEchoApp {
 
         // Damage surveys: the fitted path first, then a dot per surveyed indicator coloured by its
         // EF rating, so the rating gradient along the track reads at a glance.
-        if self.show_dat {
+        if !radar_changing && self.dat_request.shows(self.damage_survey_key(idx, vp)) {
             let to_screen = |lon: f64, lat: f64| {
                 let w = crate::render::mercator::lonlat_to_world(lon, lat);
                 let (sx, sy) = cam.world_to_screen(w, vp);
@@ -18174,10 +18350,9 @@ impl HookEchoApp {
             // Indices, not strings: the `take(6)` below drew six of them however many marker ×
             // warning pairs were formatted.
             let mut etas: Vec<(f64, usize, usize)> = Vec::new();
-            let features = self.active_alert_features();
+            let features = &pane_overlay.alerts;
             for (fi, f) in features.iter().enumerate() {
                 let Some(a) = &f.alert else { continue };
-                if !self.map_alert_visible(f) { continue; }
                 // Motion vector + projected path (heading = FROM + 180).
                 let Some(m) = &a.motion else { continue };
                 let Some(&origin) = m.points.first() else {
@@ -20360,6 +20535,9 @@ impl HookEchoApp {
             // discarded rather than retaining tessellated geometry until the pane reopens.
             self.pane_vtiles[idx] = crate::vector_tiles::VectorTileManager::new(self.spawner.clone());
             self.vlabel_cache[idx] = None;
+            self.pane_overlays[idx] = None;
+            self.pane_warning_meshes[idx] = None;
+            self.field_atlas[idx] = Default::default();
         }
         self.pane_custom_sweep.retain(|idx, _| *idx < n);
         self.pane_custom_input.retain(|idx, _| *idx < n);
@@ -23512,8 +23690,12 @@ impl eframe::App for HookEchoApp {
             self.persistence_focused = focused;
         }
         let reconnected = crate::platform::network_recovered();
-        if let (true, Some((_, retry_at))) = (reconnected, self.arch_warn_retry.as_mut()) {
-            *retry_at = Instant::now();
+        if reconnected {
+            let now = Instant::now();
+            for request in self.arch_warning_requests.wanted.values_mut() {
+                if let Some(retry_at) = &mut request.retry_at { *retry_at = now; }
+            }
+            if let Some(retry_at) = &mut self.dat_request.retry_at { *retry_at = now; }
         }
         if let (true, Some((_, retry_at))) = (reconnected, self.arch_lsr_retry.as_mut()) {
             *retry_at = Instant::now();
@@ -25329,14 +25511,9 @@ impl eframe::App for HookEchoApp {
         let secondary_chrome_started = Instant::now();
         self.refresh_chaser_detail();
         if let Some(detail) = &self.detail {
-            let tex = detail
-                .image
-                .as_ref()
-                .and_then(|k| self.pf_icon_tex.get(k))
-                .and_then(|t| t.as_ref());
             let mut play_stream = None;
             let mut open_ero_discussion = false;
-            let open = ui::detail_window::show(ctx, detail, tex, &mut self.popovers, &mut play_stream, &mut open_ero_discussion);
+            let open = ui::detail_window::show(ctx, detail, &mut self.popovers, &mut play_stream, &mut open_ero_discussion);
             if let Some(url) = play_stream {
                 self.watch_stream(detail.title.clone(), url);
             }
@@ -25513,8 +25690,13 @@ impl eframe::App for HookEchoApp {
         if !self.obs_mode {
             self.chase_hud(ctx);
         }
-        if let Some(i) = self.field_atlas.show_list(ctx, self.overlay_gen, &self.overlays) {
-            if let Some(f) = self.overlays.get(i) {
+        if let Some(pane) = self.field_atlas_open_pane.filter(|pane| *pane < self.views.len()) {
+            let prepared = self.prepare_pane_overlay(pane, self.pane_warning_frame(pane));
+            let (before, after) = self.overlays.split_at(self.alert_overlay_index);
+            let features = crate::field_atlas::Features([before, &prepared.alerts, after]);
+            let feature = self.field_atlas[pane].show_list(ctx, prepared.revision, features)
+                .and_then(|i| features.get(i));
+            if let Some(f) = feature {
                 if let Some(info) = &f.alert {
                     self.detail = None;
                     self.warning_popup = Some(ui::warning_window::WarningPopup {
@@ -26370,6 +26552,90 @@ mod warning_scope_tests {
             .unwrap()
             .contains("below"));
         assert_eq!(sampled_height_warning("dBZ", 50.0, coverage, 0.3), None);
+    }
+
+    #[test]
+    fn pane_warnings_follow_their_own_clock_and_share_requests() {
+        use super::{ArchiveWarningRequests, DisplayedOverlayFrame};
+        use std::num::NonZeroUsize;
+        use wxdata::clock::Instant;
+        let mut live = poly(-98.0, 32.0, -97.0, 33.0);
+        live.title = "live".into();
+        let mut historical = poly(-96.0, 32.0, -95.0, 33.0);
+        historical.title = "historical".into();
+        let live = [live];
+        let mut cache = lru::LruCache::new(NonZeroUsize::new(4).unwrap());
+        let now = Instant::now();
+        let scan = DisplayedOverlayFrame::Scan(42);
+        let panes = [DisplayedOverlayFrame::Live, scan, scan];
+        let mut requests = ArchiveWarningRequests::default();
+        requests.set_wanted(&panes, now);
+        assert_eq!(requests.wanted.len(), 1, "linked scans share one request");
+        assert_eq!(panes[0].features(&live, &cache)[0].title, "live");
+        assert!(panes[1].features(&live, &cache).is_empty());
+        cache.put(42, vec![historical]);
+        for pane in [2, 0, 1] {
+            let expected = if pane == 0 { "live" } else { "historical" };
+            assert_eq!(panes[pane].features(&live, &cache)[0].title, expected);
+        }
+        requests.wanted.get_mut(&42).unwrap().slot = Some(0);
+        assert!(requests.set_wanted(&[scan], now).is_empty());
+        assert_eq!(requests.set_wanted(&[DisplayedOverlayFrame::Scan(43)], now), vec![0]);
+        assert!(requests.wanted.contains_key(&43));
+    }
+
+    #[test]
+    fn returning_live_holds_the_historical_warning_clock_until_the_new_scan_paints() {
+        use super::{Arc, DisplayedOverlayFrame, MapView, Utc, level2};
+        use crate::render::mercator::Camera;
+        let scan = Arc::new(level2::decode_volume(include_bytes!("../../wxdata/tests/data/kdmx-one-sweep.bin").to_vec()).unwrap());
+        let mut view = MapView::new(Some("KDMX".into()), Camera::at_lonlat(-93.7, 41.7, 6.0));
+        let archive = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+        let live = Utc::now();
+        let id = level2::Identifier::new(format!("KDMX{}", live.format("%Y%m%d_%H%M%S")));
+        view.custom_product = Some("fixture".into());
+        view.timeline.following = false;
+        view.show_volume(scan.clone(), "historical".into(), archive);
+        assert!(matches!(DisplayedOverlayFrame::warnings(&view), DisplayedOverlayFrame::WaitingForScan));
+        view.stage_presentation(1);
+        view.acknowledge_presentation(1);
+        view.timeline.go_head();
+        assert!(matches!(DisplayedOverlayFrame::warnings(&view), DisplayedOverlayFrame::Scan(1_000)));
+        view.timeline.append_head(id.clone());
+        view.show_volume(scan, id.name().into(), live);
+        view.stage_presentation(2);
+        view.acknowledge_presentation(1);
+        assert!(matches!(DisplayedOverlayFrame::warnings(&view), DisplayedOverlayFrame::Scan(1_000)));
+        view.acknowledge_presentation(2);
+        assert!(matches!(DisplayedOverlayFrame::warnings(&view), DisplayedOverlayFrame::Live));
+
+        view.timeline.following = false;
+        view.acknowledge_presentation(2);
+        assert!(!view.presented_as_live(), "pausing without a new paint retires the live marker");
+    }
+
+    #[test]
+    fn damage_surveys_hide_previous_data_and_retry_the_current_key() {
+        use super::DamageSurveyRequest;
+        use std::time::Duration;
+        use wxdata::clock::Instant;
+        let day = chrono::NaiveDate::from_ymd_opt(2024, 4, 26).unwrap();
+        let first = ((-98.0, 32.0, -97.0, 33.0), day);
+        let second = (first.0, day.succ_opt().unwrap());
+        let now = Instant::now();
+        let mut request = DamageSurveyRequest::default();
+        request.select(Some(first));
+        assert_eq!(request.next(now), Ok(Some(first)));
+        request.begin(first);
+        request.finish(first);
+        assert!(request.shows(Some(first)));
+        request.select(Some(second));
+        assert!(!request.shows(Some(second)));
+        request.begin(second);
+        assert_eq!(request.next(now), Ok(None));
+        request.fail(now);
+        assert_eq!(request.next(now), Err(Duration::from_secs(15)));
+        assert_eq!(request.next(now + Duration::from_secs(15)), Ok(Some(second)));
     }
 }
 

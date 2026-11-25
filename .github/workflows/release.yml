@@ -1,8 +1,11 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+  push:
     tags: ["v*"]
   workflow_dispatch:
 
@@ -11,11 +14,24 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  # A skipped CI completion must not evict an eligible release from the queue.
+  group: >-
+    release-${{ github.event_name == 'workflow_run' &&
+      (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.event != 'push' ||
+      github.event.workflow_run.head_repository.full_name != github.repository ||
+      github.event.workflow_run.head_sha != github.sha) && github.run_id || github.ref }}
   cancel-in-progress: false
 
 jobs:
   verify:
+    # workflow_run uses the default branch's SHA. Only build if CI tested that same revision.
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_sha == github.sha
+      )
     name: Require successful CI for this commit
     runs-on: ubuntu-latest
     permissions:

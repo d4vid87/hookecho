@@ -56,6 +56,7 @@ class AlertWidget : AppWidgetProvider() {
             // Tapping opens the app at the first watched point (site left empty: keep the current
             // radar, just fly there), same deep-link string the notifications use.
             val intent = Intent(context, MainActivity::class.java)
+                .setAction("io.hookecho.HookEcho.OPEN_ALERT_WIDGET")
                 .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             watch?.let {
                 intent.putExtra(MainActivity.EXTRA_GOTO, Nws.gotoPoint(it.lon, it.lat))

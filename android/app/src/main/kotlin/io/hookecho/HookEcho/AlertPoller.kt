@@ -11,6 +11,7 @@ internal class AlertPoller(private val clock: () -> Long = System::nanoTime) {
         val incomplete: List<String> = emptyList(),
         val cancelled: Boolean = false,
         val error: String? = null,
+        val nextRequest: Int = 0,
     ) {
         val complete: Boolean get() = watched.isNotEmpty() && successfulRequests > 0 &&
             failedRequests == 0 && incomplete.isEmpty() && !cancelled && error == null
@@ -53,6 +54,8 @@ internal class AlertPoller(private val clock: () -> Long = System::nanoTime) {
 
     companion object {
         const val BUDGET_NANOS = 45_000_000_000L
+        private const val REQUEST_CAP = 40
+        private const val HOME_LEAD_NANOS = 5_000_000_000L
 
         fun deliverIfNew(
             seen: MutableSet<String>,
@@ -72,52 +75,84 @@ internal class AlertPoller(private val clock: () -> Long = System::nanoTime) {
             point: (Double, Double, Long, () -> Boolean) -> Nws.AlertResponse = Nws::alertsAt,
             area: (Double, Double, Double, Long, () -> Boolean) -> Nws.AlertResponse = Nws::alertsWithin,
             clock: () -> Long = System::nanoTime,
+            startAt: Int = 0,
         ): Result {
             var hot = false
             var successful = 0
             var failed = 0
             val lines = linkedSetOf<String>()
-            val incomplete = watched.filter { it.samples.size < it.requestedSamples }.mapTo(linkedSetOf()) { it.name }
-            val remaining = watched.map { it.samples.size + if (it.home && it.samples.isNotEmpty()) 1 else 0 }.toIntArray()
+            val incomplete = linkedSetOf<String>()
+            val requests = buildList<Pair<Int, DoubleArray?>>() {
+                // Home checks retain their speech priority. Elsewhere, check centres before rims.
+                for ((index, watch) in watched.withIndex()) {
+                    if (watch.home && watch.samples.isNotEmpty()) {
+                        add(index to null)
+                        for (sample in watch.samples) add(index to sample)
+                    }
+                }
+                val others = watched.withIndex().filter { !it.value.home }
+                for (sample in 0 until (others.maxOfOrNull { it.value.samples.size } ?: 0)) {
+                    for ((index, watch) in others) {
+                        watch.samples.getOrNull(sample)?.let { add(index to it) }
+                    }
+                }
+            }
+            val remaining = IntArray(watched.size)
+            for ((index, _) in requests) remaining[index]++
             fun continuing() = shouldContinue() && clock() < deadline
-            fun request(index: Int, sample: DoubleArray?): Boolean {
-                if (!continuing()) return false
+            var attempted = 0
+            fun checkRequest(position: Int, requestDeadline: Long): Boolean {
+                val (index, sample) = requests[position]
+                attempted++
                 val watch = watched[index]
-                val response = if (sample == null) area(watch.lat, watch.lon, 30.0, deadline, shouldContinue)
-                    else point(sample[0], sample[1], deadline, shouldContinue)
+                val response = if (sample == null) area(watch.lat, watch.lon, 30.0, requestDeadline, shouldContinue)
+                    else point(sample[0], sample[1], requestDeadline, shouldContinue)
                 if (!continuing()) return false
-                remaining[index]--
                 if (response.successful) successful++ else {
                     failed++
                     incomplete.add(watch.name)
                 }
                 for (alert in response.alerts) {
-                    if (!continuing()) { incomplete.add(watch.name); return false }
+                    if (!continuing()) return false
                     if (alert.tier >= Nws.TIER_WARNING) hot = true
                     lines.add("${alert.event} — ${watch.name}")
                     onAlert(watch, alert, sample == null || Nws.speaksAt(watch, sample))
                 }
+                remaining[index]--
                 return true
             }
-            // Homes retain notification/speech priority; other places check centres before rims.
-            checking@ do {
-                for ((index, watch) in watched.withIndex()) {
-                    if (watch.home && watch.samples.isNotEmpty()) {
-                        if (!request(index, null)) break@checking
-                        for (sample in watch.samples) if (!request(index, sample)) break@checking
-                    }
+            val start = startAt.takeIf { it in requests.indices } ?: 0
+            // Give earlier home checks another chance to speak first, reserving time and slots
+            // for continuation. Count these checks against the same cap and skip them on wrap.
+            val homeDeadline = minOf(deadline, clock() + HOME_LEAD_NANOS)
+            val homeLimit = minOf(start, REQUEST_CAP / 2)
+            var homePrefix = 0
+            while (homePrefix < homeLimit && watched[requests[homePrefix].first].home &&
+                shouldContinue() && clock() < homeDeadline) {
+                if (!checkRequest(homePrefix, homeDeadline)) break
+                homePrefix++
+            }
+            var advanced = 0
+            var attemptedContinuation = false
+            while (advanced < requests.size && continuing()) {
+                val position = (start + advanced) % requests.size
+                if (position >= homePrefix) {
+                    if (attempted == REQUEST_CAP) break
+                    attemptedContinuation = true
+                    if (!checkRequest(position, deadline)) break
                 }
-                for ((index, watch) in watched.withIndex()) {
-                    if (!watch.home && watch.samples.isNotEmpty() && !request(index, watch.samples.first())) break@checking
-                }
-                for (sample in 1 until (watched.maxOfOrNull { it.samples.size } ?: 0)) {
-                    for ((index, watch) in watched.withIndex()) {
-                        if (!watch.home && sample < watch.samples.size && !request(index, watch.samples[sample])) break@checking
-                    }
-                }
-            } while (false)
+                advanced++
+            }
             for ((index, count) in remaining.withIndex()) if (count > 0) incomplete.add(watched[index].name)
-            return Result(watched, lines.toList(), hot, successful, failed, incomplete.toList(), !shouldContinue())
+            // Retry the first unfinished request next time. If one request used the entire budget,
+            // advance anyway so a persistently slow point cannot block the rest of the list.
+            val nextRequest = when {
+                advanced == requests.size -> 0
+                advanced == 0 && attemptedContinuation -> (start + 1) % requests.size
+                else -> (start + advanced) % requests.size
+            }
+            return Result(watched, lines.toList(), hot, successful, failed, incomplete.toList(),
+                !shouldContinue(), nextRequest = nextRequest)
         }
     }
 }

@@ -3,9 +3,9 @@ package io.hookecho.HookEcho
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.math.BigDecimal
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Locale
 
 /**
  * The watched-points alert lookup, shared by the background service and the home-screen widget.
@@ -33,7 +33,6 @@ object Nws {
         val lon: Double,
         val samples: List<DoubleArray>,
         val home: Boolean = false,
-        val requestedSamples: Int = samples.size,
     )
 
     data class Alert(val id: String, val event: String, val headline: String, val tier: Int)
@@ -76,9 +75,6 @@ object Nws {
     /** Vertices sampled per drawn zone, evenly spaced around its ring. */
     private const val ZONE_POINTS = 8
 
-    /** Ceiling on `?point=` requests per pass; api.weather.gov is not ours to hammer. */
-    private const val SAMPLE_CAP = 40
-
     /**
      * Saved markers and drawn zones from settings.json — the same file the Rust app reads and
      * writes (`markers[].name/lat/lon/alert_radius_mi`, `alert_polygons[].name/ring`).
@@ -120,32 +116,25 @@ object Nws {
                 val p = ring.optJSONArray(k) ?: return@mapNotNull null
                 val lon = p.optDouble(0)
                 val lat = p.optDouble(1)
-                if (lat.isFinite() && lon.isFinite()) doubleArrayOf(lat, lon) else null
+                if (lat.isFinite() && lon.isFinite()) doubleArrayOf(lat, Math.IEEEremainder(lon, 360.0)) else null
             }
             if (pts.isEmpty()) continue
-            val lat = pts.sumOf { it[0] } / pts.size
-            val lon = pts.sumOf { it[1] } / pts.size
+            val anchor = pts.first()
+            val meanLat = pts.sumOf { it[0] } / pts.size
+            val meanLon = Math.IEEEremainder(anchor[1] + pts.sumOf {
+                Math.IEEEremainder(it[1] - anchor[1], 360.0)
+            } / pts.size, 360.0)
+            // A concave zone can exclude its vertex average. Use a point on the ring in that case.
+            val target = if (ringContact(ring, meanLat, meanLon, 0.0) == RingContact.OUTSIDE) anchor
+                else doubleArrayOf(meanLat, meanLon)
             val step = maxOf(1, pts.size / ZONE_POINTS)
             val samples = ArrayList<DoubleArray>()
-            samples.add(doubleArrayOf(lat, lon))
-            for (k in pts.indices step step) samples.add(pts[k])
-            out.add(Watch(z.optString("name", "Watch zone"), lat, lon, samples))
+            samples.add(target)
+            for (k in pts.indices step step) if (!pts[k].contentEquals(target)) samples.add(pts[k])
+            out.add(Watch(z.optString("name", "Watch zone"), target[0], target[1], samples))
         }
 
-        // Cover every centre before spending requests on rims; retain unchecked places so the
-        // result can disclose incomplete coverage instead of silently calling it all quiet.
-        val ordered = out.sortedByDescending { it.home }
-        val counts = IntArray(ordered.size)
-        var budget = SAMPLE_CAP
-        for (sample in 0 until (ordered.maxOfOrNull { it.samples.size } ?: 0)) {
-            for ((index, watch) in ordered.withIndex()) {
-                if (budget > 0 && sample < watch.samples.size) {
-                    counts[index]++
-                    budget--
-                }
-            }
-        }
-        return ordered.mapIndexed { index, watch -> watch.copy(samples = watch.samples.take(counts[index])) }
+        return out.sortedByDescending { it.home }
     }
 
     fun speaksAt(watch: Watch, sample: DoubleArray): Boolean {
@@ -173,15 +162,18 @@ object Nws {
         return doubleArrayOf(Math.toDegrees(la2), Math.toDegrees(lo2))
     }
 
+    // Rounding can move a checked point outside a small zone or off its boundary.
+    private fun coordinate(value: Double): String = BigDecimal.valueOf(value).toPlainString()
+
     fun pointUrl(lat: Double, lon: Double): String =
-        "https://api.weather.gov/alerts/active?point=%.4f,%.4f".format(Locale.ROOT, lat, lon)
+        "https://api.weather.gov/alerts/active?point=${coordinate(lat)},${coordinate(lon)}"
 
     fun gotoPoint(lon: Double, lat: Double): String =
-        ",%.4f,%.4f,9".format(Locale.ROOT, lon, lat)
+        ",${coordinate(lon)},${coordinate(lat)},9"
 
     internal fun coverageKey(watched: List<Watch>): String = org.json.JSONArray(watched.map { watch ->
         JSONObject().put("name", watch.name).put("lat", watch.lat).put("lon", watch.lon)
-            .put("home", watch.home).put("requested", watch.requestedSamples)
+            .put("home", watch.home)
             .put("samples", org.json.JSONArray(watch.samples.map { org.json.JSONArray(it.toList()) }))
     }).toString()
 

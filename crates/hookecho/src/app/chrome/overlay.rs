@@ -129,7 +129,11 @@ impl HookEchoApp {
             });
             ui::alert_panel::FeedStatus {
                 archived: frame != DisplayedOverlayFrame::Live,
-                archive_notice: frame.notice(&self.arch_warns, self.arch_warn_retry.map(|(scan, _)| scan)),
+                archive_notice: frame.notice(&self.arch_warns, match frame {
+                    DisplayedOverlayFrame::Scan(scan) if self.arch_warning_requests.wanted.get(&scan)
+                        .is_some_and(|request| request.retry_at.is_some()) => Some(scan),
+                    _ => None,
+                }),
                 view_covered: self.alert_coverage.covers(bounds),
                 saved_places_covered,
                 last_success: health.last_success,

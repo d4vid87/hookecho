@@ -121,6 +121,20 @@ pub fn decode_with_stamp(bytes: Vec<u8>) -> anyhow::Result<(DateTime<Utc>, Scan,
     let time = timestamp(&root_what, "date", "time")
         .ok_or_else(|| anyhow::anyhow!("odim: no usable /what/date and /what/time"))?;
     let root_where = f.attributes("where").map_err(|e| anyhow::anyhow!("{e}"))?;
+    let minor_version = text(&f.attributes("").unwrap_or_default(), "Conventions")
+        .and_then(|version| version.strip_prefix("ODIM_H5/V2_"))
+        .and_then(|minor| minor.parse::<u8>().ok())
+        .or_else(|| {
+            text(&root_what, "version")
+                .and_then(|version| version.strip_prefix("H5rad 2."))
+                .and_then(|minor| minor.split('.').next()?.parse().ok())
+        });
+    // ODIM 2.4 switched rstart from kilometers to meters.
+    let rstart_multiplier = if minor_version.is_some_and(|minor| minor >= 4) {
+        1.0
+    } else {
+        1000.0
+    };
 
     // Sweep groups are `dataset<n>`, and `dataset10` must not sort before `dataset2`.
     let mut groups: Vec<(u32, String)> = f
@@ -132,7 +146,7 @@ pub fn decode_with_stamp(bytes: Vec<u8>) -> anyhow::Result<(DateTime<Utc>, Scan,
 
     let mut sweeps = Vec::new();
     for (i, (_, group)) in groups.iter().enumerate() {
-        match sweep(&f, group, i as u8 + 1) {
+        match sweep(&f, group, i as u8 + 1, rstart_multiplier) {
             Ok(Some(s)) => sweeps.push(s),
             Ok(None) => {}
             // One unreadable elevation shouldn't cost the whole volume.
@@ -194,7 +208,7 @@ fn site_identifier(source: &str) -> [u8; 4] {
 }
 
 /// Build one sweep from a `dataset<n>` group, or `None` when it holds no moment we can use.
-fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Result<Option<Sweep>> {
+fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8, rstart_multiplier: f64) -> anyhow::Result<Option<Sweep>> {
     let attrs = |p: String| f.attributes(&p).map_err(|e| anyhow::anyhow!("{e}"));
     let w = attrs(format!("{group}/where"))?;
     let (nrays, nbins) = (
@@ -203,8 +217,7 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
     );
     let elevation = num(&w, "elangle").unwrap_or(0.0) as f32;
     let rscale = num(&w, "rscale").unwrap_or(0.0);
-    // `rstart` is the one ODIM range field in kilometres, not metres.
-    let rstart_m = num(&w, "rstart").unwrap_or(0.0) * 1000.0;
+    let rstart_m = num(&w, "rstart").unwrap_or(0.0) * rstart_multiplier;
     if nrays == 0 || nrays > u16::MAX as usize || nbins == 0 || nbins > u16::MAX as usize || rscale <= 0.0 {
         anyhow::bail!("{group}: nrays={nrays} nbins={nbins} rscale={rscale}");
     }
@@ -213,7 +226,8 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
     let gate_interval = rscale as u16;
 
     let what = attrs(format!("{group}/what")).unwrap_or_default();
-    let start = timestamp(&what, "startdate", "starttime");
+    let start_ms = timestamp(&what, "startdate", "starttime").map(|time| time.timestamp_millis());
+    let end_ms = timestamp(&what, "enddate", "endtime").map(|time| time.timestamp_millis());
 
     let mut moments: [Option<Moment>; 6] = Default::default();
     for child in f.children(group).map_err(|e| anyhow::anyhow!("{e}"))? {
@@ -229,11 +243,22 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
     }
 
     // NI is the instrument's Nyquist interval in m/s, never inferred from observed gates.
-    let how = f.attributes_with_arrays(&format!("{group}/how"), &[("startazA", nrays), ("stopazA", nrays)])
+    let how = f.attributes_with_arrays(&format!("{group}/how"), &[
+        ("startazA", nrays), ("stopazA", nrays), ("startT", nrays), ("startazT", nrays),
+    ]).unwrap_or_default();
+    let root_how = f.attributes_with_arrays("how", &[("startT", nrays), ("startazT", nrays)])
         .unwrap_or_default();
     let nyquist = num(&how, "NI")
-        .or_else(|| f.attributes("how").ok().and_then(|how| num(&how, "NI")))
+        .or_else(|| num(&root_how, "NI"))
         .filter(|v| v.is_finite() && *v > 0.0).map(|v| v as f32);
+    let ray_times: Vec<_> = [&how, &root_how].into_iter()
+        .flat_map(|attrs| ["startT", "startazT"].into_iter().filter_map(|key| {
+            match attrs.get(key) {
+                Some(Value::Numbers(times)) => Some(times),
+                _ => None,
+            }
+        }))
+        .collect();
     let spacing = 360.0 / nrays as f32;
     let azimuths = match (how.get("startazA"), how.get("stopazA")) {
         (Some(Value::Numbers(starts)), Some(Value::Numbers(stops))) =>
@@ -261,8 +286,19 @@ fn sweep(f: &hdf5lite::File, group: &str, elevation_number: u8) -> anyhow::Resul
             }
             let [refl, vel, sw, zdr, phi, rho] = slots;
             let (azimuth, width) = azimuths.as_ref().map_or(((i as f32 + 0.5) * spacing, spacing), |angles| angles[i]);
+            let collected_at = ray_times.iter().map(|times| times[i])
+                .filter(|time| time.is_finite() && *time > 0.0)
+                .map(|time| (time * 1_000.0).round() as i64)
+                .find(|&at| {
+                    // Dataset timestamps have whole-second precision.
+                    DateTime::from_timestamp_millis(at).is_some()
+                        && start_ms.is_none_or(|start| at >= start - 1_000)
+                        && end_ms.is_none_or(|end| at <= end + 1_000)
+                })
+                .or(start_ms)
+                .unwrap_or_default();
             Radial::new(
-                start.map(|t| t.timestamp_millis()).unwrap_or(0),
+                collected_at,
                 i as u16,
                 azimuth,
                 width,
@@ -490,6 +526,31 @@ mod tests {
         let (_, scan) = decode(std::fs::read(path).unwrap()).unwrap();
         assert!(scan.sweeps()[0].radials().iter().all(|radial|
             radial.nyquist_velocity_mps().is_some_and(|value| (value - 31.9683).abs() < 0.001)));
+    }
+
+    #[test]
+    fn dwd_cut_uses_per_ray_collection_times() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/dwd-boo-tilt00.h5");
+        let (_, scan) = decode(std::fs::read(path).unwrap()).unwrap();
+        let cut = crate::level2::cut_chronology(&scan)[0];
+        assert_eq!(cut.started_at_ms, 1_787_627_135_453);
+        assert_eq!(cut.ended_at_ms, 1_787_627_157_894);
+    }
+
+    #[test]
+    fn swedish_scan_uses_current_odim_collection_times() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../hdf5lite/tests/data/seang.h5");
+        let (_, scan) = decode(std::fs::read(p).unwrap()).unwrap();
+        let radial = &scan.sweeps()[0].radials()[0];
+        assert_eq!(radial.collection_timestamp(), 1_792_049_427_021);
+    }
+
+    #[test]
+    fn odim_24_range_start_is_in_meters() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/esahr.h5");
+        let (_, scan) = decode(std::fs::read(p).unwrap()).unwrap();
+        let sweep = crate::level2::bin_scan(&scan, crate::level2::Moment::Reflectivity, 0).unwrap();
+        assert!((sweep.first_gate_km - 0.450).abs() < 1e-6, "{}", sweep.first_gate_km);
     }
 
     #[test]

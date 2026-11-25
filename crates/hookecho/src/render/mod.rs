@@ -696,6 +696,8 @@ pub struct MapCallback {
     /// `Some` only when the overlay geometry changed (else the last upload is reused).
     pub overlay_upload: Option<OverlayUpload>,
     pub draw_overlay: bool,
+    /// Pane-specific alerts. The shared overlay buffer holds the other map layers.
+    pub warning_overlay: Option<std::sync::Arc<OverlayUpload>>,
     /// Drop all cached GPU tiles before uploading (basemap style changed).
     pub clear_tiles: bool,
     /// Individual tiles the tile manager evicted; freed before this frame's uploads. Eviction is
@@ -847,6 +849,7 @@ struct PaneGpu {
     frame_draw_radar: bool,
     frame_draw_wind: bool,
     frame_draw_overlay: bool,
+    warning_overlay: Option<(std::sync::Weak<OverlayUpload>, OverlayGpu)>,
     /// Field layers this pane draws this frame. Per-pane, not shared: two panes are how you look
     /// at two fields at once.
     field_draws: Vec<FieldLayer>,
@@ -1318,6 +1321,7 @@ impl RenderResources {
                 frame_draw_radar: false,
                 frame_draw_wind: false,
                 frame_draw_overlay: false,
+                warning_overlay: None,
                 field_draws: Vec::new(),
             }
         })
@@ -1834,6 +1838,14 @@ impl RenderResources {
 
         self.pane_mut(device, cb.pane);
         let pane = self.panes.get_mut(&cb.pane).unwrap();
+        if let Some(upload) = &cb.warning_overlay {
+            let key = std::sync::Arc::downgrade(upload);
+            if pane.warning_overlay.as_ref().is_none_or(|(previous, _)| !previous.ptr_eq(&key)) {
+                pane.warning_overlay = Self::overlay_buffers(device, upload).map(|gpu| (key, gpu));
+            }
+        } else {
+            pane.warning_overlay = None;
+        }
         // Camera uniforms can move without changing the tile cover. Only a new cover or a
         // residency change needs the ancestor/descendant search; other panes cannot affect it.
         let vector_changed = pane.vector_selection.update(
@@ -1913,9 +1925,12 @@ impl RenderResources {
     }
 
     fn upload_overlay(&mut self, device: &wgpu::Device, o: &OverlayUpload) {
+        self.overlay = Self::overlay_buffers(device, o);
+    }
+
+    fn overlay_buffers(device: &wgpu::Device, o: &OverlayUpload) -> Option<OverlayGpu> {
         if o.indices.is_empty() {
-            self.overlay = None;
-            return;
+            return None;
         }
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("overlay_vbuf"),
@@ -1927,11 +1942,11 @@ impl RenderResources {
             contents: bytemuck::cast_slice(&o.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        self.overlay = Some(OverlayGpu {
+        Some(OverlayGpu {
             vbuf,
             ibuf,
             index_count: o.indices.len() as u32,
-        });
+        })
     }
 
     /// Build a national field-layer (MRMS mosaic or lightning): R8 index texture + LUT texture +
@@ -2158,15 +2173,15 @@ impl RenderResources {
         if pane.frame_draw_wind {
             if let Some(wind) = self.wind.get(&id) { wind.draw(id, pass); }
         }
-        if pane.frame_draw_overlay {
-            if let Some(overlay) = &self.overlay {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_bind_group(0, cam, &[]);
-                pass.set_vertex_buffer(0, overlay.vbuf.slice(..));
-                pass.set_vertex_buffer(1, pane.vector_copy_buf.slice(..));
-                pass.set_index_buffer(overlay.ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..overlay.index_count, 0, 0..1);
-            }
+        let shared_overlay = self.overlay.as_ref().filter(|_| pane.frame_draw_overlay);
+        let pane_warnings = pane.warning_overlay.as_ref().map(|(_, overlay)| overlay);
+        for overlay in shared_overlay.into_iter().chain(pane_warnings) {
+            pass.set_pipeline(&self.overlay_pipeline);
+            pass.set_bind_group(0, cam, &[]);
+            pass.set_vertex_buffer(0, overlay.vbuf.slice(..));
+            pass.set_vertex_buffer(1, pane.vector_copy_buf.slice(..));
+            pass.set_index_buffer(overlay.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..overlay.index_count, 0, 0..1);
         }
     }
 
@@ -2291,6 +2306,7 @@ impl RenderResources {
         let mut shadows = 0;
         for pane in self.panes.values() {
             gpu += pane.camera_buf.size() + pane.tile_vbuf.size() + pane.radar_vbuf.size();
+            if let Some((_, warning)) = &pane.warning_overlay { gpu += overlay(warning); }
             if let Some(surface) = &pane.surface { gpu += surface.memory_bytes(); }
             for radar in pane.radar.iter().chain(pane.radar_cache.iter()) {
                 gpu += radar.smooth.as_ref().map_or(0, texture) + texture(&radar.tex)

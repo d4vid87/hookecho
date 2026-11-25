@@ -507,6 +507,7 @@ pub fn run(
         radar_surface: false,
         draw_radar: true,
         draw_overlay: overlay.is_some(),
+        warning_overlay: None,
         overlay_upload: overlay,
         field_uploads: Vec::new(),
         field_draws: Vec::new(),
@@ -568,6 +569,7 @@ pub fn run_multipane(site: &str, out_a: &str, out_b: &str) -> anyhow::Result<()>
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
+            warning_overlay: None,
             field_uploads: Vec::new(),
             field_draws: Vec::new(),
             clear_tiles: false,
@@ -1241,6 +1243,7 @@ pub fn run_live(out_path: &str, site: &str, moment: Moment) -> anyhow::Result<()
         draw_radar: true,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: Vec::new(),
         field_draws: Vec::new(),
         clear_tiles: false,
@@ -1332,6 +1335,7 @@ pub fn run_placefile(path: &str, out_path: &str) -> anyhow::Result<()> {
             indices: geom.indices,
         }),
         draw_overlay: true,
+        warning_overlay: None,
         field_uploads: Vec::new(),
         field_draws: Vec::new(),
         clear_tiles: false,
@@ -1399,6 +1403,7 @@ pub fn run_overlay(out_path: &str) -> anyhow::Result<()> {
             indices: geom.indices,
         }),
         draw_overlay: true,
+        warning_overlay: None,
         field_uploads: Vec::new(),
         field_draws: Vec::new(),
         clear_tiles: false,
@@ -1523,6 +1528,7 @@ pub fn run_mrms(out_path: &str) -> anyhow::Result<()> {
         radar_surface: false,
         draw_radar: false,
         draw_overlay: overlay.is_some(),
+        warning_overlay: None,
         overlay_upload: overlay,
         field_uploads: vec![(crate::render::FieldLayer::Mrms, upload)],
         field_draws: vec![(crate::render::FieldLayer::Mrms, 1.0)],
@@ -1586,6 +1592,7 @@ pub fn run_lightning(out_path: &str) -> anyhow::Result<()> {
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(crate::render::FieldLayer::Lightning, upload)],
         field_draws: vec![(crate::render::FieldLayer::Lightning, 1.0)],
         clear_tiles: false,
@@ -1664,6 +1671,7 @@ pub fn run_field(slug: &str, out_path: &str) -> anyhow::Result<()> {
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(layer, upload)],
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
@@ -1780,6 +1788,7 @@ pub fn run_global(model: &str, slug: &str, out_path: &str) -> anyhow::Result<()>
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(layer, upload)],
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
@@ -1901,6 +1910,7 @@ pub fn run_diff(slug: &str, out_path: &str) -> anyhow::Result<()> {
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(FL::ModelDiff, upload)],
         field_draws: vec![(FL::ModelDiff, 1.0)],
         clear_tiles: false,
@@ -2236,6 +2246,7 @@ pub fn run_l3grid(kind: &str, site: &str, out_path: &str) -> anyhow::Result<()> 
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(layer, upload)],
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
@@ -2316,6 +2327,7 @@ pub fn run_env(slug: &str, out_path: &str) -> anyhow::Result<()> {
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(layer, upload)],
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
@@ -2507,6 +2519,7 @@ pub fn run_hrrr_layer(
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(FieldLayer::Hrrr, upload)],
         field_draws: vec![(FieldLayer::Hrrr, 1.0)],
         clear_tiles: false,
@@ -2550,6 +2563,7 @@ fn render_field_png(
         draw_radar: false,
         overlay_upload: None,
         draw_overlay: false,
+        warning_overlay: None,
         field_uploads: vec![(layer, upload)],
         field_draws: vec![(layer, 1.0)],
         clear_tiles: false,
@@ -3364,6 +3378,7 @@ mod golden_tests {
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
+            warning_overlay: None,
             field_uploads: Vec::new(),
             field_draws: Vec::new(),
             clear_tiles: false,
@@ -3376,6 +3391,49 @@ mod golden_tests {
             wind_upload: None,
             wind: None,
         }
+    }
+
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_warning_overlay_is_pane_local_and_clears_independently() {
+        use crate::render::{OverlayUpload, OverlayVertex};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (device, queue, _) = init_gpu(&rt).expect("no wgpu adapter");
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut resources = RenderResources::new(&device, format);
+        let target = new_target(&device, format, GOLDEN_SIZE);
+        let view = target.create_view(&Default::default());
+        let sweep = synthetic_sweep();
+        let table = crate::colormap::default_table(Moment::Reflectivity);
+        let camera = Camera::at_lonlat(-97.0, 35.0, 7.0);
+        let warning = |color| std::sync::Arc::new(OverlayUpload {
+            vertices: [(-0.001, -0.001), (0.001, -0.001), (0.001, 0.001), (-0.001, 0.001)]
+                .into_iter().map(|(x, y)| OverlayVertex::new([camera.center.0 + x, camera.center.1 + y], color, [0.0; 3])).collect(),
+            indices: vec![0, 1, 2, 0, 2, 3],
+        });
+        let mut live = performance_callback(&sweep, table, camera, false);
+        live.draw_radar = false;
+        live.radar_upload = None;
+        live.warning_overlay = Some(warning([1.0, 0.0, 0.0, 1.0]));
+        let mut archive = performance_callback(&sweep, table, camera, false);
+        archive.pane = 1;
+        archive.draw_radar = false;
+        archive.radar_upload = None;
+        archive.warning_overlay = Some(warning([0.0, 1.0, 0.0, 1.0]));
+        resources.prepare_pane(&device, &queue, &live);
+        resources.prepare_pane(&device, &queue, &archive);
+        let center_pixel = |resources: &RenderResources, pane| {
+            resources.draw_pane(&device, &queue, &view, pane, wgpu::Color::BLACK);
+            let pixels = read_target(&device, &queue, &target, GOLDEN_SIZE);
+            let center = (GOLDEN_SIZE as usize / 2) * (GOLDEN_SIZE as usize + 1) * 4;
+            <[u8; 4]>::try_from(&pixels[center..center + 4]).unwrap()
+        };
+        assert_eq!(center_pixel(&resources, 0), [255, 0, 0, 255]);
+        assert_eq!(center_pixel(&resources, 1), [0, 255, 0, 255]);
+        archive.warning_overlay = None;
+        resources.prepare_pane(&device, &queue, &archive);
+        assert_eq!(center_pixel(&resources, 1), [0, 0, 0, 255]);
+        assert_eq!(center_pixel(&resources, 0), [255, 0, 0, 255]);
     }
     #[test]
     #[ignore = "gpu"]
@@ -4039,6 +4097,7 @@ mod golden_tests {
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
+            warning_overlay: None,
             field_uploads: Vec::new(),
             field_draws: Vec::new(),
             clear_tiles: false,
@@ -4132,7 +4191,7 @@ mod golden_tests {
             new_tiles: Vec::new(), visible: Vec::new(),
             radar_upload: Some(crate::app::to_upload(&sweep, &table, None, false, None, None, false)),
             radar_surface: false,
-            draw_radar: true, overlay_upload: None, draw_overlay: false,
+            draw_radar: true, overlay_upload: None, draw_overlay: false, warning_overlay: None,
             field_uploads: Vec::new(), field_draws: Vec::new(), clear_tiles: false, drop_tiles: Vec::new(),
             drop_fields: Vec::new(), new_vector_tiles: Vec::new(), visible_vector: Vec::new(), clear_vector: false,
             drop_vector_tiles: Vec::new(), wind_upload: None, wind: None,
@@ -4227,7 +4286,7 @@ mod golden_tests {
             new_tiles: Vec::new(), visible: Vec::new(),
             radar_upload: None,
             radar_surface: false,
-            draw_radar: false, overlay_upload: None, draw_overlay: false,
+            draw_radar: false, overlay_upload: None, draw_overlay: false, warning_overlay: None,
             field_uploads: Vec::new(), field_draws: Vec::new(), clear_tiles: false, drop_tiles: Vec::new(),
             drop_fields: Vec::new(), new_vector_tiles: Vec::new(), visible_vector: Vec::new(), clear_vector: false,
             drop_vector_tiles: Vec::new(), wind_upload: None, wind: None,
@@ -4373,6 +4432,7 @@ mod golden_tests {
                 draw_radar: true,
                 overlay_upload: None,
                 draw_overlay: false,
+                warning_overlay: None,
                 field_uploads: Vec::new(),
                 field_draws: Vec::new(),
                 clear_tiles: false,
@@ -4427,7 +4487,7 @@ mod golden_tests {
                 basemap_key: 0, vector_over_raster: false,
                 new_tiles: Vec::new(), visible: Vec::new(), radar_upload: Some(upload),
                 radar_surface: false, draw_radar: true,
-                overlay_upload: None, draw_overlay: false,
+                overlay_upload: None, draw_overlay: false, warning_overlay: None,
                 field_uploads: Vec::new(), field_draws: Vec::new(),
                 clear_tiles: false, drop_tiles: Vec::new(), drop_fields: Vec::new(),
                 new_vector_tiles: Vec::new(), visible_vector: Vec::new(),
@@ -4471,6 +4531,7 @@ mod golden_tests {
             draw_radar: false,
             overlay_upload: None,
             draw_overlay: true,
+            warning_overlay: None,
             field_uploads: Vec::new(),
             field_draws: Vec::new(),
             clear_tiles: false,
@@ -4594,6 +4655,7 @@ mod golden_tests {
             draw_radar: true,
             overlay_upload: None,
             draw_overlay: false,
+            warning_overlay: None,
             field_uploads: Vec::new(),
             field_draws: Vec::new(),
             clear_tiles: false,

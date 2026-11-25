@@ -113,13 +113,13 @@ class AlertPollerTest {
 
     @Test fun centresRunBeforeRimsAndCoverageStaysPartial() {
         val watches = (1..7).map { i -> Nws.Watch("Place $i", i.toDouble(), 0.0,
-            listOf(doubleArrayOf(i.toDouble(), 0.0), doubleArrayOf(i.toDouble(), 1.0)), requestedSamples = 7) }
+            (0..6).map { sample -> doubleArrayOf(i.toDouble(), sample.toDouble()) }) }
         val points = mutableListOf<Pair<Double, Double>>()
         val result = AlertPoller.collect(watches, 100, { true }, { _, _, _ -> },
             point = { lat, lon, _, _ -> points.add(lat to lon); Nws.AlertResponse(emptyList()) },
             clock = { 0 })
         assertEquals((1..7).map { it.toDouble() to 0.0 }, points.take(7))
-        assertEquals(14, result.successfulRequests)
+        assertEquals(40, result.successfulRequests)
         assertFalse(result.complete)
         assertEquals(watches.map { it.name }, result.incomplete)
     }
@@ -159,5 +159,84 @@ class AlertPollerTest {
         assertTrue(cancelled.cancelled)
         assertEquals(0, cancelled.successfulRequests)
         assertEquals(3, cancelled.incomplete.size)
+    }
+
+    @Test fun laterCentresGetCheckedAfterADeadlineCutsOffTheFirstPass() {
+        val watches = (1..16).map { i -> Nws.Watch("Place $i", i.toDouble(), 0.0,
+            listOf(doubleArrayOf(i.toDouble(), 0.0))) }
+        val warning = Nws.Alert("a", "Tornado Warning", "warning", Nws.TIER_WARNING)
+        val reported = mutableListOf<String>()
+        fun collect(startAt: Int): AlertPoller.Result {
+            var now = 0L
+            return AlertPoller.collect(watches, AlertPoller.BUDGET_NANOS, { true },
+                { watch, _, _ -> reported.add(watch.name) },
+                point = { lat, _, _, _ ->
+                    now += 4_000_000_000L
+                    Nws.AlertResponse(if (lat == 16.0) listOf(warning) else emptyList())
+                }, clock = { now }, startAt = startAt)
+        }
+
+        val first = collect(0)
+        assertTrue("Place 16" in first.incomplete)
+        assertTrue(reported.isEmpty())
+        val second = collect(first.nextRequest)
+        assertFalse("Place 16" in second.incomplete)
+        assertEquals(listOf("Place 16"), reported)
+        assertFalse(second.complete)
+    }
+
+    @Test fun laterCentresGetCheckedWithoutExceedingTheRequestCap() {
+        val watches = (1..42).map { i -> Nws.Watch("Place $i", i.toDouble(), 0.0,
+            listOf(doubleArrayOf(i.toDouble(), 0.0))) }
+        val checked = mutableListOf<Int>()
+        fun collect(startAt: Int) = AlertPoller.collect(watches, Long.MAX_VALUE, { true }, { _, _, _ -> },
+            point = { lat, _, _, _ -> checked.add(lat.toInt()); Nws.AlertResponse(emptyList()) },
+            startAt = startAt)
+
+        val first = collect(0)
+        assertEquals((1..40).toList(), checked)
+        assertEquals(listOf("Place 41", "Place 42"), first.incomplete)
+        checked.clear()
+        val second = collect(first.nextRequest)
+        assertEquals(listOf(41, 42), checked.take(2))
+        assertEquals(40, checked.size)
+        assertFalse(second.complete)
+    }
+
+    @Test fun resumedPassChecksHomeFirstWithoutStarvingLaterPlaces() {
+        val home = Nws.Watch("Home", 0.0, 0.0, listOf(doubleArrayOf(0.0, 0.0)), home = true)
+        val watches = listOf(home) + (1..42).map { i -> Nws.Watch("Place $i", i.toDouble(), 0.0,
+            listOf(doubleArrayOf(i.toDouble(), 0.0))) }
+        val warning = Nws.Alert("a", "Tornado Warning", "warning", Nws.TIER_WARNING)
+        val attempted = mutableListOf<Int>()
+        val heard = mutableListOf<Pair<String, Boolean>>()
+        val seen = mutableSetOf<String>()
+        fun collect(startAt: Int): AlertPoller.Result {
+            var now = 0L
+            return AlertPoller.collect(watches, AlertPoller.BUDGET_NANOS, { true }, { watch, alert, speak ->
+                if (seen.add(alert.id)) heard.add(watch.name to speak)
+            }, point = { lat, _, _, _ ->
+                attempted.add(lat.toInt())
+                Nws.AlertResponse(if (startAt != 0 && lat == 42.0) listOf(warning) else emptyList())
+            }, area = { _, _, _, deadline, _ ->
+                attempted.add(-1)
+                if (startAt == 0) Nws.AlertResponse(emptyList()) else {
+                    assertTrue("Home consumed the whole pass budget", deadline < AlertPoller.BUDGET_NANOS)
+                    now = deadline - 1
+                    Nws.AlertResponse(listOf(warning))
+                }
+            }, clock = { now }, startAt = startAt)
+        }
+
+        val first = collect(0)
+        assertEquals(40, attempted.size)
+        assertTrue("Place 42" in first.incomplete)
+        attempted.clear()
+        val second = collect(first.nextRequest)
+        assertEquals(-1, attempted.first())
+        assertEquals(1, attempted.count { it == -1 })
+        assertEquals(40, attempted.size)
+        assertFalse("Place 42" in second.incomplete)
+        assertEquals(listOf("Home" to true), heard)
     }
 }

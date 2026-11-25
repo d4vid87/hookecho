@@ -228,7 +228,9 @@ gz_bytes="$(gzip -9 -c "web/dist/hookecho_bg-$wasm_hash.wasm" | wc -c)"
 # the Lite and startup limits stay unchanged.
 # Alert health, TDWR archive retries and IndexedDB GIS storage bring the main bundle to
 # 5,150,459 gzip bytes. Allow 14,541 bytes of headroom for build variation.
-budget="${HOOKECHO_WASM_BUDGET:-5165000}"
+# The pane-local warnings and ODIM fixes bring the Binaryen 130 build to 5,170,193 gzip bytes.
+# Keep 2,807 bytes of headroom; the Lite and startup limits stay unchanged.
+budget="${HOOKECHO_WASM_BUDGET:-5173000}"
 printf 'wasm: %s raw, %s gzipped (budget %s)\n' \
   "$(stat -c%s "web/dist/hookecho_bg-$wasm_hash.wasm")" "$gz_bytes" "$budget"
 if [ "$gz_bytes" -gt "$budget" ]; then

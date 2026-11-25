@@ -425,8 +425,9 @@ pub struct MapView {
     pub volume: Option<Volume>,
     /// Latest mutable scan while the playhead shows history; never enters the archive LRU.
     pub live_head: Option<wxdata::live::Update>,
-    pending_presentation: Option<(u64, DateTime<Utc>)>,
+    pending_presentation: Option<(u64, DateTime<Utc>, bool)>,
     presented_at: Option<DateTime<Utc>>,
+    presented_live: bool,
     pending_frame_details: Option<serde_json::Value>,
     presented_frame_details: Option<serde_json::Value>,
     /// Volumes the playhead has moved off, with their binned sweeps intact. See
@@ -575,13 +576,13 @@ impl MapView {
 
     pub fn time_basis(&self) -> &'static str {
         if self.custom_product.is_some() { return "Volume reference time; derived product"; }
-        if self.volume.as_ref().and_then(|volume| volume.observation_time(self.moment, self.tilt, self.selected_cut_ms())).is_none() {
+        let Some(time) = self.volume.as_ref().and_then(|volume| volume.observation_time(self.moment, self.tilt, self.selected_cut_ms())) else {
             return "Volume reference time; selected sweep acquisition unavailable";
-        }
+        };
         if self.displayed_station().is_some_and(wxdata::tdwr::is_tdwr) {
             return "Product generation time; beam acquisition unavailable";
         }
-        if self.displayed_station().is_some_and(wxdata::sites::is_nexrad) {
+        if time.newest_radial_ms > time.oldest_radial_ms || self.displayed_station().is_some_and(wxdata::sites::is_nexrad) {
             return "Selected sweep's newest radial; sectors can have different ages";
         }
         "Source scan time; individual radial acquisition unavailable"
@@ -618,12 +619,25 @@ impl MapView {
         self.presented_at.filter(|_| self.show_radar)
     }
 
+    pub fn presented_as_live(&self) -> bool {
+        self.presented_time().is_some() && self.presented_live
+    }
+
+    pub fn decoded_live_frame(&self) -> bool {
+        self.timeline.following && self.retained_station.is_none() && self.volume.as_ref().is_some_and(|volume| {
+            volume.live_status.as_ref().is_some_and(|status| status.stream_active)
+                || (volume.time.date_naive() == self.timeline.date
+                    && self.timeline.current().is_some_and(|frame| self.displays_frame(frame)))
+        })
+    }
+
     pub fn painted_frame_details(&self) -> Option<&serde_json::Value> {
         self.presented_frame_details.as_ref().filter(|_| self.show_radar)
     }
 
     pub fn stage_presentation(&mut self, token: u64) {
-        self.pending_presentation = self.displayed_time().filter(|_| token != 0).map(|time| (token, time));
+        self.pending_presentation = self.displayed_time().filter(|_| token != 0)
+            .map(|time| (token, time, self.decoded_live_frame()));
         self.pending_frame_details = self.pending_presentation.map(|_| self.frame_details(token));
         if let Some(details) = &self.pending_frame_details {
             let object = details["object"].as_str().or_else(|| details["chunk_key"].as_str()).unwrap_or("");
@@ -632,18 +646,23 @@ impl MapView {
     }
 
     pub fn acknowledge_presentation(&mut self, painted: u64) {
-        if let Some((token, time)) = self.pending_presentation.filter(|(token, _)| *token == painted) {
+        if let Some((token, time, live)) = self.pending_presentation.filter(|(token, _, _)| *token == painted) {
             debug_assert_ne!(token, 0);
             self.presented_at = Some(time);
+            self.presented_live = live;
             self.presented_frame_details = self.pending_frame_details.take();
             self.pending_presentation = None;
         }
+        // Scrubbing can pause on the same texture. Its previous live status must not survive
+        // a subsequent Return to Latest while the new head is still loading.
+        if !self.timeline.following { self.presented_live = false; }
     }
 
     pub fn clear_presentation(&mut self) {
         self.pending_presentation = None;
         self.pending_frame_details = None;
         self.presented_at = None;
+        self.presented_live = false;
         self.presented_frame_details = None;
     }
 
@@ -738,6 +757,7 @@ impl MapView {
             live_head: None,
             pending_presentation: None,
             presented_at: None,
+            presented_live: false,
             pending_frame_details: None,
             presented_frame_details: None,
             recent: LruCache::new(NonZeroUsize::new(RECENT_VOLUMES).unwrap()),
@@ -1853,6 +1873,15 @@ mod tests {
         assert_eq!(view.presented_time(), None, "revealing a retained texture still waits for paint");
         view.acknowledge_presentation(42);
         assert_eq!(view.presented_time(), Some(second));
+    }
+
+    #[test]
+    fn odim_clock_labels_observed_radial_acquisition() {
+        let bytes = include_bytes!("../../wxdata/tests/data/dwd-boo-tilt00.h5");
+        let (time, scan) = wxdata::odim::decode(bytes.to_vec()).unwrap();
+        let mut view = MapView::new(Some("DBOO".into()), Camera::at_lonlat(10.0, 54.0, 8.0));
+        view.show_volume(Arc::new(scan), "dwd-fixture".into(), time);
+        assert_eq!(view.time_basis(), "Selected sweep's newest radial; sectors can have different ages");
     }
 
     #[test]

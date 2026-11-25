@@ -300,9 +300,30 @@ pub fn draw(
     }
 }
 
+/// Ordered borrowed slices let each pane interleave its alerts with shared overlays.
+#[derive(Clone, Copy)]
+pub struct Features<'a>(pub [&'a [GeoFeature]; 3]);
+
+impl<'a> Features<'a> {
+    pub fn iter(self) -> impl Iterator<Item = &'a GeoFeature> { self.0.into_iter().flatten() }
+
+    pub fn get(self, mut index: usize) -> Option<&'a GeoFeature> {
+        for section in self.0 {
+            if let Some(feature) = section.get(index) { return Some(feature); }
+            index -= section.len();
+        }
+        None
+    }
+}
+
+impl std::ops::Index<usize> for Features<'_> {
+    type Output = GeoFeature;
+    fn index(&self, index: usize) -> &Self::Output { self.get(index).expect("prepared feature index") }
+}
+
+#[derive(Default)]
 /// Regional labels share the existing bulletin/detail readers. Original polygons are never
 /// simplified or filtered for hit testing; only the painted outline is cached.
-#[derive(Default)]
 pub struct Cache {
     generation: Option<u64>,
     prepared: Vec<Prepared>,
@@ -375,7 +396,7 @@ fn edge_key(a: (f64, f64), b: (f64, f64)) -> ([(u64, u64); 2], i32) {
 }
 
 impl Cache {
-    fn prepare(&mut self, generation: u64, features: &[GeoFeature]) {
+    fn prepare(&mut self, generation: u64, features: Features<'_>) {
         if self.generation == Some(generation) {
             return;
         }
@@ -488,7 +509,7 @@ impl Cache {
         }
     }
 
-    fn build(&self, ctx: &egui::Context, key: ViewKey, features: &[GeoFeature]) -> Pane {
+    fn build(&self, ctx: &egui::Context, key: ViewKey, features: Features<'_>) -> Pane {
         use crate::render::mercator::{world_to_lonlat, Camera};
         let cam = Camera {
             center: key.center,
@@ -666,11 +687,11 @@ impl Cache {
         ui: &egui::Ui,
         pane: usize,
         generation: u64,
-        features: &[GeoFeature],
+        features: Features<'_>,
         clip: Rect,
         cam: crate::render::mercator::Camera,
         scale: f32,
-    ) {
+    ) -> bool {
         self.prepare(generation, features);
         let key = ViewKey {
             center: cam.center,
@@ -693,6 +714,7 @@ impl Cache {
         for &(i, s, p) in cached.labels.iter().rev() {
             label(&painter, clip, p, &features[i].title, s, &mut taken);
         }
+        let mut opened = false;
         for c in &cached.clusters {
             let clicked = egui::Area::new(egui::Id::new(("regional_cluster", pane, c.name)))
                 .order(egui::Order::Middle)
@@ -715,15 +737,17 @@ impl Cache {
                 .inner;
             if clicked {
                 self.open = Some(c.clone());
+                opened = true;
             }
         }
+        opened
     }
 
     pub fn show_list(
         &mut self,
         ctx: &egui::Context,
         generation: u64,
-        features: &[GeoFeature],
+        features: Features<'_>,
     ) -> Option<usize> {
         if self.generation != Some(generation) {
             self.open = None;
@@ -770,6 +794,10 @@ impl Cache {
             self.open = None;
         }
         chosen
+    }
+
+    pub fn dismiss_list(&mut self) {
+        self.open = None;
     }
 }
 
@@ -823,7 +851,7 @@ mod tests {
         let cam = Camera::at_lonlat(-98.0, 35.0, 5.0);
         let draw = |cache: &mut Cache, generation, cam, pane| {
             let _ = ctx.run_ui(Default::default(), |ui| {
-                cache.draw(ui, pane, generation, &features, clip, cam, 1.0)
+                cache.draw(ui, pane, generation, Features([&features, &[], &[]]), clip, cam, 1.0);
             });
         };
         draw(&mut cache, 1, cam, 0);
@@ -874,7 +902,7 @@ mod tests {
         );
         assert_eq!(cache.panes.len(), 1, "old pane generation evicted");
         assert!(!std::sync::Arc::ptr_eq(&mesh, &cache.panes[&0].mesh));
-        cache.prepare(3, &[]);
+        cache.prepare(3, Features([&[], &[], &[]]));
         assert!(
             cache.open.is_none(),
             "removed bulletins cannot leave stale indices"
@@ -914,13 +942,13 @@ mod tests {
         let old = start.elapsed();
         let mut cache = Cache::default();
         let _ = ctx.run_ui(Default::default(), |ui| {
-            cache.draw(ui, 0, 1, &features, clip, cam, 1.0)
+            cache.draw(ui, 0, 1, Features([&features, &[], &[]]), clip, cam, 1.0);
         });
         let mesh = cache.panes[&0].mesh.clone();
         let start = std::time::Instant::now();
         for _ in 0..5 {
             let _ = ctx.run_ui(Default::default(), |ui| {
-                cache.draw(ui, 0, 1, &features, clip, cam, 1.0)
+                cache.draw(ui, 0, 1, Features([&features, &[], &[]]), clip, cam, 1.0);
             });
         }
         eprintln!("1,000 polygon parts, five CPU paint passes: original {:?}, cached {:?} (not full browser frame time)",old,start.elapsed());
@@ -937,7 +965,7 @@ mod tests {
             p[0] += 1.0;
         }
         let mut cache = Cache::default();
-        cache.prepare(1, &[a.clone(), b.clone()]);
+        cache.prepare(1, Features([&[a.clone(), b.clone()], &[], &[]]));
         assert_eq!(
             cache
                 .prepared
@@ -949,14 +977,14 @@ mod tests {
             2
         );
         b.title = "Different watch".into();
-        cache.prepare(2, &[a.clone(), b]);
+        cache.prepare(2, Features([&[a.clone(), b], &[], &[]]));
         assert!(cache
             .prepared
             .iter()
             .flat_map(|p| &p.rings)
             .flat_map(|r| &r.exterior)
             .all(|&x| x));
-        cache.prepare(3, &[a.clone(), a]);
+        cache.prepare(3, Features([&[a.clone(), a], &[], &[]]));
         assert!(
             cache
                 .prepared

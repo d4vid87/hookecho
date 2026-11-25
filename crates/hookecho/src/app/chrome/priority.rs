@@ -9,7 +9,43 @@ struct PriorityDockCache {
     first: Option<(wxdata::overlay::AlertInfo, usize, bool, f64)>,
 }
 
-fn national_signal_counts(features: &[GeoFeature]) -> [usize; 5] {
+fn priority_dock_snapshot(
+    ctx: &egui::Context,
+    overlay: &super::super::PaneOverlay,
+    features: &[GeoFeature],
+    rules: &crate::settings::PriorityRules,
+    point: (f64, f64),
+    now: chrono::DateTime<Utc>,
+) -> PriorityDockCache {
+    let key = (
+        overlay.revision,
+        point.0.to_bits(),
+        point.1.to_bits(),
+        now.timestamp() / 60,
+        rules.clone(),
+    );
+    let cache_id = egui::Id::new("priority_dock_snapshot");
+    let cached = ctx.data_mut(|d| d.get_temp::<PriorityDockCache>(cache_id));
+    match cached {
+        Some(cached) if cached.key == key => cached,
+        _ => {
+            let rows = priority::rows(features, rules, point, now);
+            let first = rows.first().map(|f| {
+                (
+                    f.alert.as_ref().unwrap().clone(),
+                    priority::category(f),
+                    f.contains(point.0, point.1),
+                    f.distance_km(point.0, point.1),
+                )
+            });
+            let snapshot = PriorityDockCache { key, count: rows.len(), first };
+            ctx.data_mut(|d| d.insert_temp(cache_id, snapshot.clone()));
+            snapshot
+        }
+    }
+}
+
+fn national_signal_counts<'a>(features: impl IntoIterator<Item = &'a GeoFeature>) -> [usize; 5] {
     let mut seen: [std::collections::HashSet<String>; 5] = std::array::from_fn(|_| Default::default());
     for feature in features {
         let text = feature.title.to_ascii_uppercase();
@@ -33,7 +69,13 @@ fn national_signal_counts(features: &[GeoFeature]) -> [usize; 5] {
 
 impl HookEchoApp {
     pub(crate) fn national_signal_strip(&mut self, ctx: &egui::Context) {
-        let counts = national_signal_counts(&self.overlays);
+        let frame = self.archive_warning_frame();
+        let at = match frame {
+            super::super::DisplayedOverlayFrame::Scan(scan) => chrono::DateTime::from_timestamp(scan, 0).unwrap_or_else(Utc::now),
+            _ => Utc::now(),
+        };
+        let counts = national_signal_counts(self.overlays.iter().chain(self.active_alert_features().iter()
+            .filter(|feature| self.filters.show_alerts && self.map_alert_visible(feature, at))));
         let width = (self.chrome_rect.width() - super::clearview::CORNER_WIDTH - 36.0)
             .clamp(440.0, 1100.0);
         let mut open_alerts = false;
@@ -110,10 +152,10 @@ impl HookEchoApp {
             Utc::now()
         }
     }
-    pub(crate) fn map_alert_visible(&self, feature: &GeoFeature) -> bool {
+    pub(crate) fn map_alert_visible(&self, feature: &GeoFeature, at: chrono::DateTime<Utc>) -> bool {
         alerts::event_enabled(&feature.title, &self.settings.optional_alert_events)
             && self.filters.alert_cats[alerts::category(&feature.title).index()]
-            && priority::map_visible(feature, self.priority_time())
+            && priority::map_visible(feature, at)
     }
     pub(crate) fn refresh_priority_overlays(&mut self, ctx: &egui::Context) {
         // Rebuild on reference/settings changes, and once a minute for expiry. All alert feeds,
@@ -147,37 +189,10 @@ impl HookEchoApp {
         }
         let (point, reference) = self.priority_reference();
         let now = self.priority_time();
-        let key = (
-            self.overlay_gen,
-            point.0.to_bits(),
-            point.1.to_bits(),
-            now.timestamp() / 60,
-            self.settings.priority_rules.clone(),
+        let overlay = self.prepare_pane_overlay(self.active, self.pane_warning_frame(self.active));
+        let snapshot = priority_dock_snapshot(
+            ctx, &overlay, self.active_alert_features(), &self.settings.priority_rules, point, now,
         );
-        let cache_id = egui::Id::new("priority_dock_snapshot");
-        let cached = ctx.data_mut(|d| d.get_temp::<PriorityDockCache>(cache_id));
-        let snapshot = match cached {
-            Some(cached) if cached.key == key => cached,
-            _ => {
-                let rows = priority::rows(
-                    self.active_alert_features(),
-                    &self.settings.priority_rules,
-                    point,
-                    now,
-                );
-                let first = rows.first().map(|f| {
-                    (
-                        f.alert.as_ref().unwrap().clone(),
-                        priority::category(f),
-                        f.contains(point.0, point.1),
-                        f.distance_km(point.0, point.1),
-                    )
-                });
-                let snapshot = PriorityDockCache { key, count: rows.len(), first };
-                ctx.data_mut(|d| d.insert_temp(cache_id, snapshot.clone()));
-                snapshot
-            }
-        };
         let count = snapshot.count;
         let first = snapshot.first;
         let track_count = if self.cells_site.as_deref() == self.views[self.active].site.as_deref() {
@@ -360,6 +375,49 @@ impl HookEchoApp {
 #[cfg(test)]
 mod signal_tests {
     use super::*;
+
+    #[test]
+    fn dock_refreshes_archive_warnings_without_a_shared_rebuild() {
+        use super::super::super::{DisplayedOverlayFrame, PaneOverlay, PaneOverlayKey};
+        let ctx = egui::Context::default();
+        let at = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let point = (-97.5, 32.5);
+        let rules = crate::settings::PriorityRules::default();
+        let mut overlay = PaneOverlay {
+            key: PaneOverlayKey {
+                shared_generation: 7,
+                archive_generation: 0,
+                frame: DisplayedOverlayFrame::Scan(at.timestamp()),
+                live_minute: 0,
+            },
+            revision: 1,
+            alerts: Vec::new(),
+        };
+        let snapshot = |overlay: &PaneOverlay, features: &[GeoFeature]| {
+            priority_dock_snapshot(&ctx, overlay, features, &rules, point, at)
+        };
+        assert_eq!(snapshot(&overlay, &[]).count, 0);
+
+        // The archive response only advances its own generation; time stays paused.
+        let mut alert = wxdata::spoken::demo_alert();
+        alert.expires = None;
+        let warnings = [GeoFeature {
+            rings: vec![vec![[-98., 32.], [-97., 32.], [-97., 33.], [-98., 33.], [-98., 32.]]],
+            fill: [0; 4], stroke: [0; 4], kind: wxdata::overlay::FeatureKind::Warning,
+            title: alert.event.clone(), detail: String::new(), alert: Some(alert.clone()),
+        }];
+        overlay.key.archive_generation += 1;
+        overlay.revision += 1;
+        let loaded = snapshot(&overlay, &warnings);
+        assert_eq!(loaded.count, 1, "new archived warnings must replace the empty snapshot");
+        assert_eq!(loaded.first.unwrap().0.id, alert.id);
+
+        // Another pane can show a different scan within this same minute and location.
+        overlay.key.frame = DisplayedOverlayFrame::Scan(at.timestamp() + 10);
+        overlay.revision += 1;
+        assert_eq!(snapshot(&overlay, &[]).count, 0, "pane changes must not reuse another scan's bulletin");
+        assert!(snapshot(&overlay, &[]).first.is_none());
+    }
 
     #[test]
     fn counts_unique_signals_by_type() {

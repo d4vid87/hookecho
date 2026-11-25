@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class NwsTest {
-    @Test fun requestBudgetKeepsEveryCentreAndDisclosesOmittedCoverage() {
+    @Test fun watchedRetainsSamplesBeyondOneRequestBudget() {
         val dir = Files.createTempDirectory("hookecho-coverage-test").toFile()
         try {
             val settings = dir.resolve("config/settings.json")
@@ -22,21 +22,14 @@ class NwsTest {
             writePlaces(7, 20.0)
             val seven = Nws.watched(dir)
             assertEquals(7, seven.size)
-            assertEquals(40, seven.sumOf { it.samples.size })
-            assertTrue(seven.all { it.samples.isNotEmpty() })
-            assertTrue(seven.all { it.requestedSamples == 7 })
+            assertTrue(seven.all { it.samples.size == 7 })
             for (watch in seven) assertArrayEquals(doubleArrayOf(watch.lat, watch.lon), watch.samples.first(), 0.0)
 
             writePlaces(42, 0.0)
             val many = Nws.watched(dir)
             assertEquals(42, many.size)
-            assertEquals(40, many.sumOf { it.samples.size })
-            val omitted = many.filter { it.samples.size < it.requestedSamples }.map { it.name }
-            assertEquals(listOf("Place 41", "Place 42"), omitted)
-            val summary = Nws.checkSummary(true, emptyList(), 40, 0, 0, omitted)
-            assertTrue(summary.contains("Place 41"))
-            assertTrue(summary.contains("Place 42"))
-            assertFalse(summary.contains("All quiet"))
+            assertTrue(many.all { it.samples.size == 1 })
+            assertEquals("Place 42", many.last().name)
         } finally { dir.deleteRecursively() }
     }
 
@@ -167,5 +160,29 @@ class NwsTest {
         assertTrue(Nws.geometryTouches(polygon, 51.0, -179.5, 0.0))
         assertTrue(Nws.geometryTouches(polygon, 51.0, -178.9, 30.0))
         assertFalse(Nws.geometryTouches(polygon, 51.0, 0.0, 30.0))
+    }
+
+    @Test fun watchZoneQueryAndDestinationStayInsideConcaveAndDatelineRings() {
+        val dir = Files.createTempDirectory("hookecho-watch-zone-test").toFile()
+        try {
+            val settings = dir.resolve("config/settings.json")
+            settings.parentFile!!.mkdirs()
+            val dateline = """[[179,50],[-179,50],[-179,52],[179,52],[179,50]]"""
+            val concave = """[[-101,30],[-97,30],[-97,34],[-98,34],[-98,31],[-100,31],[-100,34],[-101,34],[-101,30]]"""
+            val small = """[[-99.23456,32.123461],[-99.23455,32.123461],[-99.23455,32.123469],[-99.23456,32.123469],[-99.23456,32.123461]]"""
+            for (ring in listOf(dateline, concave, small)) {
+                settings.writeText("""{"alert_polygons":[{"name":"Zone","ring":$ring}]}""")
+                val watch = Nws.watched(dir).single()
+                val polygon = JSONObject("""{"type":"Polygon","coordinates":[$ring]}""")
+                val (sampleLat, sampleLon) = watch.samples.first()
+                val (queryLat, queryLon) = Nws.pointUrl(sampleLat, sampleLon).substringAfter("point=")
+                    .split(',').map(String::toDouble)
+                val (_, gotoLon, gotoLat) = Nws.gotoPoint(watch.lon, watch.lat).split(',')
+                assertTrue("Query $queryLon, $queryLat is outside $ring",
+                    Nws.geometryTouches(polygon, queryLat, queryLon, 0.0))
+                assertTrue("Tap destination $gotoLon, $gotoLat is outside $ring",
+                    Nws.geometryTouches(polygon, gotoLat.toDouble(), gotoLon.toDouble(), 0.0))
+            }
+        } finally { dir.deleteRecursively() }
     }
 }

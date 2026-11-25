@@ -109,6 +109,8 @@ class AlertService : Service() {
         private const val KEY_SEEN = "seen"
         private const val KEY_ENABLED = "enabled"
         private const val KEY_SAVER = "battery_saver"
+        private const val KEY_REQUEST_COVERAGE = "request_coverage"
+        private const val KEY_NEXT_REQUEST = "next_request"
 
         /** Newest-last, so trimming from the front drops the oldest IDs. */
         private const val SEEN_CAP = 200
@@ -154,9 +156,13 @@ class AlertService : Service() {
                 java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
             )
             val canNotify = enabled && canPostNotifications(context)
-            val key = "$enabled:$quiet:$canNotify:" + Nws.coverageKey(watched)
+            val coverage = Nws.coverageKey(watched)
+            val key = "$enabled:$quiet:$canNotify:$coverage"
             val result = poller.run(key, shouldContinue) {
                 // Loading, notification decisions and persistence are one coordinated pass.
+                val preferences = prefs(context)
+                val startAt = if (preferences.getString(KEY_REQUEST_COVERAGE, null) == coverage)
+                    preferences.getInt(KEY_NEXT_REQUEST, 0) else 0
                 val seen = loadSeen(context)
                 val before = seen.size
                 try {
@@ -175,7 +181,15 @@ class AlertService : Service() {
                                 }
                             }
                         },
-                    )
+                        startAt = startAt,
+                    ).also { pass ->
+                        if (!pass.cancelled) {
+                            val edit = preferences.edit()
+                            if (pass.nextRequest == 0) edit.remove(KEY_REQUEST_COVERAGE).remove(KEY_NEXT_REQUEST)
+                            else edit.putString(KEY_REQUEST_COVERAGE, coverage).putInt(KEY_NEXT_REQUEST, pass.nextRequest)
+                            edit.apply()
+                        }
+                    }
                 } finally {
                     if (seen.size != before) saveSeen(context, seen)
                 }

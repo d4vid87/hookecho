@@ -11,7 +11,7 @@
 //! NWS writes "S 10 to 15 mph". Both are translated here so the UI stays provider-blind.
 
 use crate::forecast::{Period, PointForecast};
-use chrono::{TimeZone, Utc};
+use chrono::{TimeDelta, TimeZone, Utc};
 
 const BASE: &str = "https://api.open-meteo.com/v1/forecast";
 
@@ -21,6 +21,11 @@ pub fn parse_forecast(body: &str) -> anyhow::Result<PointForecast> {
     if let Some(reason) = v.get("reason").and_then(|r| r.as_str()) {
         anyhow::bail!("open-meteo: {reason}");
     }
+    let local_offset = v.get("utc_offset_seconds")
+        .and_then(|offset| offset.as_i64())
+        .filter(|offset| (-86_399..=86_399).contains(offset))
+        .map(TimeDelta::seconds)
+        .unwrap_or_default();
 
     let daily = v
         .get("daily")
@@ -42,7 +47,7 @@ pub fn parse_forecast(body: &str) -> anyhow::Result<PointForecast> {
             start,
             // Open-Meteo's daily rows are calendar days, so the weekday is the name; the NWS's
             // "This Afternoon" / "Tuesday Night" split doesn't exist here.
-            name: start.format("%A").to_string(),
+            name: start.checked_add_signed(local_offset).unwrap_or(start).format("%A").to_string(),
             temp_f: number(temps, i).unwrap_or(f32::NAN),
             precip_pct: probability(precip, i),
             short: number(codes, i).map_or("", wmo_label).to_string(),
@@ -166,11 +171,10 @@ fn wmo_label(code: f32) -> &'static str {
 
 /// Fetch the global forecast for `(lat, lon)`. One request, no key.
 pub async fn fetch(http: &reqwest::Client, lat: f64, lon: f64) -> anyhow::Result<PointForecast> {
-    // Fahrenheit/mph so the shared `Period` needs no per-provider unit flag; unixtime in UTC so
-    // parsing is a timestamp rather than a local-time string with an implied zone.
+    // Daily aggregates follow the location's calendar days while Unix timestamps stay absolute.
     let url = format!(
         "{BASE}?latitude={lat:.4}&longitude={lon:.4}\
-         &temperature_unit=fahrenheit&wind_speed_unit=mph&timeformat=unixtime&timezone=UTC\
+         &temperature_unit=fahrenheit&wind_speed_unit=mph&timeformat=unixtime&timezone=auto\
          &hourly=temperature_2m,precipitation_probability,wind_speed_10m,wind_direction_10m\
          &daily=temperature_2m_max,precipitation_probability_max,weather_code,\
 wind_speed_10m_max,wind_direction_10m_dominant&forecast_days=7"
@@ -223,6 +227,19 @@ mod tests {
         assert_eq!(f.daily[1].short, "Overcast");
         // The name is the weekday: 4102444800 is 2100-01-01, a Friday.
         assert_eq!(f.daily[0].name, "Friday");
+    }
+
+    #[test]
+    fn daily_weekday_follows_the_forecast_location() {
+        let body = r#"{
+            "timezone": "Pacific/Auckland",
+            "utc_offset_seconds": 46800,
+            "daily": {"time": [4102484400], "temperature_2m_max": [68.1]}
+        }"#;
+        let forecast = parse_forecast(body).unwrap();
+        // 2100-01-01 11:00 UTC is midnight Saturday in Auckland.
+        assert_eq!(forecast.daily[0].start.timestamp(), 4_102_484_400);
+        assert_eq!(forecast.daily[0].name, "Saturday");
     }
 
     #[test]

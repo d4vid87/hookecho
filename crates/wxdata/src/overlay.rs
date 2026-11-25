@@ -249,8 +249,8 @@ pub fn hit(features: &[GeoFeature], lon: f64, lat: f64) -> Option<&GeoFeature> {
 }
 
 /// All features containing `(lon, lat)`, highest click-priority first.
-pub fn hit_all(features: &[GeoFeature], lon: f64, lat: f64) -> Vec<&GeoFeature> {
-    let mut hits: Vec<&GeoFeature> = features.iter().filter(|f| f.contains(lon, lat)).collect();
+pub fn hit_all<'a>(features: impl IntoIterator<Item = &'a GeoFeature>, lon: f64, lat: f64) -> Vec<&'a GeoFeature> {
+    let mut hits: Vec<_> = features.into_iter().filter(|f| f.contains(lon, lat)).collect();
     hits.sort_by_key(|f| std::cmp::Reverse(f.kind.z()));
     hits
 }

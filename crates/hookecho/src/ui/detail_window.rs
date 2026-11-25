@@ -1,13 +1,35 @@
 //! Detail window shown when a map overlay feature (warning, watch, outlook, MD) is clicked.
 
+#[cfg(test)]
+mod photo_tests {
+    use super::{DetailImage, PhotoSource};
+
+    #[test]
+    fn a_closed_or_reopened_photo_discards_the_previous_request_before_upload() {
+        let ctx = egui::Context::default();
+        let manager = ctx.tex_manager();
+        let initial = manager.read().num_allocated();
+        let photo = || egui::ColorImage::filled([8, 8], egui::Color32::RED);
+        let mut image = DetailImage::new(1, PhotoSource::Highway);
+        image.receive(&ctx, 1, photo());
+        image.receive(&ctx, 1, photo());
+        assert_eq!(manager.read().num_allocated(), initial + 1);
+        drop(image);
+        let mut image = DetailImage::new(2, PhotoSource::Highway);
+        image.receive(&ctx, 1, photo());
+        assert_eq!(manager.read().num_allocated(), initial);
+        assert!(image.texture.is_none());
+        image.receive(&ctx, 2, photo());
+        assert!(image.texture.is_some());
+    }
+}
+
 /// The currently-open detail popup.
 pub struct Detail {
     pub title: String,
     pub body: String,
     pub color: [u8; 4],
-    /// Texture-cache key of a picture to show above the text (webcam stills). `None` for the
-    /// text-only features this window was built for.
-    pub image: Option<String>,
+    pub image: Option<DetailImage>,
     /// `(label, url)` for a "see this on its own site" button. Windy's webcam terms require every
     /// image to link back to the camera's page, so for those this is not decoration.
     pub link: Option<(String, String)>,
@@ -15,12 +37,37 @@ pub struct Detail {
     pub stream: Option<String>,
 }
 
-/// Show the detail window. Returns `false` when it should close. `image` is the resolved texture
-/// for `detail.image`, if it has finished loading.
+#[derive(Clone, Copy)]
+pub enum PhotoSource {
+    Webcam(u64),
+    Highway,
+    Survey,
+}
+
+pub struct DetailImage {
+    pub request: u64,
+    pub source: PhotoSource,
+    pub texture: Option<egui::TextureHandle>,
+}
+
+impl DetailImage {
+    pub fn new(request: u64, source: PhotoSource) -> Self {
+        Self { request, source, texture: None }
+    }
+
+    pub fn receive(&mut self, ctx: &egui::Context, request: u64, image: egui::ColorImage) {
+        if request != self.request { return; }
+        match &mut self.texture {
+            Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
+            None => self.texture = Some(ctx.load_texture("detail photo", image, egui::TextureOptions::LINEAR)),
+        }
+    }
+}
+
+/// Show the detail window. Returns `false` when it should close.
 pub fn show(
     ctx: &egui::Context,
     detail: &Detail,
-    image: Option<&egui::TextureHandle>,
     popovers: &mut crate::ui::popover::Popovers,
     play_stream: &mut Option<String>,
     open_ero_discussion: &mut bool,
@@ -104,8 +151,8 @@ pub fn show(
                 ui.heading(&detail.title);
             });
             ui.separator();
-            if detail.image.is_some() {
-                match image {
+            if let Some(image) = &detail.image {
+                match image.texture.as_ref() {
                     Some(tex) => {
                         let size = tex.size_vec2();
                         // Never wider than the image really is. Windy's webcam terms allow their

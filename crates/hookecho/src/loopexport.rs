@@ -135,12 +135,21 @@ fn encode_mp4_controlled(frames: &[RgbaImage], delays_ms: &[u32], path: &Path, c
     let mut concat = String::new();
     for (i, delay) in delays_ms.iter().enumerate() {
         concat.push_str(&format!(
-            "file 'f{i:04}.png'\nduration {:.3}\n",
-            *delay as f64 / 1_000.0
+            "file 'f{i:04}.png'\noption framerate 1000\nduration {:.3}\n",
+            (*delay).max(1) as f64 / 1_000.0
         ));
     }
-    concat.push_str(&format!("file 'f{:04}.png'\n", frames.len() - 1));
     std::fs::write(dir.join("frames.txt"), concat)?;
+    // MP4 derives sample durations from adjacent decode timestamps except for the final frame.
+    // Keep decode and display order the same and set that last packet's duration explicitly.
+    let last_duration = format!(
+        "setts=duration=if(eq(N\\,{})\\,{}\\,DURATION)",
+        frames.len() - 1,
+        delays_ms[delays_ms.len() - 1].max(1),
+    );
+    // Use the fastest actual frame interval for H.264 level selection, independent of the clock.
+    let shortest = delays_ms.iter().copied().min().unwrap_or(1).max(1);
+    let encoder_rate = format!("fps=1000/{shortest}");
     // Even dimensions are required by yuv420p; pad if odd.
     let mut ffmpeg = std::process::Command::new("ffmpeg");
     crate::platform::no_window(&mut ffmpeg);
@@ -155,10 +164,20 @@ fn encode_mp4_controlled(frames: &[RgbaImage], delays_ms: &[u32], path: &Path, c
             "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-fps_mode",
             "vfr",
+            "-enc_time_base",
+            "1:1000",
             "-c:v",
             "libx264",
+            "-x264-params",
+            &encoder_rate,
+            "-bf",
+            "0",
+            "-bsf:v",
+            &last_duration,
             "-pix_fmt",
             "yuv420p",
+            "-video_track_timescale",
+            "1000",
             "-movflags",
             "+faststart",
         ])
@@ -578,6 +597,36 @@ mod tests {
                 bytes.windows(4).take(64).any(|w| w == b"ftyp"),
                 "looks like an MP4"
             );
+        }
+    }
+
+    #[test]
+    fn mp4_preserves_variable_frame_durations_without_a_duplicate() {
+        use std::process::{Command, Stdio};
+        if !["ffmpeg", "ffprobe"].iter().all(|program| {
+            Command::new(program).arg("-version").stdout(Stdio::null()).stderr(Stdio::null())
+                .status().is_ok_and(|status| status.success())
+        }) {
+            return;
+        }
+        let temporary = ExportDirectory::new(&std::env::temp_dir()).unwrap();
+        let path = temporary.0.join("loop.mp4");
+        let frames = [40, 120, 200].map(|red| RgbaImage::from_pixel(16, 16, image::Rgba([red, 0, 0, 255])));
+        for (frames, delays, expected) in [
+            (&frames[..], &[67, 100, 213][..], vec![(0, 67), (67, 100), (167, 213)]),
+            (&frames[..1], &[213][..], vec![(0, 213)]),
+        ] {
+            encode_mp4_timed(frames, delays, &path).unwrap();
+            let probe = Command::new("ffprobe")
+                .args(["-v", "error", "-show_entries", "packet=pts_time,duration_time", "-of", "json"])
+                .arg(&path).output().unwrap();
+            assert!(probe.status.success());
+            let probe: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+            let ms = |s: &serde_json::Value| (s.as_str().unwrap().parse::<f64>().unwrap() * 1000.0).round() as u32;
+            let mut packets: Vec<_> = probe["packets"].as_array().unwrap().iter()
+                .map(|p| (ms(&p["pts_time"]), ms(&p["duration_time"]))).collect();
+            packets.sort_unstable();
+            assert_eq!(packets, expected);
         }
     }
 }

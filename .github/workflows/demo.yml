@@ -1,18 +1,33 @@
 name: Demo
 
-# The public browser demo, rebuilt from main on every push. It is the primary link in every
+# The public browser demo, rebuilt when CI passes on main. It is the primary link in every
 # announcement, so it tracks the rolling `latest` build rather than the last tag.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: demo-${{ github.ref }}
+  # A skipped CI completion must not evict an eligible deployment from the queue.
+  group: >-
+    demo-${{ github.event_name == 'workflow_run' &&
+      (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.event != 'push' ||
+      github.event.workflow_run.head_repository.full_name != github.repository ||
+      github.event.workflow_run.head_sha != github.sha) && github.run_id || github.ref }}
   cancel-in-progress: false
 
 jobs:
   verify:
+    # workflow_run uses the default branch's SHA. Only build if CI tested that same revision.
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_sha == github.sha
+      )
     name: Require successful CI for this commit
     runs-on: ubuntu-latest
     permissions:
